@@ -6,3 +6,5 @@ https://github.com/akselov/kukavarproxy-msg-format
 
 https://github.com/linuxsand/py_openshowvar
 
+https://github.com/ImtsSrl/KUKAVARPROXY
+
