@@ -1,7 +1,14 @@
+# kukak RSI
+
+https://www.kuka.com/en-us/products/robotics-systems/software/hub-technologies/kuka_robotsensorinterface
+
 ## python
 https://pypi.org/project/RSIPI/
 
 https://github.com/otherworld-dev/rsi-pi
+
+https://github.com/pawankumardev/kukarsiserver
+
 
 ###
 
