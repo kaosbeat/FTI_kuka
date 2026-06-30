@@ -68,18 +68,12 @@ def checklimits(joint,angle,limits):
     else:
         return True
 
-
 def posSafe(pos, limits):
     for i,p in enumerate(pos):
         if i < 5: # A6 is always out of limits
             if not (checklimits(i, p, limits)):
                 return False
     return True
-
-
-
-
-
 
 def activateZone(zone, robot, state):
     # get current condition:
@@ -107,3 +101,4 @@ def activateZone(zone, robot, state):
     state.update({"currentzone":zone})
      # unblock state changes 
     state.update({"modechange":False})
+
