@@ -71,8 +71,9 @@ def checklimits(joint,angle,limits):
 
 def posSafe(pos, limits):
     for i,p in enumerate(pos):
-        if !checklimits(i, p, limits):
-            return False
+        if i < 5: # A6 is always out of limits
+            if not (checklimits(i, p, limits)):
+                return False
     return True
 
 
