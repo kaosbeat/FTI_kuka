@@ -5,7 +5,6 @@ import json
 import asyncio
 from itertools import product as iproduct
 from threading import Thread
-from typing import List, Optional
 import numpy as np
 from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation as _Rot
@@ -13,108 +12,19 @@ import rtmidi
 import time
 import queue
 import random
-
+from robotstates import kukastate
+from robothelpers import *  
 # sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 from kukapy.robot import Robot
 # wandermode = 0  # 0 == bored, 1 == active
 kukastate_queue = queue.Queue()
 
 
-def comparelist(
-    list1: List[float], 
-    list2: List[float], 
-    margin: float, 
-    count: Optional[int] = None ) -> bool:
-    """
-    Compares two lists element by element, checking if they are all within a margin.
-
-    Args:
-        list1: The first list of numbers.
-        list2: The second list of numbers.
-        margin: The allowed tolerance/margin (a positive float).
-        count: (Optional) The number of initial elements to compare. 
-               If None, the entire lists are compared.
-
-    Returns:
-        True if all compared pairs are within the margin, False otherwise.
-    """
-    
-    # 1. Determine the effective comparison length (N)
-    if count is None:
-        N = len(list1)
-    else:
-        N = count
-
-    # 2. Check for list length compatibility
-    if len(list1) < N or len(list2) < N:
-        # If either list is shorter than the requested count, they cannot be compared fully.
-        print(f"Warning: Requested count ({N}) exceeds the length of one or both lists.")
-        return False # Or raise an error, depending on desired strictness
-
-    # 3. Slice the lists to compare only the first N elements
-    slice1 = list1[:N]
-    slice2 = list2[:N]
-    
-    # 4. Perform the comparison using zip and all()
-    return all(abs(a - b) <= margin for a, b in zip(slice1, slice2))
-
-def checklimits(joint,angle,limits):
-    if angle < limits[joint][0]:
-        angle = limits[joint][0]
-    if angle > limits[joint][1]:
-        angle = limits[joint][1]
-    return angle
-
 
 class KukaState:
     """Manages all shared state variables for the robot."""
     def __init__(self):
-        self.state = {  "robot": {},
-                        "wandermode": 0,
-                        "wanderspeed" :0,
-                        "dynmode": 0,
-                        "randomwristmode": 0,
-                        "reachmode":0,
-                        "dancemode":1,
-                        "limitadjust1":5,
-                        "limitadjust2":5,
-                        "limits" : [(-94, 122), (-134,34), (-119,157), (-349,349), (-118,118), (-357,357)],
-                        "playzone" : {"init": {
-                                        "startpos": [  0, -90,  90,   0,  90,   0],
-                                        "safezone": [(-94, 122), (-134,34), (-119,157), (-349,349), (-118,118), (-357,357)]
-                                        },
-                                       "wander": {
-                                        "startpos": [60, -22.5, -112.5, 180, 45],
-                                        "safezone" : [(-94, 122), (-134,34), (-119,157), (-349,349), (-118,118), (-357,357)]
-                                       } 
-                        },
-                        "linmode": False,
-                    #### poses ####
-                        "linposes" : { "pos1" : [[855.209656, -577.229004, 1515.260742, 145.978836, -27.013065, -179.960007],
-                                                 [500.209656, -527.229004, 1515.260742, 105.978836, 55.013065, 117.960007],
-                                                 [1780.209656, -527.229004, 1515.260742, 105.978836, 55.013065, 117.960007],
-                                                 [1750.209656, -527.229004, 1515.260742, 105.978836, 55.013065, 117.960007]]},
-                        "poses" : {   
-                                "init": [
-                                    [  0, -90,  90,   0,  90,   0],  # home                  (baseline)
-                                ],
-                                "ch1": [
-                                    [  0, -80,  90,   0,  80,   0],               
-                                    [  0, -90,  90,   0,  40,   0],  
-                                    [  0, -70,  90,   0,  60,   0],  
-                                    [  0, -100,  90,   0,  20,   0],  
-                                ]},
-
-                        "dynposes":{
-                                "dynwander": 
-                                    {"dynjoints":[0], "dynlimits":[[-90,90]], "dynpose": [  0, -90,  90,   0,  90,   0]}
-                                
-                        },
-                        "nextjpose":[  0, -90,  90,   0,  90,   0],
-                        "prevjpose":[  0, -90,  90,   0,  90,   0],
-                        "nextpose": [855.209656, -577.229004, 1515.260742, 145.978836, -27.013065, -179.960007],
-                        "prevpose": [855.209656, -577.229004, 1515.260742, 145.978836, -27.013065, -179.960007],
-                    } 
+        self.state = kukastate
 
     def update(self, msg):
         kukastate_queue.put(msg)
@@ -139,6 +49,29 @@ class MidiInputHandler:
         print("[%s] @%0.6f %r" % (self.port, self._wallclock, message))
 
         if message[0] == 176:
+            if message[1] == 1: 
+                if message[2] == 1: # conditions
+                    print("init")
+                    
+                    pose = self.state.get("zone")["init"]["startpos"]
+                    self.state.update({"nextjpose":pose})  
+                if message[2] == 2:
+                    print("rest")
+                    pose = self.state.get("zone")["rest"]["startpos"]
+                    self.state.update({"nextjpose":pose})  
+                if message[2] == 3:
+                    print("wakeup")
+                    pose = self.state.get("zone")["wakeup"]["startpos"]
+                    self.state.update({"nextjpose":pose})  
+                if message[2] == 4:
+                    print("stretch")
+                    pose = self.state.get("zone")["stretch"]["startpos"]
+                    self.state.update({"nextjpose":pose})  
+                if message[2] == 5:
+                    print("wander")
+                    pose = self.state.get("zone")["wander"]["startpos"]
+                    self.state.update({"nextjpose":pose})  
+
             if message[1] == 13:
                 # print(self.state["dynposes"]["dynwander"]["dynjoints"])
                 vel = (message[2]-64)/8
@@ -239,7 +172,7 @@ class MidiInputHandler:
             if pose[0] > self.state.get("limits")[0][1]:
                 pose[0] = self.state.get("limits")[0][1]   
             pose[4] = -(pose[2] + self.state.get("nextjpose")[1])
-            pose[4] = checklimits(4,pose[4],self.state.get("limits")) 
+            pose[4] = fitlimits(4,pose[4],self.state.get("limits")) 
             self.state.update({"nextjpose":pose})    
             print(pose)
         if message[0] == 148:
@@ -255,7 +188,7 @@ class MidiInputHandler:
             if pose[1] > self.state.get("limits")[1][1]:
                 pose[1] = self.state.get("limits")[1][1]  
             pose[4] = -(pose[1] + self.state.get("nextjpose")[2])
-            pose[4] = checklimits(4,pose[4],self.state.get("limits"))
+            pose[4] = fitlimits(4,pose[4],self.state.get("limits"))
             self.state.update({"nextjpose":pose})    
             print(pose)
         if message[0] == 149:
