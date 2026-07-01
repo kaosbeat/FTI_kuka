@@ -69,39 +69,52 @@ def checklimits(joint,angle,limits):
         return True
 
 def posSafe(pos, limits):
+    # print(limits)
     for i,p in enumerate(pos):
+        # print(i,p)
         if i < 5: # A6 is always out of limits
-            if not (checklimits(i, p, limits)):
+            if (not (checklimits(i, p, limits))):
                 return False
     return True
 
 
 
 def activateZone(zone, state):
-    robot = state.get("robot")
+    # robot = state.get("robot")
+    # print(robot)
     # get current condition:
     currentzone = state.get("currentzone")
+    print("currentzone= ", currentzone)
+    # print(state.get("zones")[zone]["safezone"])
     # block state changes
     state.update({"modechange":True})
     # get current pos    
-    if not posSafe(robot.get_curjpos(), state.get("zones")[zone]["safezone"]): # is current pos in safe zone of new limits?
+    print(posSafe(state.get("curjpos"), state.get("zones")[zone]["safezone"]))
+    if (not posSafe(state.get("curjpos"), state.get("zones")[zone]["safezone"])): # is current pos in safe zone of new limits?
+        print(" not in safezone ")
         pose = state.get("zones")[currentzone]["exitpos"] # goto exit pos 
-        state.update({"nextjpose":pose}) 
-        while not (comparelist(robot.get_curjpos(), state.get("nextjpose"),0.1,5)):
+        state.update({"nextjpos":pose}) 
+        while (not (comparelist(state.get("curjpos"), state.get("nextjpos"),0.1,5))):
             print("moving to exit position")
-        if not posSafe(robot.get_curjpos(), state.get("zones")[zone]["safezone"]): # is current pos in safe zone?
+            # robot.move("joint", state.get("nextjpos") , 100)   
+        if (not posSafe(state.get("curjpos"), state.get("zones")[zone]["safezone"])): # is current pos in safe zone?
             pose = state.get("zones")["init"]["exitpos"] # goto neutral pos 
-            state.update({"nextjpose":pose}) 
-            while not (comparelist(robot.get_curjpos(), state.get("nextjpose"),0.1,5)):
+            state.update({"nextjpos":pose}) 
+            while (not (comparelist(state.get("curjpos"), state.get("nextjpos"),0.1,5))):
                 print("moving to neutral position")
+                # robot.move("joint", state.get("nextjpos") , 100)   
+    print("safezone exit possible")
     # yes so lets move to startpos for new state
     pose = state.get("zones")[zone]["startpos"]
-    state.update({"nextjpose":pose}) 
+    state.update({"nextjpos":pose}) 
     # get current pos, check if new state near
-    while not(comparelist(robot.get_curjpos(), state.get("nextjpose"),0.1,5)):
+    while not(comparelist(robot.get_curjpos(), state.get("nextjpos"),0.1,5)):
         print("moving to "+ zone +" position")
+        # robot.move("joint", state.get("nextjpos") , 100)   
+
     # set new state
     state.update({"currentzone":zone})
+    print(state.get("currentzone"))
      # unblock state changes 
     state.update({"modechange":False})
 

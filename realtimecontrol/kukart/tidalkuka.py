@@ -54,25 +54,19 @@ class MidiInputHandler:
             if message[1] == 1: 
                 if message[2] == 1: # conditions
                     print("init")
-                    activateZone("init", state)
-                    pose = self.state.get("zone")["init"]["startpos"]
-                    self.state.update({"nextjpose":pose})  
+                    activateZone("init", self.state)
                 if message[2] == 2:
                     print("rest")
-                    pose = self.state.get("zone")["rest"]["startpos"]
-                    self.state.update({"nextjpose":pose})  
+                    activateZone("rest", self.state)
                 if message[2] == 3:
                     print("wakeup")
-                    pose = self.state.get("zone")["wakeup"]["startpos"]
-                    self.state.update({"nextjpose":pose})  
+                    activateZone("wakeup", self.state)
                 if message[2] == 4:
                     print("stretch")
-                    pose = self.state.get("zone")["stretch"]["startpos"]
-                    self.state.update({"nextjpose":pose})  
+                    activateZone("stretch", self.state)
                 if message[2] == 5:
                     print("wander")
-                    pose = self.state.get("zone")["wander"]["startpos"]
-                    self.state.update({"nextjpose":pose})  
+                    activateZone("wander", self.state)
 
             if message[1] == 13:
                 # print(self.state["dynposes"]["dynwander"]["dynjoints"])
@@ -133,38 +127,40 @@ class MidiInputHandler:
                     rmode = {"reachmode": 0}
                 self.state.update(rmode)
             if message[1] == 61:
-                self.state.update({"nextjpose":self.ch1poses[0]})
+                self.state.update({"nextjpos":self.ch1poses[0]})
             if message[1] == 62:
-                self.state.update({"nextjpose":self.ch1poses[1]})
+                self.state.update({"nextjpos":self.ch1poses[1]})
             if message[1] == 63:
-                self.state.update({"nextjpose":self.ch1poses[2]})
+                self.state.update({"nextjpos":self.ch1poses[2]})
             if message[1] == 64:
-                self.state.update({"nextjpose":self.ch1poses[3]})
+                self.state.update({"nextjpos":self.ch1poses[3]})
         if message[0] == 145:
             self.state.update({"linmode":False})
             #channel 2 (tidal1)
             if message[1] == 61:
-                self.state.update({"nextjpose":self.ch1poses[0]})
+                self.state.update({"nextjpos":self.ch1poses[0]})
             if message[1] == 62:
-                self.state.update({"nextjpose":self.ch1poses[1]})
+                self.state.update({"nextjpos":self.ch1poses[1]})
             if message[1] == 63:
-                self.state.update({"nextjpose":self.ch1poses[2]})
+                self.state.update({"nextjpos":self.ch1poses[2]})
             if message[1] == 64:
-                self.state.update({"nextjpose":self.ch1poses[3]})  
+                self.state.update({"nextjpos":self.ch1poses[3]})  
         if message[0] == 146:
+            #channel 3 (tidal2)
             self.state.update({"linmode":False})
 
             a4 = random.randint(-349,349)
             a5 = random.randint(-118,118)
-            pose = self.state.get("nextjpose")
+            pose = self.state.get("nextjpos")
             pose[3] = a4
             pose[4] = a5
-            self.state.update({"nextjpose":pose})    
+            self.state.update({"nextjpos":pose})    
             print(pose)
         if message[0] == 147:
+            #channel 4 (tidal3)
             self.state.update({"linmode":False})
             # move to a new pos, randomwalk
-            pose = self.state.get("nextjpose")
+            pose = self.state.get("nextjpos")
             basepose = pose[0]
             limit = self.state.get("limitadjust1")
             basepose+=random.randint(-limit,limit)
@@ -173,14 +169,14 @@ class MidiInputHandler:
                 pose[0] = self.state.get("limits")[0][0]
             if pose[0] > self.state.get("limits")[0][1]:
                 pose[0] = self.state.get("limits")[0][1]   
-            pose[4] = -(pose[2] + self.state.get("nextjpose")[1])
+            pose[4] = -(pose[2] + self.state.get("nextjpos")[1])
             pose[4] = fitlimits(4,pose[4],self.state.get("limits")) 
-            self.state.update({"nextjpose":pose})    
+            self.state.update({"nextjpos":pose})    
             print(pose)
         if message[0] == 148:
+            #channel 5 (tidal4)
             self.state.update({"linmode":False})
-            
-            pose = self.state.get("nextjpose")
+            pose = self.state.get("nextjpos")
             basepose = pose[1]
             limit = self.state.get("limitadjust2")
             basepose+=random.randint(-limit,limit)
@@ -189,11 +185,12 @@ class MidiInputHandler:
                 pose[1] = self.state.get("limits")[1][0]
             if pose[1] > self.state.get("limits")[1][1]:
                 pose[1] = self.state.get("limits")[1][1]  
-            pose[4] = -(pose[1] + self.state.get("nextjpose")[2])
+            pose[4] = -(pose[1] + self.state.get("nextjpos")[2])
             pose[4] = fitlimits(4,pose[4],self.state.get("limits"))
-            self.state.update({"nextjpose":pose})    
+            self.state.update({"nextjpos":pose})    
             print(pose)
         if message[0] == 149:
+            #channel 4 (tidal5)
             if not self.state.get("linmode"):
                 gotopos = [34.0, -104.0, 90.0, 0.0, 90.0, 216720.0]
                 robot.move("joint", gotopos , 100)
@@ -202,7 +199,7 @@ class MidiInputHandler:
                 pose = self.state.get("linposes")["pos1"][random.randint(0,3)]
                 print(pose)
                 
-                self.state.update({"nextpose":pose})    
+                self.state.update({"nextpos":pose})    
 
         else:
             # print("unkown command")
@@ -230,22 +227,24 @@ async def kukaLoop(kukastate):
     state = kukastate.state
     count = 0
     while True:
-        # if (comparelist(robot.get_curjpos(),state.get("nextjpose"),0.1,5)):
-        # if (state.get("nextjpose"))
-        # print(state.get("nextjpose"))
+        # if (comparelist(robot.get_curjpos(),state.get("nextjpos"),0.1,5)):
+        # if (state.get("nextjpos"))
+        # print(state.get("nextjpos"))
         # print(robot.get_curjpos())
         # count+=1
-        # if (comparelist(robot.get_curjpos(), state.get("nextjpose"),0.1,5)):
+        # if (comparelist(robot.get_curjpos(), state.get("nextjpos"),0.1,5)):
         #     print("getting close")
         # else:
         #     print("stil moving")
         # print(count)
+        state.update({"currentjpose":robot.get_curjpos()})
+        state.update({"currentpose":robot.get_curpos()})
         if state.get("linmode"):
             # print(state)
-            robot.move("pose", state.get("nextpose") , 100, linear=True) 
+            robot.move("pose", state.get("nextpos") , 100, linear=True) 
             pass  
         else:
-            robot.move("joint", state.get("nextjpose") , 100)   
+            robot.move("joint", state.get("nextjpos") , 100)   
             # pass
 
 def queue_handler():
