@@ -23,8 +23,10 @@ kukastate_queue = queue.Queue()
 
 class KukaState:
     """Manages all shared state variables for the robot."""
-    def __init__(self):
+    def __init__(self, robot):
         self.state = kukastate
+        self.state["robot"] = robot
+        
 
     def update(self, msg):
         kukastate_queue.put(msg)
@@ -52,7 +54,7 @@ class MidiInputHandler:
             if message[1] == 1: 
                 if message[2] == 1: # conditions
                     print("init")
-                    
+                    activateZone("init", state)
                     pose = self.state.get("zone")["init"]["startpos"]
                     self.state.update({"nextjpose":pose})  
                 if message[2] == 2:
@@ -210,11 +212,10 @@ class MidiInputHandler:
 
 
 
-kukastate = KukaState()
-
-
 robot = Robot(port=18735)
 robot.connect()
+kukastate = KukaState(robot)
+
 
 def initKuka(robot):
     j = robot.get_curjpos()
