@@ -71,7 +71,7 @@ def checklimits(joint,angle,limits):
 
 def posSafe(pos, limits):
     for i,p in enumerate(pos):
-        if !checklimits(i, p, limits):
+        if  not checklimits(i, p, limits):
             return False
     return True
 
@@ -80,27 +80,28 @@ def posSafe(pos, limits):
 
 
 
-def activateZone(zone, robot, state):
+def activateZone(zone, state):
+    robot = state.get("robot")
     # get current condition:
     currentzone = state.get("currentzone")
     # block state changes
     state.update({"modechange":True})
     # get current pos    
-    if !posSafe(robot.get_curjpos(), state.get("zones")[zone]["safezone"]): # is current pos in safe zone of new limits?
+    if not posSafe(robot.get_curjpos(), state.get("zones")[zone]["safezone"]): # is current pos in safe zone of new limits?
         pose = state.get("zones")[currentzone]["exitpos"] # goto exit pos 
         state.update({"nextjpose":pose}) 
-        while !(comparelist(robot.get_curjpos(), state.get("nextjpose"),0.1,5)):
+        while not (comparelist(robot.get_curjpos(), state.get("nextjpose"),0.1,5)):
             print("moving to exit position")
-        if !posSafe(robot.get_curjpos(), state.get("zones")[zone]["safezone"]): # is current pos in safe zone?
+        if not posSafe(robot.get_curjpos(), state.get("zones")[zone]["safezone"]): # is current pos in safe zone?
             pose = state.get("zones")["init"]["exitpos"] # goto neutral pos 
             state.update({"nextjpose":pose}) 
-            while !(comparelist(robot.get_curjpos(), state.get("nextjpose"),0.1,5)):
+            while not (comparelist(robot.get_curjpos(), state.get("nextjpose"),0.1,5)):
                 print("moving to neutral position")
     # yes so lets move to startpos for new state
     pose = state.get("zones")[zone]["startpos"]
     state.update({"nextjpose":pose}) 
     # get current pos, check if new state near
-    while !(comparelist(robot.get_curjpos(), state.get("nextjpose"),0.1,5)):
+    while not(comparelist(robot.get_curjpos(), state.get("nextjpose"),0.1,5)):
         print("moving to "+ zone +" position")
     # set new state
     state.update({"currentzone":zone})
