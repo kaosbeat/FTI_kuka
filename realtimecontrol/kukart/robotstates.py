@@ -1,39 +1,64 @@
 kukastate = {  "robot": {},
                 "modechange": False, # are we currently changing modes?
+                "actionmode": False,
+                "randommode":True,
+                "currentaction": None,
+                "actionindex" : 0,
                 "currentzone": "init", 
                 "wandermode": 0,
                 "wanderspeed" :0,
+                "speed":100,
                 "dynmode": 0,
                 "randomwristmode": 0,
                 "reachmode":0,
                 "dancemode":1,
-                "limitadjust1":5,
-                "limitadjust2":5,
+                "limitadjust":[5,5,5],
+                "softwarelimits": [(-95,123), (-135,35),(-120,158),(-350,350),(-119,119),(-358,358)],
                 "limits" : [(-94, 122), (-134,34), (-119,157), (-349,349), (-118,118), (-357,357)],
                 "zones" : {"init": {
-                                "startpos": [  0, -90,  90,   0,  90,   0],
-                                "safezone": [(-94, 122), (-134,34), (-119,157), (-349,349), (-118,118), (-357,357)],
-                                "exitpos": [  0, -90,  90,   0,  90,   0]                       
+                                "startpos": [  0, -90,  90,   0,  15,   0],
+                                "safezone": [(-94, 122), (-105,-65), (89,115), (-15,15), (-15,45), (-357,357)],
+                                "actions":[],
+                                "exitpos": [  0, -131,  155,   3,  -10,   0], ##exit to rest position  
+                                "exits" : ["rest"],
+                                "speed": 20          
                                 },
                             "rest" :{
-                                "startpos": [-3, -134, 157, -2 , 0, 0],
-                                "safezone": [(-5, 5), (-134,-130), (156,157), (-3,3), (-10,10), (-357,357)],
-                                "exitpos": [-3, -134, 157, -2 , 0, 0]                          
+                                "startpos": [-3, -133, 156, -2 , 0, 0],
+                                "safezone": [(-5, 5), (-134,-130), (155,157), (-3,3), (-10,10), (-357,357)],
+                                "actions": {"breathe":[[-3, -130, 155, -2 , 0, 0],[-3, -134, 157, -2 , 0, 0]]},
+                                "exitpos": [-3, -134, 156, -2 , 0, 0],    ##exit to wakeup position                        
+                                "exits" : ["wakeup"] ,
+                                "speed": 20                 
                             },
                             "wakeup":{
-                                "startpos": [-3, -134, 157, -2 , 0, 0],
+                                "startpos": [-3, -134, 156, -2 , 0, 0],
                                 "safezone": [(-94, 122), (-134,-123), (136,157), (-23,23), (-25,25), (-357,357)],
-                                "exitpos": [-3, -134, 157, -2 , 0, 0]                          
+                                "exitpos": [-3, -97, 16, -2 , 90, 0],   ##exit to stretch position                   
+                                "exits" : ["stretch", "wander"]  ,
+                                "speed": 40                
+
                             },
                             "stretch": {
-                                "startpos": [-3, -97, 16, -2 , 90, 0],
+                                "startpos": [-3, -97, 16, -2 , 0, 0],
                                 "safezone": [(-94, 122), (-98,-96), (13,19), (-2,2), (85,95), (-357,357)],
-                                "exitpos": [-3, -134, 157, -2 , 0, 0]   
+                                "exitpos": [-60, -65, 157, -2 , 0, 0],   ##exit to wander position
+                                "exits" : ["wander"] ,
+                                "speed": 50         
                             },
                             "wander": {
-                                "startpos": [60, -22.5, -112.5, 180, 45, 0],
-                                "safezone" : [(-94, 122), (-134,34), (-119,157), (-349,349), (-118,118), (-357,357)],
-                                "exitpos": [-3, -134, 157, -2 , 0, 0]                          
+                                "startpos": [60, -65, 60, 0, 45, 0],
+                                "safezone" : [(-94, 122), (-70,-60), (29,100), (-4,4), (-118,118), (-357,357)],
+                                "exitpos": [-3, -97, 157, -2 , 0, 0],
+                                "exits" : ["stretch", "wildwander"],
+                                "speed": 30                                    
+                                },
+                            "wildwander": {
+                                "startpos": [60, -22.5, -112.5, 0, 45, 0],
+                                "safezone" : [(-94, 122), (-124,-60), (-19,157), (-1,1), (-118,118), (-357,357)],
+                                "exitpos": [-3, -97, 157, -2 , 0, 0] ,                        
+                                "exits" : ["stretch", "wander"] ,
+                                "speed": 100         
                                 } 
                 },
                 "linmode": False,

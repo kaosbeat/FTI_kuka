@@ -48,7 +48,7 @@ class MidiInputHandler:
     def __call__(self, event, data=None):
         message, deltatime = event
         self._wallclock += deltatime
-        print("[%s] @%0.6f %r" % (self.port, self._wallclock, message))
+        # print("[%s] @%0.6f %r" % (self.port, self._wallclock, message))
 
         if message[0] == 176:
             if message[1] == 1: 
@@ -67,6 +67,23 @@ class MidiInputHandler:
                 if message[2] == 5:
                     print("wander")
                     activateZone("wander", self.state)
+                if message[2] == 6:
+                    print("wildwander")
+                    activateZone("wildwander", self.state)
+
+            if message[1] == 2: # action mode
+                if message[2] == 0:
+                    self.state.update(({"actionmode" :False}))
+                    self.state.update(({"currentaction" :None}))
+
+                if message[2] == 1:
+                    self.state.update(({"actionmode" :True}))
+                    currentzone = self.state.get("currentzone")
+                    currentaction = self.state.get("zones")[curren:currentactiontzone]["actions"].keys()[0]
+                    self.state.update(({"currentaction" :currentaction}))
+                    
+
+                
 
             if message[1] == 13:
                 # print(self.state["dynposes"]["dynwander"]["dynjoints"])
@@ -87,10 +104,25 @@ class MidiInputHandler:
                         dynp["dynwander"]["dynpose"][i] = j
                     self.state.update(dynp)
                     print(self.state.state)
-            if message[1] == 29:
-                self.state.update({"limitadjust1": message[2]})
-            if message[1] == 49:
-                self.state.update({"limitadjust2": message[2]})
+            if message[1] == 20:
+                limitadjust = self.state.get("limitadjust")
+                limitadjust[0] = message[2]/4
+                self.state.update({"limitadjust":limitadjust})
+            if message[1] == 21:
+                limitadjust = self.state.get("limitadjust")
+                limitadjust[1] = message[2]/4
+                self.state.update({"limitadjust":limitadjust})
+            if message[1] == 22:
+                limitadjust = self.state.get("limitadjust")
+                limitadjust[2] = message[2]/4
+                self.state.update({"limitadjust":limitadjust})
+
+            if message[1] == 30:
+                if message[2] == 1:
+                    randommode = True
+                if message[2] == 2:
+                    randommode = False
+                self.state.update({"randommode":randommode })
 
         if message[0] == 144:
             self.state.update({"linmode":False})
@@ -190,7 +222,7 @@ class MidiInputHandler:
             self.state.update({"nextjpos":pose})    
             print(pose)
         if message[0] == 149:
-            #channel 4 (tidal5)
+            #channel 6 (tidal5)
             if not self.state.get("linmode"):
                 gotopos = [34.0, -104.0, 90.0, 0.0, 90.0, 216720.0]
                 robot.move("joint", gotopos , 100)
@@ -199,7 +231,58 @@ class MidiInputHandler:
                 pose = self.state.get("linposes")["pos1"][random.randint(0,3)]
                 print(pose)
                 
-                self.state.update({"nextpos":pose})    
+                self.state.update({"nextpos":pose})   
+        if message[0] == 150:
+            #channel 7 (tidal6)
+            
+
+            if (not self.state.get("modechange")  and not self.state.get("actionmode")):
+                # move all joints within limits of mode 
+                # get mode
+                pose = self.state.get("curjpos")
+                currentzone = self.state.get("currentzone")
+                # print(currentzone, pose)
+                # print(self.state.get("zones")[currentzone]["safezone"])
+                for i,jointlimit in enumerate(self.state.get("zones")[currentzone]["safezone"]):
+                    # print(" joint ", i, " limit", jointlimit)
+                    if self.state.get("actionmode"):
+                        currentaction = self.state.get("currentaction")
+                        actionindex = self.state.get("actionindex")
+                        actionlength = len(self.state.get("zones")[currentzone]["actions"][currentaction])
+                        pose[i] = self.state.get("zones")[currentzone]["actions"][currentaction][actionindex][i]
+                        actionindex+=1
+                        if actionindex >= actionlength-1:
+                            actionindex = 0
+                        self.state.update({"actionindex":actionindex})
+
+                    elif self.state.get("randommode"):
+                        joint = random.randint(jointlimit[0], jointlimit[1])
+                        pose[i] = joint
+                    # elif self.state.get("actionmode"): 
+                    #     currentaction = self.state.get("currentaction") 
+                    #     if currentaction == currentaction None:
+                    #         currentaction = self.state.get("zones")[currentzone]["actions"].keys()[0]
+                        
+                    else:
+                        # print(self.state.get("limitadjust"))
+                        for i in range(3):
+                            val = (0.5 - random.random())*self.state.get("limitadjust")[i]
+                            pose[i]=pose[i] + val
+                            pose[i] = fitlimits(i,pose[i],self.state.get("zones")[currentzone]["safezone"])
+                        # pass
+                pose[4] = -(pose[1] + pose[2])
+                pose[4] = fitlimits(4,pose[4],self.state.get("zones")[currentzone]["safezone"])
+                # a5_required = calculate_away_and_horizon_angle(pose[0], pose[1],pose[2], pose[3], 1, 1)
+                # pose[4] = a5_required
+                self.state.update({"nextjpos":pose})
+            if (not self.state.get("modechange")  and self.state.get("actionmode")):
+                currentzone = self.state.get("currentzone")
+                pose = self.state.get("curjpos")
+
+
+
+            
+
 
         else:
             # print("unkown command")
@@ -237,14 +320,14 @@ async def kukaLoop(kukastate):
         # else:
         #     print("stil moving")
         # print(count)
-        state.update({"currentjpose":robot.get_curjpos()})
-        state.update({"currentpose":robot.get_curpos()})
+        state.update({"curjpos":robot.get_curjpos()})
+        state.update({"curpos":robot.get_curpos()})
         if state.get("linmode"):
             # print(state)
             robot.move("pose", state.get("nextpos") , 100, linear=True) 
             pass  
         else:
-            robot.move("joint", state.get("nextjpos") , 100)   
+            robot.move("joint", state.get("nextjpos") , state.get("speed"))   
             # pass
 
 def queue_handler():
@@ -267,6 +350,7 @@ async def main():
 
     midiin.open_port(0)
     port_name = available_inports[0]
+    port_name = 'Midi Through:Midi Through Port-0 14:0'
     kukaDaemon = Thread(target=asyncio.run , args=(kukaLoop(kukastate),), daemon=True, name='kukaLoop')
     kukaDaemon.start()
     print("Attaching MIDI input callback handler.")
