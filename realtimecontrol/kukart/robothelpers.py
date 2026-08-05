@@ -1,4 +1,50 @@
 from typing import List, Optional
+import numpy as np
+
+
+def rotation_matrix(axis, theta):
+    c, s = np.cos(theta), np.sin(theta)
+    if axis == 'x': return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
+    if axis == 'y': return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+    if axis == 'z': return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+
+def get_wrist_position(q1, q2, q3, L1, L2):
+    """ 
+    Simplified FK to find wrist position (x, y, z).
+    L1, L2 are the lengths of the upper arm and forearm.
+    """
+    # Distance from base center to wrist in the XY plane
+    r = L1 * np.cos(q2) + L2 * np.cos(q2 + q3)
+    x = r * np.cos(q1)
+    y = r * np.sin(q1)
+    z = L1 * np.sin(q2) + L2 * np.sin(q2 + q3)
+    return np.array([x, y, z])
+
+def calculate_away_and_horizon_angle(q1, q2, q3, q4, L1, L2):
+
+    # 1. Find where the wrist is in space
+    p_wrist = get_wrist_position(q1, q2, q3, L1, L2)
+    # print(p_wrist)
+    # 2. Define Target Vector: Pointing from base to wrist, but flattened to Z=0
+    v_target = np.array([p_wrist[0], p_wrist[1], 0])
+    v_target = v_target / np.linalg.norm(v_target) # Normalize
+    
+    # 3. Get current tool orientation (FK rotation up to axis 4)
+    R0_4 = rotation_matrix('z', q1) @ rotation_matrix('y', q2) @ \
+           rotation_matrix('y', q3) @ rotation_matrix('x', q4)
+    
+    v_tool = R0_4[:, 2] # The local Z-axis of the tool
+    
+    # 4. Calculate the angle between current tool vector and target vector
+    # We use the dot product: cos(theta) = (A . B) / (|A||B|)
+    dot_product = np.dot(v_tool, v_target)
+    angle_diff = np.arccos(np.clip(dot_product, -1.0, 1.0))
+    
+    # Determine direction of rotation (up or down)
+    # We check the Z component of the tool to see if we need to rotate + or -
+    direction = -1 if v_tool[2] > 0 else 1
+    print(np.rad2deg(angle_diff * direction))
+    return np.rad2deg(angle_diff * direction)
 
 
 def comparelist(
@@ -19,7 +65,11 @@ def comparelist(
     Returns:
         True if all compared pairs are within the margin, False otherwise.
     """
-    
+    print("+"*80)
+    print("comparing:")
+    print(list1)
+    print(list2)
+    print("+"*80)
     # 1. Determine the effective comparison length (N)
     if count is None:
         N = len(list1)
@@ -94,27 +144,37 @@ def activateZone(zone, state):
         print(" not in safezone ")
         pose = state.get("zones")[currentzone]["exitpos"] # goto exit pos 
         state.update({"nextjpos":pose}) 
-        while (not (comparelist(state.get("curjpos"), state.get("nextjpos"),0.1,5))):
-            print("moving to exit position")
+        # while (not (comparelist(state.get("curjpos"), state.get("nextjpos"),0.1,5))):
+            # print("moving to exit position")
             # robot.move("joint", state.get("nextjpos") , 100)   
-        if (not posSafe(state.get("curjpos"), state.get("zones")[zone]["safezone"])): # is current pos in safe zone?
-            pose = state.get("zones")["init"]["exitpos"] # goto neutral pos 
-            state.update({"nextjpos":pose}) 
-            while (not (comparelist(state.get("curjpos"), state.get("nextjpos"),0.1,5))):
-                print("moving to neutral position")
-                # robot.move("joint", state.get("nextjpos") , 100)   
+        print("moved to exit position")
+        # if (not posSafe(state.get("curjpos"), state.get("zones")[zone]["safezone"])): # is current pos in safe zone?
+        #     pose = state.get("zones")[currentzone]["exitpos"] # goto neutral pos 
+        #     state.update({"nextjpos":pose}) 
+        #     # while (not (comparelist(state.get("curjpos"), state.get("nextjpos"),0.1,5))):
+        #     #     print("moving to neutral position")
+        #         # robot.move("joint", state.get("nextjpos") , 100) 
+        #     print("moved to neutral position")
+              
     print("safezone exit possible")
     # yes so lets move to startpos for new state
     pose = state.get("zones")[zone]["startpos"]
+    print(pose)
     state.update({"nextjpos":pose}) 
     # get current pos, check if new state near
-    while not(comparelist(robot.get_curjpos(), state.get("nextjpos"),0.1,5)):
+    while not(comparelist(state.get("curjpos"), state.get("nextjpos"),0.1,5)):
         print("moving to "+ zone +" position")
-        # robot.move("joint", state.get("nextjpos") , 100)   
+        print(comparelist(state.get("curjpos"), state.get("nextjpos"),0.1,5))
+        print(state.get("robot").get_curjpos())
+
+        print(state.get("robot"))
+        # state.get("robot").move("joint", state.get("nextjpos") , 100)   
+    print("moving to "+ zone +" position")
 
     # set new state
     state.update({"currentzone":zone})
     print(state.get("currentzone"))
+    state.update({"speed":state.get("zones")[zone]["speed"]})
      # unblock state changes 
     state.update({"modechange":False})
 
