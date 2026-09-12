@@ -1,0 +1,13 @@
+# Core dependencies for the RTR realtime control system.
+#
+# numpy + scipy are used by the kinematics helpers; rtmidi for MIDI in/out;
+# websockets for the P5live / external-control bridge. kukapy is only needed for the
+# real robot and is installed from git (see the repo README).
+
+numpy
+scipy
+python-rtmidi
+websockets
+
+# Real robot only (not needed for --sim):
+#   pip install git+https://github.com/JasonLvernex/KukaPy.git
