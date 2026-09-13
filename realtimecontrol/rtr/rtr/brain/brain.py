@@ -104,10 +104,12 @@ class Brain:
             return
         self.mode = mode
         if mode == "action" and not self.machine.current_action:
-            # Start the first action of the current zone.
-            actions = self.machine.zones.get(self.machine.current_zone).actions()
-            if actions:
-                self.machine.play_action(list(actions.keys())[0])
+            # Start the first *enabled* action of the current zone.
+            zone = self.machine.zones.get(self.machine.current_zone)
+            for name in zone.actions():
+                if zone.action_enabled(name):
+                    self.machine.play_action(name)
+                    break
 
     # ------------------------------------------------------------------
     # Per-tick decision.

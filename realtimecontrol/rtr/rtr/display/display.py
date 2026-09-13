@@ -36,6 +36,8 @@ class Display:
             self._send({"type": "zone", "zone": data})
         elif event == Event.MODE_CHANGED:
             self._send({"type": "mode", "mode": data})
+        elif event == Event.ZONES_CHANGED:
+            self._send({"type": "zones_changed", "zones": data})
 
     @staticmethod
     def _frame(snapshot_cls, snap) -> dict:

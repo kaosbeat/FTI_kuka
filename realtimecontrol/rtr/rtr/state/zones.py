@@ -14,8 +14,9 @@ A zone declares:
 - ``speed``     – default move speed while in the zone.
 """
 
+import json
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # Per-axis software limits (the union of every zone's safezone, used as a hard clamp).
 SOFTWARE_LIMITS: List[Tuple[float, float]] = [
@@ -166,6 +167,89 @@ LIN_POSES: Dict[str, List[List[float]]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Loading + validation of the on-disk data file (``zones.json``).
+#
+# The file is the editable source of truth (see the editor page). The dicts above
+# are kept as built-in fallback defaults so the core still runs if the file is
+# missing or corrupt.
+# ---------------------------------------------------------------------------
+
+def _is_num(v) -> bool:
+    """True for real numbers (bool is excluded on purpose)."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _validate_zone(name: str, z: dict, all_names: set) -> None:
+    if not isinstance(z, dict):
+        raise ValueError(f"zone {name!r}: must be an object")
+    if "enabled" in z and not isinstance(z["enabled"], bool):
+        raise ValueError(f"zone {name!r}: 'enabled' must be a bool")
+    for key in ("startpos", "exitpos"):
+        v = z.get(key)
+        if not (isinstance(v, list) and len(v) == 6 and all(_is_num(x) for x in v)):
+            raise ValueError(f"zone {name!r}: {key} must be a list of 6 numbers")
+    sz = z.get("safezone")
+    if not (isinstance(sz, list) and len(sz) == 6):
+        raise ValueError(f"zone {name!r}: safezone must be a list of 6 [lo, hi] pairs")
+    for i, pair in enumerate(sz):
+        if not (isinstance(pair, list) and len(pair) == 2
+                and _is_num(pair[0]) and _is_num(pair[1]) and pair[0] < pair[1]):
+            raise ValueError(f"zone {name!r}: safezone axis {i} must be [lo, hi] with lo < hi")
+    exits = z.get("exits", [])
+    if not (isinstance(exits, list) and all(isinstance(e, str) for e in exits)):
+        raise ValueError(f"zone {name!r}: exits must be a list of zone names")
+    for e in exits:
+        if e not in all_names:
+            raise ValueError(f"zone {name!r}: exit {e!r} does not name an existing zone")
+    if not _is_num(z.get("speed")):
+        raise ValueError(f"zone {name!r}: speed must be a number")
+    acts = z.get("actions", {})
+    if not isinstance(acts, dict):
+        raise ValueError(f"zone {name!r}: actions must be an object")
+    for an, a in acts.items():
+        if not isinstance(a, dict):
+            raise ValueError(f"zone {name!r} action {an!r}: must be an object")
+        if "enabled" in a and not isinstance(a["enabled"], bool):
+            raise ValueError(f"zone {name!r} action {an!r}: 'enabled' must be a bool")
+        pos = a.get("pos")
+        if not (isinstance(pos, list) and pos and all(
+                isinstance(p, list) and len(p) == 6 and all(_is_num(x) for x in p) for p in pos)):
+            raise ValueError(f"zone {name!r} action {an!r}: pos must be a list of 6-number poses")
+        spd = a.get("speed")
+        if not (isinstance(spd, list) and len(spd) == len(pos) and all(_is_num(x) for x in spd)):
+            raise ValueError(f"zone {name!r} action {an!r}: speed must have one value per pose")
+
+
+def validate_state_data(data) -> dict:
+    """Validate a full zone/pose data table. Returns ``data`` or raises ``ValueError``."""
+    if not isinstance(data, dict):
+        raise ValueError("data must be an object")
+    zones = data.get("zones")
+    if not (isinstance(zones, dict) and zones):
+        raise ValueError("'zones' must be a non-empty object")
+    names = set(zones)
+    for name, z in zones.items():
+        _validate_zone(name, z, names)
+    for key in ("poses", "lin_poses"):
+        if key in data:
+            table = data[key]
+            if not isinstance(table, dict):
+                raise ValueError(f"{key!r} must be an object")
+            for pn, ps in table.items():
+                if not (isinstance(ps, list) and all(
+                        isinstance(p, list) and len(p) == 6 and all(_is_num(x) for x in p)
+                        for p in ps)):
+                    raise ValueError(f"{key}[{pn!r}] must be a list of 6-number poses")
+    return data
+
+
+def load_state_data(path) -> dict:
+    """Load and validate the on-disk data file. Raises ``OSError``/``ValueError``."""
+    with open(path, "r", encoding="utf-8") as f:
+        return validate_state_data(json.load(f))
+
+
 @dataclass
 class Zone:
     """A single zone, with typed accessors over the raw dict."""
@@ -193,8 +277,25 @@ class Zone:
     def speed(self) -> float:
         return self.data["speed"]
 
+    @property
+    def enabled(self) -> bool:
+        """Whether this zone is enabled (default true when the flag is absent)."""
+        return bool(self.data.get("enabled", True))
+
     def actions(self) -> Dict[str, dict]:
-        return self.data.get("actions", {})
+        """The zone's action table as a dict (empty when absent or malformed)."""
+        a = self.data.get("actions", {})
+        return a if isinstance(a, dict) else {}
+
+    def action_enabled(self, name: str) -> bool:
+        """Whether a named action is enabled (default true when the flag is absent)."""
+        a = self.data.get("actions", {})
+        if not isinstance(a, dict):
+            return True
+        act = a.get(name)
+        if not isinstance(act, dict):
+            return True
+        return bool(act.get("enabled", True))
 
 
 class Zones:
@@ -216,3 +317,7 @@ class Zones:
     def can_exit_to(self, current: str, target: str) -> bool:
         """True if ``target`` is a declared exit of ``current``."""
         return target in self._by_name[current].exits
+
+    def table(self) -> Dict[str, dict]:
+        """A copy of the full zone table (for the HTTP ``GET /api/zones`` endpoint)."""
+        return {n: dict(d) for n, d in self._zones.items()}

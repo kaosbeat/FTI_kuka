@@ -38,10 +38,15 @@ FLAG_BY_NOTE = {41: "wandermode", 42: "randomwristmode", 73: "dynmode", 74: "rea
 class MidiInput:
     """Reads MIDI and turns it into commands on the bus."""
 
-    def __init__(self, bus: StateBus, in_port: Optional[int] = 0, enabled: bool = True):
+    def __init__(self, bus: StateBus, in_port: Optional[int] = 0, enabled: bool = True,
+                 poses=None, lin_poses=None):
         self.bus = bus
         self.in_port = in_port
         self.enabled = enabled
+        # Named pose tables come from the loaded zone data (wired in main.py);
+        # the built-in dicts are the fallback when the data file omits them.
+        self.poses = poses if poses is not None else POSES
+        self.lin_poses = lin_poses if lin_poses is not None else LIN_POSES
         self._midi = None
         if enabled:
             self._connect()
@@ -101,15 +106,17 @@ class MidiInput:
         if velocity == 0:  # note off
             return
         if channel in (0, 1) and 61 <= note <= 64:
-            pose = POSES["ch1"][note - 61]
-            self._submit(Cmd.SET_JOINT_POSE, {"pose": pose})
+            table = self.poses.get("ch1")
+            if table and 0 <= note - 61 < len(table):
+                self._submit(Cmd.SET_JOINT_POSE, {"pose": table[note - 61]})
         elif channel == 0 and note in FLAG_BY_NOTE:
             self._submit(Cmd.SET_FLAG, {"flag": FLAG_BY_NOTE[note], "value": velocity})
         elif channel == 2:
             self._submit(Cmd.RANDOM_WRIST, {})
         elif channel == 5:
-            pose = LIN_POSES["pos1"][velocity % len(LIN_POSES["pos1"])]
-            self._submit(Cmd.SET_LINEAR_POSE, {"pose": pose})
+            table = self.lin_poses.get("pos1")
+            if table:
+                self._submit(Cmd.SET_LINEAR_POSE, {"pose": table[velocity % len(table)]})
 
     def _submit(self, cmd: Cmd, payload: dict) -> None:
         self.bus.submit(Command(cmd=cmd, payload=payload))

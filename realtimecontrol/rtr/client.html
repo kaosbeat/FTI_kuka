@@ -123,25 +123,47 @@
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="rtr3d.js"></script>
 <script>
 "use strict";
 
-// Mirrors rtr/state/zones.py (safezones + exits), so the page can show axis
-// ranges and dim zones that are not reachable from the current one.
-const ZONES = {
-  init:       { safezone: [[-94,122],[-105,-65],[89,115],[-15,15],[-15,45],[-357,357]],  exits: ["rest"],                    actions: [] },
-  rest:       { safezone: [[-5,5],[-134,-130],[155,157],[-3,3],[-10,10],[-357,357]],     exits: ["wakeup"],                  actions: ["breathe","look"] },
-  wakeup:     { safezone: [[-94,122],[-134,-123],[136,157],[-23,23],[-25,25],[-357,357]],exits: ["stretch","wander"],        actions: ["breathe","look"] },
-  stretch:    { safezone: [[-94,122],[-98,-96],[13,19],[-2,2],[85,95],[-357,357]],       exits: ["wander"],                  actions: ["breathe","look"] },
-  wander:     { safezone: [[-94,122],[-70,-60],[29,100],[-4,4],[-118,118],[-357,357]],   exits: ["stretch","wildwander"],    actions: ["breathe","look"] },
-  wildwander: { safezone: [[-94,122],[-124,-60],[-19,157],[-1,1],[-118,118],[-357,357]], exits: ["stretch","wander"],        actions: ["breathe","look"] },
+// Built-in fallback zone table (mirrors rtr/state/zones.py: safezones + exits +
+// action names). Used when the HTTP API is unreachable (e.g. opened from file://).
+// Over HTTP it is replaced by GET /api/zones (the live, editable table).
+const FALLBACK_ZONES = {
+  init:       { safezone: [[-94,122],[-105,-65],[89,115],[-15,15],[-15,45],[-357,357]],  exits: ["rest"],                    actions: {} },
+  rest:       { safezone: [[-5,5],[-134,-130],[155,157],[-3,3],[-10,10],[-357,357]],     exits: ["wakeup"],                  actions: {breathe:{},look:{}} },
+  wakeup:     { safezone: [[-94,122],[-134,-123],[136,157],[-23,23],[-25,25],[-357,357]],exits: ["stretch","wander"],        actions: {breathe:{},look:{}} },
+  stretch:    { safezone: [[-94,122],[-98,-96],[13,19],[-2,2],[85,95],[-357,357]],       exits: ["wander"],                  actions: {breathe:{},look:{}} },
+  wander:     { safezone: [[-94,122],[-70,-60],[29,100],[-4,4],[-118,118],[-357,357]],   exits: ["stretch","wildwander"],    actions: {breathe:{},look:{}} },
+  wildwander: { safezone: [[-94,122],[-124,-60],[-19,157],[-1,1],[-118,118],[-357,357]], exits: ["stretch","wander"],        actions: {breathe:{},look:{}} },
 };
+let ZONES = FALLBACK_ZONES;
+let currentZone = null;
+
 const AXES = ["A1","A2","A3","A4","A5","A6"];
 const MODES = ["wander","random","action","track","hold"];
 const FLAGS = ["wandermode","randomwristmode","dynmode","reachmode"];
 
 const $ = (id) => document.getElementById(id);
-const fmt = (v) => v == null ? "—" : (Math.round(v * 10) / 10).toFixed(1);
+
+// Fetch the live zone table from the core's HTTP API (same origin). Falls back to
+// FALLBACK_ZONES when the request fails (file:// usage or the core is down).
+async function fetchZones() {
+  try {
+    const r = await fetch("/api/zones", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    if (data && data.zones) {
+      ZONES = data.zones;
+      buildZoneButtons();
+      buildActionButtons(currentZone);
+    }
+  } catch (err) {
+    console.log("zones fetch failed, keeping fallback:", err);
+  }
+}
 
 // ------------------------------------------------------------------
 // Log.
@@ -167,7 +189,7 @@ function connect() {
   const url = $("host").value.trim();
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   ws = new WebSocket(url);
-  ws.onopen = () => { setConn(true); log("connected to " + url); };
+  ws.onopen = () => { setConn(true); log("connected to " + url); fetchZones(); };
   ws.onclose = () => {
     setConn(false);
     log("disconnected; retrying in 2s");
@@ -177,6 +199,7 @@ function connect() {
     let m;
     try { m = JSON.parse(e.data); } catch (err) { log("bad message: " + err); return; }
     if (m.type === "state") render(m);
+    else if (m.type === "zones_changed") { fetchZones(); log("zones changed; re-fetching"); }
     else log("event " + m.type + " = " + (m.zone !== undefined ? m.zone : m.mode));
   };
 }
@@ -195,6 +218,12 @@ const zoneBtns = {}, modeBtns = {}, actionBtns = {};
 const poseInputs = [];
 
 function render(s) {
+  // Actions are per-zone: rebuild the action buttons whenever the zone changes.
+  if (s.zone !== currentZone) {
+    currentZone = s.zone;
+    buildActionButtons(currentZone);
+  }
+
   $("zone").textContent = s.zone;
   $("mode").textContent = s.mode;
   $("action").textContent = s.action === null ? "—" : (s.action || "—");
@@ -217,13 +246,55 @@ function render(s) {
     flagEls[f].className = "chip" + (s.flags[f] ? " on" : "");
   }
 
+  // Zone buttons: active = current; dim = disabled or unreachable from current.
   for (const name of Object.keys(zoneBtns)) {
-    zoneBtns[name].className =
-      name === s.zone ? "active" :
-      (!ZONES[s.zone] || !ZONES[s.zone].exits.includes(name)) ? "dim" : "";
+    const z = ZONES[name];
+    let cls = "";
+    if (name === s.zone) cls = "active";
+    else if (!z || z.enabled === false) cls = "dim";
+    else if (!ZONES[s.zone] || !ZONES[s.zone].exits.includes(name)) cls = "dim";
+    zoneBtns[name].className = cls;
   }
   for (const m of MODES) modeBtns[m].className = m === s.mode ? "active" : "";
-  for (const a of Object.keys(actionBtns)) actionBtns[a].className = a === s.action ? "active" : "";
+  // Action buttons: active = current action; dim = disabled.
+  for (const a of Object.keys(actionBtns)) {
+    const act = (ZONES[currentZone] && ZONES[currentZone].actions) ? ZONES[currentZone].actions[a] : null;
+    let cls = "";
+    if (a === s.action) cls = "active";
+    else if (act && act.enabled === false) cls = "dim";
+    actionBtns[a].className = cls;
+  }
+}
+
+// ------------------------------------------------------------------
+// Zone + action buttons (rebuilt when the zone table or current zone changes).
+// ------------------------------------------------------------------
+function buildZoneButtons() {
+  const el = $("zones");
+  el.innerHTML = "";
+  for (const k in zoneBtns) delete zoneBtns[k];
+  Object.keys(ZONES).forEach((name) => {
+    const b = document.createElement("button");
+    b.textContent = name;
+    b.onclick = () => send({ cmd: "goto_zone", zone: name });
+    el.appendChild(b);
+    zoneBtns[name] = b;
+  });
+}
+
+function buildActionButtons(zoneName) {
+  const el = $("actions");
+  el.innerHTML = "";
+  for (const k in actionBtns) delete actionBtns[k];
+  const z = ZONES[zoneName];
+  const actions = (z && z.actions) ? z.actions : {};
+  Object.keys(actions).forEach((a) => {
+    const b = document.createElement("button");
+    b.textContent = a;
+    b.onclick = () => send({ cmd: "play_action", action: a });
+    el.appendChild(b);
+    actionBtns[a] = b;
+  });
 }
 
 // ------------------------------------------------------------------
@@ -253,14 +324,8 @@ function buildUI() {
     flagEls[f] = c;
   });
 
-  // zones
-  Object.keys(ZONES).forEach((name) => {
-    const b = document.createElement("button");
-    b.textContent = name;
-    b.onclick = () => send({ cmd: "goto_zone", zone: name });
-    $("zones").appendChild(b);
-    zoneBtns[name] = b;
-  });
+  // zones (built from the current zone table; rebuilt on fetch)
+  buildZoneButtons();
 
   // modes
   MODES.forEach((m) => {
@@ -271,14 +336,8 @@ function buildUI() {
     modeBtns[m] = b;
   });
 
-  // actions
-  ["breathe", "look"].forEach((a) => {
-    const b = document.createElement("button");
-    b.textContent = a;
-    b.onclick = () => send({ cmd: "play_action", action: a });
-    $("actions").appendChild(b);
-    actionBtns[a] = b;
-  });
+  // actions (per-zone; rebuilt when the zone changes)
+  buildActionButtons(null);
 
   // joint pose inputs
   AXES.forEach((n, i) => {
@@ -324,177 +383,14 @@ function buildUI() {
   $("connect").onclick = () => { const u = $("host").value.trim(); $("host").value = u; connect(); };
 }
 
-// ------------------------------------------------------------------
-// 3D schematic (Three.js). The joint chain mirrors kuka_kr60.urdf; each rotor
-// is driven by the KUKA joint variable (deg -> rad about the URDF joint axis).
-// ------------------------------------------------------------------
-const Robot3D = (() => {
-  const JOINTS = [
-    { pos: [0, 0, 0.47975],            rpy: [1.5708, 0, 0],          axis: [0, -1, 0] },
-    { pos: [0.35, 0.33557, 0.094],     rpy: [-1.5708, 0, 0],         axis: [0, 1, 0] },
-    { pos: [0.83287, -0.0097315, 0],   rpy: [0, 0, -0.011684],       axis: [0, 1, 0] },
-    { pos: [0.60824, 0.089904, 0.145], rpy: [0, 0, 0],               axis: [-1, 0, 0] },
-    { pos: [0.41176, 0, 0.0000638],    rpy: [0, -0.00079387, 0.011684], axis: [0.011683, 0.99993, 0] },
-    { pos: [0.12607, -0.0000365, -0.0000281], rpy: [0, 0, 0],        axis: [-1, 0, 0] },
-  ];
-  const TOOL = { pos: [0.215, 0, 0], rpy: [0, 1.5708, 0] };
-  const HOME = [0, -90, 90, 0, 90, 0];
-
-  let scene, camera, renderer, controls, rotors, rotorsT, toolNode;
-  let container, toolEl, running = false;
-
-  function rotFromRpy(r) {
-    const Rx = new THREE.Matrix4().makeRotationX(r[0]);
-    const Ry = new THREE.Matrix4().makeRotationY(r[1]);
-    const Rz = new THREE.Matrix4().makeRotationZ(r[2]);
-    const RyRx = new THREE.Matrix4().multiplyMatrices(Ry, Rx);
-    return new THREE.Matrix4().multiplyMatrices(Rz, RyRx);
-  }
-
-  function addSegment(parent, to, radius, mat) {
-    const v = new THREE.Vector3(to[0], to[1], to[2]);
-    const len = v.length();
-    if (len < 1e-6) return;
-    const geo = new THREE.CylinderGeometry(radius, radius * 0.8, len, 20);
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.copy(v.clone().multiplyScalar(0.5));
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), v.clone().normalize());
-    parent.add(mesh);
-  }
-
-  function addSphere(parent, radius, mat) {
-    parent.add(new THREE.Mesh(new THREE.SphereGeometry(radius, 20, 16), mat));
-  }
-
-  function buildArm(parent, mats) {
-    const rot = [];
-    let ref = parent;
-    for (let j = 0; j < 6; j++) {
-      const jt = JOINTS[j];
-      const n = new THREE.Group();
-      n.position.set(jt.pos[0], jt.pos[1], jt.pos[2]);
-      n.quaternion.setFromRotationMatrix(rotFromRpy(jt.rpy));
-      ref.add(n);
-      const r = new THREE.Group();
-      n.add(r);
-      rot.push(r);
-      const to = j < 5 ? JOINTS[j + 1].pos : TOOL.pos;
-      addSegment(r, to, mats.linkRadius, mats.linkMat);
-      addSphere(r, mats.jointRadius, mats.jointMat);
-      ref = r;
-    }
-    const tool = new THREE.Group();
-    tool.position.set(TOOL.pos[0], TOOL.pos[1], TOOL.pos[2]);
-    tool.quaternion.setFromRotationMatrix(rotFromRpy(TOOL.rpy));
-    ref.add(tool);
-    tool.add(new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.14), mats.toolMat));
-    return { rot, tool };
-  }
-
-  function setJoints(rot, jointsDeg) {
-    for (let j = 0; j < 6; j++) {
-      const ang = jointsDeg[j] * Math.PI / 180;
-      const axis = new THREE.Vector3(JOINTS[j].axis[0], JOINTS[j].axis[1], JOINTS[j].axis[2]);
-      rot[j].quaternion.setFromAxisAngle(axis, ang);
-    }
-  }
-
-  function init(containerEl) {
-    if (typeof THREE === "undefined") { log("three.js failed to load; 3d view disabled"); return; }
-    container = containerEl;
-    toolEl = $("toolPos");
-    const w = container.clientWidth || 600, h = container.clientHeight || 360;
-
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0d0f13);
-
-    camera = new THREE.PerspectiveCamera(45, w / h, 0.01, 100);
-    camera.position.set(2.6, -2.4, 2.2);
-    camera.up.set(0, 0, 1);  // URDF is Z-up
-
-    renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setSize(w, h);
-    container.appendChild(renderer.domElement);
-
-    controls = new THREE.OrbitControls(camera, renderer.domElement);
-    controls.target.set(0.5, 0, 1.1);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.12;
-    controls.update();
-
-    scene.add(new THREE.AmbientLight(0xffffff, 0.65));
-    const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-    dir.position.set(3, 4, 5);
-    scene.add(dir);
-
-    scene.add(new THREE.GridHelper(8, 16, 0x3a4152, 0x1c2029));
-
-    const baseMat = new THREE.MeshStandardMaterial({ color: 0x2a2f3a, metalness: 0.2, roughness: 0.85 });
-    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.1), baseMat);
-    plate.position.set(0, 0, 0.05);
-    scene.add(plate);
-    const ped = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.22, 0.48, 24), baseMat);
-    ped.rotation.x = Math.PI / 2;
-    ped.position.set(0, 0, 0.24);
-    scene.add(ped);
-
-    const curMats = {
-      linkMat: new THREE.MeshStandardMaterial({ color: 0xff6a2a, metalness: 0.3, roughness: 0.5 }),
-      jointMat: new THREE.MeshStandardMaterial({ color: 0x3a3f4a, metalness: 0.4, roughness: 0.6 }),
-      toolMat: new THREE.MeshStandardMaterial({ color: 0xd7dbe2, metalness: 0.2, roughness: 0.7 }),
-      linkRadius: 0.09, jointRadius: 0.11,
-    };
-    const tgtMats = {
-      linkMat: new THREE.MeshStandardMaterial({ color: 0x4fc08d, metalness: 0.1, roughness: 0.8, transparent: true, opacity: 0.22 }),
-      jointMat: new THREE.MeshStandardMaterial({ color: 0x4fc08d, metalness: 0.1, roughness: 0.8, transparent: true, opacity: 0.22 }),
-      toolMat: new THREE.MeshStandardMaterial({ color: 0x4fc08d, metalness: 0.1, roughness: 0.8, transparent: true, opacity: 0.22 }),
-      linkRadius: 0.09, jointRadius: 0.11,
-    };
-
-    const arm = buildArm(scene, curMats);
-    rotors = arm.rot; toolNode = arm.tool;
-    const armT = buildArm(scene, tgtMats);
-    rotorsT = armT.rot;
-
-    setJoints(rotors, HOME);
-    setJoints(rotorsT, HOME);
-
-    window.addEventListener("resize", () => {
-      const cw = container.clientWidth, ch = container.clientHeight;
-      if (!cw || !ch) return;
-      camera.aspect = cw / ch;
-      camera.updateProjectionMatrix();
-      renderer.setSize(cw, ch);
-    });
-
-    (function loop() {
-      requestAnimationFrame(loop);
-      controls.update();
-      renderer.render(scene, camera);
-      if (toolNode) {
-        const p = toolNode.getWorldPosition(new THREE.Vector3());
-        toolEl.textContent = p.x.toFixed(2) + ", " + p.y.toFixed(2) + ", " + p.z.toFixed(2);
-      }
-    })();
-    running = true;
-  }
-
-  function update(s) {
-    if (!running) return;
-    if (s.joints) setJoints(rotors, s.joints);
-    if (s.target) setJoints(rotorsT, s.target);
-  }
-
-  return { init, update };
-})();
+// The Robot3D schematic builder + fmt helper live in rtr3d.js (shared with editor.html).
 
 let lastSnap = null;
 const _render = render;
 render = (s) => { lastSnap = s; _render(s); Robot3D.update(s); };
 
 buildUI();
-Robot3D.init($("robot3d"));
+Robot3D.init($("robot3d"), { toolEl: $("toolPos"), log: log, environment: true });
 connect();
 </script>
 </body>

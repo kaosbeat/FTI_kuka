@@ -116,7 +116,12 @@ starts folding commands into ticks.
 | `sound/sound.py`  | Sound adapter: MIDI-out, driven by the state.                          |
 | `io/midi.py`      | MIDI-in adapter: maps controller messages to core commands.           |
 | `io/websocket.py` | WebSocket server: the single bridge for external control + state.     |
-| `client.html`     | A self-contained browser control page (WebSocket client).             |
+| `io/httpserver.py`| HTTP server: serves the pages + `/api/zones` (port 8766, stdlib-only).|
+| `client.html`     | Browser control page (served over HTTP; WebSocket client).            |
+| `editor.html`     | Zone/action editor page (create/edit/enable-disable; hot-reloads core).|
+| `rtr3d.js`        | Shared Robot3D schematic builder + helpers (used by client + editor). |
+| `zones.json`      | On-disk zone/pose data — the editable source of truth.                |
+| `assets/`         | Blender-editable environment GLB + its stdlib-only generator.         |
 
 ## The state machine
 
@@ -210,13 +215,65 @@ client. Two directions, one port (default 8765):
 - **Out** — the core broadcasts a state frame to every connected client (driven by the
   `Display` adapter).
 
-`client.html` is a self-contained browser page (no build step, no server) that opens a
-WebSocket to the core and is the hand-rolled stand-in for P5live. It shows the current
-state (zone / mode / action / speed / moving / flags), all six axes with their target
-and position within the current zone's safezone, and a live log; and it sends commands
-(zone buttons, mode buttons, action buttons, a 6-axis joint-pose editor, wander-limit
-sliders, random-wrist). Open it from any browser (`file://` works) and it auto-connects
-to `ws://localhost:8765`, retrying every 2 s.
+`client.html` is a browser page (no build step) that opens a WebSocket to the core and
+is the hand-rolled stand-in for P5live. It shows the current state (zone / mode / action
+/ speed / moving / flags), all six axes with their target and position within the current
+zone's safezone, and a live log; and it sends commands (zone buttons, mode buttons, action
+buttons, a 6-axis joint-pose editor, wander-limit sliders, random-wrist). It auto-connects
+to `ws://localhost:8765`, retrying every 2 s. It is best served over the HTTP server
+(`http://localhost:8766/client.html`); opened from `file://` it still works against the
+WebSocket, but the environment GLB and live zone table are unavailable (it falls back to
+its built-in zones and no environment).
+
+### The HTTP server, editor, and zones.json
+
+The core also runs a small **HTTP server** (`io/httpserver.py`, stdlib-only, default port
+**8766**, `--http-port` / `--no-http`). It exists because browsers block loading local
+assets (three.js, the environment GLB, shared JS) from a `file://` page. It serves:
+
+- `GET /` → `client.html`, plus `/client.html`, `/editor.html`, `/rtr3d.js`, `/assets/<file>`
+  (path-traversal safe),
+- `GET /api/zones` → the current zone data table (read fresh from `zones.json`),
+- `POST /api/zones` → validates the full table and, on success, writes it atomically to
+  `zones.json` and submits a `reload_zones` command so the running core **hot-reloads**
+  (the robot keeps running; if the current zone was deleted the machine resets to `init`).
+  On validation failure the file is untouched and a 400 is returned.
+
+**`zones.json`** is the editable source of truth for zones, actions, and the named poses
+(`poses` / `lin_poses`). The built-in dicts in `state/zones.py` remain the fallback if the
+file is missing or corrupt. Each zone and action has an **`enabled`** flag (default true):
+a disabled zone is rejected by `goto_zone` (the UI dims it; the robot already inside keeps
+running and can still exit), and a disabled action is rejected by `play_action`.
+
+**`editor.html`** is the zone/action editor. It has its own 3D preview (the shared
+`rtr3d.js` Robot3D), mirrors the live robot over the same WebSocket, and lets you:
+
+- add / remove zones,
+- edit each zone (enabled, speed, startpos, exitpos, safezone lo/hi, exits),
+- edit each action (enabled, name, pose rows, per-pose speed),
+- step through an action's poses locally with the ghost (target) arm,
+- **Save** the whole table (`POST /api/zones` → the core hot-reloads, so `client.html` and
+  the live robot pick it up immediately), and **Play** an action over the WebSocket.
+
+It loads the table from `GET /api/zones` (falling back to `/zones.json`, then a built-in),
+and validates client-side before posting (all poses 6 numbers, exits reference existing
+zones; it warns, non-blocking, when a pose falls outside its zone's safezone).
+
+### The Blender → GLB environment
+
+`assets/environment.glb` is a **Blender-editable** environment rendered around the schematic
+robot in `client.html` (and the editor). glTF is Y-up; the scene is Z-up, so the loader
+rotates the loaded scene +90° about X to sit it on the floor. The starter GLB is generated
+by `assets/make_environment.py` (stdlib-only, since Blender is not available in this
+environment): a 10×10 m floor, a pedestal cylinder at the origin, and two corner walls so
+the robot is not boxed in. To edit it:
+
+1. Open `assets/environment.glb` in Blender.
+2. Edit the scene.
+3. `File > Export > glTF 2.0 (.glb)` over the same file.
+
+The client loads `assets/environment.glb` on init and logs "environment not loaded" (and
+continues) if it is missing or fails to load (e.g. `file://` usage).
 
 ### Sound
 
@@ -239,6 +296,15 @@ python main.py --sim --no-midi --no-sound
 # self-contained wander loop, no WebSocket, prints a line each second
 python sim_demo.py
 ```
+
+With the core running, open the pages over the HTTP server (port 8766):
+
+- `http://localhost:8766/client.html` — the control page (3D view + environment + zones).
+- `http://localhost:8766/editor.html` — the zone/action editor.
+
+`GET http://localhost:8766/api/zones` returns the live zone table; `POST` to the same URL
+saves it (the core hot-reloads). Use `--http-port` to change the port or `--no-http` to
+disable the server (the WebSocket on 8765 still works).
 
 ### kukapy (real robot only)
 

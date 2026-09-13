@@ -33,9 +33,12 @@ class StateMachine:
     # Requested changes (called by the brain when a command arrives).
     # ------------------------------------------------------------------
     def request_zone(self, name: str, curjpos: List[float]) -> bool:
-        """Begin a transition to ``name``. Returns False if the zone is unknown."""
+        """Begin a transition to ``name``. Returns False if the zone is unknown/disabled."""
         if not self.zones.has(name):
             print(f"[state] unknown zone: {name}")
+            return False
+        if not self.zones.get(name).enabled:
+            print(f"[state] zone disabled: {name}")
             return False
         # Never start a transition while one is already in progress.
         if self._transition is not None:
@@ -71,10 +74,16 @@ class StateMachine:
         return pose
 
     def play_action(self, name: str) -> bool:
-        """Start (or restart) a named action in the current zone."""
+        """Start (or restart) a named action in the current zone.
+
+        Returns False if the action is unknown or disabled.
+        """
         zone = self.zones.get(self.current_zone)
         if name not in zone.actions():
             print(f"[state] unknown action in {self.current_zone}: {name}")
+            return False
+        if not zone.action_enabled(name):
+            print(f"[state] action disabled in {self.current_zone}: {name}")
             return False
         self.current_action = name
         self.action_index = 0

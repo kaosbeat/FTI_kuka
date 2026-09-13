@@ -34,6 +34,16 @@ class Config:
     ws_host: str = "0.0.0.0"
     ws_port: int = 8765
 
+    # --- HTTP server (static pages + /api/zones) -------------------------
+    # Serves client.html / editor.html / rtr3d.js / assets and the zone API.
+    http_host: str = "0.0.0.0"
+    http_port: int = 8766
+    enable_http: bool = True
+
+    # --- zone data -------------------------------------------------------
+    # On-disk zone/pose table (zones.json). The built-in dicts are the fallback.
+    zones_path: str = "zones.json"
+
     # --- display / camera / sound ---------------------------------------
     # Only enabled when the corresponding hardware is present.
     enable_display: bool = True

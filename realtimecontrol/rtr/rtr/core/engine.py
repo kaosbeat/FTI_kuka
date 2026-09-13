@@ -15,26 +15,29 @@ brain advances one step per tick.
 """
 
 import asyncio
-from typing import Optional
+from typing import Callable, Optional
 
 from ..brain.brain import Brain
 from ..core.bus import StateBus
-from ..core.commands import Event, Snapshot
+from ..core.commands import Cmd, Event, Snapshot
 from ..robot.base import RobotBase
 from ..robot.helpers import comparelist
 from ..state.machine import StateMachine
+from ..state.zones import Zones
 
 
 class Engine:
     """Runs the core's control loop."""
 
     def __init__(self, bus: StateBus, robot: RobotBase, brain: Brain,
-                 machine: StateMachine, tick_hz: float = 20.0):
+                 machine: StateMachine, tick_hz: float = 20.0,
+                 zone_loader: Callable[[], dict] = None):
         self.bus = bus
         self.robot = robot
         self.brain = brain
         self.machine = machine
         self.tick_hz = tick_hz
+        self._zone_loader = zone_loader
         self._running = False
 
     async def run(self) -> None:
@@ -54,7 +57,10 @@ class Engine:
             curpos = await asyncio.to_thread(self.robot.get_curpos)
 
             for cmd in self.bus.drain_commands():
-                self.brain.on_command(cmd, curjpos)
+                if cmd.cmd == Cmd.RELOAD_ZONES:
+                    self.reload_zones()
+                else:
+                    self.brain.on_command(cmd, curjpos)
 
             target = self.brain.step(curjpos)
 
@@ -74,6 +80,35 @@ class Engine:
 
     def stop(self) -> None:
         self._running = False
+
+    def reload_zones(self) -> None:
+        """Re-read the zone data file and swap it into the machine + brain.
+
+        The robot's pose is untouched. If the current zone no longer exists the
+        machine resets to ``"init"``. A read/validation failure keeps the current
+        zones (logged) so a bad edit never kills the core.
+        """
+        if self._zone_loader is None:
+            return
+        try:
+            data = self._zone_loader()
+        except (OSError, ValueError) as exc:
+            print(f"[engine] zone reload failed ({exc}); keeping current zones")
+            return
+        zones = Zones(data.get("zones"))
+        m = self.machine
+        # Drop an in-progress transition whose target zone was deleted.
+        if m._transition is not None and not zones.has(m._transition["zone"]):
+            m._transition = None
+        if not zones.has(m.current_zone):
+            m.current_zone = "init"
+            m.current_action = None
+            m.action_index = 0
+        m.zones = zones
+        m.speed = zones.get(m.current_zone).speed
+        self.brain.zones = zones
+        self.bus.publish(Event.ZONES_CHANGED, zones.names())
+        print(f"[engine] zones reloaded: {', '.join(zones.names())}")
 
     def _publish(self, curjpos, curpos, target: Optional[list]) -> None:
         moving = not comparelist(curjpos, target if target is not None else curjpos,

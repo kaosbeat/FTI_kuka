@@ -1,7 +1,7 @@
 """RTR entry point.
 
 Wires the core (state machine + brain + engine) and its adapters (robot, display,
-camera, sound, MIDI, WebSocket) together, then runs the engine until Ctrl-C.
+camera, sound, MIDI, WebSocket, HTTP) together, then runs the engine until Ctrl-C.
 
 Examples
 --------
@@ -12,19 +12,24 @@ Examples
 
 import argparse
 import asyncio
+import os
 import signal
 import sys
 
-from rtr.config import Config, from_args
+from rtr.config import Config
 from rtr.core.bus import StateBus
 from rtr.core.engine import Engine
 from rtr.robot import make_robot
 from rtr.state import StateMachine, Zones
+from rtr.state.zones import LIN_POSES, POSES, ZONES, load_state_data
 from rtr.brain import Brain
 from rtr.display import make_display
 from rtr.sound import make_sound
 from rtr.camera import make_camera
-from rtr.io import MidiInput, WebSocketServer
+from rtr.io import HttpServer, MidiInput, WebSocketServer
+
+# The directory this file lives in: where client.html / editor.html / assets / zones.json are.
+ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
 def parse_args(argv):
@@ -35,6 +40,10 @@ def parse_args(argv):
     parser.add_argument("--port", type=int, default=18735, help="robot EKI port")
     parser.add_argument("--tick", type=float, default=20.0, help="engine tick rate (Hz)")
     parser.add_argument("--ws-port", type=int, default=8765, help="WebSocket port")
+    parser.add_argument("--http-port", type=int, default=8766, help="HTTP server port")
+    parser.add_argument("--no-http", action="store_true", help="disable the HTTP server")
+    parser.add_argument("--zones", default="zones.json",
+                        help="zone data file (default: zones.json next to main.py)")
     parser.add_argument("--midi", type=int, default=0, help="MIDI in port index")
     parser.add_argument("--no-midi", action="store_true", help="disable MIDI input")
     parser.add_argument("--no-sound", action="store_true", help="disable sound (MIDI out)")
@@ -50,6 +59,9 @@ def build_config(args) -> Config:
     cfg.robot_port = args.port
     cfg.tick_hz = args.tick
     cfg.ws_port = args.ws_port
+    cfg.http_port = args.http_port
+    cfg.enable_http = not args.no_http
+    cfg.zones_path = _resolve(args.zones)
     cfg.midi_in_port = None if args.no_midi else args.midi
     cfg.enable_sound = not args.no_sound
     cfg.enable_display = not args.no_display
@@ -57,29 +69,55 @@ def build_config(args) -> Config:
     return cfg
 
 
+def _resolve(path: str) -> str:
+    """Make a path absolute, anchoring relative paths at the rtr directory."""
+    return path if os.path.isabs(path) else os.path.join(ROOT, path)
+
+
+def load_zones_data(path: str) -> dict:
+    """Load the zone data file, falling back to the built-in tables with a warning."""
+    try:
+        return load_state_data(path)
+    except (OSError, ValueError) as exc:
+        print(f"[rtr] zones file {path!r} unavailable ({exc}); using built-in zones")
+        return {"zones": ZONES, "poses": POSES, "lin_poses": LIN_POSES}
+
+
 async def run(cfg: Config) -> None:
     bus = StateBus()
 
+    # --- zone data --------------------------------------------------------
+    data = load_zones_data(cfg.zones_path)
+    zones = Zones(data["zones"])
+    poses = data.get("poses", POSES)
+    lin_poses = data.get("lin_poses", LIN_POSES)
+
     # --- core -----------------------------------------------------------
     robot = make_robot(cfg.robot_kind, port=cfg.robot_port, tick_hz=cfg.tick_hz)
-    zones = Zones()
     machine = StateMachine(zones)
     brain = Brain(machine, zones, tick_hz=cfg.tick_hz)
-    engine = Engine(bus, robot, brain, machine, tick_hz=cfg.tick_hz)
+    engine = Engine(bus, robot, brain, machine, tick_hz=cfg.tick_hz,
+                    zone_loader=lambda: load_state_data(cfg.zones_path))
 
     # --- adapters -------------------------------------------------------
     ws = WebSocketServer(bus, host=cfg.ws_host, port=cfg.ws_port,
                          enabled=cfg.enable_display)
+    http = HttpServer(bus, zones_provider=lambda: machine.zones,
+                      zones_path=cfg.zones_path, root=ROOT,
+                      host=cfg.http_host, port=cfg.http_port,
+                      enabled=cfg.enable_http)
     display = make_display(bus, ws.broadcast, enabled=cfg.enable_display)
     sound = make_sound(bus, enabled=cfg.enable_sound,
                        out_port=cfg.midi_out_port, out_device=cfg.midi_out_device)
     camera = make_camera(bus, enabled=cfg.enable_camera)
     midi = MidiInput(bus, in_port=cfg.midi_in_port,
-                     enabled=cfg.midi_in_port is not None)
+                     enabled=cfg.midi_in_port is not None,
+                     poses=poses, lin_poses=lin_poses)
 
-    # The WebSocket bridge comes up first, so the control interface is always
-    # reachable (and keeps running) while we wait for the robot.
+    # The WebSocket + HTTP bridges come up first, so the control interface is
+    # always reachable (and keeps running) while we wait for the robot.
     await ws.start()
+    http.start()
 
     # The KUKA EKI link is a blocking listen/accept: Python is the TCP *server*
     # and the KRC dials in (start KUKAPY_SERVER on the pendant). Run it in a
@@ -92,7 +130,7 @@ async def run(cfg: Config) -> None:
     print(f"[rtr] robot connected: {cfg.robot_kind}")
 
     print(f"[rtr] core up: robot={cfg.robot_kind} zone={machine.current_zone} "
-          f"mode={brain.mode} ws={cfg.ws_port}")
+          f"mode={brain.mode} ws={cfg.ws_port} http={cfg.http_port if http.enabled else 'off'}")
 
     # --- run until interrupted ----------------------------------------
     engine_task = asyncio.create_task(engine.run())
@@ -106,6 +144,7 @@ async def run(cfg: Config) -> None:
         engine_task.cancel()
         await asyncio.gather(engine_task, return_exceptions=True)
         await ws.stop()
+        http.stop()
         midi.stop()
         sound.close()
         robot.disconnect()

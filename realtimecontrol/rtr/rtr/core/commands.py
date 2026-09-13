@@ -22,6 +22,7 @@ class Cmd(str, Enum):
     ADJUST_LIMIT = "adjust_limit"
     SET_FLAG = "set_flag"
     RANDOM_WRIST = "random_wrist"
+    RELOAD_ZONES = "reload_zones"
     STOP = "stop"
 
 
@@ -31,6 +32,7 @@ class Event(str, Enum):
     ZONE_CHANGED = "zone_changed"
     MODE_CHANGED = "mode_changed"
     ACTION_CHANGED = "action_changed"
+    ZONES_CHANGED = "zones_changed"
     POSE_UPDATED = "pose_updated"
     SNAPSHOT = "snapshot"
 
