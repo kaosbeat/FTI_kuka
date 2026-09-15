@@ -113,14 +113,15 @@ starts folding commands into ticks.
 | `robot/helpers.py`| Joint-limit math (`fitlimits`, `posSafe`, `comparelist`).             |
 | `camera/camera.py`| Camera control adapter (track/follow, analysis).                       |
 | `display/display.py`| Display adapter: turns each snapshot into a P5live frame over the WS. |
-| `sound/sound.py`  | Sound adapter: MIDI-out, driven by the state.                          |
-| `io/midi.py`      | MIDI-in adapter: maps controller messages to core commands.           |
+| `sound/sound.py`  | Sound adapter: configurable MIDI-out, data-driven from `sound.json`.  |
+| `io/midi.py`      | MIDI-in adapter: maps controller messages to core commands (goto-zone is path-routed; CC3 plays an action). |
 | `io/websocket.py` | WebSocket server: the single bridge for external control + state.     |
-| `io/httpserver.py`| HTTP server: serves the pages + `/api/zones` (port 8766, stdlib-only).|
+| `io/httpserver.py`| HTTP server: serves the pages + `/api/zones`, `/api/sound`, `/api/limits` (port 8766, stdlib-only).|
 | `client.html`     | Browser control page (served over HTTP; WebSocket client).            |
-| `editor.html`     | Zone/action editor page (create/edit/enable-disable; hot-reloads core).|
-| `rtr3d.js`        | Shared Robot3D schematic builder + helpers (used by client + editor). |
+| `editor.html`     | Zone/action + sound editor page (create/edit/enable-disable; hot-reloads core).|
+| `rtr3d.js`        | Shared Robot3D builder: the real KR60 (kr60ha xacro chain + visual STL meshes) + helpers (used by client + editor). |
 | `zones.json`      | On-disk zone/pose data — the editable source of truth.                |
+| `sound.json`      | On-disk MIDI-out mapping (channel + zone/mode/action messages).       |
 | `assets/`         | Blender-editable environment GLB + its stdlib-only generator.         |
 
 ## The state machine
@@ -139,6 +140,15 @@ times when in a current zone:
 If the robot's axes are all within the ranges specified, it can safely move to any of
 the other locations in that zone.
 
+On top of the per-zone safezone there is a **hardware floor**: the per-axis limits from
+the `kr60ha` xacro (`HARDWARE_LIMITS` in `state/zones.py`, exposed read-only by
+`GET /api/limits`). Every commanded pose is clamped to the **intersection** of the
+current zone's safezone and the hardware limits (`effective_limits`), so a safezone wider
+than the hardware range safely shrinks to the hardware range. Note **A6** (the rotary
+wrist) is now limited too — it was previously treated as free. The brain applies this
+floor to every pose it emits (wander / random / action / track / hold / transitions), so
+the published `target_pose` snapshot is always within the floor.
+
 A zone also declares:
 
 - `startpos` / `exitpos` — the pose used when entering / leaving the zone,
@@ -149,9 +159,12 @@ A zone also declares:
 ### Zones
 
 `init → rest → wakeup → {stretch, wander} → wildwander` (see `state/zones.py` for the
-graph and the exact limits). A transition is just data: a list of poses to pass through
-(the current zone's `exitpos`, then the target zone's `startpos`). `StateMachine.update`
-advances it one step per tick; nothing blocks.
+graph and the exact limits). A `goto_zone` is **path-routed** through the zone `exits`
+graph: `Zones.find_path(from, to)` (a BFS) returns the shortest sequence of zones, and
+`StateMachine.request_zone` builds the step list by walking it — for each hop it appends
+the current zone's `exitpos` then the next zone's `startpos`. A target with no path is
+rejected (logged, no transition). The old direct transition is the path-length-2 case.
+`StateMachine.update` advances the step list one pose per tick; nothing blocks.
 
 ### Actions
 
@@ -174,7 +187,7 @@ Inputs are **commands** (see `core/commands.py`). They are flat JSON, e.g.
 
 | Command           | Meaning                                            |
 | ----------------- | -------------------------------------------------- |
-| `goto_zone`       | Transition to a zone (via exit/start poses).       |
+| `goto_zone`       | Transition to a zone (path-routed through the exits graph). |
 | `set_mode`        | `wander` / `random` / `action` / `track` / `hold`. |
 | `play_action`     | Play a named action in the current zone.           |
 | `set_joint_pose`  | Move to a specific 6-axis joint pose (then `hold`).|
@@ -222,8 +235,8 @@ zone's safezone, and a live log; and it sends commands (zone buttons, mode butto
 buttons, a 6-axis joint-pose editor, wander-limit sliders, random-wrist). It auto-connects
 to `ws://localhost:8765`, retrying every 2 s. It is best served over the HTTP server
 (`http://localhost:8766/client.html`); opened from `file://` it still works against the
-WebSocket, but the environment GLB and live zone table are unavailable (it falls back to
-its built-in zones and no environment).
+WebSocket, but the environment GLB, the KR60 meshes, and the live zone table are
+unavailable (it falls back to its built-in zones, a placeholder arm, and no environment).
 
 ### The HTTP server, editor, and zones.json
 
@@ -238,6 +251,8 @@ assets (three.js, the environment GLB, shared JS) from a `file://` page. It serv
   `zones.json` and submits a `reload_zones` command so the running core **hot-reloads**
   (the robot keeps running; if the current zone was deleted the machine resets to `init`).
   On validation failure the file is untouched and a 400 is returned.
+- `GET /api/limits` → the per-axis **hardware limits** (a static constant from the
+  `kr60ha` xacro). Read-only — the hardware limits are fixed by the robot's mechanics.
 
 **`zones.json`** is the editable source of truth for zones, actions, and the named poses
 (`poses` / `lin_poses`). The built-in dicts in `state/zones.py` remain the fallback if the
@@ -257,12 +272,30 @@ running and can still exit), and a disabled action is rejected by `play_action`.
 
 It loads the table from `GET /api/zones` (falling back to `/zones.json`, then a built-in),
 and validates client-side before posting (all poses 6 numbers, exits reference existing
-zones; it warns, non-blocking, when a pose falls outside its zone's safezone).
+zones; it warns, non-blocking, when a pose falls outside its zone's safezone **or** the
+hardware floor). The per-axis **hardware limits** are shown as a reference row in the 3D
+preview panel (loaded from `GET /api/limits`, falling back to a built-in constant that
+mirrors the xacro). A second **sound** tab edits the `sound.json` mapping (see the Sound
+section).
+
+### The 3D model (real KR60 meshes)
+
+The 3D view in `client.html` and `editor.html` is the **real KR60**, built from the
+`kr60ha` ROS model: the `kr60ha_macro.xacro` joint chain (base at the origin, A1 about
+−Z) drives the visual STL meshes in `assets/kr60ha/visual/` (`base_link` + `link_1..6`).
+Each KUKA joint variable (deg) drives one rotor about its xacro axis (the FK convention).
+The **current** arm is rendered in the real KUKA colors (base + wrist black, links
+orange); the **target** (ghost) arm is the same geometry as a green translucent overlay,
+so the "current / target" legend still applies. The STLs are loaded once and shared
+between the two arms. If the assets or `STLLoader` are unavailable (e.g. `file://`), the
+view degrades to placeholders and keeps running. The chain is driven as-is; the computed
+flange differs slightly from the older `kuka_kr60_abs.urdf` schematic (the 3D view is a
+visualization — the real robot is driven by the KUKA controller, not the model).
 
 ### The Blender → GLB environment
 
-`assets/environment.glb` is a **Blender-editable** environment rendered around the schematic
-robot in `client.html` (and the editor). glTF is Y-up; the scene is Z-up, so the loader
+`assets/environment.glb` is a **Blender-editable** environment rendered around the KR60
+model in `client.html` (and the editor). glTF is Y-up; the scene is Z-up, so the loader
 rotates the loaded scene +90° about X to sit it on the floor. The starter GLB is generated
 by `assets/make_environment.py` (stdlib-only, since Blender is not available in this
 environment): a 10×10 m floor, a pedestal cylinder at the origin, and two corner walls so
@@ -275,11 +308,70 @@ the robot is not boxed in. To edit it:
 The client loads `assets/environment.glb` on init and logs "environment not loaded" (and
 continues) if it is missing or fails to load (e.g. `file://` usage).
 
-### Sound
+### Sound (configurable MIDI-out)
 
-Sound is MIDI-controlled. The `sound.py` adapter opens a MIDI-out port and, for each
-state snapshot, maps the current zone/mode to the MIDI messages (notes, CCs) that
-trigger the sound.
+Sound is MIDI-controlled: the core does not synthesise audio, it sends MIDI messages
+that an external sound engine (Max, Ableton, a script, a hardware unit) turns into sound.
+The `sound.py` adapter opens a single MIDI-out port and, on each state snapshot, fires the
+mapped messages for the **triggers**:
+
+- **zone entry** — `zones[<zone>]` (the previous zone's note is turned off first),
+- **mode change** — `modes[<mode>]` (a CC),
+- **action start** — `actions[<name>].start` (or its first pose),
+- **per-pose step** — while in `action` mode, each change of the target pose advances an
+  internal pose index and sends `actions[<name>].poses[i % len(poses)]`.
+
+The mapping is **data-driven**: it lives in **`sound.json`** (a separate file, not bundled
+in `zones.json`). A **MIDI message** is one of `{note, velocity}` (note-on),
+`{cc, value}` (control change), or `{program}` (program change); the global `channel`
+(0-15) is applied when a message is converted to bytes. The schema:
+
+```json
+{
+  "channel": 0,
+  "zones":   { "init": { "note": 48, "velocity": 60 }, "...": { "cc": 70, "value": 32 } },
+  "modes":   { "wander": { "cc": 70, "value": 32 }, "...": { "cc": 70, "value": 64 } },
+  "actions": { "breathe": { "start": { "note": 60, "velocity": 80 },
+                            "poses": [ { "note": 62, "velocity": 70 }, "..." ] } }
+}
+```
+
+`actions` is keyed by **action name** globally (not per-zone — per-zone action MIDI is a
+later extension). `start` is optional; without it, pose 0 is used on start. The built-in
+`ZONE_NOTES` / `MODE_CCS` in `sound.py` are the fallback if the file is missing or corrupt.
+
+`sound.json` is served and saved over the same HTTP server as `zones.json`:
+
+- `GET /api/sound` → the current mapping (read fresh, falling back to the running table).
+- `POST /api/sound` → validates the mapping; on success writes it atomically and submits
+  a `reload_sound` command so the running core **hot-reloads** (mirrors `/api/zones`).
+  On validation failure the file is untouched and a 400 is returned.
+
+**`editor.html`** has a dedicated **sound** tab (alongside the zone tab): a global channel
+input, a per-zone message list, a per-mode message list, and a per-action block (a `start`
+message + a list of `poses`, with add/remove rows). It loads from `GET /api/sound`
+(falling back to `/sound.json`, then a built-in), validates client-side, and saves to
+`POST /api/sound`; it re-fetches on the `sound_changed` WebSocket frame.
+
+When no MIDI-out device is open (sim / no rig), the adapter **degrades to logging** each
+message it would send (e.g. `[sound] note ch0 48 vel60`), so the mapping is testable
+without hardware; the core keeps running either way.
+
+### MIDI-in
+
+The `io/midi.py` adapter maps controller messages to core commands (the same physical
+protocol the legacy controller used). The additions from this round:
+
+- **`goto_zone` (CC1, value 1-6)** — now benefits from **path-finding** automatically: the
+  command is the same, but the state machine routes it through the exits graph (see Zones).
+- **`play_action` (CC3, value `i`)** — plays the `i`-th action (**1-based**) in the current
+  zone; `0` clears the active action. The index is resolved against the current zone's
+  action table (in order), so it tracks hot-reloaded zone data. A bad index or a zone with
+  no actions is a logged no-op.
+
+The other mappings are unchanged: CC2 → `set_mode` (wander/action), CC13 → `set_flag`,
+CC20/21/22 → `adjust_limit`, CC30 → `set_mode` (random/wander), and the note mappings for
+joint poses / random wrist / linear poses.
 
 ## Running
 
@@ -303,8 +395,10 @@ With the core running, open the pages over the HTTP server (port 8766):
 - `http://localhost:8766/editor.html` — the zone/action editor.
 
 `GET http://localhost:8766/api/zones` returns the live zone table; `POST` to the same URL
-saves it (the core hot-reloads). Use `--http-port` to change the port or `--no-http` to
-disable the server (the WebSocket on 8765 still works).
+saves it (the core hot-reloads). `GET/POST /api/sound` do the same for the MIDI-out
+mapping. `GET /api/limits` returns the per-axis hardware limits (read-only). Use
+`--http-port` to change the port or `--no-http` to disable the server (the WebSocket on
+8765 still works).
 
 ### kukapy (real robot only)
 

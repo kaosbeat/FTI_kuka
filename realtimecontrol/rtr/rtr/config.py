@@ -44,6 +44,11 @@ class Config:
     # On-disk zone/pose table (zones.json). The built-in dicts are the fallback.
     zones_path: str = "zones.json"
 
+    # --- sound data ------------------------------------------------------
+    # On-disk MIDI-out mapping (sound.json). The built-in ZONE_NOTES/MODE_CCS
+    # are the fallback when the file is missing or corrupt.
+    sound_path: str = "sound.json"
+
     # --- display / camera / sound ---------------------------------------
     # Only enabled when the corresponding hardware is present.
     enable_display: bool = True

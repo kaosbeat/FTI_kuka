@@ -51,9 +51,22 @@
   .bar { height: 6px; background: #0d0f13; border-radius: 3px; margin-top: 3px; position: relative; overflow: hidden; }
   .bar .mark { position: absolute; top: 0; bottom: 0; width: 4px; background: var(--accent); }
   .stateRow { display: flex; justify-content: space-between; padding: 2px 0;
-              border-bottom: 1px solid #20242d; font-size: 13px; }
+               border-bottom: 1px solid #20242d; font-size: 13px; }
   .stateRow > span:first-child { color: var(--dim); }
   .warn { color: #e0a030; font-size: 12px; }
+  .hwlims { display: flex; flex-wrap: wrap; gap: 3px 10px; font-size: 11px; color: var(--dim); margin-bottom: 8px; }
+  #tabZones, #tabSound { font-size: 12px; }
+  .sndMain { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); align-items: start; }
+  .sndRow { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+  .sndName { min-width: 78px; font-size: 13px; }
+  .msgForm { display: inline-flex; gap: 4px; align-items: center; }
+  .msgType { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
+             border-radius: 4px; padding: 2px 4px; font: inherit; }
+  .msgFields { display: inline-flex; gap: 4px; align-items: center; }
+  .msgFields label { display: inline-flex; gap: 3px; align-items: baseline; font-size: 11px; color: var(--dim); }
+  .msgFields input[type=number] { width: 62px; background: #0d0f13; color: var(--text);
+                                   border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; font: inherit; }
+  .sndPoses { margin: 2px 0 6px 86px; }
 </style>
 </head>
 <body>
@@ -63,11 +76,13 @@
   <span class="dot" id="dot"></span><span id="status">disconnected</span>
   <input id="host" value="ws://localhost:8765" spellcheck="false">
   <button id="connect">connect</button>
+  <button id="tabZones" class="active">zones</button>
+  <button id="tabSound">sound</button>
   <button id="save">save</button>
   <span id="saveMsg"></span>
 </header>
 
-<main>
+<main id="zoneMain">
   <section>
     <h2>zones</h2>
     <div class="zoneList" id="zoneList"></div>
@@ -87,6 +102,8 @@
     <div id="robot3d"></div>
     <h3>safezone (selected zone)</h3>
     <div id="bars"></div>
+    <h3>hardware limits (xacro floor)</h3>
+    <div id="hwLimits" class="hwlims"></div>
     <h3>ghost arm — step action poses</h3>
     <div class="row">
       <button id="ghostPrev">prev</button>
@@ -98,14 +115,36 @@
   </section>
 </main>
 
+<main id="soundMain" class="sndMain" style="display:none">
+  <section>
+    <h2>channel</h2>
+    <div id="sndChannel"></div>
+    <h2 style="margin-top:12px">zones (zone entry)</h2>
+    <div id="sndZones"></div>
+  </section>
+  <section>
+    <h2>modes (mode change)</h2>
+    <div id="sndModes"></div>
+  </section>
+  <section>
+    <h2>actions (start + per-pose)</h2>
+    <div id="sndActions"></div>
+    <div class="row" style="margin-top:8px">
+      <button id="addSoundAction">+ add action</button>
+    </div>
+  </section>
+</main>
+
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
 <script src="rtr3d.js"></script>
 <script>
 "use strict";
 
 const AXES = ["A1", "A2", "A3", "A4", "A5", "A6"];
+const MODES = ["wander", "random", "action", "track", "hold"];
 const $ = (id) => document.getElementById(id);
 
 // Minimal fallback table (last resort when both /api/zones and /zones.json fail,
@@ -119,7 +158,37 @@ const FALLBACK = {
   poses: {}, lin_poses: {},
 };
 
+// Last-resort sound mapping (mirrors rtr/sound/sound.py ZONE_NOTES/MODE_CCS). Used
+// when both /api/sound and /sound.json fail (e.g. opened from file://).
+const SOUND_FALLBACK = {
+  channel: 0,
+  zones: {
+    init: {note:48, velocity:60}, rest: {note:36, velocity:50}, wakeup: {note:52, velocity:70},
+    stretch: {note:55, velocity:75}, wander: {note:60, velocity:80}, wildwander: {note:64, velocity:90},
+  },
+  modes: {
+    wander: {cc:70, value:32}, random: {cc:70, value:64}, action: {cc:70, value:96},
+    track: {cc:70, value:127}, hold: {cc:70, value:0},
+  },
+  actions: {},
+};
+
+// Hardware joint limits (deg) from the kr60ha xacro — the hard safety floor the core
+// clamps every pose to. Fallback mirrors the xacro; over HTTP it is replaced by
+// GET /api/limits (same pattern as the zones/sound fallbacks).
+const HW_LIMITS_FALLBACK = [
+  [-185, 185],   // A1
+  [-135, 35],    // A2
+  [-120, 158],   // A3
+  [-350, 350],   // A4
+  [-119, 119],   // A5
+  [-350, 350],   // A6
+];
+let HW_LIMITS = HW_LIMITS_FALLBACK.slice();
+
 let TABLE = null;
+let SOUND = null;
+let soundView = false;
 let selectedZone = null;
 let selectedAction = null;
 let ghostIndex = 0;
@@ -147,6 +216,9 @@ function connect() {
         `<div class="stateRow"><span>action</span><span>${m.action ? m.action : "—"}</span></div>` +
         `<div class="stateRow"><span>speed</span><span>${m.speed}</span></div>` +
         `<div class="stateRow"><span>moving</span><span>${m.moving ? "yes" : "no"}</span></div>`;
+    } else if (m.type === "sound_changed") {
+      // The running core reloaded the sound mapping; re-fetch it.
+      loadSound().then(() => { if (soundView) buildSoundForm(); });
     }
   };
 }
@@ -179,6 +251,295 @@ async function loadTable() {
   buildZoneList();
   selectZone(selectedZone);
   $("saveMsg").textContent = source === "api" ? "live" : (source === "file" ? "from zones.json" : "offline (built-in)");
+}
+
+// ---------------------------------------------------------------------------
+// Load the hardware limits (API -> built-in fallback mirroring the xacro).
+// ---------------------------------------------------------------------------
+async function loadLimits() {
+  try {
+    const r = await fetch("/api/limits", { cache: "no-store" });
+    if (r.ok) {
+      const data = await r.json();
+      if (data && Array.isArray(data.hardware_limits) && data.hardware_limits.length === 6) {
+        HW_LIMITS = data.hardware_limits;
+      }
+    }
+  } catch (e) {}
+  buildHwLimitsRow();
+}
+
+// Render the per-axis hardware limits as a compact reference row (a static floor —
+// it does not depend on the selected zone).
+function buildHwLimitsRow() {
+  const el = $("hwLimits");
+  if (!el) return;
+  el.innerHTML = "";
+  AXES.forEach((n, i) => {
+    const [lo, hi] = HW_LIMITS[i];
+    const s = document.createElement("span");
+    s.textContent = n + " [" + lo + ", " + hi + "]";
+    el.appendChild(s);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Load the sound mapping (API -> sound.json -> built-in fallback).
+// ---------------------------------------------------------------------------
+async function loadSound() {
+  let data = null;
+  try {
+    const r = await fetch("/api/sound", { cache: "no-store" });
+    if (r.ok) data = await r.json();
+  } catch (e) {}
+  if (!data) {
+    try {
+      const r = await fetch("/sound.json", { cache: "no-store" });
+      if (r.ok) data = await r.json();
+    } catch (e) {}
+  }
+  if (!data) data = JSON.parse(JSON.stringify(SOUND_FALLBACK));
+  SOUND = data;
+  if (SOUND.zones === undefined) SOUND.zones = {};
+  if (SOUND.modes === undefined) SOUND.modes = {};
+  if (SOUND.actions === undefined) SOUND.actions = {};
+  if (SOUND.channel === undefined) SOUND.channel = 0;
+  // Seed the action list from the union of the zone table's action names (globally
+  // keyed). Only fills names that are not already present, so an edited mapping
+  // keeps its own actions.
+  const names = Object.keys(TABLE.zones || {}).flatMap((n) => Object.keys(TABLE.zones[n].actions || {}));
+  names.forEach((an) => {
+    if (!SOUND.actions[an]) SOUND.actions[an] = { start: { note: 60, velocity: 60 }, poses: [] };
+  });
+  if (soundView) buildSoundForm();
+  return SOUND;
+}
+
+// ---------------------------------------------------------------------------
+// Sound editor.
+//
+// A MIDI message is one of: {note, velocity}, {cc, value}, or {program}. Each is
+// edited inline; the global channel is applied by the core when sending.
+// ---------------------------------------------------------------------------
+function msgType(msg) {
+  if (msg && (msg.note !== undefined || msg.velocity !== undefined)) return "note";
+  if (msg && (msg.cc !== undefined || msg.value !== undefined)) return "cc";
+  if (msg && msg.program !== undefined) return "program";
+  return "note";
+}
+
+function freshMsg(type) {
+  if (type === "cc") return { cc: 70, value: 64 };
+  if (type === "program") return { program: 0 };
+  return { note: 60, velocity: 60 };
+}
+
+// Build an inline MIDI-message editor. Field edits mutate ``msg`` in place; a type
+// change calls ``onType(freshMsg)`` so the caller can swap the object and rebuild.
+function msgEditor(msg, onType) {
+  const root = document.createElement("div");
+  root.className = "msgForm";
+  const sel = document.createElement("select");
+  sel.className = "msgType";
+  ["note", "cc", "program"].forEach((t) => {
+    const o = document.createElement("option");
+    o.value = t; o.textContent = t;
+    sel.appendChild(o);
+  });
+  sel.value = msgType(msg);
+  root.appendChild(sel);
+  const fields = document.createElement("div");
+  fields.className = "msgFields";
+  root.appendChild(fields);
+
+  function renderFields() {
+    fields.innerHTML = "";
+    const t = msgType(msg);
+    const keys = t === "note" ? ["note", "velocity"] : t === "cc" ? ["cc", "value"] : ["program"];
+    keys.forEach((k) => {
+      const l = document.createElement("label");
+      l.textContent = k;
+      const inp = document.createElement("input");
+      inp.type = "number"; inp.step = "1";
+      inp.value = msg[k] !== undefined ? msg[k] : 0;
+      inp.oninput = () => { msg[k] = parseInt(inp.value, 10); if (isNaN(msg[k])) msg[k] = 0; };
+      l.appendChild(inp);
+      fields.appendChild(l);
+    });
+  }
+  renderFields();
+  sel.onchange = () => { if (onType) onType(freshMsg(sel.value)); };
+  return root;
+}
+
+function buildSoundForm() {
+  // channel
+  const chEl = $("sndChannel");
+  chEl.innerHTML = "";
+  const ch = document.createElement("label");
+  ch.className = "inline";
+  ch.innerHTML = "channel <input type='number' step='1' min='0' max='15' value='" +
+                 (SOUND.channel !== undefined ? SOUND.channel : 0) + "'>";
+  ch.querySelector("input").oninput = (e) => {
+    SOUND.channel = parseInt(e.target.value, 10); if (isNaN(SOUND.channel)) SOUND.channel = 0;
+  };
+  chEl.appendChild(ch);
+
+  // zones (one MIDI message per zone in the live table)
+  const zEl = $("sndZones");
+  zEl.innerHTML = "";
+  Object.keys(TABLE.zones).forEach((name) => {
+    if (!SOUND.zones[name]) SOUND.zones[name] = { note: 60, velocity: 60 };
+    const row = document.createElement("div");
+    row.className = "sndRow";
+    const lbl = document.createElement("span");
+    lbl.className = "sndName"; lbl.textContent = name;
+    row.appendChild(lbl);
+    row.appendChild(msgEditor(SOUND.zones[name], (fresh) => { SOUND.zones[name] = fresh; buildSoundForm(); }));
+    zEl.appendChild(row);
+  });
+
+  // modes (one MIDI message per behaviour mode)
+  const mEl = $("sndModes");
+  mEl.innerHTML = "";
+  MODES.forEach((mode) => {
+    if (!SOUND.modes[mode]) SOUND.modes[mode] = { cc: 70, value: 64 };
+    const row = document.createElement("div");
+    row.className = "sndRow";
+    const lbl = document.createElement("span");
+    lbl.className = "sndName"; lbl.textContent = mode;
+    row.appendChild(lbl);
+    row.appendChild(msgEditor(SOUND.modes[mode], (fresh) => { SOUND.modes[mode] = fresh; buildSoundForm(); }));
+    mEl.appendChild(row);
+  });
+
+  // actions (globally keyed: a start message + a list of per-pose messages)
+  const aEl = $("sndActions");
+  aEl.innerHTML = "";
+  Object.keys(SOUND.actions).forEach((name) => {
+    const act = SOUND.actions[name];
+    const box = document.createElement("div");
+    box.className = "action";
+    // header: name + remove
+    const head = document.createElement("div");
+    head.className = "actionHead";
+    const nm = document.createElement("input");
+    nm.type = "text"; nm.value = name;
+    nm.onchange = () => {
+      const nn = nm.value.trim();
+      if (!nn || nn === name) { nm.value = name; return; }
+      SOUND.actions[nn] = act; delete SOUND.actions[name];
+      buildSoundForm();
+    };
+    const rm = document.createElement("button");
+    rm.className = "small"; rm.textContent = "remove";
+    rm.onclick = () => { delete SOUND.actions[name]; buildSoundForm(); };
+    head.appendChild(nm); head.appendChild(rm);
+    box.appendChild(head);
+    // start message
+    if (!act.start) act.start = { note: 60, velocity: 60 };
+    const s = document.createElement("div");
+    s.className = "sndRow";
+    const sl = document.createElement("span");
+    sl.className = "sndName"; sl.textContent = "start";
+    s.appendChild(sl);
+    s.appendChild(msgEditor(act.start, (fresh) => { act.start = fresh; buildSoundForm(); }));
+    box.appendChild(s);
+    // per-pose messages
+    if (!act.poses) act.poses = [];
+    const pw = document.createElement("div");
+    pw.className = "sndPoses";
+    act.poses.forEach((pm, pi) => {
+      const prow = document.createElement("div");
+      prow.className = "sndRow";
+      const pl = document.createElement("span");
+      pl.className = "sndName"; pl.textContent = "pose " + (pi + 1);
+      prow.appendChild(pl);
+      prow.appendChild(msgEditor(pm, (fresh) => { act.poses[pi] = fresh; buildSoundForm(); }));
+      const prx = document.createElement("button");
+      prx.className = "small"; prx.textContent = "×";
+      prx.onclick = () => { act.poses.splice(pi, 1); buildSoundForm(); };
+      prow.appendChild(prx);
+      pw.appendChild(prow);
+    });
+    const addP = document.createElement("button");
+    addP.className = "small"; addP.textContent = "+ pose";
+    addP.onclick = () => { act.poses.push({ note: 60, velocity: 60 }); buildSoundForm(); };
+    pw.appendChild(addP);
+    box.appendChild(pw);
+    aEl.appendChild(box);
+  });
+}
+
+function addSoundAction() {
+  const nm = prompt("action name:", "new");
+  if (!nm || SOUND.actions[nm]) return;
+  SOUND.actions[nm] = { start: { note: 60, velocity: 60 }, poses: [] };
+  buildSoundForm();
+}
+
+// ---------------------------------------------------------------------------
+// Sound save (validate + POST the whole mapping).
+// ---------------------------------------------------------------------------
+function validMsg(msg) {
+  if (typeof msg !== "object" || msg === null) return "message must be an object";
+  const t = msgType(msg);
+  const inRange = (v) => Number.isInteger(v) && v >= 0 && v <= 127;
+  if (t === "note") return (inRange(msg.note) && inRange(msg.velocity)) ? "" : "note-on needs note + velocity (0-127)";
+  if (t === "cc") return (inRange(msg.cc) && inRange(msg.value)) ? "" : "cc needs cc + value (0-127)";
+  return inRange(msg.program) ? "" : "program change needs program (0-127)";
+}
+
+function validateSound() {
+  const errs = [];
+  const ch = SOUND.channel;
+  if (!Number.isInteger(ch) || ch < 0 || ch > 15) errs.push("channel must be an int 0-15");
+  for (const [where, table] of [["zones", SOUND.zones], ["modes", SOUND.modes]]) {
+    for (const name of Object.keys(table)) {
+      const e = validMsg(table[name]);
+      if (e) errs.push(`${where}[${name}]: ${e}`);
+    }
+  }
+  for (const name of Object.keys(SOUND.actions)) {
+    const act = SOUND.actions[name];
+    if (act.start) { const e = validMsg(act.start); if (e) errs.push(`actions[${name}].start: ${e}`); }
+    (act.poses || []).forEach((pm, i) => { const e = validMsg(pm); if (e) errs.push(`actions[${name}].poses[${i}]: ${e}`); });
+  }
+  return errs;
+}
+
+function saveSound() {
+  const errs = validateSound();
+  if (errs.length) {
+    $("saveMsg").textContent = errs.join("; ");
+    $("saveMsg").className = "err";
+    return;
+  }
+  fetch("/api/sound", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(SOUND),
+  }).then((r) => r.json().then((body) => ({ ok: r.ok, body }))).then(({ ok, body }) => {
+    if (ok) {
+      $("saveMsg").textContent = "sound saved";
+      $("saveMsg").className = "";
+    } else {
+      $("saveMsg").textContent = "sound save failed: " + (body.error || r.status);
+      $("saveMsg").className = "err";
+    }
+  }).catch((e) => { $("saveMsg").textContent = "sound save failed: " + e; $("saveMsg").className = "err"; });
+}
+
+// ---------------------------------------------------------------------------
+// View switching (zones editor vs sound editor).
+// ---------------------------------------------------------------------------
+function switchView(v) {
+  soundView = v === "sound";
+  $("zoneMain").style.display = soundView ? "none" : "";
+  $("soundMain").style.display = soundView ? "" : "none";
+  $("tabZones").className = soundView ? "" : "active";
+  $("tabSound").className = soundView ? "active" : "";
+  if (soundView) buildSoundForm();
 }
 
 // ---------------------------------------------------------------------------
@@ -488,21 +849,35 @@ function validate() {
 }
 
 function save() {
+  if (soundView) { saveSound(); return; }
+  saveZones();
+}
+
+function saveZones() {
   const errs = validate();
   if (errs.length) {
     $("saveMsg").textContent = errs.join("; ");
     $("saveMsg").className = "err";
     return;
   }
-  // Non-blocking warning: poses outside the zone's safezone.
+  // Non-blocking warnings: action poses outside the zone's safezone, action poses
+  // outside the hardware floor, and safezones wider than the hardware range. The core
+  // clamps to the intersection (safezone ∩ hardware), so these are flags, not blockers.
   const warns = [];
   for (const name of Object.keys(TABLE.zones)) {
     const z = TABLE.zones[name];
+    for (let ax = 0; ax < 6; ax++) {
+      const [slo, shi] = z.safezone[ax];
+      const [hlo, hhi] = HW_LIMITS[ax];
+      if (slo < hlo || shi > hhi) warns.push(`${name}: safezone ${AXES[ax]} exceeds hardware [${hlo}, ${hhi}]`);
+    }
     for (const an of Object.keys(z.actions || {})) {
       (z.actions[an].pos || []).forEach((p, i) => {
         for (let ax = 0; ax < 6; ax++) {
           const [lo, hi] = z.safezone[ax];
           if (p[ax] < lo || p[ax] > hi) warns.push(`${name}/${an} pose ${i} axis ${AXES[ax]} outside safezone`);
+          const [hlo, hhi] = HW_LIMITS[ax];
+          if (p[ax] < hlo || p[ax] > hhi) warns.push(`${name}/${an} pose ${i} axis ${AXES[ax]} outside hardware limits`);
         }
       });
     }
@@ -551,11 +926,16 @@ function delZone() {
 }
 
 Robot3D.init($("robot3d"), { log: (m) => console.log(m), environment: true });
-loadTable().then(connect);
+// Load the zone table first (the sound editor seeds its action list from the zone
+// table's action names), then the sound mapping, then open the WebSocket.
+loadTable().then(loadSound).then(loadLimits).then(connect);
 $("connect").onclick = () => { $("host").value = $("host").value.trim(); connect(); };
 $("save").onclick = save;
 $("addZone").onclick = addZone;
 $("delZone").onclick = delZone;
+$("tabZones").onclick = () => switchView("zones");
+$("tabSound").onclick = () => switchView("sound");
+$("addSoundAction").onclick = addSoundAction;
 $("ghostPrev").onclick = () => stepGhost(-1);
 $("ghostNext").onclick = () => stepGhost(1);
 </script>

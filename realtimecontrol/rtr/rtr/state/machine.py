@@ -14,7 +14,7 @@ step per engine tick. Nothing blocks.
 
 from typing import List, Optional
 
-from ..robot.helpers import comparelist, posSafe
+from ..robot.helpers import comparelist
 from .zones import Zones
 
 
@@ -33,7 +33,12 @@ class StateMachine:
     # Requested changes (called by the brain when a command arrives).
     # ------------------------------------------------------------------
     def request_zone(self, name: str, curjpos: List[float]) -> bool:
-        """Begin a transition to ``name``. Returns False if the zone is unknown/disabled."""
+        """Begin a transition to ``name``. Returns False if the zone is unknown/disabled.
+
+        The transition is routed through the zone ``exits`` graph: the robot walks the
+        shortest path from the current zone to ``name``, passing each intermediate
+        zone's exit pose then start pose. A target with no path is rejected.
+        """
         if not self.zones.has(name):
             print(f"[state] unknown zone: {name}")
             return False
@@ -44,13 +49,21 @@ class StateMachine:
         if self._transition is not None:
             return False
 
-        zone = self.zones.get(name)
+        path = self.zones.find_path(self.current_zone, name)
+        if path is None:
+            print(f"[state] no path from {self.current_zone!r} to {name!r}")
+            return False
+        if len(path) < 2:
+            print(f"[state] already in zone {name!r}; no transition")
+            return False
+
         steps: List[List[float]] = []
-        # If we are not already inside the new zone's safezone, leave the current
-        # zone through its exit pose first.
-        if not posSafe(curjpos, zone.safezone):
-            steps.append(self.zones.get(self.current_zone).exitpos)
-        steps.append(zone.startpos)
+        # Walk the path: for each hop, leave the zone (exitpos) then enter the next
+        # zone (startpos). The old "skip exit if already safe" shortcut is dropped in
+        # favour of always routing through the graph (more predictable, always safe).
+        for i in range(len(path) - 1):
+            steps.append(self.zones.get(path[i]).exitpos)
+            steps.append(self.zones.get(path[i + 1]).startpos)
         self._transition = {"zone": name, "steps": steps, "i": 0}
         return True
 

@@ -8,8 +8,9 @@ directly).
 
 Protocol (from the legacy code)
 --------------------------------
-- CC1 (value 1-6)      → goto_zone
+- CC1 (value 1-6)      → goto_zone (path-routed through the zone exits graph)
 - CC2 (0/1)            → set_mode (wander / action)
+- CC3 (value i)        → play the i-th action (1-based) in the current zone; 0 clears
 - CC13                 → set_flag("dynvel", value)
 - CC20 / 21 / 22       → adjust_limit (index 0/1/2)
 - CC30 (1/2)           → set_mode (random / wander)
@@ -25,7 +26,7 @@ brain's continuous tick in the new architecture, so they are intentionally not m
 from typing import List, Optional
 
 from ..core.bus import StateBus
-from ..core.commands import Cmd, Command
+from ..core.commands import Cmd, Command, Event
 from ..state.zones import LIN_POSES, POSES
 
 # CC1 value -> zone name.
@@ -39,7 +40,7 @@ class MidiInput:
     """Reads MIDI and turns it into commands on the bus."""
 
     def __init__(self, bus: StateBus, in_port: Optional[int] = 0, enabled: bool = True,
-                 poses=None, lin_poses=None):
+                 poses=None, lin_poses=None, zones_provider=None):
         self.bus = bus
         self.in_port = in_port
         self.enabled = enabled
@@ -47,9 +48,19 @@ class MidiInput:
         # the built-in dicts are the fallback when the data file omits them.
         self.poses = poses if poses is not None else POSES
         self.lin_poses = lin_poses if lin_poses is not None else LIN_POSES
+        # The live zone table (hot-reloads); used to resolve CC3 action indices.
+        self.zones_provider = zones_provider
+        self._current_zone = "init"
         self._midi = None
         if enabled:
             self._connect()
+        # Track the current zone so CC3 can resolve an action index in it.
+        bus.subscribe(self.on_event)
+
+    def on_event(self, event: Event, data) -> None:
+        """Track the current zone from each snapshot (for CC3 action indexing)."""
+        if event == Event.SNAPSHOT:
+            self._current_zone = data.zone
 
     def _connect(self) -> None:
         try:
@@ -95,12 +106,34 @@ class MidiInput:
             self._submit(Cmd.GOTO_ZONE, {"zone": ZONE_BY_CC1[value]})
         elif cc == 2:
             self._submit(Cmd.SET_MODE, {"mode": "action" if value else "wander"})
+        elif cc == 3:
+            self._play_action_by_index(value)
         elif cc == 13:
             self._submit(Cmd.SET_FLAG, {"flag": "dynvel", "value": value})
         elif cc in (20, 21, 22):
             self._submit(Cmd.ADJUST_LIMIT, {"index": cc - 20, "value": value / 4})
         elif cc == 30:
             self._submit(Cmd.SET_MODE, {"mode": "random" if value == 1 else "wander"})
+
+    def _play_action_by_index(self, index: int) -> None:
+        """CC3: play the ``index``-th action (1-based) in the current zone.
+
+        ``0`` clears the active action. The index is resolved against the current
+        zone's action table (in order), so it tracks hot-reloaded zone data.
+        """
+        if index == 0:
+            self._submit(Cmd.CLEAR_ACTION, {})
+            return
+        zones = self.zones_provider() if self.zones_provider is not None else None
+        if zones is None or not zones.has(self._current_zone):
+            print(f"[midi] CC3: unknown current zone {self._current_zone!r}")
+            return
+        actions = list(zones.get(self._current_zone).actions())
+        if index <= 0 or index > len(actions):
+            print(f"[midi] CC3 index {index} out of range for zone "
+                  f"{self._current_zone!r} ({len(actions)} action(s))")
+            return
+        self._submit(Cmd.PLAY_ACTION, {"action": actions[index - 1]})
 
     def _handle_note(self, channel: int, note: int, velocity: int) -> None:
         if velocity == 0:  # note off

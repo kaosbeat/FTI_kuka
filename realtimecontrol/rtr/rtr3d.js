@@ -1,9 +1,11 @@
-// rtr3d.js — shared 3D schematic builder + helpers, used by client.html and editor.html.
+// rtr3d.js — shared 3D model builder + helpers, used by client.html and editor.html.
 //
-// Extracted from client.html so both pages share the same Robot3D (a schematic KR60
-// built from the URDF joint chain) and the `fmt` number formatter. This file expects
-// THREE and OrbitControls to be loaded globally (three.js r128 non-module builds), and
-// optionally THREE.GLTFLoader (for the Blender-editable environment).
+// Builds the real KR60 from the kr60ha ROS model: the `kr60ha_macro.xacro` joint
+// chain (base at the origin, A1 about -Z) driving the visual STL meshes in
+// `assets/kr60ha/visual/`. Each KUKA joint variable (deg) drives one rotor about the
+// xacro joint axis (the FK convention). This file expects THREE + OrbitControls to be
+// loaded globally (three.js r128 non-module builds), plus optionally THREE.GLTFLoader
+// (the Blender-editable environment) and THREE.STLLoader (the KR60 meshes).
 //
 // Usage:
 //   Robot3D.init(containerEl, { toolEl, log, environment, environmentUrl });
@@ -15,20 +17,31 @@
 const fmt = (v) => v == null ? "—" : (Math.round(v * 10) / 10).toFixed(1);
 
 // ------------------------------------------------------------------
-// 3D schematic (Three.js). The joint chain mirrors kuka_kr60.urdf; each rotor
-// is driven by the KUKA joint variable (deg -> rad about the URDF joint axis).
+// 3D model (Three.js). The frame chain mirrors `kr60ha_macro.xacro` (meters, Z-up):
+// six revolute joints + a fixed tool0 ($FLANGE) frame. The visual STL meshes are
+// loaded once and shared between the current and target (ghost) arms.
 // ------------------------------------------------------------------
 const Robot3D = (() => {
+  // Revolute joints from kr60ha_macro.xacro: origin offset (xyz), frame orientation
+  // (rpy, identity for this chain), and the rotation axis. A1 rotates about -Z.
   const JOINTS = [
-    { pos: [0, 0, 0.47975],            rpy: [1.5708, 0, 0],          axis: [0, -1, 0] },
-    { pos: [0.35, 0.33557, 0.094],     rpy: [-1.5708, 0, 0],         axis: [0, 1, 0] },
-    { pos: [0.83287, -0.0097315, 0],   rpy: [0, 0, -0.011684],       axis: [0, 1, 0] },
-    { pos: [0.60824, 0.089904, 0.145], rpy: [0, 0, 0],               axis: [-1, 0, 0] },
-    { pos: [0.41176, 0, 0.0000638],    rpy: [0, -0.00079387, 0.011684], axis: [0.011683, 0.99993, 0] },
-    { pos: [0.12607, -0.0000365, -0.0000281], rpy: [0, 0, 0],        axis: [-1, 0, 0] },
+    { xyz: [0, 0, 0],           rpy: [0, 0, 0],      axis: [0, 0, -1] },  // A1
+    { xyz: [0.35, 0, 0.815],    rpy: [0, 0, 0],      axis: [0, 1, 0]  },  // A2
+    { xyz: [0.85, 0, 0],        rpy: [0, 0, 0],      axis: [0, 1, 0]  },  // A3
+    { xyz: [0.465, 0, 0.145],   rpy: [0, 0, 0],      axis: [-1, 0, 0] },  // A4
+    { xyz: [0.355, 0, 0],       rpy: [0, 0, 0],      axis: [0, 1, 0]  },  // A5
+    { xyz: [0.17, 0, 0],        rpy: [0, 0, 0],      axis: [-1, 0, 0] },  // A6
   ];
-  const TOOL = { pos: [0.215, 0, 0], rpy: [0, 1.5708, 0] };
+  // Fixed tool0 frame ($FLANGE) — a child of link_6, +90° about Y.
+  const TOOL0 = { xyz: [0, 0, 0], rpy: [0, 1.5708, 0] };
+  const MESH_NAMES = ["base_link", "link_1", "link_2", "link_3", "link_4", "link_5", "link_6"];
+  const ASSET_DIR = "assets/kr60ha/visual/";
   const HOME = [0, -90, 90, 0, 90, 0];
+
+  // Real KUKA colors: base + wrist black (RAL 9005), links orange (RAL 2003).
+  const COLOR_BLACK = 0x0e0e10;
+  const COLOR_ORANGE = 0xf67828;
+  const COLOR_GHOST = 0x4fc08d;
 
   let scene, camera, renderer, controls, rotors, rotorsT, toolNode;
   let container, toolEl, logFn, running = false;
@@ -41,43 +54,52 @@ const Robot3D = (() => {
     return new THREE.Matrix4().multiplyMatrices(Rz, RyRx);
   }
 
-  function addSegment(parent, to, radius, mat) {
-    const v = new THREE.Vector3(to[0], to[1], to[2]);
-    const len = v.length();
-    if (len < 1e-6) return;
-    const geo = new THREE.CylinderGeometry(radius, radius * 0.8, len, 20);
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.copy(v.clone().multiplyScalar(0.5));
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), v.clone().normalize());
-    parent.add(mesh);
+  // A material factory: returns a material for a named mesh of this arm.
+  function makeMats(kind) {
+    if (kind === "ghost") {
+      const m = new THREE.MeshStandardMaterial({
+        color: COLOR_GHOST, metalness: 0.1, roughness: 0.8,
+        transparent: true, opacity: 0.22,
+      });
+      return () => m;
+    }
+    // Current arm: real KUKA colors.
+    const black = new THREE.MeshStandardMaterial({ color: COLOR_BLACK, metalness: 0.4, roughness: 0.55 });
+    const orange = new THREE.MeshStandardMaterial({ color: COLOR_ORANGE, metalness: 0.3, roughness: 0.5 });
+    const tool = new THREE.MeshStandardMaterial({ color: 0xd7dbe2, metalness: 0.3, roughness: 0.6 });
+    return (name) => {
+      if (name === "base_link" || name === "link_6") return black;
+      if (name === "tool") return tool;
+      return orange; // link_1..link_5
+    };
   }
 
-  function addSphere(parent, radius, mat) {
-    parent.add(new THREE.Mesh(new THREE.SphereGeometry(radius, 20, 16), mat));
-  }
-
-  function buildArm(parent, mats) {
+  // Build one arm (six rotors + link meshes + tool0 marker) from shared geometries.
+  // ``geos[name]`` is the STL BufferGeometry (or absent, in which case a placeholder
+  // box keeps the arm visible). The base_link pedestal is added separately (it is static).
+  function buildArm(geos, matFor) {
     const rot = [];
-    let ref = parent;
     for (let j = 0; j < 6; j++) {
       const jt = JOINTS[j];
-      const n = new THREE.Group();
-      n.position.set(jt.pos[0], jt.pos[1], jt.pos[2]);
-      n.quaternion.setFromRotationMatrix(rotFromRpy(jt.rpy));
-      ref.add(n);
-      const r = new THREE.Group();
-      n.add(r);
-      rot.push(r);
-      const to = j < 5 ? JOINTS[j + 1].pos : TOOL.pos;
-      addSegment(r, to, mats.linkRadius, mats.linkMat);
-      addSphere(r, mats.jointRadius, mats.jointMat);
-      ref = r;
+      const rotor = new THREE.Group();
+      rotor.position.set(jt.xyz[0], jt.xyz[1], jt.xyz[2]);
+      (j === 0 ? scene : rot[j - 1]).add(rotor);
+      rot.push(rotor);
+      const name = "link_" + (j + 1);
+      if (geos[name]) {
+        rotor.add(new THREE.Mesh(geos[name], matFor(name)));
+      } else {
+        const ph = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 0.3), matFor(name));
+        rotor.add(ph);
+        logFn(name + ".stl not loaded; placeholder link");
+      }
     }
+    // tool0 marker ($FLANGE) — a child of rotor[5]; drives the tool readout.
     const tool = new THREE.Group();
-    tool.position.set(TOOL.pos[0], TOOL.pos[1], TOOL.pos[2]);
-    tool.quaternion.setFromRotationMatrix(rotFromRpy(TOOL.rpy));
-    ref.add(tool);
-    tool.add(new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.14), mats.toolMat));
+    tool.position.set(TOOL0.xyz[0], TOOL0.xyz[1], TOOL0.xyz[2]);
+    tool.quaternion.setFromRotationMatrix(rotFromRpy(TOOL0.rpy));
+    rot[5].add(tool);
+    tool.add(new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.14), matFor("tool")));
     return { rot, tool };
   }
 
@@ -87,6 +109,26 @@ const Robot3D = (() => {
       const axis = new THREE.Vector3(JOINTS[j].axis[0], JOINTS[j].axis[1], JOINTS[j].axis[2]);
       rot[j].quaternion.setFromAxisAngle(axis, ang);
     }
+  }
+
+  // Load the real KR60 STL meshes (once each; the geometry is shared by both arms).
+  // Failures are logged and skipped (e.g. file:// without the assets); ``onDone`` is
+  // called with the geometry table once every load has settled.
+  function loadAllMeshes(onDone) {
+    const geos = {};
+    let pending = MESH_NAMES.length;
+    const finish = () => { if (--pending === 0) onDone(geos); };
+    MESH_NAMES.forEach((name) => {
+      new THREE.STLLoader().load(
+        ASSET_DIR + name + ".stl",
+        (geo) => { geos[name] = geo; finish(); },
+        undefined,
+        (err) => {
+          logFn(name + ".stl not loaded: " + (err && err.message ? err.message : err));
+          finish();
+        }
+      );
+    });
   }
 
   // Load the Blender-editable environment (a GLB). glTF is Y-up; this scene is Z-up,
@@ -114,8 +156,8 @@ const Robot3D = (() => {
     scene.background = new THREE.Color(0x0d0f13);
 
     camera = new THREE.PerspectiveCamera(45, w / h, 0.01, 100);
-    camera.position.set(2.6, -2.4, 2.2);
-    camera.up.set(0, 0, 1);  // URDF is Z-up
+    camera.position.set(2.2, -2.0, 1.6);
+    camera.up.set(0, 0, 1);  // the kr60ha chain is Z-up
 
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
@@ -123,7 +165,7 @@ const Robot3D = (() => {
     container.appendChild(renderer.domElement);
 
     controls = new THREE.OrbitControls(camera, renderer.domElement);
-    controls.target.set(0.5, 0, 1.1);
+    controls.target.set(0.3, 0, 0.9);
     controls.enableDamping = true;
     controls.dampingFactor = 0.12;
     controls.update();
@@ -135,40 +177,11 @@ const Robot3D = (() => {
 
     scene.add(new THREE.GridHelper(8, 16, 0x3a4152, 0x1c2029));
 
-    const baseMat = new THREE.MeshStandardMaterial({ color: 0x2a2f3a, metalness: 0.2, roughness: 0.85 });
-    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.1), baseMat);
-    plate.position.set(0, 0, 0.05);
-    scene.add(plate);
-    const ped = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.22, 0.48, 24), baseMat);
-    ped.rotation.x = Math.PI / 2;
-    ped.position.set(0, 0, 0.24);
-    scene.add(ped);
-
     if (opts.environment !== false && typeof THREE.GLTFLoader !== "undefined") {
       loadEnvironment(opts.environmentUrl || "assets/environment.glb");
     }
 
-    const curMats = {
-      linkMat: new THREE.MeshStandardMaterial({ color: 0xff6a2a, metalness: 0.3, roughness: 0.5 }),
-      jointMat: new THREE.MeshStandardMaterial({ color: 0x3a3f4a, metalness: 0.4, roughness: 0.6 }),
-      toolMat: new THREE.MeshStandardMaterial({ color: 0xd7dbe2, metalness: 0.2, roughness: 0.7 }),
-      linkRadius: 0.09, jointRadius: 0.11,
-    };
-    const tgtMats = {
-      linkMat: new THREE.MeshStandardMaterial({ color: 0x4fc08d, metalness: 0.1, roughness: 0.8, transparent: true, opacity: 0.22 }),
-      jointMat: new THREE.MeshStandardMaterial({ color: 0x4fc08d, metalness: 0.1, roughness: 0.8, transparent: true, opacity: 0.22 }),
-      toolMat: new THREE.MeshStandardMaterial({ color: 0x4fc08d, metalness: 0.1, roughness: 0.8, transparent: true, opacity: 0.22 }),
-      linkRadius: 0.09, jointRadius: 0.11,
-    };
-
-    const arm = buildArm(scene, curMats);
-    rotors = arm.rot; toolNode = arm.tool;
-    const armT = buildArm(scene, tgtMats);
-    rotorsT = armT.rot;
-
-    setJoints(rotors, HOME);
-    setJoints(rotorsT, HOME);
-
+    // The render loop starts immediately (it renders the scene as it builds up).
     window.addEventListener("resize", () => {
       const cw = container.clientWidth, ch = container.clientHeight;
       if (!cw || !ch) return;
@@ -176,7 +189,6 @@ const Robot3D = (() => {
       camera.updateProjectionMatrix();
       renderer.setSize(cw, ch);
     });
-
     (function loop() {
       requestAnimationFrame(loop);
       controls.update();
@@ -186,7 +198,32 @@ const Robot3D = (() => {
         toolEl.textContent = p.x.toFixed(2) + ", " + p.y.toFixed(2) + ", " + p.z.toFixed(2);
       }
     })();
-    running = true;
+
+    // Load the real KR60 meshes and build the arms (shared geometry).
+    if (typeof THREE.STLLoader === "undefined") {
+      logFn("STLLoader not available; 3d arm disabled");
+      return;
+    }
+    loadAllMeshes((geos) => {
+      const curMat = makeMats("cur");
+      const ghostMat = makeMats("ghost");
+      // Static base_link (the pedestal) — added once, shared by both arms.
+      if (geos.base_link) {
+        scene.add(new THREE.Mesh(geos.base_link, curMat("base_link")));
+      } else {
+        const ph = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 0.5, 24), curMat("base_link"));
+        ph.position.set(0, 0, 0.25);
+        scene.add(ph);
+        logFn("base_link.stl not loaded; placeholder pedestal");
+      }
+      const cur = buildArm(geos, curMat);
+      rotors = cur.rot; toolNode = cur.tool;
+      const tgt = buildArm(geos, ghostMat);
+      rotorsT = tgt.rot;
+      setJoints(rotors, HOME);
+      setJoints(rotorsT, HOME);
+      running = true;
+    });
   }
 
   function update(s) {

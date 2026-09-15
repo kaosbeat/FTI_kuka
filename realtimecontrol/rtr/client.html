@@ -75,7 +75,7 @@
   <section id="robot3d-section">
     <h2>3d view</h2>
     <div id="robot3d"></div>
-    <div class="legend"><span class="sw" style="background:#ff6a2a"></span>current
+    <div class="legend"><span class="sw" style="background:#f67828"></span>current
       &nbsp;<span class="sw" style="background:#4fc08d"></span>target</div>
     <div class="kv" style="margin-top:8px"><span>tool (x, y, z)</span><span id="toolPos">&#8211;</span></div>
   </section>
@@ -124,6 +124,7 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
 <script src="rtr3d.js"></script>
 <script>
 "use strict";
@@ -210,6 +211,24 @@ function send(cmd) {
   log("→ " + JSON.stringify(cmd));
 }
 
+// Whether `to` is reachable from `from` via the zone exits graph (BFS). Zone
+// transitions are path-routed, so a button is only dimmed if the zone is disabled
+// or genuinely unreachable (no path), not merely if it is not a *direct* exit.
+function reachable(from, to) {
+  if (to === from) return true;
+  const seen = new Set([from]);
+  const queue = [from];
+  while (queue.length) {
+    const n = queue.shift();
+    const exits = (ZONES[n] && ZONES[n].exits) ? ZONES[n].exits : [];
+    for (const e of exits) {
+      if (e === to) return true;
+      if (!seen.has(e) && ZONES[e]) { seen.add(e); queue.push(e); }
+    }
+  }
+  return false;
+}
+
 // ------------------------------------------------------------------
 // Render snapshots.
 // ------------------------------------------------------------------
@@ -246,13 +265,13 @@ function render(s) {
     flagEls[f].className = "chip" + (s.flags[f] ? " on" : "");
   }
 
-  // Zone buttons: active = current; dim = disabled or unreachable from current.
+  // Zone buttons: active = current; dim = disabled or unreachable (no path) from current.
   for (const name of Object.keys(zoneBtns)) {
     const z = ZONES[name];
     let cls = "";
     if (name === s.zone) cls = "active";
     else if (!z || z.enabled === false) cls = "dim";
-    else if (!ZONES[s.zone] || !ZONES[s.zone].exits.includes(name)) cls = "dim";
+    else if (!ZONES[s.zone] || !reachable(s.zone, name)) cls = "dim";
     zoneBtns[name].className = cls;
   }
   for (const m of MODES) modeBtns[m].className = m === s.mode ? "active" : "";

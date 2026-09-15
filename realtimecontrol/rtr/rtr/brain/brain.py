@@ -28,7 +28,7 @@ from typing import List, Optional
 from ..core.commands import Cmd, Command
 from ..robot.helpers import fitlimits
 from ..state.machine import StateMachine
-from ..state.zones import Zones
+from ..state.zones import Zones, effective_limits
 
 MODES = ("wander", "random", "action", "track", "hold")
 
@@ -75,6 +75,8 @@ class Brain:
             self.set_mode(p.get("mode", "wander"))
         elif c == Cmd.PLAY_ACTION:
             self.machine.play_action(p.get("action"))
+        elif c == Cmd.CLEAR_ACTION:
+            self.machine.clear_action()
         elif c == Cmd.SET_JOINT_POSE:
             pose = self._clamp(list(p["pose"]))
             self.target = pose
@@ -123,8 +125,8 @@ class Brain:
             t = self.machine.update(curjpos)
             if t is not None:
                 self.target_kind = "joint"
-                self.target = t
-                return t
+                self.target = self._clamp(t)  # floor the transition target too
+                return self.target
             # Transition just completed; fall through to the zone behaviour.
 
         if self.mode == "wander":
@@ -147,6 +149,11 @@ class Brain:
             self.target_kind = "joint"
         # "hold" (and any other case): keep self.target as-is.
 
+        # Floor the final result so every pose reaching the robot is within the
+        # hard safety floor (safezone ∩ hardware), regardless of the policy.
+        if self.target is not None:
+            self.target = self._clamp(self.target)
+
         return self.target
 
     # ------------------------------------------------------------------
@@ -155,13 +162,18 @@ class Brain:
     def _safezone(self):
         return self.machine.zones.get(self.machine.current_zone).safezone
 
+    def _effective(self):
+        """The per-axis hard safety floor: the zone safezone ∩ the hardware limits."""
+        return effective_limits(self._safezone())
+
     def _clamp(self, pose: List[float]) -> List[float]:
-        return [fitlimits(i, pose[i], self._safezone()) for i in range(len(pose))]
+        """Clamp every axis (A1–A6) to the effective floor (safezone ∩ hardware)."""
+        return [fitlimits(i, pose[i], self._effective()) for i in range(len(pose))]
 
     def _wander(self, curjpos: List[float]) -> List[float]:
-        """Gentle continuous drift of A1-A3, wrist derived, clamped to the zone."""
+        """Gentle continuous drift of A1-A3, wrist derived, clamped to the floor."""
         pose = list(curjpos)
-        limits = self._safezone()
+        limits = self._effective()
         for i in range(3):
             val = (0.5 - random.random()) * self.limitadjust[i] * (1.0 / self.tick_hz)
             pose[i] = fitlimits(i, pose[i] + val, limits)
@@ -170,17 +182,17 @@ class Brain:
         return pose
 
     def _random_pose(self) -> List[float]:
-        """A fully random pose inside the current zone's safezone."""
-        limits = self._safezone()
+        """A fully random pose inside the current zone's effective floor."""
+        limits = self._effective()
         pose = [random.uniform(lo, hi) for (lo, hi) in limits[:5]]
         pose[4] = fitlimits(4, -(pose[1] + pose[2]), limits)
-        pose.append(0.0)  # A6 free
+        pose.append(0.0)  # A6 kept at 0 (the step clamp floors it)
         return pose
 
     def _track(self, curjpos: List[float]) -> List[float]:
-        """Advance A1 at ``track_speed`` deg/s, clamped to the zone."""
+        """Advance A1 at ``track_speed`` deg/s, clamped to the floor."""
         pose = list(curjpos)
-        limits = self._safezone()
+        limits = self._effective()
         step = self.track_speed * (1.0 / self.tick_hz)
         pose[0] = fitlimits(0, pose[0] + step, limits)
         return pose

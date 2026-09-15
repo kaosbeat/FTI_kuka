@@ -24,7 +24,7 @@ from rtr.state import StateMachine, Zones
 from rtr.state.zones import LIN_POSES, POSES, ZONES, load_state_data
 from rtr.brain import Brain
 from rtr.display import make_display
-from rtr.sound import make_sound
+from rtr.sound import make_sound, load_sound_data, builtin_sound_data
 from rtr.camera import make_camera
 from rtr.io import HttpServer, MidiInput, WebSocketServer
 
@@ -46,6 +46,8 @@ def parse_args(argv):
                         help="zone data file (default: zones.json next to main.py)")
     parser.add_argument("--midi", type=int, default=0, help="MIDI in port index")
     parser.add_argument("--no-midi", action="store_true", help="disable MIDI input")
+    parser.add_argument("--sound", default="sound.json",
+                        help="sound data file (default: sound.json next to main.py)")
     parser.add_argument("--no-sound", action="store_true", help="disable sound (MIDI out)")
     parser.add_argument("--no-display", action="store_true", help="disable display (P5live)")
     parser.add_argument("--camera", action="store_true", help="enable the camera adapter")
@@ -62,6 +64,7 @@ def build_config(args) -> Config:
     cfg.http_port = args.http_port
     cfg.enable_http = not args.no_http
     cfg.zones_path = _resolve(args.zones)
+    cfg.sound_path = _resolve(args.sound)
     cfg.midi_in_port = None if args.no_midi else args.midi
     cfg.enable_sound = not args.no_sound
     cfg.enable_display = not args.no_display
@@ -83,6 +86,15 @@ def load_zones_data(path: str) -> dict:
         return {"zones": ZONES, "poses": POSES, "lin_poses": LIN_POSES}
 
 
+def load_sound_data_fallback(path: str) -> dict:
+    """Load the sound data file, falling back to the built-in tables with a warning."""
+    try:
+        return load_sound_data(path)
+    except (OSError, ValueError) as exc:
+        print(f"[rtr] sound file {path!r} unavailable ({exc}); using built-in sound")
+        return builtin_sound_data()
+
+
 async def run(cfg: Config) -> None:
     bus = StateBus()
 
@@ -96,23 +108,28 @@ async def run(cfg: Config) -> None:
     robot = make_robot(cfg.robot_kind, port=cfg.robot_port, tick_hz=cfg.tick_hz)
     machine = StateMachine(zones)
     brain = Brain(machine, zones, tick_hz=cfg.tick_hz)
+    # Sound is created before the engine so the engine can hold its reload hook.
+    sound = make_sound(bus, sound_loader=lambda: load_sound_data_fallback(cfg.sound_path),
+                       enabled=cfg.enable_sound,
+                       out_port=cfg.midi_out_port, out_device=cfg.midi_out_device)
     engine = Engine(bus, robot, brain, machine, tick_hz=cfg.tick_hz,
-                    zone_loader=lambda: load_state_data(cfg.zones_path))
+                    zone_loader=lambda: load_state_data(cfg.zones_path),
+                    sound_reload=sound.reload)
 
     # --- adapters -------------------------------------------------------
     ws = WebSocketServer(bus, host=cfg.ws_host, port=cfg.ws_port,
                          enabled=cfg.enable_display)
     http = HttpServer(bus, zones_provider=lambda: machine.zones,
-                      zones_path=cfg.zones_path, root=ROOT,
+                      sound_provider=sound.current_data,
+                      zones_path=cfg.zones_path, sound_path=cfg.sound_path, root=ROOT,
                       host=cfg.http_host, port=cfg.http_port,
                       enabled=cfg.enable_http)
     display = make_display(bus, ws.broadcast, enabled=cfg.enable_display)
-    sound = make_sound(bus, enabled=cfg.enable_sound,
-                       out_port=cfg.midi_out_port, out_device=cfg.midi_out_device)
     camera = make_camera(bus, enabled=cfg.enable_camera)
     midi = MidiInput(bus, in_port=cfg.midi_in_port,
                      enabled=cfg.midi_in_port is not None,
-                     poses=poses, lin_poses=lin_poses)
+                     poses=poses, lin_poses=lin_poses,
+                     zones_provider=lambda: machine.zones)
 
     # The WebSocket + HTTP bridges come up first, so the control interface is
     # always reachable (and keeps running) while we wait for the robot.

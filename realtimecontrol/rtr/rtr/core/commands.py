@@ -17,12 +17,14 @@ class Cmd(str, Enum):
     GOTO_ZONE = "goto_zone"
     SET_MODE = "set_mode"
     PLAY_ACTION = "play_action"
+    CLEAR_ACTION = "clear_action"
     SET_JOINT_POSE = "set_joint_pose"
     SET_LINEAR_POSE = "set_linear_pose"
     ADJUST_LIMIT = "adjust_limit"
     SET_FLAG = "set_flag"
     RANDOM_WRIST = "random_wrist"
     RELOAD_ZONES = "reload_zones"
+    RELOAD_SOUND = "reload_sound"
     STOP = "stop"
 
 
@@ -33,6 +35,7 @@ class Event(str, Enum):
     MODE_CHANGED = "mode_changed"
     ACTION_CHANGED = "action_changed"
     ZONES_CHANGED = "zones_changed"
+    SOUND_CHANGED = "sound_changed"
     POSE_UPDATED = "pose_updated"
     SNAPSHOT = "snapshot"
 

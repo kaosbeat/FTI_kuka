@@ -15,6 +15,7 @@ A zone declares:
 """
 
 import json
+from collections import deque
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -27,6 +28,35 @@ SOFTWARE_LIMITS: List[Tuple[float, float]] = [
 LIMITS: List[Tuple[float, float]] = [
     (-94, 122), (-134, 34), (-119, 157), (-349, 349), (-118, 118), (-357, 357),
 ]
+
+# Per-axis *hardware* limits (degrees), from the ``kr60ha_macro.xacro`` joint
+# ``<limit>`` tags. These are the physical joint limits of the real KR60 and form a
+# hard safety floor: every commanded pose is clamped to the intersection of the
+# current zone's safezone and these limits. Note A6 (the rotary wrist) is now
+# limited too — it was previously treated as free.
+HARDWARE_LIMITS: List[Tuple[float, float]] = [
+    (-185, 185),   # A1
+    (-135, 35),    # A2
+    (-120, 158),   # A3
+    (-350, 350),   # A4
+    (-119, 119),   # A5
+    (-350, 350),   # A6
+]
+
+
+def effective_limits(zone_safezone: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    """Per-axis intersection of a zone's safezone and the hardware limits.
+
+    The effective range for each axis is ``[max(sz_lo, hw_lo), min(sz_hi, hw_hi)]`` —
+    the safezone narrowed by the hardware floor. This is the hard safety limit every
+    commanded pose is clamped to. If a safezone is wider than the hardware range the
+    intersection safely shrinks to the hardware range; if it is entirely outside the
+    hardware range the result clamps to the hardware boundary (a safe failure).
+    """
+    return [
+        (max(sz[0], hw[0]), min(sz[1], hw[1]))
+        for sz, hw in zip(zone_safezone, HARDWARE_LIMITS)
+    ]
 
 ZONES: Dict[str, dict] = {
     "init": {
@@ -317,6 +347,30 @@ class Zones:
     def can_exit_to(self, current: str, target: str) -> bool:
         """True if ``target`` is a declared exit of ``current``."""
         return target in self._by_name[current].exits
+
+    def find_path(self, from_name: str, to_name: str) -> Optional[List[str]]:
+        """Shortest path on the zone ``exits`` graph.
+
+        Returns ``[from_name, ..., to_name]`` or ``None`` if ``to_name`` is not
+        reachable from ``from_name`` (BFS over the ``exits`` edges).
+        """
+        if not self.has(from_name) or not self.has(to_name):
+            return None
+        if from_name == to_name:
+            return [from_name]
+        queue = deque([(from_name, (from_name,))])
+        seen = {from_name}
+        while queue:
+            node, path = queue.popleft()
+            for nxt in self.get(node).exits:
+                if nxt in seen:
+                    continue
+                new_path = path + (nxt,)
+                if nxt == to_name:
+                    return list(new_path)
+                seen.add(nxt)
+                queue.append((nxt, new_path))
+        return None
 
     def table(self) -> Dict[str, dict]:
         """A copy of the full zone table (for the HTTP ``GET /api/zones`` endpoint)."""
