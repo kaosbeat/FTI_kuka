@@ -28,7 +28,7 @@ from typing import List, Optional
 from ..core.commands import Cmd, Command
 from ..robot.helpers import fitlimits
 from ..state.machine import StateMachine
-from ..state.zones import Zones, effective_limits
+from ..state.zones import HARDWARE_LIMITS, Zones, effective_limits
 
 MODES = ("wander", "random", "action", "track", "hold")
 
@@ -125,7 +125,16 @@ class Brain:
             t = self.machine.update(curjpos)
             if t is not None:
                 self.target_kind = "joint"
-                self.target = self._clamp(t)  # floor the transition target too
+                # A transition target (exitpos / startpos) is a curated hand-off pose
+                # that must be reached EXACTLY: the state machine's arrival check
+                # (comparelist against the *unclamped* step) only fires when the robot
+                # gets there. The exit pose is by definition outside the current zone's
+                # safezone (it is the hand-off to the next zone), so flooring it to the
+                # safezone would move it and the robot could never reach the unclamped
+                # step -> the transition stalls forever and, because this branch takes
+                # priority every tick, the whole core freezes (moving=no, stuck).
+                # Floor it to the hardware limits only.
+                self.target = self._hardware_clamp(t)
                 return self.target
             # Transition just completed; fall through to the zone behaviour.
 
@@ -169,6 +178,16 @@ class Brain:
     def _clamp(self, pose: List[float]) -> List[float]:
         """Clamp every axis (A1–A6) to the effective floor (safezone ∩ hardware)."""
         return [fitlimits(i, pose[i], self._effective()) for i in range(len(pose))]
+
+    def _hardware_clamp(self, pose: List[float]) -> List[float]:
+        """Clamp every axis to the hardware limits only (no safezone).
+
+        Used for zone-transition targets: the exit/start poses sit outside the current
+        zone's safezone by design, so the safezone floor must not apply to them — only
+        the hardware floor. This keeps them reachable so the state machine's arrival
+        check fires and the transition can complete.
+        """
+        return [fitlimits(i, pose[i], HARDWARE_LIMITS) for i in range(len(pose))]
 
     def _wander(self, curjpos: List[float]) -> List[float]:
         """Gentle continuous drift of A1-A3, wrist derived, clamped to the floor."""

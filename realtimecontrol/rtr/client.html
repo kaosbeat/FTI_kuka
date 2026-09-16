@@ -59,7 +59,12 @@
   #robot3d canvas { display: block; }
   .legend { font-size: 11px; color: var(--dim); margin-top: 6px; }
   .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
-               margin: 0 4px 0 0; vertical-align: middle; }
+                margin: 0 4px 0 0; vertical-align: middle; }
+  #patchSel { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
+              border-radius: 4px; padding: 4px 6px; font: inherit; width: 200px; }
+  #patchPreview { width: 100%; height: 200px; border: 1px solid var(--border);
+                  border-radius: 6px; overflow: hidden; background: #0d0f13; margin-top: 8px; }
+  #patchPreview canvas { display: block; width: 100%; height: 100%; }
 </style>
 </head>
 <body>
@@ -98,6 +103,16 @@
   </section>
 
   <section>
+    <h2>patches (hydra)</h2>
+    <div class="btnrow">
+      <select id="patchSel"></select>
+    </div>
+    <div id="patchPreview"></div>
+    <div class="kv" style="margin-top:8px"><span>auto (live state)</span><span id="patchAuto">&#8211;</span></div>
+    <div class="kv"><span>render</span><span><a href="render.html" style="color:var(--accent)">fullscreen &#8594;</a></span></div>
+  </section>
+
+  <section>
     <h2>zones</h2>
     <div class="btnrow" id="zones"></div>
     <h2>modes</h2>
@@ -125,6 +140,7 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hydra-synth/dist/hydra-synth.js"></script>
 <script src="rtr3d.js"></script>
 <script>
 "use strict";
@@ -164,6 +180,121 @@ async function fetchZones() {
   } catch (err) {
     console.log("zones fetch failed, keeping fallback:", err);
   }
+  // The patch chooser's zone slots follow the zone table; rebuild it on every fetch.
+  fetchPatches();
+}
+
+// ------------------------------------------------------------------
+// Patch chooser (hydra). Pick a patch slot to preview, or follow the live state.
+// The table comes from /api/patches (matched action > mode > zone > default).
+// ------------------------------------------------------------------
+const PATCH_DEFAULT = "osc(4, 0.1, 1.2).out()";
+let PATCHES = { default: PATCH_DEFAULT, zones: {}, modes: {}, actions: {} };
+let patchHydra = null;
+let patchLastCode = null;
+let patchSelValue = "auto";
+
+async function fetchPatches() {
+  let data = null;
+  try {
+    const r = await fetch("/api/patches", { cache: "no-store" });
+    if (r.ok) data = await r.json();
+  } catch (e) {}
+  if (!data) {
+    try {
+      const r = await fetch("/patches.json", { cache: "no-store" });
+      if (r.ok) data = await r.json();
+    } catch (e) {}
+  }
+  if (!data) data = { default: PATCH_DEFAULT, zones: {}, modes: {}, actions: {} };
+  PATCHES = data;
+  if (typeof PATCHES.default !== "string") PATCHES.default = PATCH_DEFAULT;
+  if (!PATCHES.zones) PATCHES.zones = {};
+  if (!PATCHES.modes) PATCHES.modes = {};
+  if (!PATCHES.actions) PATCHES.actions = {};
+  buildPatchChooser();
+  updatePatchPreview();
+}
+
+// Match precedence: action > mode > zone > default (mirrors the core's match_patch).
+function matchPatch(zone, mode, action) {
+  const scopes = [["actions", action], ["modes", mode], ["zones", zone]];
+  for (const [scope, key] of scopes) {
+    if (key) {
+      const code = (PATCHES[scope] || {})[key];
+      if (typeof code === "string" && code) return code;
+    }
+  }
+  const d = PATCHES.default;
+  return (typeof d === "string" && d) ? d : PATCH_DEFAULT;
+}
+
+function patchAutoLabel(m) {
+  if (m.action && (PATCHES.actions || {})[m.action]) return "action:" + m.action;
+  if (m.mode && (PATCHES.modes || {})[m.mode]) return "mode:" + m.mode;
+  if (m.zone && (PATCHES.zones || {})[m.zone]) return "zone:" + m.zone;
+  return "default";
+}
+
+function currentPatchCode() {
+  if (patchSelValue === "auto") {
+    const s = lastSnap || {};
+    return matchPatch(s.zone, s.mode, s.action);
+  }
+  if (patchSelValue === "default") return PATCHES.default;
+  const idx = patchSelValue.indexOf(".");
+  const scope = patchSelValue.slice(0, idx), name = patchSelValue.slice(idx + 1);
+  return (PATCHES[scope] && PATCHES[scope][name]) || PATCHES.default;
+}
+
+function ensurePatchHydra() {
+  if (patchHydra) return patchHydra;
+  if (typeof Hydra === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  // Match the 3D tool-screen resolution (single source of truth in rtr3d.js).
+  const res = typeof Robot3D !== "undefined" ? Robot3D.screenResolution() : [640, 360];
+  canvas.width = res[0]; canvas.height = res[1];
+  $("patchPreview").appendChild(canvas);
+  patchHydra = new Hydra({ canvas, detectAudio: false, makeGlobal: true, autoLoop: true });
+  return patchHydra;
+}
+
+function updatePatchPreview() {
+  const code = currentPatchCode();
+  const h = ensurePatchHydra();
+  if (!h) return;
+  if (code === patchLastCode) return;
+  try {
+    h.eval(code || PATCH_DEFAULT);
+    patchLastCode = code || PATCH_DEFAULT;
+  } catch (e) {
+    log("patch preview failed: " + e);
+  }
+}
+
+function buildPatchChooser() {
+  const sel = $("patchSel");
+  const prev = sel.value || patchSelValue;
+  sel.innerHTML = "";
+  const addOpt = (val, label) => {
+    const o = document.createElement("option");
+    o.value = val; o.textContent = label;
+    sel.appendChild(o);
+  };
+  addOpt("auto", "auto (follow state)");
+  addOpt("default", "default");
+  const zGroup = document.createElement("optgroup"); zGroup.label = "zones";
+  Object.keys(ZONES).forEach((n) => { const o = document.createElement("option"); o.value = "zones." + n; o.textContent = n; zGroup.appendChild(o); });
+  sel.appendChild(zGroup);
+  const mGroup = document.createElement("optgroup"); mGroup.label = "modes";
+  MODES.forEach((m) => { const o = document.createElement("option"); o.value = "modes." + m; o.textContent = m; mGroup.appendChild(o); });
+  sel.appendChild(mGroup);
+  const aGroup = document.createElement("optgroup"); aGroup.label = "actions";
+  Object.keys(PATCHES.actions).forEach((a) => { const o = document.createElement("option"); o.value = "actions." + a; o.textContent = a; aGroup.appendChild(o); });
+  sel.appendChild(aGroup);
+  sel.value = prev;
+  patchSelValue = sel.value || "auto";
+  sel.onchange = () => { patchSelValue = sel.value; updatePatchPreview(); };
 }
 
 // ------------------------------------------------------------------
@@ -199,8 +330,13 @@ function connect() {
   ws.onmessage = (e) => {
     let m;
     try { m = JSON.parse(e.data); } catch (err) { log("bad message: " + err); return; }
-    if (m.type === "state") render(m);
+    if (m.type === "state") {
+      renderState(m);
+      $("patchAuto").textContent = patchAutoLabel(m);
+      if (patchSelValue === "auto") updatePatchPreview();
+    }
     else if (m.type === "zones_changed") { fetchZones(); log("zones changed; re-fetching"); }
+    else if (m.type === "patches_changed") { fetchPatches(); log("patches changed; re-fetching"); }
     else log("event " + m.type + " = " + (m.zone !== undefined ? m.zone : m.mode));
   };
 }
@@ -236,7 +372,7 @@ const valEls = [], tgtEls = [], markEls = [], flagEls = {};
 const zoneBtns = {}, modeBtns = {}, actionBtns = {};
 const poseInputs = [];
 
-function render(s) {
+function renderState(s) {
   // Actions are per-zone: rebuild the action buttons whenever the zone changes.
   if (s.zone !== currentZone) {
     currentZone = s.zone;
@@ -275,12 +411,13 @@ function render(s) {
     zoneBtns[name].className = cls;
   }
   for (const m of MODES) modeBtns[m].className = m === s.mode ? "active" : "";
-  // Action buttons: active = current action; dim = disabled.
+  // Action buttons: active = current action; dim = not available in this zone.
   for (const a of Object.keys(actionBtns)) {
     const act = (ZONES[currentZone] && ZONES[currentZone].actions) ? ZONES[currentZone].actions[a] : null;
+    const unavailable = act && act.enabled === false;
     let cls = "";
-    if (a === s.action) cls = "active";
-    else if (act && act.enabled === false) cls = "dim";
+    if (unavailable) cls = "dim";
+    else if (a === s.action) cls = "active";
     actionBtns[a].className = cls;
   }
 }
@@ -307,10 +444,28 @@ function buildActionButtons(zoneName) {
   for (const k in actionBtns) delete actionBtns[k];
   const z = ZONES[zoneName];
   const actions = (z && z.actions) ? z.actions : {};
-  Object.keys(actions).forEach((a) => {
+  const names = Object.keys(actions);
+  if (!names.length) {
+    const s = document.createElement("span");
+    s.style.cssText = "color:var(--dim);font-size:12px";
+    s.textContent = "no actions available in this zone";
+    el.appendChild(s);
+    return;
+  }
+  names.forEach((a) => {
+    const act = actions[a];
     const b = document.createElement("button");
     b.textContent = a;
-    b.onclick = () => send({ cmd: "play_action", action: a });
+    // An action the zone does not allow (disabled) is shown but never selectable:
+    // excluded actions are absent from the zone's table and so get no button at all.
+    if (act && act.enabled === false) {
+      b.disabled = true;
+      b.title = "not available in this zone";
+    }
+    b.onclick = () => {
+      if (b.disabled) return;
+      send({ cmd: "play_action", action: a });
+    };
     el.appendChild(b);
     actionBtns[a] = b;
   });
@@ -405,8 +560,10 @@ function buildUI() {
 // The Robot3D schematic builder + fmt helper live in rtr3d.js (shared with editor.html).
 
 let lastSnap = null;
-const _render = render;
-render = (s) => { lastSnap = s; _render(s); Robot3D.update(s); };
+const _renderDom = renderState;
+// Drive the 3D arm first (like editor.html) so it keeps moving even if the DOM
+// snapshot render throws; the render is guarded so one bad frame can't freeze the view.
+renderState = (s) => { lastSnap = s; Robot3D.update(s); try { _renderDom(s); } catch (e) { log("render failed: " + e); } };
 
 buildUI();
 Robot3D.init($("robot3d"), { toolEl: $("toolPos"), log: log, environment: true });

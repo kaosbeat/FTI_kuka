@@ -25,11 +25,27 @@ from rtr.state.zones import LIN_POSES, POSES, ZONES, load_state_data
 from rtr.brain import Brain
 from rtr.display import make_display
 from rtr.sound import make_sound, load_sound_data, builtin_sound_data
+from rtr.patches import (
+    Patches,
+    load_patches_data,
+    builtin_patches_data,
+    DEFAULT_HYDRA_CODE,
+)
 from rtr.camera import make_camera
 from rtr.io import HttpServer, MidiInput, WebSocketServer
 
 # The directory this file lives in: where client.html / editor.html / assets / zones.json are.
 ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# ---------------------------------------------------------------------------
+# Tool screen (hydra).
+#
+# The tool GLB carries a red mesh that stands in for a screen. The browser renders
+# a hydra patch onto it (see rtr3d.js). The patch is now data-driven: it lives in
+# ``patches.json`` (edited in ``editor.html``), matched to zone/mode/action, and is
+# served at GET /api/screen (the ``default`` entry) and GET /api/patches (the whole
+# table). The built-in :data:`DEFAULT_HYDRA_CODE` is the fallback.
+# ---------------------------------------------------------------------------
 
 
 def parse_args(argv):
@@ -49,6 +65,8 @@ def parse_args(argv):
     parser.add_argument("--sound", default="sound.json",
                         help="sound data file (default: sound.json next to main.py)")
     parser.add_argument("--no-sound", action="store_true", help="disable sound (MIDI out)")
+    parser.add_argument("--patches", default="patches.json",
+                        help="patches data file (default: patches.json next to main.py)")
     parser.add_argument("--no-display", action="store_true", help="disable display (P5live)")
     parser.add_argument("--camera", action="store_true", help="enable the camera adapter")
     return parser.parse_args(argv)
@@ -65,6 +83,7 @@ def build_config(args) -> Config:
     cfg.enable_http = not args.no_http
     cfg.zones_path = _resolve(args.zones)
     cfg.sound_path = _resolve(args.sound)
+    cfg.patches_path = _resolve(args.patches)
     cfg.midi_in_port = None if args.no_midi else args.midi
     cfg.enable_sound = not args.no_sound
     cfg.enable_display = not args.no_display
@@ -95,6 +114,15 @@ def load_sound_data_fallback(path: str) -> dict:
         return builtin_sound_data()
 
 
+def load_patches_data_fallback(path: str) -> dict:
+    """Load the patches data file, falling back to the built-in table with a warning."""
+    try:
+        return load_patches_data(path)
+    except (OSError, ValueError) as exc:
+        print(f"[rtr] patches file {path!r} unavailable ({exc}); using built-in patches")
+        return builtin_patches_data()
+
+
 async def run(cfg: Config) -> None:
     bus = StateBus()
 
@@ -112,16 +140,22 @@ async def run(cfg: Config) -> None:
     sound = make_sound(bus, sound_loader=lambda: load_sound_data_fallback(cfg.sound_path),
                        enabled=cfg.enable_sound,
                        out_port=cfg.midi_out_port, out_device=cfg.midi_out_device)
+    # The hydra patches (tool screen) are data-driven too; the engine holds the
+    # reload hook so a POST /api/patches hot-reloads the running table.
+    patches = Patches(bus, patches_loader=lambda: load_patches_data_fallback(cfg.patches_path))
     engine = Engine(bus, robot, brain, machine, tick_hz=cfg.tick_hz,
                     zone_loader=lambda: load_state_data(cfg.zones_path),
-                    sound_reload=sound.reload)
+                    sound_reload=sound.reload,
+                    patch_reload=patches.reload)
 
     # --- adapters -------------------------------------------------------
     ws = WebSocketServer(bus, host=cfg.ws_host, port=cfg.ws_port,
                          enabled=cfg.enable_display)
     http = HttpServer(bus, zones_provider=lambda: machine.zones,
                       sound_provider=sound.current_data,
-                      zones_path=cfg.zones_path, sound_path=cfg.sound_path, root=ROOT,
+                      patches_provider=patches.current_data,
+                      zones_path=cfg.zones_path, sound_path=cfg.sound_path,
+                      patches_path=cfg.patches_path, root=ROOT,
                       host=cfg.http_host, port=cfg.http_port,
                       enabled=cfg.enable_http)
     display = make_display(bus, ws.broadcast, enabled=cfg.enable_display)

@@ -49,6 +49,11 @@ class Config:
     # are the fallback when the file is missing or corrupt.
     sound_path: str = "sound.json"
 
+    # --- patches data (hydra screen code) --------------------------------
+    # On-disk hydra patch table (patches.json), matched to zone/mode/action.
+    # The built-in DEFAULT_HYDRA_CODE is the fallback when the file is missing.
+    patches_path: str = "patches.json"
+
     # --- display / camera / sound ---------------------------------------
     # Only enabled when the corresponding hardware is present.
     enable_display: bool = True

@@ -40,6 +40,8 @@ class Display:
             self._send({"type": "zones_changed", "zones": data})
         elif event == Event.SOUND_CHANGED:
             self._send({"type": "sound_changed"})
+        elif event == Event.PATCHES_CHANGED:
+            self._send({"type": "patches_changed"})
 
     @staticmethod
     def _frame(snapshot_cls, snap) -> dict:

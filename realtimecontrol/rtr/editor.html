@@ -67,6 +67,19 @@
   .msgFields input[type=number] { width: 62px; background: #0d0f13; color: var(--text);
                                    border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; font: inherit; }
   .sndPoses { margin: 2px 0 6px 86px; }
+  #patchesMain { display: grid; gap: 16px; grid-template-columns: 210px 1fr 380px; align-items: start; }
+  .patchList { display: flex; flex-direction: column; gap: 4px; }
+  .patchList button { width: 100%; text-align: left; }
+  .patchList .grp { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+                     color: var(--dim); margin: 8px 0 2px; }
+  .patchList .grp:first-child { margin-top: 0; }
+  #patchCode { width: 100%; min-height: 220px; resize: vertical; background: #0d0f13;
+               color: var(--text); border: 1px solid var(--border); border-radius: 4px;
+               padding: 8px; font: inherit; white-space: pre; }
+  #patchPreview { width: 100%; height: 360px; border: 1px solid var(--border);
+                  border-radius: 6px; overflow: hidden; background: #0d0f13; }
+  #patchPreview canvas { display: block; width: 100%; height: 100%; }
+  #patchInfo { font-size: 12px; color: var(--dim); margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -78,6 +91,7 @@
   <button id="connect">connect</button>
   <button id="tabZones" class="active">zones</button>
   <button id="tabSound">sound</button>
+  <button id="tabPatches">patches</button>
   <button id="save">save</button>
   <span id="saveMsg"></span>
 </header>
@@ -135,10 +149,32 @@
   </section>
 </main>
 
+<main id="patchesMain" style="display:none">
+  <section>
+    <h2>patch slots</h2>
+    <div class="patchList" id="patchList"></div>
+  </section>
+  <section>
+    <h2 id="patchTitle">patch code</h2>
+    <div class="row" style="margin-bottom:8px">
+      <button id="patchAdd">+ add action patch</button>
+      <button id="patchRemove" class="small">remove</button>
+    </div>
+    <textarea id="patchCode" spellcheck="false"></textarea>
+    <div id="patchInfo"></div>
+  </section>
+  <section>
+    <h2>live preview</h2>
+    <div id="patchPreview"></div>
+    <div id="patchStatus" style="font-size:12px;color:var(--dim);margin-top:6px">preview</div>
+  </section>
+</main>
+
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hydra-synth/dist/hydra-synth.js"></script>
 <script src="rtr3d.js"></script>
 <script>
 "use strict";
@@ -188,11 +224,23 @@ let HW_LIMITS = HW_LIMITS_FALLBACK.slice();
 
 let TABLE = null;
 let SOUND = null;
+let PATCHES = null;
 let soundView = false;
+let patchView = false;
 let selectedZone = null;
 let selectedAction = null;
+let selectedPatch = null;   // the current patch slot key
+let patchHydra = null;      // the live-preview hydra instance
+let patchTimer = null;      // debounce timer for the live preview
 let ghostIndex = 0;
 let ws = null;
+
+// Last-resort patches table (mirrors rtr/patches/patches.py DEFAULT_HYDRA_CODE).
+// Used when both /api/patches and /patches.json fail (e.g. opened from file://).
+const PATCHES_FALLBACK = {
+  default: "osc(4, 0.1, 1.2).out()",
+  zones: {}, modes: {}, actions: {},
+};
 
 // ---------------------------------------------------------------------------
 // WebSocket (live mirror: the current arm follows the robot).
@@ -209,7 +257,7 @@ function connect() {
   ws.onmessage = (e) => {
     let m; try { m = JSON.parse(e.data); } catch (err) { return; }
     if (m.type === "state") {
-      Robot3D.update({ joints: m.joints });
+      Robot3D.update({ joints: m.joints, target: m.target });
       $("liveState").innerHTML =
         `<div class="stateRow"><span>zone</span><span>${m.zone}</span></div>` +
         `<div class="stateRow"><span>mode</span><span>${m.mode}</span></div>` +
@@ -219,6 +267,9 @@ function connect() {
     } else if (m.type === "sound_changed") {
       // The running core reloaded the sound mapping; re-fetch it.
       loadSound().then(() => { if (soundView) buildSoundForm(); });
+    } else if (m.type === "patches_changed") {
+      // The running core reloaded the hydra patches; re-fetch them.
+      loadPatches().then(() => { if (patchView) buildPatchesForm(); });
     }
   };
 }
@@ -531,15 +582,200 @@ function saveSound() {
 }
 
 // ---------------------------------------------------------------------------
-// View switching (zones editor vs sound editor).
+// Patches editor (hydra screen code).
+//
+// A patches table maps state to hydra code: ``default`` (the fallback) plus
+// per-zone / per-mode / per-action entries. Match precedence is action > mode >
+// zone > default (the core resolves this; the editor just edits the table). The
+// live preview renders the selected slot's code on a dedicated hydra canvas.
+// ---------------------------------------------------------------------------
+function getPatchCode(key) {
+  if (key === "default") return PATCHES.default;
+  const idx = key.indexOf(".");
+  const scope = key.slice(0, idx), name = key.slice(idx + 1);
+  return (PATCHES[scope] && PATCHES[scope][name]) || "";
+}
+
+function setPatchCode(key, code) {
+  if (key === "default") { PATCHES.default = code; return; }
+  const idx = key.indexOf(".");
+  const scope = key.slice(0, idx), name = key.slice(idx + 1);
+  if (!PATCHES[scope]) PATCHES[scope] = {};
+  PATCHES[scope][name] = code;
+}
+
+// Commit the textarea back to the selected slot (the textarea is the live edit buffer).
+function commitPatchEditor() {
+  if (selectedPatch) setPatchCode(selectedPatch, $("patchCode").value);
+}
+
+async function loadPatches() {
+  let data = null;
+  try {
+    const r = await fetch("/api/patches", { cache: "no-store" });
+    if (r.ok) data = await r.json();
+  } catch (e) {}
+  if (!data) {
+    try {
+      const r = await fetch("/patches.json", { cache: "no-store" });
+      if (r.ok) data = await r.json();
+    } catch (e) {}
+  }
+  if (!data) data = JSON.parse(JSON.stringify(PATCHES_FALLBACK));
+  PATCHES = data;
+  if (typeof PATCHES.default !== "string") PATCHES.default = PATCHES_FALLBACK.default;
+  if (!PATCHES.zones) PATCHES.zones = {};
+  if (!PATCHES.modes) PATCHES.modes = {};
+  if (!PATCHES.actions) PATCHES.actions = {};
+  // Seed every zone / mode / action slot with the default code so the editor shows a
+  // complete, offline-editable table. Only fills names not already present.
+  const def = PATCHES.default;
+  Object.keys(TABLE.zones).forEach((n) => { if (PATCHES.zones[n] === undefined) PATCHES.zones[n] = def; });
+  MODES.forEach((m) => { if (PATCHES.modes[m] === undefined) PATCHES.modes[m] = def; });
+  catalogActions().forEach((a) => { if (PATCHES.actions[a] === undefined) PATCHES.actions[a] = def; });
+  if (selectedPatch === null) selectedPatch = "default";
+  if (patchView) buildPatchesForm();
+  return PATCHES;
+}
+
+// The live-preview hydra (one instance, created lazily on first use).
+function ensurePatchHydra() {
+  if (patchHydra) return patchHydra;
+  if (typeof Hydra === "undefined") {
+    $("patchStatus").textContent = "hydra-synth not loaded";
+    return null;
+  }
+  const container = $("patchPreview");
+  const canvas = document.createElement("canvas");
+  // Match the 3D tool-screen resolution (single source of truth in rtr3d.js).
+  const res = typeof Robot3D !== "undefined" ? Robot3D.screenResolution() : [640, 360];
+  canvas.width = res[0]; canvas.height = res[1];
+  container.appendChild(canvas);
+  patchHydra = new Hydra({ canvas, detectAudio: false, makeGlobal: true, autoLoop: true });
+  return patchHydra;
+}
+
+function evalPatchPreview(code) {
+  const h = ensurePatchHydra();
+  if (!h) return;
+  try {
+    h.eval(code || PATCHES_FALLBACK.default);
+    $("patchStatus").textContent = "preview: running";
+  } catch (e) {
+    $("patchStatus").textContent = "preview error: " + (e && e.message ? e.message : e);
+  }
+}
+
+function buildPatchesForm() {
+  const listEl = $("patchList");
+  listEl.innerHTML = "";
+  const addGroup = (label) => {
+    const g = document.createElement("div");
+    g.className = "grp"; g.textContent = label;
+    listEl.appendChild(g);
+  };
+  const addSlot = (key, label) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.className = key === selectedPatch ? "active" : "";
+    b.onclick = () => {
+      commitPatchEditor();
+      selectedPatch = key;
+      buildPatchesForm();
+    };
+    listEl.appendChild(b);
+  };
+  addGroup("default");
+  addSlot("default", "default");
+  addGroup("zones");
+  Object.keys(TABLE.zones).forEach((n) => addSlot("zones." + n, n));
+  addGroup("modes");
+  MODES.forEach((m) => addSlot("modes." + m, m));
+  addGroup("actions");
+  Object.keys(PATCHES.actions).forEach((a) => addSlot("actions." + a, a));
+
+  const code = getPatchCode(selectedPatch);
+  $("patchCode").value = code;
+  $("patchTitle").textContent = "patch: " + selectedPatch;
+  $("patchInfo").textContent = "match precedence: action > mode > zone > default";
+  evalPatchPreview(code);
+}
+
+function addPatchAction() {
+  const nm = prompt("action name:", "new");
+  if (!nm) return;
+  if (!PATCHES.actions[nm]) {
+    PATCHES.actions[nm] = PATCHES.default || PATCHES_FALLBACK.default;
+    selectedPatch = "actions." + nm;
+    buildPatchesForm();
+  }
+}
+
+function removePatchSlot() {
+  if (!selectedPatch || selectedPatch === "default") {
+    $("saveMsg").textContent = "only action patches can be removed";
+    $("saveMsg").className = "err";
+    setTimeout(() => { $("saveMsg").className = ""; }, 3000);
+    return;
+  }
+  const idx = selectedPatch.indexOf(".");
+  const scope = selectedPatch.slice(0, idx), name = selectedPatch.slice(idx + 1);
+  if (scope !== "actions") {
+    $("saveMsg").textContent = "zone/mode patches follow the zone table; only actions can be removed";
+    $("saveMsg").className = "err";
+    setTimeout(() => { $("saveMsg").className = ""; }, 3000);
+    return;
+  }
+  delete PATCHES.actions[name];
+  selectedPatch = "default";
+  buildPatchesForm();
+}
+
+function savePatches() {
+  commitPatchEditor();
+  const errs = [];
+  if (typeof PATCHES.default !== "string" || !PATCHES.default) errs.push("default: must be a non-empty string");
+  for (const [scope, table] of [["zones", PATCHES.zones], ["modes", PATCHES.modes], ["actions", PATCHES.actions]]) {
+    for (const name of Object.keys(table)) {
+      if (typeof table[name] !== "string" || !table[name]) errs.push(`${scope}[${name}]: must be a non-empty string`);
+    }
+  }
+  if (errs.length) {
+    $("saveMsg").textContent = errs.join("; ");
+    $("saveMsg").className = "err";
+    return;
+  }
+  fetch("/api/patches", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(PATCHES),
+  }).then((r) => r.json().then((body) => ({ ok: r.ok, body }))).then(({ ok, body }) => {
+    if (ok) {
+      $("saveMsg").textContent = "patches saved";
+      $("saveMsg").className = "";
+    } else {
+      $("saveMsg").textContent = "patches save failed: " + (body.error || r.status);
+      $("saveMsg").className = "err";
+    }
+  }).catch((e) => { $("saveMsg").textContent = "patches save failed: " + e; $("saveMsg").className = "err"; });
+}
+
+// ---------------------------------------------------------------------------
+// View switching (zones / sound / patches editors).
 // ---------------------------------------------------------------------------
 function switchView(v) {
+  const wasPatch = patchView;
   soundView = v === "sound";
-  $("zoneMain").style.display = soundView ? "none" : "";
+  patchView = v === "patches";
+  if (wasPatch && !patchView) commitPatchEditor();  // leaving the patches view: commit
+  $("zoneMain").style.display = (soundView || patchView) ? "none" : "";
   $("soundMain").style.display = soundView ? "" : "none";
-  $("tabZones").className = soundView ? "" : "active";
+  $("patchesMain").style.display = patchView ? "" : "none";
+  $("tabZones").className = (soundView || patchView) ? "" : "active";
   $("tabSound").className = soundView ? "active" : "";
+  $("tabPatches").className = patchView ? "active" : "";
   if (soundView) buildSoundForm();
+  if (patchView) buildPatchesForm();
 }
 
 // ---------------------------------------------------------------------------
@@ -664,8 +900,9 @@ function buildZoneForm() {
   });
   el.appendChild(ex);
 
-  // actions
-  el.appendChild(h3("actions"));
+  // actions: include / exclude from the master catalog, then edit the included ones
+  el.appendChild(h3("actions (include / exclude)"));
+  buildActionToggles(el, name, z);
   buildActionList(el, name, z);
 
   const addA = document.createElement("button");
@@ -692,6 +929,74 @@ function list6(arr) {
   return [0, 0, 0, 0, 0, 0];
 }
 
+// ---------------------------------------------------------------------------
+// Per-zone action include / exclude.
+//
+// The master catalog is the ordered union of action names across all zones. A zone
+// *includes* an action iff it has an entry in its own `actions` dict (the per-zone
+// poses); *excluding* removes the entry. Including one the zone lacks seeds its poses
+// from another zone that offers the same action (else the zone's own startpos).
+// ---------------------------------------------------------------------------
+function catalogActions() {
+  const seen = new Set();
+  const list = [];
+  Object.keys(TABLE.zones).forEach((zn) => {
+    const acts = TABLE.zones[zn].actions || {};
+    Object.keys(acts).forEach((an) => {
+      if (!seen.has(an)) { seen.add(an); list.push(an); }
+    });
+  });
+  return list;
+}
+
+function seedAction(name, an) {
+  const z = TABLE.zones[name];
+  if (!z.actions) z.actions = {};
+  for (const zn of Object.keys(TABLE.zones)) {
+    const other = TABLE.zones[zn].actions || {};
+    if (zn !== name && other[an] && other[an].pos) {
+      z.actions[an] = {
+        enabled: true,
+        pos: other[an].pos.map((p) => (Array.isArray(p) && p.length === 6 ? p.slice() : [0, 0, 0, 0, 0, 0])),
+        speed: (other[an].speed || []).slice(),
+      };
+      return;
+    }
+  }
+  const sp = (Array.isArray(z.startpos) && z.startpos.length === 6) ? z.startpos.slice() : [0, 0, 0, 0, 0, 0];
+  z.actions[an] = { enabled: true, pos: [sp], speed: [10] };
+}
+
+function buildActionToggles(el, name, z) {
+  const cat = catalogActions();
+  if (!cat.length) {
+    const s = document.createElement("span");
+    s.style.cssText = "color:var(--dim);font-size:12px";
+    s.textContent = "no actions defined yet — add one below";
+    el.appendChild(s);
+    return;
+  }
+  const row = document.createElement("div");
+  row.className = "row";
+  cat.forEach((an) => {
+    const c = document.createElement("label");
+    c.className = "inline";
+    c.innerHTML = `<input type="checkbox" ${z.actions && z.actions[an] ? "checked" : ""}> ${an}`;
+    c.querySelector("input").onchange = (e) => {
+      if (!z.actions) z.actions = {};
+      if (e.target.checked) {
+        if (!z.actions[an]) seedAction(name, an);
+      } else {
+        delete z.actions[an];
+        if (selectedAction === an) selectedAction = null;
+      }
+      buildZoneForm(); updateGhost();
+    };
+    row.appendChild(c);
+  });
+  el.appendChild(row);
+}
+
 function buildActionList(container, name, z) {
   Object.keys(z.actions).forEach((an) => {
     const a = z.actions[an];
@@ -716,14 +1021,7 @@ function buildActionList(container, name, z) {
     const play = document.createElement("button");
     play.className = "small"; play.textContent = "play";
     play.onclick = () => send({ cmd: "play_action", action: an });
-    const rm = document.createElement("button");
-    rm.className = "small"; rm.textContent = "remove";
-    rm.onclick = () => {
-      delete z.actions[an];
-      selectedAction = Object.keys(z.actions)[0] || null;
-      buildZoneForm(); updateGhost();
-    };
-    head.appendChild(nm); head.appendChild(en); head.appendChild(play); head.appendChild(rm);
+    head.appendChild(nm); head.appendChild(en); head.appendChild(play);
     box.appendChild(head);
 
     // pose rows
@@ -850,6 +1148,7 @@ function validate() {
 
 function save() {
   if (soundView) { saveSound(); return; }
+  if (patchView) { savePatches(); return; }
   saveZones();
 }
 
@@ -926,16 +1225,28 @@ function delZone() {
 }
 
 Robot3D.init($("robot3d"), { log: (m) => console.log(m), environment: true });
-// Load the zone table first (the sound editor seeds its action list from the zone
-// table's action names), then the sound mapping, then open the WebSocket.
-loadTable().then(loadSound).then(loadLimits).then(connect);
+// The live-preview textarea: commit + re-render (debounced) as the user types.
+$("patchCode").oninput = () => {
+  if (patchTimer) clearTimeout(patchTimer);
+  patchTimer = setTimeout(() => {
+    commitPatchEditor();
+    evalPatchPreview($("patchCode").value);
+  }, 300);
+};
+// Load the zone table first (the sound + patches editors seed their lists from the
+// zone table's action names), then the sound mapping, then the patches, then open
+// the WebSocket.
+loadTable().then(loadSound).then(loadPatches).then(loadLimits).then(connect);
 $("connect").onclick = () => { $("host").value = $("host").value.trim(); connect(); };
 $("save").onclick = save;
 $("addZone").onclick = addZone;
 $("delZone").onclick = delZone;
 $("tabZones").onclick = () => switchView("zones");
 $("tabSound").onclick = () => switchView("sound");
+$("tabPatches").onclick = () => switchView("patches");
 $("addSoundAction").onclick = addSoundAction;
+$("patchAdd").onclick = addPatchAction;
+$("patchRemove").onclick = removePatchSlot;
 $("ghostPrev").onclick = () => stepGhost(-1);
 $("ghostNext").onclick = () => stepGhost(1);
 </script>

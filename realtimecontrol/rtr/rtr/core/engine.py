@@ -32,7 +32,8 @@ class Engine:
     def __init__(self, bus: StateBus, robot: RobotBase, brain: Brain,
                  machine: StateMachine, tick_hz: float = 20.0,
                  zone_loader: Callable[[], dict] = None,
-                 sound_reload: Callable[[], None] = None):
+                 sound_reload: Callable[[], None] = None,
+                 patch_reload: Callable[[], None] = None):
         self.bus = bus
         self.robot = robot
         self.brain = brain
@@ -40,6 +41,7 @@ class Engine:
         self.tick_hz = tick_hz
         self._zone_loader = zone_loader
         self._sound_reload = sound_reload
+        self._patch_reload = patch_reload
         self._running = False
 
     async def run(self) -> None:
@@ -64,6 +66,9 @@ class Engine:
                 elif cmd.cmd == Cmd.RELOAD_SOUND:
                     if self._sound_reload is not None:
                         self._sound_reload()
+                elif cmd.cmd == Cmd.RELOAD_PATCHES:
+                    if self._patch_reload is not None:
+                        self._patch_reload()
                 else:
                     self.brain.on_command(cmd, curjpos)
 

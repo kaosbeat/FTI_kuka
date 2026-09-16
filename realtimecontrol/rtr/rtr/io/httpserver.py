@@ -25,6 +25,15 @@ It serves two kinds of requests:
 - **The limits API**:
   - ``GET /api/limits`` → the per-axis hardware limits (a static constant from the
     kr60ha xacro). Read-only; the hardware limits are fixed by the robot's mechanics.
+- **The patches API** (hydra screen code):
+  - ``GET /api/patches`` → the current patches table (read fresh from ``patches.json``,
+    falling back to the running table / built-in default if the file is bad).
+  - ``POST /api/patches`` → validate the table; on success write it atomically to
+    ``patches.json`` and submit a ``RELOAD_PATCHES`` command so the running core hot-reloads.
+    On validation failure the file is untouched and a 400 is returned.
+- **The screen API**:
+  - ``GET /api/screen`` → the hydra patch (JS) rendered on the tool's screen, i.e. the
+    ``default`` entry of the patches table.
 
 Only the standard library is used (no new dependencies).
 """
@@ -36,6 +45,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ..core.bus import StateBus
 from ..core.commands import Cmd, Command
+from ..patches import (
+    DEFAULT_HYDRA_CODE,
+    load_patches_data,
+    validate_patches_data,
+)
 from ..sound import load_sound_data, validate_sound_data
 from ..state.zones import (
     HARDWARE_LIMITS,
@@ -67,16 +81,21 @@ class HttpServer:
     def __init__(self, bus: StateBus, zones_provider, sound_provider,
                  zones_path: str, sound_path: str, root: str,
                  host: str = "0.0.0.0", port: int = 8766,
-                 enabled: bool = True):
+                 enabled: bool = True, screen_code: str = None,
+                 patches_provider=None, patches_path: str = None):
         self.bus = bus
         self.zones_provider = zones_provider
         self.sound_provider = sound_provider
         self.zones_path = os.path.abspath(zones_path)
         self.sound_path = os.path.abspath(sound_path)
+        self.patches_path = os.path.abspath(patches_path) if patches_path else None
+        self.patches_provider = patches_provider
         self.root = os.path.abspath(root)
         self.host = host
         self.port = port
         self.enabled = enabled
+        # The hydra patch (JS) rendered on the tool's screen; served at /api/screen.
+        self.screen_code = screen_code
         self._httpd = None
 
     def start(self) -> None:
@@ -124,8 +143,12 @@ def _make_handler(server: HttpServer):
                 self._get_zones()
             elif path == "/api/sound":
                 self._get_sound()
+            elif path == "/api/patches":
+                self._get_patches()
             elif path == "/api/limits":
                 self._get_limits()
+            elif path == "/api/screen":
+                self._get_screen()
             elif self._is_static(path):
                 self._serve_static(path)
             else:
@@ -137,6 +160,8 @@ def _make_handler(server: HttpServer):
                 self._post_zones()
             elif path == "/api/sound":
                 self._post_sound()
+            elif path == "/api/patches":
+                self._post_patches()
             else:
                 self._send_text(404, "not found")
 
@@ -214,6 +239,50 @@ def _make_handler(server: HttpServer):
             self._send_json(200, {"ok": True})
 
         # ------------------------------------------------------------------
+        # Patches API (hydra screen code).
+        # ------------------------------------------------------------------
+        def _patches_data(self) -> dict:
+            """The current patches table: read fresh from the file, fall back to
+            the running table (or the built-in default) if the file is bad."""
+            if server.patches_path:
+                try:
+                    return load_patches_data(server.patches_path)
+                except (OSError, ValueError):
+                    pass
+            if server.patches_provider is not None:
+                return server.patches_provider()
+            return {"default": server.screen_code or DEFAULT_HYDRA_CODE,
+                    "zones": {}, "modes": {}, "actions": {}}
+
+        def _get_patches(self):
+            self._send_json(200, self._patches_data())
+
+        def _post_patches(self):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                length = 0
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                data = json.loads(body)
+                validate_patches_data(data)
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._send_json(400, {"error": str(exc)})
+                return
+            # Atomic write: dump to a temp file, then replace.
+            tmp = server.patches_path + ".tmp"
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(tmp, server.patches_path)
+            except OSError as exc:
+                self._send_json(500, {"error": f"could not write patches: {exc}"})
+                return
+            # Ask the running core to hot-reload the new table.
+            server.bus.submit(Command(cmd=Cmd.RELOAD_PATCHES, payload={}))
+            self._send_json(200, {"ok": True})
+
+        # ------------------------------------------------------------------
         # Limits API.
         # ------------------------------------------------------------------
         def _get_limits(self):
@@ -223,6 +292,15 @@ def _make_handler(server: HttpServer):
                 "axes": ["A1", "A2", "A3", "A4", "A5", "A6"],
                 "hardware_limits": HARDWARE_LIMITS,
             })
+
+        # ------------------------------------------------------------------
+        # Screen API.
+        # ------------------------------------------------------------------
+        def _get_screen(self):
+            # The hydra patch (JS) rendered on the tool's screen. Now data-driven:
+            # it is the ``default`` entry of the patches table (see /api/patches).
+            self._send_json(200, {"code": self._patches_data().get("default")
+                                   or server.screen_code or DEFAULT_HYDRA_CODE})
 
         # ------------------------------------------------------------------
         # Static files.

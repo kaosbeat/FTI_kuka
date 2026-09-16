@@ -36,6 +36,9 @@ const Robot3D = (() => {
   const TOOL0 = { xyz: [0, 0, 0], rpy: [0, 1.5708, 0] };
   const MESH_NAMES = ["base_link", "link_1", "link_2", "link_3", "link_4", "link_5", "link_6"];
   const ASSET_DIR = "assets/kr60ha/visual/";
+  // The Blender-editable tool GLB (authored Y-up like environment.glb). Replaces the
+  // old white placeholder box at the $FLANGE; see assets/make_tool.py for the starter.
+  const TOOL_ASSET_URL = "assets/tool.glb";
   const HOME = [0, -90, 90, 0, 90, 0];
 
   // Real KUKA colors: base + wrist black (RAL 9005), links orange (RAL 2003).
@@ -43,8 +46,16 @@ const Robot3D = (() => {
   const COLOR_ORANGE = 0xf67828;
   const COLOR_GHOST = 0x4fc08d;
 
+  // The tool-screen resolution [width, height] — the hydra canvas mapped onto the tool's
+  // red mesh. This is the size hydra screen content is rendered at, so when designing
+  // patches, design to this resolution. Overridable per init via opts.screenResolution.
+  const SCREEN_RESOLUTION = [512, 512];
+
   let scene, camera, renderer, controls, rotors, rotorsT, toolNode;
   let container, toolEl, logFn, running = false;
+  // The tool-screen texture (fed by hydra); re-uploaded from the hydra canvas each frame.
+  let screenTex = null;
+  let screenW = SCREEN_RESOLUTION[0], screenH = SCREEN_RESOLUTION[1];
 
   function rotFromRpy(r) {
     const Rx = new THREE.Matrix4().makeRotationX(r[0]);
@@ -77,7 +88,10 @@ const Robot3D = (() => {
   // Build one arm (six rotors + link meshes + tool0 marker) from shared geometries.
   // ``geos[name]`` is the STL BufferGeometry (or absent, in which case a placeholder
   // box keeps the arm visible). The base_link pedestal is added separately (it is static).
-  function buildArm(geos, matFor) {
+  // ``toolObj`` is the loaded tool GLB scene (or absent); it is cloned onto the tool
+  // node. For the ghost arm its materials are swapped to the translucent green so the
+  // target tool reads like the ghost links.
+  function buildArm(geos, matFor, toolObj, isGhost) {
     const rot = [];
     for (let j = 0; j < 6; j++) {
       const jt = JOINTS[j];
@@ -99,8 +113,23 @@ const Robot3D = (() => {
     tool.position.set(TOOL0.xyz[0], TOOL0.xyz[1], TOOL0.xyz[2]);
     tool.quaternion.setFromRotationMatrix(rotFromRpy(TOOL0.rpy));
     rot[5].add(tool);
-    tool.add(new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.14), matFor("tool")));
+    if (toolObj) {
+      const t = toolObj.clone();
+      if (isGhost) t.traverse((o) => { if (o.isMesh) o.material = matFor("tool"); });
+      tool.add(t);
+    } else {
+      tool.add(new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.14), matFor("tool")));
+    }
     return { rot, tool };
+  }
+
+  // Swap the contents of a tool node (placeholder box vs the loaded GLB). Used to attach
+  // the tool GLB *after* the arms are already built, so the tool load never gates motion.
+  function attachTool(node, toolObj, matFor, isGhost) {
+    while (node.children.length) node.remove(node.children[0]);
+    const t = toolObj.clone();
+    if (isGhost) t.traverse((o) => { if (o.isMesh) o.material = matFor("tool"); });
+    node.add(t);
   }
 
   function setJoints(rot, jointsDeg) {
@@ -144,12 +173,124 @@ const Robot3D = (() => {
     });
   }
 
+  // Load the Blender-editable tool GLB (authored Y-up, like environment.glb). The loaded
+  // scene is rotated +90° about X (maps +Y -> +Z) so it sits correctly in the Z-up robot
+  // scene, then handed to buildArm to attach to the tool node. Failures are logged and
+  // ``onDone(null)`` is called, so the white box placeholder is used instead.
+  function loadToolAsset(url, onDone) {
+    new THREE.GLTFLoader().load(url, (gltf) => {
+      const t = gltf.scene;
+      t.rotation.x = Math.PI / 2;
+      onDone(t);
+    }, undefined, (err) => {
+      logFn("tool asset not loaded: " + (err && err.message ? err.message : err));
+      onDone(null);
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Tool screen (hydra). The tool GLB carries a red mesh that stands in for a
+  // screen. We render a hydra patch onto a dedicated canvas and use that canvas
+  // as the screen mesh's texture, so the tool shows a live WebGL image.
+  // ------------------------------------------------------------------
+
+  // Built-in hydra patch used when the core's /api/screen is unreachable (e.g. the
+  // page is opened from file://). Mirrors the placeholder in main.py.
+  // const SCREEN_CODE_FALLBACK = "osc(4, 0.1, 1.2).out()";
+
+  let vidurl = "http://127.0.0.1:8766/assets/vid/hand08.mp4"
+  const SCREEN_CODE_FALLBACK = "s0.initVideo(vidurl); src(s0).out()";
+
+  // Fetch the hydra patch from the core's HTTP API (same origin); fall back to the
+  // built-in placeholder when the request fails.
+  async function fetchScreenCode() {
+    try {
+      const r = await fetch("/api/screen", { cache: "no-store" });
+      if (r.ok) {
+        const data = await r.json();
+        if (data && data.code) return data.code;
+      }
+    } catch (err) { /* keep the fallback */ }
+    return SCREEN_CODE_FALLBACK;
+  }
+
+  // Find the first mesh whose material reads as red (the screen stand-in).
+  function findRedMesh(obj) {
+    let found = null;
+    obj.traverse((o) => {
+      if (found) return;
+      if (o.isMesh && o.material && o.material.color) {
+        const c = o.material.color;
+        if (c.r > 0.5 && c.g < 0.3 && c.b < 0.3) found = o;
+      }
+    });
+    return found;
+  }
+
+  // Render a hydra patch onto the tool's red mesh. ``toolGroup`` is the current
+  // arm's tool node (the ghost arm's tool is already recoloured green, so only the
+  // current tool has the red screen mesh). Failures are logged and skipped.
+  function setupToolScreen(toolGroup) {
+    if (!toolGroup) return;
+    if (typeof Hydra === "undefined") {
+      logFn("hydra-synth not loaded; tool screen stays red");
+      return;
+    }
+    const mesh = findRedMesh(toolGroup);
+    if (!mesh) { logFn("no red screen mesh found in tool"); return; }
+
+    // A dedicated canvas hydra renders to. We pre-create its WebGL context with
+    // preserveDrawingBuffer so three.js can reliably read the canvas as a texture
+    // source each frame (regl reuses this context when it initialises).
+    const canvas = document.createElement("canvas");
+    canvas.width = screenW; canvas.height = screenH;
+    canvas.getContext("webgl", { preserveDrawingBuffer: true });
+    logFn("tool screen resolution: " + screenW + "x" + screenH);
+
+    const hydra = new Hydra({ canvas, detectAudio: false, makeGlobal: true, autoLoop: true });
+
+    // The screen texture: three.js re-uploads the canvas each frame via needsUpdate.
+    const tex = new THREE.Texture(canvas);
+    tex.needsUpdate = true;
+    // The red screen mesh's UVs cover only a sub-rectangle of the texture (a central
+    // crop), which made the 3D screen show a zoomed-in slice of the video. Remap the
+    // texture so the mesh's UV range samples the full image, matching the standalone
+    // previews (which display the whole canvas). Computed from the geometry so a
+    // re-exported tool GLB still maps correctly.
+    const uvAttr = mesh.geometry && mesh.geometry.attributes && mesh.geometry.attributes.uv;
+    if (uvAttr) {
+      let uMin = 1, uMax = -1, vMin = 1, vMax = -1;
+      for (let i = 0; i < uvAttr.count; i++) {
+        const u = uvAttr.getX(i), v = uvAttr.getY(i);
+        if (u < uMin) uMin = u; if (u > uMax) uMax = u;
+        if (v < vMin) vMin = v; if (v > vMax) vMax = v;
+      }
+      if (uMax > uMin && vMax > vMin) {
+        tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+        tex.repeat.set(1 / (uMax - uMin), 1 / (vMax - vMin));
+        tex.offset.set(-uMin / (uMax - uMin), -vMin / (vMax - vMin));
+      }
+    }
+    screenTex = tex;
+    mesh.material = new THREE.MeshBasicMaterial({ map: tex, color: 0xffffff });
+
+    // Fetch the hydra patch (from the core) and run it.
+    fetchScreenCode().then((code) => {
+      try { hydra.eval(code); } catch (e) { logFn("hydra eval failed: " + e); }
+    });
+  }
+
   function init(containerEl, opts) {
     opts = opts || {};
     logFn = opts.log || console.log;
     if (typeof THREE === "undefined") { logFn("three.js failed to load; 3d view disabled"); return; }
     container = containerEl;
     toolEl = opts.toolEl || null;
+    // Configurable tool-screen resolution (the hydra canvas mapped onto the red mesh).
+    if (Array.isArray(opts.screenResolution) && opts.screenResolution.length === 2) {
+      screenW = Math.max(1, opts.screenResolution[0] | 0);
+      screenH = Math.max(1, opts.screenResolution[1] | 0);
+    }
     const w = container.clientWidth || 600, h = container.clientHeight || 360;
 
     scene = new THREE.Scene();
@@ -192,6 +333,7 @@ const Robot3D = (() => {
     (function loop() {
       requestAnimationFrame(loop);
       controls.update();
+      if (screenTex) screenTex.needsUpdate = true;  // re-upload the hydra canvas
       renderer.render(scene, camera);
       if (toolNode && toolEl) {
         const p = toolNode.getWorldPosition(new THREE.Vector3());
@@ -199,7 +341,7 @@ const Robot3D = (() => {
       }
     })();
 
-    // Load the real KR60 meshes and build the arms (shared geometry).
+    // Load the real KR60 meshes, then build the arms (shared geometry).
     if (typeof THREE.STLLoader === "undefined") {
       logFn("STLLoader not available; 3d arm disabled");
       return;
@@ -216,13 +358,33 @@ const Robot3D = (() => {
         scene.add(ph);
         logFn("base_link.stl not loaded; placeholder pedestal");
       }
-      const cur = buildArm(geos, curMat);
+      // Build both arms now (with a placeholder tool) and mark the scene ready so the
+      // robot moves immediately. The tool GLB + hydra screen are cosmetic add-ons: they
+      // attach when they load and must NEVER gate the arm's motion — a slow or failed
+      // tool load (or a hydra error) must not freeze the robot.
+      const cur = buildArm(geos, curMat, null, false);
       rotors = cur.rot; toolNode = cur.tool;
-      const tgt = buildArm(geos, ghostMat);
+      const tgt = buildArm(geos, ghostMat, null, true);
       rotorsT = tgt.rot;
       setJoints(rotors, HOME);
       setJoints(rotorsT, HOME);
       running = true;
+      const attach = (toolObj) => {
+        try {
+          if (toolObj) {
+            attachTool(cur.tool, toolObj, curMat, false);
+            attachTool(tgt.tool, toolObj, ghostMat, true);
+          }
+          setupToolScreen(cur.tool);  // render the hydra screen onto the tool's red mesh
+        } catch (e) {
+          logFn("tool setup failed: " + (e && e.message ? e.message : e));
+        }
+      };
+      if (typeof THREE.GLTFLoader !== "undefined") {
+        loadToolAsset(TOOL_ASSET_URL, attach);
+      } else {
+        attach(null);
+      }
     });
   }
 
@@ -239,5 +401,11 @@ const Robot3D = (() => {
     setJoints(rotorsT, pose);
   }
 
-  return { init, update, setTarget };
+  // The active tool-screen resolution [width, height] (the size hydra screen content is
+  // rendered at). Exposed so the standalone patch previews (editor/client) can match it.
+  function screenResolution() {
+    return [screenW, screenH];
+  }
+
+  return { init, update, setTarget, screenResolution };
 })();

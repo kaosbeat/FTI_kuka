@@ -114,15 +114,19 @@ starts folding commands into ticks.
 | `camera/camera.py`| Camera control adapter (track/follow, analysis).                       |
 | `display/display.py`| Display adapter: turns each snapshot into a P5live frame over the WS. |
 | `sound/sound.py`  | Sound adapter: configurable MIDI-out, data-driven from `sound.json`.  |
+| `patches/patches.py`| Patches adapter: hydra screen code, data-driven from `patches.json`, matched to zone/mode/action. |
 | `io/midi.py`      | MIDI-in adapter: maps controller messages to core commands (goto-zone is path-routed; CC3 plays an action). |
 | `io/websocket.py` | WebSocket server: the single bridge for external control + state.     |
-| `io/httpserver.py`| HTTP server: serves the pages + `/api/zones`, `/api/sound`, `/api/limits` (port 8766, stdlib-only).|
-| `client.html`     | Browser control page (served over HTTP; WebSocket client).            |
-| `editor.html`     | Zone/action + sound editor page (create/edit/enable-disable; hot-reloads core).|
+| `io/httpserver.py`| HTTP server: serves the pages + `/api/zones`, `/api/sound`, `/api/patches`, `/api/limits`, `/api/screen` (port 8766, stdlib-only).|
+| `client.html`     | Browser control page (served over HTTP; WebSocket client + patch chooser). |
+| `editor.html`     | Zone/action + sound + patches editor page (create/edit/enable-disable; hot-reloads core).|
+| `render.html`     | Fullscreen hydra render page (WebSocket-driven; the matched patch, re-eval on state change).|
+| `chatbot.py`      | Optional LLM brain: senses free-form input and answers the core with a JSON command. |
 | `rtr3d.js`        | Shared Robot3D builder: the real KR60 (kr60ha xacro chain + visual STL meshes) + helpers (used by client + editor). |
 | `zones.json`      | On-disk zone/pose data — the editable source of truth.                |
 | `sound.json`      | On-disk MIDI-out mapping (channel + zone/mode/action messages).       |
-| `assets/`         | Blender-editable environment GLB + its stdlib-only generator.         |
+| `patches.json`    | On-disk hydra screen code (default + zone/mode/action patches).       |
+| `assets/`         | Blender-editable environment + tool GLBs and their stdlib-only generators. |
 
 ## The state machine
 
@@ -174,6 +178,14 @@ When an action would go outside the current zone, it ends at its limit and goes 
 the next action.
 
 Some actions do not act on motors but enable the camera or an image on the display.
+
+Actions are **per-zone**: each zone's `actions` table lists only the actions that zone
+*offers* (the master set is the union of all zones' action names). An action a zone does
+not list simply does not exist there — `play_action` rejects it, so the robot can never
+perform an action the zone does not allow. `editor.html` lets you **include / exclude**
+each action per zone (a checkbox per action; including one the zone lacks seeds its poses
+from another zone that offers the same action), and `client.html` only shows — and only
+lets you select — the actions the current zone offers.
 
 ## Control
 
@@ -232,7 +244,9 @@ client. Two directions, one port (default 8765):
 is the hand-rolled stand-in for P5live. It shows the current state (zone / mode / action
 / speed / moving / flags), all six axes with their target and position within the current
 zone's safezone, and a live log; and it sends commands (zone buttons, mode buttons, action
-buttons, a 6-axis joint-pose editor, wander-limit sliders, random-wrist). It auto-connects
+buttons, a 6-axis joint-pose editor, wander-limit sliders, random-wrist). The action
+buttons are built from the current zone's action table, so an action the zone does not
+offer has no button at all, and a disabled one is shown but not selectable. It auto-connects
 to `ws://localhost:8765`, retrying every 2 s. It is best served over the HTTP server
 (`http://localhost:8766/client.html`); opened from `file://` it still works against the
 WebSocket, but the environment GLB, the KR60 meshes, and the live zone table are
@@ -244,8 +258,8 @@ The core also runs a small **HTTP server** (`io/httpserver.py`, stdlib-only, def
 **8766**, `--http-port` / `--no-http`). It exists because browsers block loading local
 assets (three.js, the environment GLB, shared JS) from a `file://` page. It serves:
 
-- `GET /` → `client.html`, plus `/client.html`, `/editor.html`, `/rtr3d.js`, `/assets/<file>`
-  (path-traversal safe),
+- `GET /` → `client.html`, plus `/client.html`, `/editor.html`, `/render.html`,
+  `/rtr3d.js`, `/assets/<file>` (path-traversal safe),
 - `GET /api/zones` → the current zone data table (read fresh from `zones.json`),
 - `POST /api/zones` → validates the full table and, on success, writes it atomically to
   `zones.json` and submits a `reload_zones` command so the running core **hot-reloads**
@@ -253,6 +267,23 @@ assets (three.js, the environment GLB, shared JS) from a `file://` page. It serv
   On validation failure the file is untouched and a 400 is returned.
 - `GET /api/limits` → the per-axis **hardware limits** (a static constant from the
   `kr60ha` xacro). Read-only — the hardware limits are fixed by the robot's mechanics.
+- `GET /api/patches` → the current **patches** table (hydra screen code; read fresh from
+  `patches.json`, falling back to the running table / built-in default).
+- `POST /api/patches` → validates the table; on success writes it atomically to
+  `patches.json` and submits a `reload_patches` command so the running core **hot-reloads**
+  (mirrors `/api/zones`). On validation failure the file is untouched and a 400 is returned.
+- `GET /api/screen` → the **hydra patch** (JS) rendered on the tool's screen: the `default`
+  entry of the patches table (data-driven; see the Patches section). Read-only.
+
+**The tool screen.** The tool GLB (`assets/tool.glb`) carries a red mesh that stands in for
+a screen. `rtr3d.js` renders a hydra patch (from `GET /api/screen`, falling back to a
+built-in placeholder when the core is unreachable) onto a dedicated canvas and maps that
+canvas onto the red mesh, so the tool shows a live WebGL image. The patch is now
+**data-driven**: `GET /api/screen` serves the `default` entry of the **patches** table
+(`patches.json`), so the tool screen follows the same zone/mode/action matching as the
+fullscreen render page (see the Patches section). The hydra canvas has a **configurable
+resolution** (`SCREEN_RESOLUTION` in `rtr3d.js`, default `640x360`; overridable per view via
+`Robot3D.init`'s `screenResolution` option) — that is the size to design patches to.
 
 **`zones.json`** is the editable source of truth for zones, actions, and the named poses
 (`poses` / `lin_poses`). The built-in dicts in `state/zones.py` remain the fallback if the
@@ -265,7 +296,9 @@ running and can still exit), and a disabled action is rejected by `play_action`.
 
 - add / remove zones,
 - edit each zone (enabled, speed, startpos, exitpos, safezone lo/hi, exits),
-- edit each action (enabled, name, pose rows, per-pose speed),
+- **include / exclude** actions per zone (a checkbox per action in the master catalog;
+  including one the zone lacks seeds its poses from another zone that offers it), and
+  edit each included action (enabled, name, pose rows, per-pose speed),
 - step through an action's poses locally with the ghost (target) arm,
 - **Save** the whole table (`POST /api/zones` → the core hot-reloads, so `client.html` and
   the live robot pick it up immediately), and **Play** an action over the WebSocket.
@@ -307,6 +340,36 @@ the robot is not boxed in. To edit it:
 
 The client loads `assets/environment.glb` on init and logs "environment not loaded" (and
 continues) if it is missing or fails to load (e.g. `file://` usage).
+
+### The Blender → GLB tool
+
+`assets/tool.glb` is a **Blender-editable** end-effector rendered at the KR60's
+$FLANGE (the tool0 frame) in `client.html` (and the editor). It replaces the old white
+placeholder box that was built directly in `rtr3d.js`. glTF is Y-up and the scene is
+Z-up, so the loader rotates the loaded scene +90° about X (maps +Y → +Z) before attaching
+it to the tool node — the same convention as the environment. The starter GLB is generated
+by `assets/make_tool.py` (stdlib-only, since Blender is not available in this
+environment): a single 0.09 × 0.14 × 0.09 m box (Y-up) centered on the origin, which reads
+as the old 0.09 × 0.09 × 0.14 m box once rotated. To edit it:
+
+1. Open `assets/tool.glb` in Blender.
+2. Replace the box with your own end-effector design (keep it Y-up and centered on the
+   origin so it stays attached to the same point).
+3. `File > Export > glTF 2.0 (.glb)` over the same file.
+
+The tool is attached to the tool node (a child of the A6 rotor), so it follows the arm
+exactly like the old box did, and it drives the tool readout. The **current** arm shows
+the tool in its own materials; the **target** (ghost) arm shows the same geometry with its
+materials swapped to the translucent green, so the target tool reads like the ghost links.
+The client loads `assets/tool.glb` on init and logs "tool asset not loaded" (and falls
+back to the white box) if it is missing or fails to load (e.g. `file://` usage).
+
+The tool's **red mesh is a screen**: `rtr3d.js` finds it (by its red material) and renders a
+hydra patch onto it. The patch comes from `GET /api/screen` (the `default` entry of the
+patches table, see the Patches section), falling back to a built-in placeholder when the
+core is unreachable. The screen is only on the **current** arm's tool (the ghost arm's tool
+is recoloured green). If the GLB has no red mesh, or hydra-synth fails to load, the tool
+renders as-is and the situation is logged.
 
 ### Sound (configurable MIDI-out)
 
@@ -357,6 +420,54 @@ When no MIDI-out device is open (sim / no rig), the adapter **degrades to loggin
 message it would send (e.g. `[sound] note ch0 48 vel60`), so the mapping is testable
 without hardware; the core keeps running either way.
 
+### Patches (hydra screen code)
+
+The tool screen (and the fullscreen render page) show a **hydra** patch — a hydra-synth JS
+code string. The patches are **data-driven**: they live in **`patches.json`** (edited in
+`editor.html`, served/saved over `/api/patches`, hot-reloaded), mirroring `sound.json`.
+The built-in `DEFAULT_HYDRA_CODE` (`"osc(4, 0.1, 1.2).out()"`) in `patches/patches.py` is
+the fallback if the file is missing or corrupt.
+
+A patch table maps the core's state to code. The schema:
+
+```json
+{
+  "default": "osc(4, 0.1, 1.2).out()",
+  "zones":   { "init": "osc(2, 0.1, 1.2).out()", "rest": "osc(3, 0.08, 1.2).out()", "..." : "..." },
+  "modes":   { "wander": "osc(4, 0.3, 1.2).out()", "..." : "..." },
+  "actions": { "breathe": "osc(6, 0.2, 1.2).out()", "..." : "..." }
+}
+```
+
+`zones` / `modes` / `actions` each map a name to a hydra code string (the zones are seeded
+by default; modes and actions start empty). `default` is the code used when nothing else
+matches. **Match precedence (most specific wins): `action > mode > zone > default`** — a
+state's patch is looked up by action name first, then mode, then zone, then `default`
+(`match_patch` in `patches/patches.py`).
+
+Unlike Sound (which fires on each snapshot), the browser pages **fetch the whole table
+once** and match locally on every state frame, so there is no per-tick traffic. A
+`PATCHES_CHANGED` event (published when the table is hot-reloaded) tells the pages to
+re-fetch. The `Patches` adapter (`patches/patches.py`) holds the table, re-reads it on
+`RELOAD_PATCHES`, and serves `current_data` to the HTTP GET fallback.
+
+- **`render.html`** is the **fullscreen** hydra render page. It opens the same WebSocket as
+  `client.html` (port 8765), fetches the patches table, and renders the matched patch onto
+  a full-window hydra canvas, re-evaluating on each state frame (zone / mode / action). A
+  small HUD shows the current zone / mode / action and the code in use. This is the page to
+  open on a display to see the live hydra output.
+- **`editor.html`** has a dedicated **patches** tab (alongside the zone and sound tabs): a
+  `default` code field, a `zones` list, a `modes` list, and an `actions` list, each with a
+  **live hydra preview** (the code is `eval`'d as you type). It loads from `GET /api/patches`
+  (falling back to `/patches.json`, then a built-in), validates client-side, and saves to
+  `POST /api/patches` (the core hot-reloads); it re-fetchs on the `patches_changed` frame.
+- **`client.html`** has a **patch chooser**: it shows the patch currently matched to the
+  live state (action > mode > zone > default) with its own small preview, so you can see
+  which patch the render page / tool screen is using without opening a second page.
+
+When no hydra-synth is available (or the code fails to `eval`), the pages fall back to the
+built-in default code and log the failure; the core keeps running either way.
+
 ### MIDI-in
 
 The `io/midi.py` adapter maps controller messages to core commands (the same physical
@@ -373,6 +484,83 @@ The other mappings are unchanged: CC2 → `set_mode` (wander/action), CC13 → `
 CC20/21/22 → `adjust_limit`, CC30 → `set_mode` (random/wander), and the note mappings for
 joint poses / random wrist / linear poses.
 
+### The chatbot (an LLM brain)
+
+`chatbot.py` is an optional, self-contained brain that drives the running core over its
+WebSocket. It is **supersimple**: stdlib + `websockets` only, no `openai` package — it
+speaks straight to any **OpenAI-compatible** endpoint with `urllib`.
+
+It is a **sense → act** loop, not a conversation:
+
+- **in** — you type free-form **sensor descriptions** (simulating the robot's camera and
+  microphone, which are not installed yet). E.g. *"I look at the robot and move my hands
+  to get its attention."*
+- **out** — the brain replies with a one-line **`REASON:`** (why it chose this, for
+  debugging) and then a **JSON command** (or a short list of them) that changes the
+  core's state machine. No other words. The way the robot *moves* is how it expresses
+  what it feels.
+
+Example exchange:
+
+```
+you> I look at the robot and move my hands to get its attention
+robot> REASON: you are calling me, I want to wake up and see you
+robot> [{"cmd": "goto_zone", "zone": "wakeup"}, {"cmd": "play_action", "action": "look"}]
+```
+
+**Do-nothing is a valid reply.** If the brain decides nothing should change, it replies
+with its REASON line and an empty list `[]`, and the robot stays exactly where it is
+(the chatbot prints `robot> why: ...` and `robot> [] (no action)` and sends nothing).
+A reply is one of: a single command object, a list of command objects (several things in
+order), or `[]`. The REASON line is printed for debugging (the chatbot's `--no-reason`
+hides it); it is never sent to the core — only the JSON is.
+
+**How it changes the state machine.** The JSON is validated against the core's live zone
+table and sent over the WebSocket. The **core is the safety boundary**: unknown zones,
+disabled zones, and unreachable paths are rejected there (and the chatbot refuses unknown
+zones/modes client-side too). The allowed commands are `goto_zone`, `set_mode`,
+`play_action`, and `clear_action`.
+
+**The sentient prompt.** The system prompt casts the model as the *mind* of the robot —
+a **restless, ADHD** persona that cannot stay still and acts on every impulse, but it
+**never speaks**; it only acts. Each turn it is given a `[body]` line (zone / mode /
+action / moving / speed / the six joints) plus the sensor input, and told to reply with
+one short `REASON:` line (why, for the human debugging it) and then only JSON. It is
+**biased toward moving**: if it could go somewhere or do something, it should, and it
+should not repeat what it did last turn. It maps feelings to movement: threatened → go
+far (`wildwander`); bored / restless → `goto_zone` a new zone or `set_mode wander`;
+wanting to see → `look` (not every turn); being called → `wakeup` + stretch; fidgety →
+`breathe` or `set_mode random`; and only when genuinely at peace (rare) → stay put. The
+`[]` ("do nothing") reply is the last resort. The prompt is built from the live
+`GET /api/zones` table and re-synced if the core hot-reloads its zones.
+
+**Two drivers** share the same conversation: the REPL (`you>`) and an optional autonomous
+loop — every `--poll` seconds the brain "senses" its own state and may act on its own
+(`--poll 0` disables it).
+
+**The endpoint.** By default it talks to the local Unsloth Studio at
+`http://127.0.0.1:8888/v1`. The model must be **loaded** in Unsloth Studio (override with
+`--model`; `--api-key` or `RTR_LLM_API_KEY` for auth). The default model is a *reasoning*
+model, so `--max-tokens` is large (1500) to leave room for its hidden thinking before the
+JSON reply.
+
+```bash
+# the core must be running first
+python main.py --sim            # or --robot
+
+# drive the robot: type sensor descriptions, it answers with a JSON action
+python chatbot.py --api-key <key>
+
+# check the core link (read-only), then exit
+python chatbot.py --selftest
+
+# disable the autonomous self-sense loop and just drive it by hand
+python chatbot.py --api-key <key> --poll 0
+
+# hide the brain's REASON line (you only see the JSON it sends)
+python chatbot.py --api-key <key> --no-reason
+```
+
 ## Running
 
 ```bash
@@ -387,12 +575,16 @@ python main.py --sim --no-midi --no-sound
 
 # self-contained wander loop, no WebSocket, prints a line each second
 python sim_demo.py
+
+# the LLM brain: chat with the robot and let it steer the core (core must be running)
+python chatbot.py --api-key <key>
 ```
 
 With the core running, open the pages over the HTTP server (port 8766):
 
 - `http://localhost:8766/client.html` — the control page (3D view + environment + zones).
-- `http://localhost:8766/editor.html` — the zone/action editor.
+- `http://localhost:8766/editor.html` — the zone/action/sound/patches editor.
+- `http://localhost:8766/render.html` — the fullscreen hydra render page (the matched patch).
 
 `GET http://localhost:8766/api/zones` returns the live zone table; `POST` to the same URL
 saves it (the core hot-reloads). `GET/POST /api/sound` do the same for the MIDI-out
