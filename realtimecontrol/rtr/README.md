@@ -207,6 +207,7 @@ Inputs are **commands** (see `core/commands.py`). They are flat JSON, e.g.
 | `adjust_limit`    | Nudge a wander drift limit A1/A2/A3 (MIDI CC 20/21/22). |
 | `set_flag`        | Toggle an informational flag (`wandermode`, `dynmode`, ...). |
 | `random_wrist`    | Randomise A4/A5 of the current target (then `hold`).|
+| `set_screen_patch`| Push a hydra patch to the screens (sets the `Patches` screen override); `code: null` clears it so the screens follow the live state match. |
 | `stop`            | Defined in the `Cmd` enum but **not handled** by the brain — currently a no-op. |
 
 Outputs are **events** the `StateBus` publishes: `zone_changed`, `mode_changed`,
@@ -244,7 +245,10 @@ client. Two directions, one port (default 8765):
 is the hand-rolled stand-in for P5live. It shows the current state (zone / mode / action
 / speed / moving / flags), all six axes with their target and position within the current
 zone's safezone, and a live log; and it sends commands (zone buttons, mode buttons, action
-buttons, a 6-axis joint-pose editor, wander-limit sliders, random-wrist). The action
+buttons, a 6-axis joint-pose editor, wander-limit sliders, random-wrist). It also has a
+**patch chooser** that previews a hydra patch and pushes the selected slot to the screens
+(`set_screen_patch`); picking **auto** clears the override so the screens follow the live
+state (see the Patches section). The action
 buttons are built from the current zone's action table, so an action the zone does not
 offer has no button at all, and a disabled one is shown but not selectable. It auto-connects
 to `ws://localhost:8765`, retrying every 2 s. It is best served over the HTTP server
@@ -276,13 +280,14 @@ assets (three.js, the environment GLB, shared JS) from a `file://` page. It serv
   entry of the patches table (data-driven; see the Patches section). Read-only.
 
 **The tool screen.** The tool GLB (`assets/tool.glb`) carries a red mesh that stands in for
-a screen. `rtr3d.js` renders a hydra patch (from `GET /api/screen`, falling back to a
-built-in placeholder when the core is unreachable) onto a dedicated canvas and maps that
-canvas onto the red mesh, so the tool shows a live WebGL image. The patch is now
-**data-driven**: `GET /api/screen` serves the `default` entry of the **patches** table
-(`patches.json`), so the tool screen follows the same zone/mode/action matching as the
-fullscreen render page (see the Patches section). The hydra canvas has a **configurable
-resolution** (`SCREEN_RESOLUTION` in `rtr3d.js`, default `640x360`; overridable per view via
+a screen. `rtr3d.js` renders a hydra patch onto a dedicated canvas and maps that canvas onto
+the red mesh, so the tool shows a live WebGL image. The patch the screen shows is the
+**core's resolved patch**, pushed in every `state` frame (see the Patches section) — so the
+3D tool screen follows the same live zone/mode/action matching as the fullscreen render page
+and the client preview. `GET /api/screen` (the `default` entry of the **patches** table,
+`patches.json`) is only the **seed** shown before the first state frame arrives (and the
+fallback when the core is unreachable). The hydra canvas has a **configurable resolution**
+(`SCREEN_RESOLUTION` in `rtr3d.js`, default `640x360`; overridable per view via
 `Robot3D.init`'s `screenResolution` option) — that is the size to design patches to.
 
 **`zones.json`** is the editable source of truth for zones, actions, and the named poses
@@ -319,8 +324,14 @@ The 3D view in `client.html` and `editor.html` is the **real KR60**, built from 
 Each KUKA joint variable (deg) drives one rotor about its xacro axis (the FK convention).
 The **current** arm is rendered in the real KUKA colors (base + wrist black, links
 orange); the **target** (ghost) arm is the same geometry as a green translucent overlay,
-so the "current / target" legend still applies. The STLs are loaded once and shared
-between the two arms. If the assets or `STLLoader` are unavailable (e.g. `file://`), the
+so the "current / target" legend still applies. A **ghost arm** button in each 3D view
+toggles the ghost on/off (`Robot3D.setGhostVisible` — the ghost rotors live in one group,
+so the whole arm hides at once; the shared base pedestal stays). The 3D view in
+`client.html` also has a **fill window** button (the 3D section takes over the whole
+window, hiding the other cards) and a **fullscreen** button (the browser Fullscreen API
+on the 3D section); both re-fit the WebGL renderer via a synthetic window resize event.
+The STLs are loaded
+once and shared between the two arms. If the assets or `STLLoader` are unavailable (e.g. `file://`), the
 view degrades to placeholders and keeps running. The chain is driven as-is; the computed
 flange differs slightly from the older `kuka_kr60_abs.urdf` schematic (the 3D view is a
 visualization — the real robot is driven by the KUKA controller, not the model).
@@ -365,11 +376,12 @@ The client loads `assets/tool.glb` on init and logs "tool asset not loaded" (and
 back to the white box) if it is missing or fails to load (e.g. `file://` usage).
 
 The tool's **red mesh is a screen**: `rtr3d.js` finds it (by its red material) and renders a
-hydra patch onto it. The patch comes from `GET /api/screen` (the `default` entry of the
-patches table, see the Patches section), falling back to a built-in placeholder when the
-core is unreachable. The screen is only on the **current** arm's tool (the ghost arm's tool
-is recoloured green). If the GLB has no red mesh, or hydra-synth fails to load, the tool
-renders as-is and the situation is logged.
+hydra patch onto it. The patch the screen shows is the **core's resolved patch**, pushed in
+each `state` frame (see the Patches section); `GET /api/screen` (the `default` entry of the
+patches table) is the seed shown until the first state frame arrives, and a built-in
+placeholder is used when the core is unreachable. The screen is only on the **current**
+arm's tool (the ghost arm's tool is recoloured green). If the GLB has no red mesh, or
+hydra-synth fails to load, the tool renders as-is and the situation is logged.
 
 ### Sound (configurable MIDI-out)
 
@@ -445,11 +457,32 @@ matches. **Match precedence (most specific wins): `action > mode > zone > defaul
 state's patch is looked up by action name first, then mode, then zone, then `default`
 (`match_patch` in `patches/patches.py`).
 
-Unlike Sound (which fires on each snapshot), the browser pages **fetch the whole table
-once** and match locally on every state frame, so there is no per-tick traffic. A
+**The core is the single source of truth for the resolved patch.** It resolves the patch
+for every snapshot (`Patches.code_for`, i.e. `match_patch`) and pushes the code in the
+`patch` field of each broadcast `state` frame (built by `display.py`). Every consumer —
+`client.html`, `render.html`, and the **3D tool screen** in `rtr3d.js` — prefers that
+pushed `patch`, so all of them stay in sync no matter what triggered the zone/mode/action
+change (MIDI, WebSocket, or HTTP). The resolver is wired in `main.py`
+(`make_display(..., patch_code=patches.code_for)`).
+
+**Manual screen override.** The tool client (`client.html`) can push a specific patch slot
+to the screens. Selecting a slot sends a `set_screen_patch` command with that slot's code;
+the `Patches` adapter holds it as an in-memory **screen override** (`set_screen_override`),
+and `code_for` returns the override while it is set — so the pushed `patch` field (and thus
+the 3D tool screen and `render.html`) follow the operator's choice. Selecting **auto** sends
+`set_screen_patch` with `code: null`, which clears the override and the screens fall back to
+the live `action > mode > zone > default` match. The override is a **live control**: it is
+held in memory (not persisted to `patches.json`) and is handled by the engine
+(`SET_SCREEN_PATCH` → `patches.set_screen_override`, wired in `main.py`).
+
+As a **fallback**, the browser pages also **fetch the whole table once** and match locally
+(`matchPatch`) on every state frame, so a page served over `file://` — or one talking to an
+older core that doesn't push `patch` — still resolves the patch correctly. A
 `PATCHES_CHANGED` event (published when the table is hot-reloaded) tells the pages to
 re-fetch. The `Patches` adapter (`patches/patches.py`) holds the table, re-reads it on
-`RELOAD_PATCHES`, and serves `current_data` to the HTTP GET fallback.
+`RELOAD_PATCHES`, and serves `current_data` to the HTTP GET fallback. The 3D tool screen
+seeds itself from `GET /api/screen` (the `default` entry) until the first state frame
+arrives, then follows the pushed patch.
 
 - **`render.html`** is the **fullscreen** hydra render page. It opens the same WebSocket as
   `client.html` (port 8765), fetches the patches table, and renders the matched patch onto

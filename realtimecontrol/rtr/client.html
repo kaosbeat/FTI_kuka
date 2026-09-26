@@ -57,6 +57,15 @@
   #robot3d { width: 100%; height: 360px; border: 1px solid var(--border);
             border-radius: 6px; overflow: hidden; background: #0d0f13; }
   #robot3d canvas { display: block; }
+  /* Fill-window mode: the 3D section takes over the whole window; the other cards are hidden. */
+  body.fill3d { display: flex; flex-direction: column; height: 100vh; padding-bottom: 0; }
+  body.fill3d main { flex: 1; min-height: 0; grid-template-rows: 1fr; }
+  body.fill3d main section:not(#robot3d-section) { display: none; }
+  body.fill3d #robot3d-section { display: flex; flex-direction: column; min-height: 0; }
+  body.fill3d #robot3d { flex: 1; min-height: 0; height: auto; }
+  /* Browser fullscreen: the section fills the screen and the 3D div takes the leftover space. */
+  #robot3d-section:fullscreen { display: flex; flex-direction: column; }
+  #robot3d-section:fullscreen #robot3d { flex: 1; min-height: 0; height: auto; }
   .legend { font-size: 11px; color: var(--dim); margin-top: 6px; }
   .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
                 margin: 0 4px 0 0; vertical-align: middle; }
@@ -70,7 +79,7 @@
 <body>
 
 <header>
-  <h1>RTR control</h1>
+  <h1>Exhibiting Intelligence - direct brain interface</h1>
   <span class="dot" id="dot"></span><span id="status">disconnected</span>
   <input id="host" value="ws://localhost:8765" spellcheck="false">
   <button id="connect">connect</button>
@@ -82,6 +91,7 @@
     <div id="robot3d"></div>
     <div class="legend"><span class="sw" style="background:#f67828"></span>current
       &nbsp;<span class="sw" style="background:#4fc08d"></span>target</div>
+    <div class="btnrow" style="margin-top:6px"><button id="ghostToggle" class="active">ghost arm</button><button id="fillToggle">fill window</button><button id="fsToggle">fullscreen</button></div>
     <div class="kv" style="margin-top:8px"><span>tool (x, y, z)</span><span id="toolPos">&#8211;</span></div>
   </section>
 
@@ -108,7 +118,8 @@
       <select id="patchSel"></select>
     </div>
     <div id="patchPreview"></div>
-    <div class="kv" style="margin-top:8px"><span>auto (live state)</span><span id="patchAuto">&#8211;</span></div>
+    <div class="kv" style="margin-top:8px"><span>pushed to screen</span><span id="patchPush">&#8211;</span></div>
+    <div class="kv"><span>auto (live state)</span><span id="patchAuto">&#8211;</span></div>
     <div class="kv"><span>render</span><span><a href="render.html" style="color:var(--accent)">fullscreen &#8594;</a></span></div>
   </section>
 
@@ -239,6 +250,10 @@ function patchAutoLabel(m) {
 function currentPatchCode() {
   if (patchSelValue === "auto") {
     const s = lastSnap || {};
+    // The core pushes the resolved patch in the state frame (single source of truth);
+    // prefer it. Fall back to local matching when it is absent (file:// or an older
+    // core that does not push the patch).
+    if (typeof s.patch === "string" && s.patch) return s.patch;
     return matchPatch(s.zone, s.mode, s.action);
   }
   if (patchSelValue === "default") return PATCHES.default;
@@ -272,6 +287,21 @@ function updatePatchPreview() {
   }
 }
 
+// Push the selected slot to the core so the 3D tool screen and the fullscreen
+// render page follow it (the core re-broadcasts it in every state frame).
+// Selecting "auto" clears the override, so the screens fall back to the live
+// zone/mode/action match.
+function pushScreenPatch() {
+  if (patchSelValue === "auto") {
+    send({ cmd: "set_screen_patch", code: null });
+    $("patchPush").textContent = "auto (following state)";
+    return;
+  }
+  const code = currentPatchCode();
+  send({ cmd: "set_screen_patch", code: code });
+  $("patchPush").textContent = code;
+}
+
 function buildPatchChooser() {
   const sel = $("patchSel");
   const prev = sel.value || patchSelValue;
@@ -294,7 +324,8 @@ function buildPatchChooser() {
   sel.appendChild(aGroup);
   sel.value = prev;
   patchSelValue = sel.value || "auto";
-  sel.onchange = () => { patchSelValue = sel.value; updatePatchPreview(); };
+  $("patchPush").textContent = patchSelValue === "auto" ? "auto (following state)" : (currentPatchCode() || PATCH_DEFAULT);
+  sel.onchange = () => { patchSelValue = sel.value; pushScreenPatch(); updatePatchPreview(); };
 }
 
 // ------------------------------------------------------------------
@@ -567,6 +598,37 @@ renderState = (s) => { lastSnap = s; Robot3D.update(s); try { _renderDom(s); } c
 
 buildUI();
 Robot3D.init($("robot3d"), { toolEl: $("toolPos"), log: log, environment: true });
+// Toggle the green ghost (target) arm in the 3D view.
+let ghostVisible = true;
+$("ghostToggle").onclick = () => {
+  ghostVisible = !ghostVisible;
+  Robot3D.setGhostVisible(ghostVisible);
+  $("ghostToggle").className = ghostVisible ? "active" : "";
+};
+
+// Fill-window mode: the 3D section takes over the whole window (the other cards are
+// hidden). rtr3d.js resizes the renderer from the container size on a window resize,
+// so dispatch one after the layout change to re-fit the WebGL canvas.
+function setFill3D(on) {
+  document.body.classList.toggle("fill3d", on);
+  $("fillToggle").className = on ? "active" : "";
+  window.dispatchEvent(new Event("resize"));
+}
+$("fillToggle").onclick = () => setFill3D(!document.body.classList.contains("fill3d"));
+
+// Browser fullscreen on the 3D section (Escape exits; the button tracks the state).
+$("fsToggle").onclick = () => {
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    const p = $("robot3d-section").requestFullscreen();
+    if (p && p.catch) p.catch((e) => log("fullscreen failed: " + e));
+  }
+};
+document.addEventListener("fullscreenchange", () => {
+  $("fsToggle").className = document.fullscreenElement ? "active" : "";
+  window.dispatchEvent(new Event("resize"));
+});
 connect();
 </script>
 </body>

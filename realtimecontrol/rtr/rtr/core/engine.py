@@ -33,7 +33,8 @@ class Engine:
                  machine: StateMachine, tick_hz: float = 20.0,
                  zone_loader: Callable[[], dict] = None,
                  sound_reload: Callable[[], None] = None,
-                 patch_reload: Callable[[], None] = None):
+                 patch_reload: Callable[[], None] = None,
+                 screen_patch_override: "Callable[[str | None], None]" = None):
         self.bus = bus
         self.robot = robot
         self.brain = brain
@@ -42,6 +43,9 @@ class Engine:
         self._zone_loader = zone_loader
         self._sound_reload = sound_reload
         self._patch_reload = patch_reload
+        # Sets (or clears) the manual hydra screen override; the core then pushes it in
+        # every state frame so the 3D tool screen and the render page follow it.
+        self._screen_patch_override = screen_patch_override
         self._running = False
 
     async def run(self) -> None:
@@ -69,6 +73,9 @@ class Engine:
                 elif cmd.cmd == Cmd.RELOAD_PATCHES:
                     if self._patch_reload is not None:
                         self._patch_reload()
+                elif cmd.cmd == Cmd.SET_SCREEN_PATCH:
+                    if self._screen_patch_override is not None:
+                        self._screen_patch_override(cmd.payload.get("code"))
                 else:
                     self.brain.on_command(cmd, curjpos)
 

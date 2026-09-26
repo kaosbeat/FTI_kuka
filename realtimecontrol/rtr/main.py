@@ -146,7 +146,8 @@ async def run(cfg: Config) -> None:
     engine = Engine(bus, robot, brain, machine, tick_hz=cfg.tick_hz,
                     zone_loader=lambda: load_state_data(cfg.zones_path),
                     sound_reload=sound.reload,
-                    patch_reload=patches.reload)
+                    patch_reload=patches.reload,
+                    screen_patch_override=patches.set_screen_override)
 
     # --- adapters -------------------------------------------------------
     ws = WebSocketServer(bus, host=cfg.ws_host, port=cfg.ws_port,
@@ -158,7 +159,11 @@ async def run(cfg: Config) -> None:
                       patches_path=cfg.patches_path, root=ROOT,
                       host=cfg.http_host, port=cfg.http_port,
                       enabled=cfg.enable_http)
-    display = make_display(bus, ws.broadcast, enabled=cfg.enable_display)
+    # The display pushes the resolved hydra patch in every state frame (the core is
+    # the single source of truth), so the pages and the 3D tool screen stay in sync
+    # no matter what triggered the change (MIDI, WebSocket, HTTP).
+    display = make_display(bus, ws.broadcast, enabled=cfg.enable_display,
+                           patch_code=patches.code_for)
     camera = make_camera(bus, enabled=cfg.enable_camera)
     midi = MidiInput(bus, in_port=cfg.midi_in_port,
                      enabled=cfg.midi_in_port is not None,

@@ -338,7 +338,7 @@
         "wander",
         "wakeup"
       ],
-      "speed": 50,
+      "speed": 100,
       "actions": {
         "breathe": {
           "enabled": true,

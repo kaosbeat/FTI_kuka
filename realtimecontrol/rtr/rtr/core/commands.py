@@ -26,6 +26,7 @@ class Cmd(str, Enum):
     RELOAD_ZONES = "reload_zones"
     RELOAD_SOUND = "reload_sound"
     RELOAD_PATCHES = "reload_patches"
+    SET_SCREEN_PATCH = "set_screen_patch"
     STOP = "stop"
 
 

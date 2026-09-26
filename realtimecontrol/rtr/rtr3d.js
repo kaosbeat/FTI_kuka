@@ -51,11 +51,19 @@ const Robot3D = (() => {
   // patches, design to this resolution. Overridable per init via opts.screenResolution.
   const SCREEN_RESOLUTION = [512, 512];
 
-  let scene, camera, renderer, controls, rotors, rotorsT, toolNode;
+  let scene, camera, renderer, controls, rotors, rotorsT, toolNode, ghostRoot;
+  // Ghost (target) arm visibility — toggled per view by the page's button. Stored so
+  // a toggle before the meshes finish loading still applies once the arm is built.
+  let ghostVisible = true;
   let container, toolEl, logFn, running = false;
   // The tool-screen texture (fed by hydra); re-uploaded from the hydra canvas each frame.
   let screenTex = null;
   let screenW = SCREEN_RESOLUTION[0], screenH = SCREEN_RESOLUTION[1];
+  // The tool-screen hydra instance + the last code eval'd onto it, so update() can push
+  // the core's resolved patch (the robot's screen follows the live state, in sync with
+  // the standalone previews and the fullscreen render page).
+  let screenHydra = null;
+  let screenPatchCode = null;
 
   function rotFromRpy(r) {
     const Rx = new THREE.Matrix4().makeRotationX(r[0]);
@@ -91,13 +99,13 @@ const Robot3D = (() => {
   // ``toolObj`` is the loaded tool GLB scene (or absent); it is cloned onto the tool
   // node. For the ghost arm its materials are swapped to the translucent green so the
   // target tool reads like the ghost links.
-  function buildArm(geos, matFor, toolObj, isGhost) {
+  function buildArm(geos, matFor, toolObj, isGhost, root) {
     const rot = [];
     for (let j = 0; j < 6; j++) {
       const jt = JOINTS[j];
       const rotor = new THREE.Group();
       rotor.position.set(jt.xyz[0], jt.xyz[1], jt.xyz[2]);
-      (j === 0 ? scene : rot[j - 1]).add(rotor);
+      (j === 0 ? (root || scene) : rot[j - 1]).add(rotor);
       rot.push(rotor);
       const name = "link_" + (j + 1);
       if (geos[name]) {
@@ -248,6 +256,7 @@ const Robot3D = (() => {
     logFn("tool screen resolution: " + screenW + "x" + screenH);
 
     const hydra = new Hydra({ canvas, detectAudio: false, makeGlobal: true, autoLoop: true });
+    screenHydra = hydra;
 
     // The screen texture: three.js re-uploads the canvas each frame via needsUpdate.
     const tex = new THREE.Texture(canvas);
@@ -274,8 +283,12 @@ const Robot3D = (() => {
     screenTex = tex;
     mesh.material = new THREE.MeshBasicMaterial({ map: tex, color: 0xffffff });
 
-    // Fetch the hydra patch (from the core) and run it.
+    // Seed the screen with the core's default patch (a fallback for file:// where no
+    // state frame ever arrives). Guarded so a state frame that already pushed the
+    // resolved patch (action > mode > zone > default) is not overwritten by a late fetch.
     fetchScreenCode().then((code) => {
+      if (screenPatchCode !== null) return;
+      screenPatchCode = code;
       try { hydra.eval(code); } catch (e) { logFn("hydra eval failed: " + e); }
     });
   }
@@ -317,6 +330,12 @@ const Robot3D = (() => {
     scene.add(dir);
 
     scene.add(new THREE.GridHelper(8, 16, 0x3a4152, 0x1c2029));
+
+    // The ghost (target) arm lives in its own group so the page can hide/show it as a
+    // whole (its rotors are chained from this root; the shared base pedestal stays).
+    ghostRoot = new THREE.Group();
+    ghostRoot.visible = ghostVisible;
+    scene.add(ghostRoot);
 
     if (opts.environment !== false && typeof THREE.GLTFLoader !== "undefined") {
       loadEnvironment(opts.environmentUrl || "assets/environment.glb");
@@ -364,7 +383,7 @@ const Robot3D = (() => {
       // tool load (or a hydra error) must not freeze the robot.
       const cur = buildArm(geos, curMat, null, false);
       rotors = cur.rot; toolNode = cur.tool;
-      const tgt = buildArm(geos, ghostMat, null, true);
+      const tgt = buildArm(geos, ghostMat, null, true, ghostRoot);
       rotorsT = tgt.rot;
       setJoints(rotors, HOME);
       setJoints(rotorsT, HOME);
@@ -392,6 +411,12 @@ const Robot3D = (() => {
     if (!running) return;
     if (s.joints) setJoints(rotors, s.joints);
     if (s.target) setJoints(rotorsT, s.target);
+    // Push the core's resolved hydra patch onto the tool screen (the robot's screen
+    // follows the live state); only re-eval when the code actually changes.
+    if (screenHydra && typeof s.patch === "string" && s.patch && s.patch !== screenPatchCode) {
+      screenPatchCode = s.patch;
+      try { screenHydra.eval(s.patch); } catch (e) { logFn("tool screen patch failed: " + e); }
+    }
   }
 
   // Set only the target (ghost) arm — used by the editor to step through an
@@ -407,5 +432,12 @@ const Robot3D = (() => {
     return [screenW, screenH];
   }
 
-  return { init, update, setTarget, screenResolution };
+  // Show/hide the green ghost (target) arm as a whole (the page's toggle button).
+  // The state is stored so a toggle before the meshes finish loading still applies.
+  function setGhostVisible(v) {
+    ghostVisible = !!v;
+    if (ghostRoot) ghostRoot.visible = ghostVisible;
+  }
+
+  return { init, update, setTarget, screenResolution, setGhostVisible };
 })();

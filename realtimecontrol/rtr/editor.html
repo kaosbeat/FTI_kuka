@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RTR zone editor</title>
+<title>Exhibiting Intelligence - brain editor</title>
 <style>
   :root { --bg: #111318; --panel: #181c24; --border: #2a2f3a; --text: #d7dbe2; --dim: #7c8494; --accent: #4fc08d; }
   * { box-sizing: border-box; }
@@ -85,7 +85,7 @@
 <body>
 
 <header>
-  <h1>RTR zone editor</h1>
+  <h1>Exhibiting Intelligence - brain editor</h1>
   <span class="dot" id="dot"></span><span id="status">disconnected</span>
   <input id="host" value="ws://localhost:8765" spellcheck="false">
   <button id="connect">connect</button>
@@ -114,6 +114,7 @@
   <section>
     <h2>3d preview</h2>
     <div id="robot3d"></div>
+    <div class="row" style="margin-top:6px"><button id="ghostToggle" class="active">ghost arm</button></div>
     <h3>safezone (selected zone)</h3>
     <div id="bars"></div>
     <h3>hardware limits (xacro floor)</h3>
@@ -257,7 +258,7 @@ function connect() {
   ws.onmessage = (e) => {
     let m; try { m = JSON.parse(e.data); } catch (err) { return; }
     if (m.type === "state") {
-      Robot3D.update({ joints: m.joints, target: m.target });
+      Robot3D.update({ joints: m.joints, target: m.target, patch: m.patch });
       $("liveState").innerHTML =
         `<div class="stateRow"><span>zone</span><span>${m.zone}</span></div>` +
         `<div class="stateRow"><span>mode</span><span>${m.mode}</span></div>` +
@@ -1225,6 +1226,13 @@ function delZone() {
 }
 
 Robot3D.init($("robot3d"), { log: (m) => console.log(m), environment: true });
+// Toggle the green ghost (target) arm in the 3D preview.
+let ghostVisible = true;
+$("ghostToggle").onclick = () => {
+  ghostVisible = !ghostVisible;
+  Robot3D.setGhostVisible(ghostVisible);
+  $("ghostToggle").className = ghostVisible ? "active" : "";
+};
 // The live-preview textarea: commit + re-render (debounced) as the user types.
 $("patchCode").oninput = () => {
   if (patchTimer) clearTimeout(patchTimer);
