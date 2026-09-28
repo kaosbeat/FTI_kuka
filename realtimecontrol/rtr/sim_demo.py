@@ -25,8 +25,8 @@ async def demo() -> None:
     robot.connect()
 
     zones = Zones()
-    machine = StateMachine(zones)
-    brain = Brain(machine, zones, tick_hz=30.0)
+    machine = StateMachine(zones, tick_hz=30.0)
+    brain = Brain(machine)
     engine = Engine(bus, robot, brain, machine, tick_hz=30.0)
 
     def submit(cmd: Cmd, **payload) -> None:

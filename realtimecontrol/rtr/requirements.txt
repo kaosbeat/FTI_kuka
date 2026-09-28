@@ -8,6 +8,7 @@ numpy
 scipy
 python-rtmidi
 websockets
+urwid>=0.7.0
 
 # Real robot only (not needed for --sim):
 #   pip install git+https://github.com/JasonLvernex/KukaPy.git

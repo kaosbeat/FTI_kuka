@@ -80,6 +80,54 @@
                   border-radius: 6px; overflow: hidden; background: #0d0f13; }
   #patchPreview canvas { display: block; width: 100%; height: 100%; }
   #patchInfo { font-size: 12px; color: var(--dim); margin-top: 6px; }
+  #flowMain { display: grid; gap: 16px; grid-template-columns: 1fr 380px; align-items: start; }
+  #flowSvgWrap { height: 560px; border: 1px solid var(--border); border-radius: 6px;
+                 background: #0d0f13; overflow: hidden; }
+  #flowSvg { width: 100%; height: 100%; display: block; }
+  .fnodeBody { fill: #22262f; stroke: var(--border); stroke-width: 1.5; }
+  .fnodeLabel { fill: var(--text); font-size: 15px; font-weight: bold; }
+  .fnodeSub { fill: var(--dim); font-size: 11px; }
+  .fnode.flive .fnodeBody { stroke: var(--accent); stroke-width: 2.5; }
+  .fnode.fsel .fnodeBody { stroke: #ffffff; stroke-width: 2.5; }
+  .fnode.off { opacity: 0.45; }
+  .fnode { cursor: move; }
+  .fedge { fill: none; stroke: var(--dim); stroke-width: 2; }
+  .fedge.fedgeCustom { stroke: var(--accent); }
+  .fedge.fedgeSel { stroke: #ffffff; stroke-width: 3; }
+  .fedgeHit { fill: none; stroke: transparent; stroke-width: 18; cursor: pointer; }
+  .fedgeLabel { fill: var(--dim); font-size: 10px; pointer-events: none; }
+  .fedgeLabel.fedgeLabelCustom { fill: var(--accent); }
+  /* Action editor modal (Step 3). */
+  #actionEditor { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; z-index: 20; }
+  #actionEditor.open { display: block; }
+  #aePanel { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+             width: 760px; max-width: 94vw; max-height: 92vh; overflow: auto;
+             background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .aeHead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 10px; }
+  .aeHead h2 { margin: 0; color: var(--text); text-transform: none; letter-spacing: 0; font-size: 15px; }
+  .aeSec { margin-bottom: 14px; border-bottom: 1px solid #20242d; padding-bottom: 10px; }
+  .aeSec h3 { margin: 0 0 8px; }
+  .aePoseRow { display: grid; grid-template-columns: repeat(6, 1fr) 56px 64px; gap: 4px;
+               margin-bottom: 4px; align-items: center; }
+  .aePoseRow input[type=number] { padding: 2px 4px; }
+  .aePoseRow input.oob { border-color: #e0a030; color: #e0a030; }
+  .aePoseCtl { display: flex; gap: 3px; }
+  .aePoseCtl button { padding: 1px 5px; font-size: 11px; }
+  .aePatch { width: 100%; min-height: 120px; resize: vertical; background: #0d0f13;
+             color: var(--text); border: 1px solid var(--border); border-radius: 4px;
+             padding: 8px; font: inherit; white-space: pre; }
+  .aePreview { width: 100%; height: 180px; border: 1px solid var(--border);
+               border-radius: 6px; overflow: hidden; background: #0d0f13; margin-top: 6px; }
+  .aePreview canvas { display: block; width: 100%; height: 100%; }
+  .aeStatus { font-size: 12px; color: var(--dim); margin-top: 4px; }
+  /* Flow action rows (Step 4). */
+  .fnode .fnodeBody { fill: #22262f; }
+  .faRow { font-size: 11px; }
+  .faRow entry { fill: var(--accent); }
+  .faLabel { fill: var(--text); font-size: 11px; }
+  .faLoop { fill: #e0a030; font-size: 11px; }
+  .faDot { fill: var(--accent); stroke: #0d0f13; stroke-width: 1; }
+  .fedge.fedgeTarget { stroke: #e0a030; stroke-dasharray: 4 3; }
 </style>
 </head>
 <body>
@@ -92,6 +140,7 @@
   <button id="tabZones" class="active">zones</button>
   <button id="tabSound">sound</button>
   <button id="tabPatches">patches</button>
+  <button id="tabFlow">flow</button>
   <button id="save">save</button>
   <span id="saveMsg"></span>
 </header>
@@ -171,6 +220,39 @@
   </section>
 </main>
 
+<main id="flowMain" style="display:none">
+  <section>
+    <h2>flow</h2>
+    <div class="row">
+      <button id="flowAddZone">+ add zone</button>
+      <button id="flowDelZone" class="small">remove</button>
+      <button id="flowAutoLayout" class="small">auto layout</button>
+      <button id="flowFit" class="small">fit view</button>
+      <span style="font-size:11px;color:var(--dim)">drag a node onto another to draw an arrow · click a node/arrow to select · wheel = zoom · middle-drag = pan</span>
+    </div>
+    <div id="flowSvgWrap">
+      <svg id="flowSvg"></svg>
+    </div>
+  </section>
+  <section>
+    <h2 id="flowDetailTitle">flow detail</h2>
+    <div id="flowDetail"></div>
+  </section>
+</main>
+
+<div id="actionEditor">
+  <div id="aePanel">
+    <div class="aeHead">
+      <h2 id="aeTitle">action</h2>
+      <div class="row">
+        <button id="aeSave">save</button>
+        <button id="aeClose" class="small">close</button>
+      </div>
+    </div>
+    <div id="aeBody"></div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
@@ -235,6 +317,19 @@ let patchHydra = null;      // the live-preview hydra instance
 let patchTimer = null;      // debounce timer for the live preview
 let ghostIndex = 0;
 let ws = null;
+let flowView = false;
+// Flow-tab state (session only — node positions are not persisted to zones.json).
+const FLOW = {
+  pos: {},        // zone -> {x, y}
+  sel: null,       // {type:"node",zone} | {type:"edge",from,to} | null
+  live: null,      // {zone,mode,action} from the latest WS state frame
+  nodeEls: {},     // zone -> <g> element (for in-place live updates)
+  drag: null,      // {from, startPt, startNode, moved}
+  layoutKey: null, // the zone-name set the current layout was computed for
+  view: null,      // {x,y,w,h} viewBox — the user's zoom/pan (null until first fit)
+  pan: null,       // {ctm, startScreen, startView} middle-drag pan state
+};
+const NODE_W = 140, NODE_H = 70;
 
 // Last-resort patches table (mirrors rtr/patches/patches.py DEFAULT_HYDRA_CODE).
 // Used when both /api/patches and /patches.json fail (e.g. opened from file://).
@@ -265,6 +360,8 @@ function connect() {
         `<div class="stateRow"><span>action</span><span>${m.action ? m.action : "—"}</span></div>` +
         `<div class="stateRow"><span>speed</span><span>${m.speed}</span></div>` +
         `<div class="stateRow"><span>moving</span><span>${m.moving ? "yes" : "no"}</span></div>`;
+      FLOW.live = { zone: m.zone, mode: m.mode, action: m.action };
+      if (flowView) applyFlowHighlight();
     } else if (m.type === "sound_changed") {
       // The running core reloaded the sound mapping; re-fetch it.
       loadSound().then(() => { if (soundView) buildSoundForm(); });
@@ -356,12 +453,14 @@ async function loadSound() {
   if (SOUND.modes === undefined) SOUND.modes = {};
   if (SOUND.actions === undefined) SOUND.actions = {};
   if (SOUND.channel === undefined) SOUND.channel = 0;
-  // Seed the action list from the union of the zone table's action names (globally
-  // keyed). Only fills names that are not already present, so an edited mapping
-  // keeps its own actions.
-  const names = Object.keys(TABLE.zones || {}).flatMap((n) => Object.keys(TABLE.zones[n].actions || {}));
-  names.forEach((an) => {
-    if (!SOUND.actions[an]) SOUND.actions[an] = { start: { note: 60, velocity: 60 }, poses: [] };
+  // Seed the action list per zone: for each zone, ensure SOUND.actions[zone] exists
+  // and seed each of that zone's actions (only filling missing entries), so an edited
+  // mapping keeps its own actions.
+  Object.keys(TABLE.zones || {}).forEach((zn) => {
+    if (!SOUND.actions[zn]) SOUND.actions[zn] = {};
+    Object.keys(TABLE.zones[zn].actions || {}).forEach((an) => {
+      if (!SOUND.actions[zn][an]) SOUND.actions[zn][an] = { start: { note: 60, velocity: 60 }, poses: [] };
+    });
   });
   if (soundView) buildSoundForm();
   return SOUND;
@@ -465,68 +564,80 @@ function buildSoundForm() {
     mEl.appendChild(row);
   });
 
-  // actions (globally keyed: a start message + a list of per-pose messages)
+  // actions (zone-scoped: a start message + a list of per-pose messages, per zone)
   const aEl = $("sndActions");
   aEl.innerHTML = "";
-  Object.keys(SOUND.actions).forEach((name) => {
-    const act = SOUND.actions[name];
-    const box = document.createElement("div");
-    box.className = "action";
-    // header: name + remove
-    const head = document.createElement("div");
-    head.className = "actionHead";
-    const nm = document.createElement("input");
-    nm.type = "text"; nm.value = name;
-    nm.onchange = () => {
-      const nn = nm.value.trim();
-      if (!nn || nn === name) { nm.value = name; return; }
-      SOUND.actions[nn] = act; delete SOUND.actions[name];
-      buildSoundForm();
-    };
-    const rm = document.createElement("button");
-    rm.className = "small"; rm.textContent = "remove";
-    rm.onclick = () => { delete SOUND.actions[name]; buildSoundForm(); };
-    head.appendChild(nm); head.appendChild(rm);
-    box.appendChild(head);
-    // start message
-    if (!act.start) act.start = { note: 60, velocity: 60 };
-    const s = document.createElement("div");
-    s.className = "sndRow";
-    const sl = document.createElement("span");
-    sl.className = "sndName"; sl.textContent = "start";
-    s.appendChild(sl);
-    s.appendChild(msgEditor(act.start, (fresh) => { act.start = fresh; buildSoundForm(); }));
-    box.appendChild(s);
-    // per-pose messages
-    if (!act.poses) act.poses = [];
-    const pw = document.createElement("div");
-    pw.className = "sndPoses";
-    act.poses.forEach((pm, pi) => {
-      const prow = document.createElement("div");
-      prow.className = "sndRow";
-      const pl = document.createElement("span");
-      pl.className = "sndName"; pl.textContent = "pose " + (pi + 1);
-      prow.appendChild(pl);
-      prow.appendChild(msgEditor(pm, (fresh) => { act.poses[pi] = fresh; buildSoundForm(); }));
-      const prx = document.createElement("button");
-      prx.className = "small"; prx.textContent = "×";
-      prx.onclick = () => { act.poses.splice(pi, 1); buildSoundForm(); };
-      prow.appendChild(prx);
-      pw.appendChild(prow);
+  Object.keys(TABLE.zones).forEach((zn) => {
+    if (!SOUND.actions[zn]) SOUND.actions[zn] = {};
+    const acts = SOUND.actions[zn];
+    const zg = document.createElement("div");
+    zg.className = "sndZoneGroup";
+    zg.appendChild(h3(zn));
+    Object.keys(acts).forEach((name) => {
+      const act = acts[name];
+      const box = document.createElement("div");
+      box.className = "action";
+      // header: name + remove
+      const head = document.createElement("div");
+      head.className = "actionHead";
+      const nm = document.createElement("input");
+      nm.type = "text"; nm.value = name;
+      nm.onchange = () => {
+        const nn = nm.value.trim();
+        if (!nn || nn === name) { nm.value = name; return; }
+        acts[nn] = act; delete acts[name];
+        buildSoundForm();
+      };
+      const rm = document.createElement("button");
+      rm.className = "small"; rm.textContent = "remove";
+      rm.onclick = () => { delete acts[name]; buildSoundForm(); };
+      head.appendChild(nm); head.appendChild(rm);
+      box.appendChild(head);
+      // start message
+      if (!act.start) act.start = { note: 60, velocity: 60 };
+      const s = document.createElement("div");
+      s.className = "sndRow";
+      const sl = document.createElement("span");
+      sl.className = "sndName"; sl.textContent = "start";
+      s.appendChild(sl);
+      s.appendChild(msgEditor(act.start, (fresh) => { act.start = fresh; buildSoundForm(); }));
+      box.appendChild(s);
+      // per-pose messages
+      if (!act.poses) act.poses = [];
+      const pw = document.createElement("div");
+      pw.className = "sndPoses";
+      act.poses.forEach((pm, pi) => {
+        const prow = document.createElement("div");
+        prow.className = "sndRow";
+        const pl = document.createElement("span");
+        pl.className = "sndName"; pl.textContent = "pose " + (pi + 1);
+        prow.appendChild(pl);
+        prow.appendChild(msgEditor(pm, (fresh) => { act.poses[pi] = fresh; buildSoundForm(); }));
+        const prx = document.createElement("button");
+        prx.className = "small"; prx.textContent = "×";
+        prx.onclick = () => { act.poses.splice(pi, 1); buildSoundForm(); };
+        prow.appendChild(prx);
+        pw.appendChild(prow);
+      });
+      const addP = document.createElement("button");
+      addP.className = "small"; addP.textContent = "+ pose";
+      addP.onclick = () => { act.poses.push({ note: 60, velocity: 60 }); buildSoundForm(); };
+      pw.appendChild(addP);
+      box.appendChild(pw);
+      zg.appendChild(box);
     });
-    const addP = document.createElement("button");
-    addP.className = "small"; addP.textContent = "+ pose";
-    addP.onclick = () => { act.poses.push({ note: 60, velocity: 60 }); buildSoundForm(); };
-    pw.appendChild(addP);
-    box.appendChild(pw);
-    aEl.appendChild(box);
+    aEl.appendChild(zg);
   });
 }
 
 function addSoundAction() {
+  const zn = prompt("zone:", selectedZone || "") || selectedZone;
+  if (!zn || !TABLE.zones[zn]) return;
   const nm = prompt("action name:", "new");
-  if (!nm || SOUND.actions[nm]) return;
-  SOUND.actions[nm] = { start: { note: 60, velocity: 60 }, poses: [] };
+  if (!nm) return;
+  if (!SOUND.actions[zn]) SOUND.actions[zn] = {};
+  if (SOUND.actions[zn][nm]) return;
+  SOUND.actions[zn][nm] = { start: { note: 60, velocity: 60 }, poses: [] };
   buildSoundForm();
 }
 
@@ -552,10 +663,17 @@ function validateSound() {
       if (e) errs.push(`${where}[${name}]: ${e}`);
     }
   }
-  for (const name of Object.keys(SOUND.actions)) {
-    const act = SOUND.actions[name];
-    if (act.start) { const e = validMsg(act.start); if (e) errs.push(`actions[${name}].start: ${e}`); }
-    (act.poses || []).forEach((pm, i) => { const e = validMsg(pm); if (e) errs.push(`actions[${name}].poses[${i}]: ${e}`); });
+  for (const zn of Object.keys(SOUND.actions)) {
+    const acts = SOUND.actions[zn];
+    if (typeof acts !== "object" || acts === null || Array.isArray(acts)) {
+      errs.push(`actions[${zn}]: must be an object`);
+      continue;
+    }
+    for (const name of Object.keys(acts)) {
+      const act = acts[name];
+      if (act.start) { const e = validMsg(act.start); if (e) errs.push(`actions[${zn}][${name}].start: ${e}`); }
+      (act.poses || []).forEach((pm, i) => { const e = validMsg(pm); if (e) errs.push(`actions[${zn}][${name}].poses[${i}]: ${e}`); });
+    }
   }
   return errs;
 }
@@ -594,6 +712,11 @@ function getPatchCode(key) {
   if (key === "default") return PATCHES.default;
   const idx = key.indexOf(".");
   const scope = key.slice(0, idx), name = key.slice(idx + 1);
+  if (scope === "actions") {
+    const ai = name.indexOf(".");
+    const zn = name.slice(0, ai), an = name.slice(ai + 1);
+    return (PATCHES.actions[zn] && PATCHES.actions[zn][an]) || "";
+  }
   return (PATCHES[scope] && PATCHES[scope][name]) || "";
 }
 
@@ -601,6 +724,13 @@ function setPatchCode(key, code) {
   if (key === "default") { PATCHES.default = code; return; }
   const idx = key.indexOf(".");
   const scope = key.slice(0, idx), name = key.slice(idx + 1);
+  if (scope === "actions") {
+    const ai = name.indexOf(".");
+    const zn = name.slice(0, ai), an = name.slice(ai + 1);
+    if (!PATCHES.actions[zn]) PATCHES.actions[zn] = {};
+    PATCHES.actions[zn][an] = code;
+    return;
+  }
   if (!PATCHES[scope]) PATCHES[scope] = {};
   PATCHES[scope][name] = code;
 }
@@ -633,7 +763,14 @@ async function loadPatches() {
   const def = PATCHES.default;
   Object.keys(TABLE.zones).forEach((n) => { if (PATCHES.zones[n] === undefined) PATCHES.zones[n] = def; });
   MODES.forEach((m) => { if (PATCHES.modes[m] === undefined) PATCHES.modes[m] = def; });
-  catalogActions().forEach((a) => { if (PATCHES.actions[a] === undefined) PATCHES.actions[a] = def; });
+  // actions are zone-scoped: seed each zone's actions with the default code (only filling
+  // missing entries), so the editor shows a complete, offline-editable table.
+  Object.keys(TABLE.zones).forEach((zn) => {
+    if (!PATCHES.actions[zn]) PATCHES.actions[zn] = {};
+    Object.keys(TABLE.zones[zn].actions || {}).forEach((an) => {
+      if (PATCHES.actions[zn][an] === undefined) PATCHES.actions[zn][an] = def;
+    });
+  });
   if (selectedPatch === null) selectedPatch = "default";
   if (patchView) buildPatchesForm();
   return PATCHES;
@@ -693,7 +830,10 @@ function buildPatchesForm() {
   addGroup("modes");
   MODES.forEach((m) => addSlot("modes." + m, m));
   addGroup("actions");
-  Object.keys(PATCHES.actions).forEach((a) => addSlot("actions." + a, a));
+  Object.keys(TABLE.zones).forEach((zn) => {
+    if (!PATCHES.actions[zn]) PATCHES.actions[zn] = {};
+    Object.keys(PATCHES.actions[zn]).forEach((an) => addSlot("actions." + zn + "." + an, zn + " / " + an));
+  });
 
   const code = getPatchCode(selectedPatch);
   $("patchCode").value = code;
@@ -703,13 +843,15 @@ function buildPatchesForm() {
 }
 
 function addPatchAction() {
+  const zn = prompt("zone:", selectedZone || "") || selectedZone;
+  if (!zn || !TABLE.zones[zn]) return;
   const nm = prompt("action name:", "new");
   if (!nm) return;
-  if (!PATCHES.actions[nm]) {
-    PATCHES.actions[nm] = PATCHES.default || PATCHES_FALLBACK.default;
-    selectedPatch = "actions." + nm;
-    buildPatchesForm();
-  }
+  if (!PATCHES.actions[zn]) PATCHES.actions[zn] = {};
+  if (PATCHES.actions[zn][nm]) return;
+  PATCHES.actions[zn][nm] = PATCHES.default || PATCHES_FALLBACK.default;
+  selectedPatch = "actions." + zn + "." + nm;
+  buildPatchesForm();
 }
 
 function removePatchSlot() {
@@ -727,20 +869,34 @@ function removePatchSlot() {
     setTimeout(() => { $("saveMsg").className = ""; }, 3000);
     return;
   }
-  delete PATCHES.actions[name];
+  const ai = name.indexOf(".");
+  const zn = name.slice(0, ai), an = name.slice(ai + 1);
+  if (PATCHES.actions[zn]) delete PATCHES.actions[zn][an];
   selectedPatch = "default";
   buildPatchesForm();
 }
 
-function savePatches() {
-  commitPatchEditor();
+function validatePatches() {
   const errs = [];
   if (typeof PATCHES.default !== "string" || !PATCHES.default) errs.push("default: must be a non-empty string");
-  for (const [scope, table] of [["zones", PATCHES.zones], ["modes", PATCHES.modes], ["actions", PATCHES.actions]]) {
+  for (const [scope, table] of [["zones", PATCHES.zones], ["modes", PATCHES.modes]]) {
     for (const name of Object.keys(table)) {
       if (typeof table[name] !== "string" || !table[name]) errs.push(`${scope}[${name}]: must be a non-empty string`);
     }
   }
+  for (const zn of Object.keys(PATCHES.actions)) {
+    const acts = PATCHES.actions[zn];
+    if (typeof acts !== "object" || acts === null || Array.isArray(acts)) { errs.push(`actions[${zn}]: must be an object`); continue; }
+    for (const an of Object.keys(acts)) {
+      if (typeof acts[an] !== "string" || !acts[an]) errs.push(`actions[${zn}][${an}]: must be a non-empty string`);
+    }
+  }
+  return errs;
+}
+
+function savePatches() {
+  commitPatchEditor();
+  const errs = validatePatches();
   if (errs.length) {
     $("saveMsg").textContent = errs.join("; ");
     $("saveMsg").className = "err";
@@ -768,15 +924,20 @@ function switchView(v) {
   const wasPatch = patchView;
   soundView = v === "sound";
   patchView = v === "patches";
+  flowView = v === "flow";
   if (wasPatch && !patchView) commitPatchEditor();  // leaving the patches view: commit
-  $("zoneMain").style.display = (soundView || patchView) ? "none" : "";
+  const other = soundView || patchView || flowView;
+  $("zoneMain").style.display = other ? "none" : "";
   $("soundMain").style.display = soundView ? "" : "none";
   $("patchesMain").style.display = patchView ? "" : "none";
-  $("tabZones").className = (soundView || patchView) ? "" : "active";
+  $("flowMain").style.display = flowView ? "" : "none";
+  $("tabZones").className = other ? "" : "active";
   $("tabSound").className = soundView ? "active" : "";
   $("tabPatches").className = patchView ? "active" : "";
+  $("tabFlow").className = flowView ? "active" : "";
   if (soundView) buildSoundForm();
   if (patchView) buildPatchesForm();
+  if (flowView) flowEnter();
 }
 
 // ---------------------------------------------------------------------------
@@ -824,18 +985,26 @@ function numGrid(id, values, oninput) {
   return g;
 }
 
-function buildZoneForm() {
-  const el = $("zoneForm");
+// Build the zone form into ``containerEl`` / ``titleEl`` for zone ``name``.
+// No-args form (the zones tab) defaults to #zoneForm / #zoneTitle / selectedZone and
+// refreshes the zones-tab list/bars/ghost. The flow tab passes its own container + a
+// ``onChanged`` that re-renders the flow canvas (so the node label tracks edits).
+function buildZoneForm(containerEl, titleEl, name, onChanged) {
+  if (containerEl === undefined) {
+    containerEl = $("zoneForm"); titleEl = $("zoneTitle"); name = selectedZone;
+    onChanged = () => { buildZoneList(); buildBars(); updateGhost(); };
+  }
+  const rebuild = () => buildZoneForm(containerEl, titleEl, name, onChanged);
+  const el = containerEl;
   el.innerHTML = "";
-  if (!selectedZone || !TABLE.zones[selectedZone]) {
+  if (!name || !TABLE.zones[name]) {
     el.innerHTML = "<span style='color:var(--dim)'>no zone selected — add one</span>";
-    $("zoneTitle").textContent = "zone";
+    titleEl.textContent = "zone";
     return;
   }
-  const name = selectedZone;
   const z = TABLE.zones[name];
   if (!z.actions) z.actions = {};
-  $("zoneTitle").textContent = "zone: " + name;
+  titleEl.textContent = "zone: " + name;
 
   // enabled + speed
   const row = document.createElement("div");
@@ -843,7 +1012,7 @@ function buildZoneForm() {
   const en = document.createElement("label");
   en.className = "inline";
   en.innerHTML = `<input type="checkbox" ${z.enabled !== false ? "checked" : ""}> enabled`;
-  en.querySelector("input").onchange = (e) => { z.enabled = e.target.checked; buildZoneList(); };
+  en.querySelector("input").onchange = (e) => { z.enabled = e.target.checked; onChanged(); };
   row.appendChild(en);
   const sp = document.createElement("label");
   sp.className = "inline";
@@ -851,6 +1020,19 @@ function buildZoneForm() {
   sp.querySelector("input").oninput = (e) => { z.speed = parseFloat(e.target.value); };
   row.appendChild(sp);
   el.appendChild(row);
+
+  // default mode (adopted on zone entry; "(keep current)" clears it)
+  const ml = document.createElement("label");
+  ml.className = "inline";
+  ml.innerHTML = "default mode <select class='msgType'></select>";
+  const msel = ml.querySelector("select");
+  const keepOpt = document.createElement("option");
+  keepOpt.value = ""; keepOpt.textContent = "(keep current)";
+  msel.appendChild(keepOpt);
+  MODES.forEach((m) => { const o = document.createElement("option"); o.value = m; o.textContent = m; msel.appendChild(o); });
+  msel.value = z.mode || "";
+  msel.onchange = () => { if (msel.value === "") delete z.mode; else z.mode = msel.value; onChanged(); };
+  el.appendChild(ml);
 
   // startpos
   el.appendChild(h3("startpos"));
@@ -877,7 +1059,7 @@ function buildZoneForm() {
       inp.oninput = () => {
         if (!z.safezone) z.safezone = Array.from({length: 6}, () => [0, 0]);
         z.safezone[i][k] = parseFloat(inp.value);
-        buildBars();
+        onChanged();
       };
       sz.appendChild(inp);
     }
@@ -896,15 +1078,15 @@ function buildZoneForm() {
     c.querySelector("input").onchange = (e) => {
       z.exits = z.exits || [];
       z.exits = e.target.checked ? [...z.exits, on] : z.exits.filter((x) => x !== on);
+      onChanged();
     };
     ex.appendChild(c);
   });
   el.appendChild(ex);
 
-  // actions: include / exclude from the master catalog, then edit the included ones
-  el.appendChild(h3("actions (include / exclude)"));
-  buildActionToggles(el, name, z);
-  buildActionList(el, name, z);
+  // actions: this zone's own actions (each zone owns its actions independently)
+  el.appendChild(h3("actions"));
+  buildActionList(el, name, z, rebuild, onChanged);
 
   const addA = document.createElement("button");
   addA.className = "small";
@@ -914,7 +1096,7 @@ function buildZoneForm() {
     if (!nm) return;
     z.actions[nm] = { enabled: true, pos: [[0,0,0,0,0,0]], speed: [10] };
     selectedAction = nm;
-    buildZoneForm(); updateGhost();
+    rebuild(); onChanged();
   };
   el.appendChild(addA);
 }
@@ -930,75 +1112,7 @@ function list6(arr) {
   return [0, 0, 0, 0, 0, 0];
 }
 
-// ---------------------------------------------------------------------------
-// Per-zone action include / exclude.
-//
-// The master catalog is the ordered union of action names across all zones. A zone
-// *includes* an action iff it has an entry in its own `actions` dict (the per-zone
-// poses); *excluding* removes the entry. Including one the zone lacks seeds its poses
-// from another zone that offers the same action (else the zone's own startpos).
-// ---------------------------------------------------------------------------
-function catalogActions() {
-  const seen = new Set();
-  const list = [];
-  Object.keys(TABLE.zones).forEach((zn) => {
-    const acts = TABLE.zones[zn].actions || {};
-    Object.keys(acts).forEach((an) => {
-      if (!seen.has(an)) { seen.add(an); list.push(an); }
-    });
-  });
-  return list;
-}
-
-function seedAction(name, an) {
-  const z = TABLE.zones[name];
-  if (!z.actions) z.actions = {};
-  for (const zn of Object.keys(TABLE.zones)) {
-    const other = TABLE.zones[zn].actions || {};
-    if (zn !== name && other[an] && other[an].pos) {
-      z.actions[an] = {
-        enabled: true,
-        pos: other[an].pos.map((p) => (Array.isArray(p) && p.length === 6 ? p.slice() : [0, 0, 0, 0, 0, 0])),
-        speed: (other[an].speed || []).slice(),
-      };
-      return;
-    }
-  }
-  const sp = (Array.isArray(z.startpos) && z.startpos.length === 6) ? z.startpos.slice() : [0, 0, 0, 0, 0, 0];
-  z.actions[an] = { enabled: true, pos: [sp], speed: [10] };
-}
-
-function buildActionToggles(el, name, z) {
-  const cat = catalogActions();
-  if (!cat.length) {
-    const s = document.createElement("span");
-    s.style.cssText = "color:var(--dim);font-size:12px";
-    s.textContent = "no actions defined yet — add one below";
-    el.appendChild(s);
-    return;
-  }
-  const row = document.createElement("div");
-  row.className = "row";
-  cat.forEach((an) => {
-    const c = document.createElement("label");
-    c.className = "inline";
-    c.innerHTML = `<input type="checkbox" ${z.actions && z.actions[an] ? "checked" : ""}> ${an}`;
-    c.querySelector("input").onchange = (e) => {
-      if (!z.actions) z.actions = {};
-      if (e.target.checked) {
-        if (!z.actions[an]) seedAction(name, an);
-      } else {
-        delete z.actions[an];
-        if (selectedAction === an) selectedAction = null;
-      }
-      buildZoneForm(); updateGhost();
-    };
-    row.appendChild(c);
-  });
-  el.appendChild(row);
-}
-
-function buildActionList(container, name, z) {
+function buildActionList(container, name, z, rebuild, onChanged) {
   Object.keys(z.actions).forEach((an) => {
     const a = z.actions[an];
     const box = document.createElement("div");
@@ -1013,7 +1127,7 @@ function buildActionList(container, name, z) {
       if (!nn || nn === an) { nm.value = an; return; }
       z.actions[nn] = a; delete z.actions[an];
       selectedAction = nn;
-      buildZoneForm();
+      rebuild();
     };
     const en = document.createElement("label");
     en.className = "inline";
@@ -1033,7 +1147,7 @@ function buildActionList(container, name, z) {
       for (let i = 0; i < 6; i++) {
         const inp = document.createElement("input");
         inp.type = "number"; inp.step = "0.1"; inp.value = pose[i];
-        inp.oninput = () => { a.pos[pi][i] = parseFloat(inp.value); if (an === selectedAction) updateGhost(); };
+        inp.oninput = () => { a.pos[pi][i] = parseFloat(inp.value); if (an === selectedAction) onChanged(); };
         pr.appendChild(inp);
       }
       const spd = document.createElement("input");
@@ -1047,7 +1161,7 @@ function buildActionList(container, name, z) {
         a.pos.splice(pi, 1);
         a.speed = a.speed || []; a.speed.splice(pi, 1);
         if (ghostIndex >= a.pos.length) ghostIndex = 0;
-        buildZoneForm(); updateGhost();
+        rebuild(); onChanged();
       };
       pr.appendChild(rx);
       box.appendChild(pr);
@@ -1059,7 +1173,7 @@ function buildActionList(container, name, z) {
       a.pos = a.pos || []; a.speed = a.speed || [];
       a.pos.push([0,0,0,0,0,0]);
       a.speed.push(10);
-      buildZoneForm();
+      rebuild();
     };
     box.appendChild(addR);
 
@@ -1137,6 +1251,18 @@ function validate() {
     if (!Array.isArray(z.exitpos) || z.exitpos.length !== 6) errs.push(`${name}: exitpos needs 6 values`);
     if (!Array.isArray(z.safezone) || z.safezone.length !== 6) errs.push(`${name}: safezone needs 6 pairs`);
     for (const e of (z.exits || [])) if (!TABLE.zones[e]) errs.push(`${name}: exit "${e}" does not exist`);
+    if (z.mode !== undefined && !MODES.includes(z.mode)) errs.push(`${name}: mode "${z.mode}" not in ${MODES.join("/")}`);
+    if (z.exitposes !== undefined) {
+      if (typeof z.exitposes !== "object" || z.exitposes === null || Array.isArray(z.exitposes)) {
+        errs.push(`${name}: exitposes must be a map of zone -> 6 values`);
+      } else {
+        for (const to of Object.keys(z.exitposes)) {
+          if (!TABLE.zones[to]) errs.push(`${name}: exitpose for unknown zone "${to}"`);
+          const ep = z.exitposes[to];
+          if (!Array.isArray(ep) || ep.length !== 6) errs.push(`${name}: exitpose "${to}" needs 6 values`);
+        }
+      }
+    }
     for (const an of Object.keys(z.actions || {})) {
       const a = z.actions[an];
       if (!Array.isArray(a.pos) || !a.pos.length) { errs.push(`${name}/${an}: needs at least 1 pose`); continue; }
@@ -1200,6 +1326,374 @@ function saveZones() {
 }
 
 // ---------------------------------------------------------------------------
+// Flow tab (SVG flowchart: nodes = zones, arrows = exits).
+//
+// Node positions are session-only (not persisted). The live zone (from the WS
+// state frame) is highlighted in place so an in-progress arrow-drag is not lost.
+// ---------------------------------------------------------------------------
+function svgEl(tag, attrs) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  if (attrs) for (const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+}
+
+// Convert a pointer event to SVG user-space coordinates.
+function svgPoint(svg, ev) {
+  const pt = svg.createSVGPoint();
+  pt.x = ev.clientX; pt.y = ev.clientY;
+  const ctm = svg.getScreenCTM();
+  const p = pt.matrixTransform(ctm.inverse());
+  return { x: p.x, y: p.y };
+}
+
+// A smooth cubic between two anchor points (horizontal S-curve).
+function edgePath(x1, y1, x2, y2) {
+  const c = Math.max(30, Math.abs(x2 - x1) * 0.5);
+  return `M ${x1} ${y1} C ${x1 + c} ${y1}, ${x2 - c} ${y2}, ${x2} ${y2}`;
+}
+
+function flowBuildDefs() {
+  const defs = svgEl("defs");
+  const marker = svgEl("marker", { id: "flowArrow", viewBox: "0 0 10 10", refX: 9, refY: 5,
+                                   markerWidth: 7, markerHeight: 7, orient: "auto" });
+  marker.appendChild(svgEl("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "var(--accent)" }));
+  defs.appendChild(marker);
+  return defs;
+}
+
+// The small text under a node's name: the live mode/action when it is the live
+// zone, else the declared default mode + the action count.
+function flowSubLabel(name) {
+  const z = TABLE.zones[name];
+  if (FLOW.live && FLOW.live.zone === name) {
+    return `${FLOW.live.mode || "—"} / ${FLOW.live.action || "—"}`;
+  }
+  const mode = z.mode || "—";
+  const n = Object.keys(z.actions || {}).length;
+  return n ? `${mode} · ${n} act` : mode;
+}
+
+// Deterministic auto-layout: columns by BFS depth from `init` (else the first
+// zone), rows by insertion order within a column. Unreachable zones go last.
+// ``names`` (optional) limits the reposition to those zones, so a manually laid-out
+// flow survives: the other zones keep their positions, and each relayouted node is
+// stacked below whatever already occupies its natural column.
+function flowAutoLayout(names) {
+  const GX = 70, GY = 40;
+  const all = Object.keys(TABLE.zones);
+  const sel = names && names.length ? names.filter((n) => TABLE.zones[n]) : all;
+  const root = TABLE.zones["init"] ? "init" : all[0];
+  const depth = {};
+  if (root) {
+    depth[root] = 0;
+    const q = [root];
+    while (q.length) {
+      const n = q.shift();
+      (TABLE.zones[n].exits || []).forEach((e) => {
+        if (TABLE.zones[e] && depth[e] === undefined) { depth[e] = depth[n] + 1; q.push(e); }
+      });
+    }
+  }
+  const maxD = Math.max(0, ...Object.values(depth));
+  all.forEach((n) => { if (depth[n] === undefined) depth[n] = maxD + 1; });
+  if (sel.length === all.length) {
+    FLOW.pos = {};
+    const cols = {};
+    all.forEach((n) => { (cols[depth[n]] = cols[depth[n]] || []).push(n); });
+    Object.keys(cols).forEach((d) => {
+      cols[d].forEach((n, i) => {
+        FLOW.pos[n] = { x: 40 + d * (NODE_W + GX), y: 40 + i * (NODE_H + GY) };
+      });
+    });
+  } else {
+    // Column bases from the zones NOT being moved (their x encodes the column).
+    const baseBottom = {};
+    all.forEach((n) => {
+      if (sel.includes(n)) return;
+      const p = FLOW.pos[n];
+      if (!p) return;
+      const d = Math.round((p.x - 40) / (NODE_W + GX));
+      baseBottom[d] = Math.max(baseBottom[d] || 0, p.y + NODE_H);
+    });
+    const rows = {};
+    sel.forEach((n) => {
+      const d = depth[n];
+      const i = (rows[d] = (rows[d] || 0) + 1) - 1;
+      FLOW.pos[n] = { x: 40 + d * (NODE_W + GX), y: Math.max(40, baseBottom[d] || 0) + i * (NODE_H + GY) };
+    });
+  }
+  FLOW.layoutKey = all.sort().join(",");
+}
+
+// Fit the viewBox to the content bounds and store it (entry / after auto-layout).
+function flowFitView() {
+  const names = Object.keys(TABLE.zones);
+  if (!names.length) { FLOW.view = { x: 0, y: 0, w: 400, h: 300 }; }
+  else {
+    let maxX = 0, maxY = 0;
+    names.forEach((n) => {
+      const p = FLOW.pos[n] || { x: 0, y: 0 };
+      maxX = Math.max(maxX, p.x + NODE_W);
+      maxY = Math.max(maxY, p.y + NODE_H);
+    });
+    FLOW.view = { x: 0, y: 0, w: Math.max(400, maxX + 60), h: Math.max(300, maxY + 60) };
+  }
+  flowApplyView();
+}
+
+// Apply the current (possibly user-zoomed/panned) viewBox to the svg element.
+function flowApplyView() {
+  const svg = $("flowSvg");
+  if (!svg || !FLOW.view) return;
+  svg.setAttribute("viewBox", `${FLOW.view.x} ${FLOW.view.y} ${FLOW.view.w} ${FLOW.view.h}`);
+}
+
+// Wheel = zoom around the cursor; middle-drag = pan. Both only mutate FLOW.view.
+function flowZoomAt(e) {
+  const svg = $("flowSvg");
+  if (!FLOW.view) flowFitView();
+  const v = FLOW.view;
+  const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  if (v.w / f < 50 || v.w / f > 5000) return;  // clamp the zoom range
+  const pt = svgPoint(svg, e);
+  v.x = pt.x - (pt.x - v.x) / f;
+  v.y = pt.y - (pt.y - v.y) / f;
+  v.w /= f; v.h /= f;
+  flowApplyView();
+}
+
+function flowPanStart(e) {
+  const svg = $("flowSvg");
+  if (!FLOW.view) flowFitView();
+  const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+  const ctm = svg.getScreenCTM();
+  FLOW.pan = { ctm, startScreen: pt.matrixTransform(ctm), startView: { ...FLOW.view } };
+  const move = (ev) => {
+    const f = FLOW.pan;
+    if (!f) return;
+    const p = svg.createSVGPoint(); p.x = ev.clientX; p.y = ev.clientY;
+    const cur = p.matrixTransform(f.ctm);  // the frozen CTM keeps the start mapping stable
+    const scale = f.startView.w / svg.getBoundingClientRect().width;
+    FLOW.view.x = f.startView.x - (cur.x - f.startScreen.x) * scale;
+    FLOW.view.y = f.startView.y - (cur.y - f.startScreen.y) * scale;
+    flowApplyView();
+  };
+  const up = () => { FLOW.pan = null; window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+}
+
+function flowAddEdge(layer, from, to) {
+  const a = FLOW.pos[from], b = FLOW.pos[to];
+  if (!a || !b) return;
+  // Anchor right-center -> left-center (or the reverse when the target is left).
+  let x1, y1, x2, y2;
+  if (b.x >= a.x) { x1 = a.x + NODE_W; y1 = a.y + NODE_H / 2; x2 = b.x; y2 = b.y + NODE_H / 2; }
+  else { x1 = a.x; y1 = a.y + NODE_H / 2; x2 = b.x + NODE_W; y2 = b.y + NODE_H / 2; }
+  const d = edgePath(x1, y1, x2, y2);
+  const z = TABLE.zones[from];
+  const isCustom = !!(z.exitposes && z.exitposes[to]);
+  const isSel = !!(FLOW.sel && FLOW.sel.type === "edge" && FLOW.sel.from === from && FLOW.sel.to === to);
+  const hit = svgEl("path", { d, class: "fedgeHit" });
+  hit.addEventListener("click", (e) => { e.stopPropagation(); flowSelect({ type: "edge", from, to }); });
+  layer.appendChild(hit);
+  const cls = "fedge" + (isCustom ? " fedgeCustom" : "") + (isSel ? " fedgeSel" : "");
+  layer.appendChild(svgEl("path", { d, class: cls, "marker-end": "url(#flowArrow)" }));
+  const lbl = svgEl("text", { x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 8,
+                               class: "fedgeLabel" + (isCustom ? " fedgeLabelCustom" : ""), "text-anchor": "middle" });
+  lbl.textContent = isCustom ? "custom" : "shared";
+  layer.appendChild(lbl);
+}
+
+function flowRenderEdges() {
+  const layer = $("flowEdgeLayer");
+  if (!layer) return;
+  layer.innerHTML = "";
+  Object.keys(TABLE.zones).forEach((from) => {
+    (TABLE.zones[from].exits || []).forEach((to) => {
+      if (TABLE.zones[to]) flowAddEdge(layer, from, to);
+    });
+  });
+}
+
+function flowAddNode(layer, name) {
+  const z = TABLE.zones[name];
+  const p = FLOW.pos[name] || { x: 40, y: 40 };
+  const g = svgEl("g", { class: "fnode", "data-zone": name, transform: `translate(${p.x},${p.y})` });
+  g.appendChild(svgEl("rect", { width: NODE_W, height: NODE_H, rx: 10, class: "fnodeBody" }));
+  const label = svgEl("text", { x: NODE_W / 2, y: 24, class: "fnodeLabel", "text-anchor": "middle" });
+  label.textContent = name;
+  g.appendChild(label);
+  const sub = svgEl("text", { x: NODE_W / 2, y: 42, class: "fnodeSub", "text-anchor": "middle" });
+  sub.textContent = flowSubLabel(name);
+  g.appendChild(sub);
+  g.addEventListener("mousedown", (e) => flowDragStart(e, name));
+  layer.appendChild(g);
+  FLOW.nodeEls[name] = g;
+  return g;
+}
+
+function flowRender() {
+  const svg = $("flowSvg");
+  if (!svg) return;
+  svg.innerHTML = "";
+  svg.appendChild(flowBuildDefs());
+  const edgeLayer = svgEl("g", { id: "flowEdgeLayer" });
+  const nodeLayer = svgEl("g", { id: "flowNodeLayer" });
+  svg.appendChild(edgeLayer);
+  svg.appendChild(nodeLayer);
+  svg.appendChild(svgEl("path", { id: "flowDragArrow", fill: "none", stroke: "var(--accent)",
+                                  "stroke-width": 2, "marker-end": "url(#flowArrow)", style: "display:none" }));
+  FLOW.nodeEls = {};
+  flowRenderEdges();
+  Object.keys(TABLE.zones).forEach((n) => flowAddNode(nodeLayer, n));
+  flowApplyView();
+  applyFlowHighlight();
+}
+
+// In-place live/selection refresh (no SVG rebuild — an arrow-drag must survive a
+// state frame). Updates node classes + sublabels and (re)marks the selected edge.
+function applyFlowHighlight() {
+  Object.keys(TABLE.zones).forEach((n) => {
+    const g = FLOW.nodeEls[n];
+    if (!g) return;
+    const isLive = !!(FLOW.live && FLOW.live.zone === n);
+    const isSel = !!(FLOW.sel && FLOW.sel.type === "node" && FLOW.sel.zone === n);
+    g.classList.toggle("flive", isLive);
+    g.classList.toggle("fsel", isSel);
+    g.classList.toggle("off", TABLE.zones[n].enabled === false);
+    const sub = g.querySelector(".fnodeSub");
+    if (sub) sub.textContent = flowSubLabel(n);
+  });
+}
+
+// Hit-test: the zone (other than ``exclude``) whose rect contains ``pt``, else null.
+function flowNodeAt(pt, exclude) {
+  for (const n of Object.keys(TABLE.zones)) {
+    if (n === exclude) continue;
+    const p = FLOW.pos[n];
+    if (p && pt.x >= p.x && pt.x <= p.x + NODE_W && pt.y >= p.y && pt.y <= p.y + NODE_H) return n;
+  }
+  return null;
+}
+
+function flowDragStart(e, name) {
+  e.preventDefault(); e.stopPropagation();
+  const svg = $("flowSvg");
+  FLOW.drag = { from: name, startPt: svgPoint(svg, e), startNode: FLOW.pos[name], moved: false };
+  const move = (ev) => flowDragMove(ev);
+  const up = (ev) => { flowDragEnd(ev); window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+}
+
+function flowDragMove(ev) {
+  const d = FLOW.drag;
+  if (!d) return;
+  const svg = $("flowSvg");
+  const pt = svgPoint(svg, ev);
+  const dx = pt.x - d.startPt.x, dy = pt.y - d.startPt.y;
+  if (!d.moved && Math.hypot(dx, dy) < 4) return;  // click threshold
+  d.moved = true;
+  const name = d.from;
+  FLOW.pos[name] = { x: d.startNode.x + dx, y: d.startNode.y + dy };
+  const g = FLOW.nodeEls[name];
+  if (g) g.setAttribute("transform", `translate(${FLOW.pos[name].x},${FLOW.pos[name].y})`);
+  flowRenderEdges();
+  // Temporary arrow: from the node's original position to the pointer.
+  const arrow = $("flowDragArrow");
+  if (arrow) {
+    const cx = d.startNode.x + NODE_W / 2, cy = d.startNode.y + NODE_H / 2;
+    arrow.setAttribute("d", edgePath(cx, cy, pt.x, pt.y));
+    arrow.style.display = "";
+  }
+}
+
+function flowDragEnd(ev) {
+  const d = FLOW.drag;
+  FLOW.drag = null;
+  const arrow = $("flowDragArrow");
+  if (arrow) arrow.style.display = "none";
+  if (!d) return;
+  const name = d.from;
+  if (!d.moved) { flowSelect({ type: "node", zone: name }); return; }
+  const svg = $("flowSvg");
+  const pt = svgPoint(svg, ev);
+  const target = flowNodeAt(pt, name);
+  if (target) {
+    // Draw an arrow: append the target to the source's exits (no duplicates).
+    // The node snaps back so arrow-drawing does not disturb the layout.
+    const z = TABLE.zones[name];
+    z.exits = z.exits || [];
+    if (!z.exits.includes(target)) z.exits.push(target);
+    FLOW.pos[name] = d.startNode;
+  }
+  // else: reposition — keep the new position (already set during the drag).
+  flowRender();
+}
+
+function flowSelect(sel) {
+  FLOW.sel = sel;
+  flowRender();
+  buildFlowDetail();
+}
+
+function buildFlowDetail() {
+  const el = $("flowDetail");
+  const title = $("flowDetailTitle");
+  el.innerHTML = "";
+  const sel = FLOW.sel;
+  if (!sel) {
+    title.textContent = "flow detail";
+    el.innerHTML = "<span style='color:var(--dim)'>click a node to edit its zone, or an arrow to edit its exit pose</span>";
+    return;
+  }
+  if (sel.type === "node") {
+    buildZoneForm(el, title, sel.zone, () => flowRender());
+    return;
+  }
+  // Edge: per-edge exitpose editor + remove link.
+  const { from, to } = sel;
+  const z = TABLE.zones[from];
+  if (!z) return;
+  title.textContent = `edge: ${from} → ${to}`;
+  el.appendChild(h3("exitpose (per-edge override)"));
+  const eff = (z.exitposes && z.exitposes[to]) ? z.exitposes[to].slice()
+              : (z.exitpos ? z.exitpos.slice() : [0, 0, 0, 0, 0, 0]);
+  el.appendChild(numGrid("edgeExitpose", eff, (v, i) => {
+    z.exitposes = z.exitposes || {};
+    if (!z.exitposes[to]) z.exitposes[to] = (z.exitpos ? z.exitpos.slice() : [0, 0, 0, 0, 0, 0]);
+    z.exitposes[to][i] = v;
+  }));
+  const row = document.createElement("div");
+  row.className = "row";
+  const useDef = document.createElement("button");
+  useDef.className = "small"; useDef.textContent = "use zone default";
+  useDef.onclick = () => {
+    if (z.exitposes) { delete z.exitposes[to]; if (!Object.keys(z.exitposes).length) delete z.exitposes; }
+    flowRender(); buildFlowDetail();
+  };
+  const rm = document.createElement("button");
+  rm.className = "small"; rm.textContent = "remove link";
+  rm.onclick = () => {
+    z.exits = (z.exits || []).filter((x) => x !== to);
+    if (z.exitposes) { delete z.exitposes[to]; if (!Object.keys(z.exitposes).length) delete z.exitposes; }
+    FLOW.sel = null;
+    flowRender(); buildFlowDetail();
+  };
+  row.appendChild(useDef); row.appendChild(rm);
+  el.appendChild(row);
+}
+
+// Enter the flow view: (re)layout when the zone set changed, then render.
+function flowEnter() {
+  const key = Object.keys(TABLE.zones).sort().join(",");
+  if (FLOW.layoutKey !== key) { flowAutoLayout(); flowFitView(); }
+  flowRender();
+  buildFlowDetail();
+}
+
+// ---------------------------------------------------------------------------
 // Init.
 // ---------------------------------------------------------------------------
 function addZone() {
@@ -1211,18 +1705,47 @@ function addZone() {
     safezone: [[-94,122],[-134,34],[-119,157],[-349,349],[-118,118],[-357,357]],
     exits: [], speed: 20, actions: {},
   };
+  if (flowView) {
+    // Place the new node below the current layout and select it.
+    let maxY = 0;
+    Object.keys(TABLE.zones).forEach((n) => { const p = FLOW.pos[n]; if (p) maxY = Math.max(maxY, p.y); });
+    FLOW.pos[nm] = { x: 40, y: maxY + NODE_H + 40 };
+    FLOW.sel = { type: "node", zone: nm };
+    FLOW.layoutKey = Object.keys(TABLE.zones).sort().join(",");
+    flowFitView();
+    flowRender();
+    buildFlowDetail();
+    return;
+  }
   selectZone(nm);
 }
 
 function delZone() {
-  if (!selectedZone) return;
+  const nm = flowView ? (FLOW.sel && FLOW.sel.type === "node" ? FLOW.sel.zone : null) : selectedZone;
+  if (!nm) { if (flowView) $("saveMsg").textContent = "select a node to remove"; return; }
   if (Object.keys(TABLE.zones).length <= 1) { $("saveMsg").textContent = "cannot remove the last zone"; return; }
-  if (!confirm(`remove zone "${selectedZone}"?`)) return;
-  delete TABLE.zones[selectedZone];
+  if (!confirm(`remove zone "${nm}"?`)) return;
+  delete TABLE.zones[nm];
+  // Clean dangling references from the other zones (exits + exitposes).
+  Object.keys(TABLE.zones).forEach((other) => {
+    const oz = TABLE.zones[other];
+    if (oz.exits) oz.exits = oz.exits.filter((e) => e !== nm);
+    if (oz.exitposes) { delete oz.exitposes[nm]; if (!Object.keys(oz.exitposes).length) delete oz.exitposes; }
+  });
+  // Re-point the shared zone editor to a live zone immediately (both views), so the
+  // deleted zone is never left selected. Then handle the flow-view specifics.
   const names = Object.keys(TABLE.zones);
   selectedZone = names[0];
   buildZoneList();
   selectZone(selectedZone);
+  if (flowView) {
+    delete FLOW.pos[nm];
+    if (FLOW.sel && FLOW.sel.zone === nm) FLOW.sel = null;
+    FLOW.layoutKey = Object.keys(TABLE.zones).sort().join(",");
+    flowRender();
+    buildFlowDetail();
+    return;
+  }
 }
 
 Robot3D.init($("robot3d"), { log: (m) => console.log(m), environment: true });
@@ -1252,6 +1775,31 @@ $("delZone").onclick = delZone;
 $("tabZones").onclick = () => switchView("zones");
 $("tabSound").onclick = () => switchView("sound");
 $("tabPatches").onclick = () => switchView("patches");
+$("tabFlow").onclick = () => switchView("flow");
+$("flowAddZone").onclick = addZone;
+$("flowDelZone").onclick = delZone;
+// Auto layout: scoped to the selection (node, or an edge's both ends) so a
+// manually laid-out flow survives. No selection -> confirm before moving everything.
+$("flowAutoLayout").onclick = () => {
+  const sel = FLOW.sel;
+  if (sel && sel.type === "node") flowAutoLayout([sel.zone]);
+  else if (sel && sel.type === "edge") flowAutoLayout([sel.from, sel.to]);
+  else if (!confirm("no selection — layout ALL zones (moves every node)?")) return;
+  else flowAutoLayout();
+  flowFitView();
+  flowRender();
+};
+$("flowFit").onclick = () => { flowFitView(); flowRender(); };
+// View controls: wheel = zoom (around the cursor), middle-drag = pan.
+$("flowSvg").addEventListener("wheel", (e) => { e.preventDefault(); flowZoomAt(e); }, { passive: false });
+$("flowSvg").addEventListener("mousedown", (e) => { if (e.button === 1) { e.preventDefault(); flowPanStart(e); } });
+// Background click on the canvas (not on a node/arrow) clears the selection.
+$("flowSvg").addEventListener("click", (e) => {
+  if (e.button !== 0 || e.target !== $("flowSvg")) return;
+  FLOW.sel = null;
+  flowRender();
+  buildFlowDetail();
+});
 $("addSoundAction").onclick = addSoundAction;
 $("patchAdd").onclick = addPatchAction;
 $("patchRemove").onclick = removePatchSlot;

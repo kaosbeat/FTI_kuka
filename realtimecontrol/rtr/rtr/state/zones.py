@@ -43,6 +43,17 @@ HARDWARE_LIMITS: List[Tuple[float, float]] = [
     (-350, 350),   # A6
 ]
 
+# The behaviour modes the state machine can be in (see :mod:`rtr.state.behavior`).
+# Kept here (the data module) so ``zones.json`` validation can check a zone's
+# optional per-zone default ``mode`` without importing the behaviour layer.
+MODES = ("wander", "random", "action", "track", "hold")
+
+# The action kinds (see the action-editor plan). Each action has exactly one:
+# - ``internal`` – "listen" (no external connectors); triggered on demand.
+# - ``entry``    – the way *in* to a zone; triggered on zone arrival.
+# - ``exit``     – the way *out* of a zone; its ``target`` names the next zone.
+ACTION_KINDS = ("internal", "entry", "exit")
+
 
 def effective_limits(zone_safezone: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
     """Per-axis intersection of a zone's safezone and the hardware limits.
@@ -85,7 +96,7 @@ ZONES: Dict[str, dict] = {
             },
         },
         "exitpos": [-3, -134, 156, -2, 0, 0],  # exit to wakeup position
-        "exits": ["wakeup"],
+        "exits": ["wakeup", "init"],
         "speed": 20,
     },
     "wakeup": {
@@ -106,7 +117,7 @@ ZONES: Dict[str, dict] = {
             },
         },
         "exitpos": [-3, -97, 16, -2, 90, 0],  # exit to stretch position
-        "exits": ["stretch", "wander"],
+        "exits": ["stretch", "rest"],
         "speed": 40,
     },
     "stretch": {
@@ -127,8 +138,8 @@ ZONES: Dict[str, dict] = {
             },
         },
         "exitpos": [-60, -65, 157, -2, 0, 0],  # exit to wander position
-        "exits": ["wander"],
-        "speed": 50,
+        "exits": ["wander", "wakeup"],
+        "speed": 100,
     },
     "wander": {
         "startpos": [60, -65, 60, 0, 45, 0],
@@ -169,7 +180,7 @@ ZONES: Dict[str, dict] = {
             },
         },
         "exitpos": [-3, -97, 157, -2, 0, 0],
-        "exits": ["stretch", "wander"],
+        "exits": ["wander"],
         "speed": 100,
     },
 }
@@ -232,6 +243,20 @@ def _validate_zone(name: str, z: dict, all_names: set) -> None:
     for e in exits:
         if e not in all_names:
             raise ValueError(f"zone {name!r}: exit {e!r} does not name an existing zone")
+    # Optional per-zone default behaviour mode.
+    if "mode" in z:
+        if not (isinstance(z["mode"], str) and z["mode"] in MODES):
+            raise ValueError(f"zone {name!r}: 'mode' must be one of {MODES}")
+    # Optional per-edge exit poses: {target zone name: [6 numbers]}.
+    if "exitposes" in z:
+        ep = z["exitposes"]
+        if not isinstance(ep, dict):
+            raise ValueError(f"zone {name!r}: 'exitposes' must be an object")
+        for tgt, pose in ep.items():
+            if tgt not in all_names:
+                raise ValueError(f"zone {name!r}: exitposes key {tgt!r} does not name an existing zone")
+            if not (isinstance(pose, list) and len(pose) == 6 and all(_is_num(x) for x in pose)):
+                raise ValueError(f"zone {name!r}: exitposes[{tgt!r}] must be a list of 6 numbers")
     if not _is_num(z.get("speed")):
         raise ValueError(f"zone {name!r}: speed must be a number")
     acts = z.get("actions", {})
@@ -249,6 +274,27 @@ def _validate_zone(name: str, z: dict, all_names: set) -> None:
         spd = a.get("speed")
         if not (isinstance(spd, list) and len(spd) == len(pos) and all(_is_num(x) for x in spd)):
             raise ValueError(f"zone {name!r} action {an!r}: speed must have one value per pose")
+        # Optional per-action kind / loop / target (the action-editor schema). All
+        # three are optional; existing zones.json files are valid unchanged (every
+        # action defaults to kind="internal", loop=True, no target).
+        if "kind" in a:
+            if not (isinstance(a["kind"], str) and a["kind"] in ACTION_KINDS):
+                raise ValueError(f"zone {name!r} action {an!r}: 'kind' must be one of {ACTION_KINDS}")
+        if "loop" in a and not isinstance(a["loop"], bool):
+            raise ValueError(f"zone {name!r} action {an!r}: 'loop' must be a bool")
+        if "target" in a:
+            t = a["target"]
+            if not isinstance(t, dict):
+                raise ValueError(f"zone {name!r} action {an!r}: 'target' must be an object")
+            if "zone" in t:
+                if not (isinstance(t["zone"], str) and t["zone"] in all_names):
+                    raise ValueError(f"zone {name!r} action {an!r}: target 'zone' must name an existing zone")
+            if "action" in t and not isinstance(t["action"], str):
+                raise ValueError(f"zone {name!r} action {an!r}: target 'action' must be a string")
+            if "pose" in t:
+                tp = t["pose"]
+                if not (isinstance(tp, list) and len(tp) == 6 and all(_is_num(x) for x in tp)):
+                    raise ValueError(f"zone {name!r} action {an!r}: target 'pose' must be a list of 6 numbers")
 
 
 def validate_state_data(data) -> dict:
@@ -300,6 +346,30 @@ class Zone:
         return list(self.data["exitpos"])
 
     @property
+    def default_mode(self) -> Optional[str]:
+        """The zone's default behaviour mode, or None if the zone declares none.
+
+        On committing a transition into the zone the state machine adopts this mode
+        (if present); a zone without a ``mode`` field keeps the current mode.
+        """
+        m = self.data.get("mode")
+        return m if isinstance(m, str) else None
+
+    def exitpose_for(self, target: str) -> List[float]:
+        """The hand-off pose used when leaving this zone toward ``target``.
+
+        Prefers a per-edge override (``exitposes[target]``), falling back to the zone's
+        single ``exitpos``. Backward compatible: a zone with no ``exitposes`` map uses
+        its one ``exitpos`` for every edge, exactly as before.
+        """
+        poses = self.data.get("exitposes", {})
+        if isinstance(poses, dict):
+            v = poses.get(target)
+            if isinstance(v, list) and len(v) == 6:
+                return list(v)
+        return list(self.data["exitpos"])
+
+    @property
     def exits(self) -> List[str]:
         return list(self.data["exits"])
 
@@ -326,6 +396,38 @@ class Zone:
         if not isinstance(act, dict):
             return True
         return bool(act.get("enabled", True))
+
+    def _action(self, name: str) -> dict:
+        """The raw action dict for ``name`` (empty dict when absent/malformed)."""
+        a = self.data.get("actions", {})
+        if not isinstance(a, dict):
+            return {}
+        act = a.get(name)
+        return act if isinstance(act, dict) else {}
+
+    def action_kind(self, name: str) -> str:
+        """The action's kind: ``internal`` | ``entry`` | ``exit``.
+
+        Defaults to ``internal`` when the field is absent (backward compatible).
+        """
+        return self._action(name).get("kind", "internal")
+
+    def action_loops(self, name: str) -> bool:
+        """Whether the action loops (wraps around) or runs once.
+
+        Defaults to ``True`` when the field is absent (today's behaviour).
+        """
+        return bool(self._action(name).get("loop", True))
+
+    def action_target(self, name: str) -> Optional[dict]:
+        """The action's ``target`` (the next step), or None when it declares none.
+
+        A ``target`` is a dict with optional ``zone`` (next zone; defaults to the
+        current zone), ``action`` (the action to activate next), and ``pose``
+        (the hand-off pose).
+        """
+        t = self._action(name).get("target")
+        return t if isinstance(t, dict) else None
 
 
 class Zones:

@@ -228,20 +228,27 @@ async function fetchPatches() {
 }
 
 // Match precedence: action > mode > zone > default (mirrors the core's match_patch).
+// The actions table is two-level (zone -> action -> code), so the action lookup is
+// scoped to the zone.
 function matchPatch(zone, mode, action) {
-  const scopes = [["actions", action], ["modes", mode], ["zones", zone]];
-  for (const [scope, key] of scopes) {
-    if (key) {
-      const code = (PATCHES[scope] || {})[key];
-      if (typeof code === "string" && code) return code;
-    }
+  if (zone && action) {
+    const code = (PATCHES.actions || {})[zone] && (PATCHES.actions || {})[zone][action];
+    if (typeof code === "string" && code) return code;
+  }
+  if (mode) {
+    const code = (PATCHES.modes || {})[mode];
+    if (typeof code === "string" && code) return code;
+  }
+  if (zone) {
+    const code = (PATCHES.zones || {})[zone];
+    if (typeof code === "string" && code) return code;
   }
   const d = PATCHES.default;
   return (typeof d === "string" && d) ? d : PATCH_DEFAULT;
 }
 
 function patchAutoLabel(m) {
-  if (m.action && (PATCHES.actions || {})[m.action]) return "action:" + m.action;
+  if (m.zone && m.action && (PATCHES.actions || {})[m.zone] && (PATCHES.actions || {})[m.zone][m.action]) return "action:" + m.action;
   if (m.mode && (PATCHES.modes || {})[m.mode]) return "mode:" + m.mode;
   if (m.zone && (PATCHES.zones || {})[m.zone]) return "zone:" + m.zone;
   return "default";
@@ -259,6 +266,11 @@ function currentPatchCode() {
   if (patchSelValue === "default") return PATCHES.default;
   const idx = patchSelValue.indexOf(".");
   const scope = patchSelValue.slice(0, idx), name = patchSelValue.slice(idx + 1);
+  if (scope === "actions") {
+    const ai = name.indexOf(".");
+    const zn = name.slice(0, ai), an = name.slice(ai + 1);
+    return ((PATCHES.actions || {})[zn] && (PATCHES.actions || {})[zn][an]) || PATCHES.default;
+  }
   return (PATCHES[scope] && PATCHES[scope][name]) || PATCHES.default;
 }
 
@@ -320,7 +332,11 @@ function buildPatchChooser() {
   MODES.forEach((m) => { const o = document.createElement("option"); o.value = "modes." + m; o.textContent = m; mGroup.appendChild(o); });
   sel.appendChild(mGroup);
   const aGroup = document.createElement("optgroup"); aGroup.label = "actions";
-  Object.keys(PATCHES.actions).forEach((a) => { const o = document.createElement("option"); o.value = "actions." + a; o.textContent = a; aGroup.appendChild(o); });
+  Object.keys(PATCHES.actions || {}).forEach((zn) => {
+    Object.keys(PATCHES.actions[zn] || {}).forEach((an) => {
+      const o = document.createElement("option"); o.value = "actions." + zn + "." + an; o.textContent = zn + " / " + an; aGroup.appendChild(o);
+    });
+  });
   sel.appendChild(aGroup);
   sel.value = prev;
   patchSelValue = sel.value || "auto";

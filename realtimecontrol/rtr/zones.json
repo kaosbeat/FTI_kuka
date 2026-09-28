@@ -2,6 +2,7 @@
   "zones": {
     "init": {
       "enabled": true,
+      "mode": "hold",
       "startpos": [
         -60,
         -90,
@@ -52,6 +53,7 @@
     },
     "rest": {
       "enabled": true,
+      "mode": "hold",
       "startpos": [
         -3,
         -133,
@@ -167,11 +169,28 @@
             100,
             100
           ]
+        },
+        "yawn": {
+          "enabled": true,
+          "pos": [
+            [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          ],
+          "speed": [
+            10
+          ]
         }
       }
     },
     "wakeup": {
       "enabled": true,
+      "mode": "action",
       "startpos": [
         -3,
         -134,
@@ -287,11 +306,28 @@
             100,
             100
           ]
+        },
+        "roar": {
+          "enabled": true,
+          "pos": [
+            [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          ],
+          "speed": [
+            10
+          ]
         }
       }
     },
     "stretch": {
       "enabled": true,
+      "mode": "action",
       "startpos": [
         -3,
         -97,
@@ -340,40 +376,6 @@
       ],
       "speed": 100,
       "actions": {
-        "breathe": {
-          "enabled": true,
-          "pos": [
-            [
-              85,
-              -97,
-              17,
-              -2,
-              0,
-              0
-            ],
-            [
-              73,
-              -97,
-              15,
-              -2,
-              0,
-              0
-            ],
-            [
-              35,
-              -97,
-              14,
-              -2,
-              0,
-              0
-            ]
-          ],
-          "speed": [
-            10,
-            10,
-            10
-          ]
-        },
         "look": {
           "enabled": true,
           "pos": [
@@ -412,6 +414,7 @@
     },
     "wander": {
       "enabled": true,
+      "mode": "wander",
       "startpos": [
         60,
         -65,
@@ -532,6 +535,7 @@
     },
     "wildwander": {
       "enabled": true,
+      "mode": "wander",
       "startpos": [
         60,
         -22.5,

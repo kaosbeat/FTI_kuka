@@ -3,15 +3,17 @@
 Each tick the engine:
 
 1. reads the current joint pose from the robot,
-2. folds any queued commands (from MIDI / WebSocket) into the brain,
-3. asks the brain for the next target (it drives the state machine's transition or
-   the current behaviour mode),
+2. folds any queued commands (from MIDI / WebSocket) into the state machine via the
+   thin command interpreter (the brain),
+3. asks the state machine for the next target (it drives the transition or the current
+   behaviour mode),
 4. commands the robot to that target,
-5. publishes a state snapshot to every subscriber (display, camera, sound).
+5. publishes a state snapshot to every subscriber (display, camera, sound), and
+6. publishes a change event (zone / mode / action) whenever one of them changes.
 
 This single loop is what replaces the old daemon-thread ``kukaLoop`` + blocking
 ``activateZone`` + ``queue_handler``. Nothing blocks: zone transitions are data the
-brain advances one step per tick.
+state machine advances one step per tick.
 """
 
 import asyncio
@@ -47,15 +49,17 @@ class Engine:
         # every state frame so the 3D tool screen and the render page follow it.
         self._screen_patch_override = screen_patch_override
         self._running = False
+        # The previous tick's (zone, mode, action), used to emit change events.
+        self._prev_state = None
 
     async def run(self) -> None:
         """Run until :meth:`stop` is called."""
         self._running = True
-        # Seed the state machine to the robot's real pose.
+        # Seed the state machine to the robot's real pose (this also seeds the target).
         curjpos = await asyncio.to_thread(self.robot.get_curjpos)
         self.machine.reset(curjpos)
-        self.brain.target = list(curjpos)
-        self.brain.target_kind = "joint"
+        self._prev_state = (self.machine.current_zone, self.machine.mode,
+                            self.machine.current_action)
 
         interval = 1.0 / self.tick_hz
         while self._running:
@@ -79,15 +83,16 @@ class Engine:
                 else:
                     self.brain.on_command(cmd, curjpos)
 
-            target = self.brain.step(curjpos)
+            target = self.machine.step(curjpos)
 
             if target is not None:
-                if self.brain.target_kind == "linear":
+                if self.machine.target_kind == "linear":
                     await asyncio.to_thread(self.robot.move_linear, target, self.machine.speed)
                 else:
                     await asyncio.to_thread(self.robot.move_joint, target, self.machine.speed)
 
             self._publish(curjpos, curpos, target)
+            self._publish_changes()
 
             # Keep the tick rate steady.
             elapsed = asyncio.get_event_loop().time() - loop_start
@@ -99,7 +104,7 @@ class Engine:
         self._running = False
 
     def reload_zones(self) -> None:
-        """Re-read the zone data file and swap it into the machine + brain.
+        """Re-read the zone data file and swap it into the machine.
 
         The robot's pose is untouched. If the current zone no longer exists the
         machine resets to ``"init"``. A read/validation failure keeps the current
@@ -123,7 +128,6 @@ class Engine:
             m.action_index = 0
         m.zones = zones
         m.speed = zones.get(m.current_zone).speed
-        self.brain.zones = zones
         self.bus.publish(Event.ZONES_CHANGED, zones.names())
         print(f"[engine] zones reloaded: {', '.join(zones.names())}")
 
@@ -132,14 +136,34 @@ class Engine:
                                  margin=0.5, count=5)
         snap = Snapshot(
             zone=self.machine.current_zone,
-            mode=self.brain.mode,
+            mode=self.machine.mode,
             action=self.machine.current_action,
             joint_pose=list(curjpos),
             cart_pose=list(curpos),
             target_pose=list(target) if target is not None else list(curjpos),
             speed=self.machine.speed,
-            flags=dict(self.brain.flags),
+            flags=dict(self.machine.flags),
             moving=moving,
         )
         self.bus.set_snapshot(snap)
         self.bus.publish(Event.SNAPSHOT, snap)
+
+    def _publish_changes(self) -> None:
+        """Publish a change event for whichever of (zone, mode, action) changed this tick.
+
+        These make the documented ``zone_changed`` / ``mode_changed`` / ``action_changed``
+        events real (the camera and display already subscribe to the zone/mode ones).
+        """
+        m = self.machine
+        cur = (m.current_zone, m.mode, m.current_action)
+        if self._prev_state is None or cur == self._prev_state:
+            self._prev_state = cur
+            return
+        prev_zone, prev_mode, prev_action = self._prev_state
+        if cur[0] != prev_zone:
+            self.bus.publish(Event.ZONE_CHANGED, m.current_zone)
+        if cur[1] != prev_mode:
+            self.bus.publish(Event.MODE_CHANGED, m.mode)
+        if cur[2] != prev_action:
+            self.bus.publish(Event.ACTION_CHANGED, m.current_action)
+        self._prev_state = cur

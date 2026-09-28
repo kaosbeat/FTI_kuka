@@ -11,9 +11,9 @@ boundaries, so none of them know about the others.
 ```
                   ┌──────────────────────────────────────────────┐
                   │                  CORE  (asyncio)             │
-   ┌───────────┐  │  ┌────────┐   ┌─────────┐   ┌────────────┐  │
-   │  MIDI in  │──┼──┤  Brain │──▶│ State-  │   │   Robot    │  │
-   │ (rtmidi)  │  │  │ (decide)│  │ Machine │   │ (kukapy)   │  │
+    ┌───────────┐  │  ┌────────┐   ┌─────────┐   ┌────────────┐  │
+    │  MIDI in  │──┼──┤  Brain │──▶│ State-  │   │   Robot    │  │
+    │ (rtmidi)  │  │  │(commands)│ │ Machine │   │ (kukapy)   │  │
    └───────────┘  │  └────────┘   └─────────┘   └─────┬──────┘  │
                   │        │                          │          │
    ┌───────────┐  │        │  ┌───────────┐           │ (thread) │
@@ -37,11 +37,14 @@ boundaries, so none of them know about the others.
 The engine ticks at a fixed rate (`--tick`, default 20 Hz). Each tick it:
 
 1. reads the current joint pose from the **robot**,
-2. folds any queued commands (from MIDI / WebSocket) into the **brain**,
-3. asks the **brain** for the next target pose (it drives the state machine's
-   transition or the current behaviour mode),
+2. folds any queued commands (from MIDI / WebSocket) into the **machine** via the **brain**
+   (the thin command interpreter),
+3. asks the **machine** for the next target pose (its `step` driver advances the transition
+   or dispatches the current behaviour mode to the policies in `state/behavior.py`),
 4. commands the robot to that target,
-5. publishes a state **snapshot** to every subscribed adapter (display, camera, sound).
+5. publishes a state **snapshot** to every subscribed adapter (display, camera, sound),
+   and a change event (`zone_changed` / `mode_changed` / `action_changed`) when one of
+   those changes.
 
 Commands (from MIDI or WebSocket) never touch the robot directly. They are queued on
 the `StateBus` and the engine folds them into the next tick. That keeps all motion
@@ -104,9 +107,10 @@ starts folding commands into ticks.
 | `core/engine.py`  | The asyncio tick loop that drives everything (robot I/O in threads).  |
 | `core/bus.py`     | `StateBus`: thread-safe state store + command queue + event pub/sub.  |
 | `core/commands.py`| Command + event + Snapshot type definitions (the core's API).         |
-| `state/machine.py`| `StateMachine`: zones, transitions, actions. Deterministic.           |
-| `state/zones.py`  | Zone/pose data (safe areas, start/exit poses, actions, named poses).  |
-| `brain/brain.py`  | `Brain`: decides the next pose each tick (wander/random/action/track/hold). |
+| `state/machine.py`| `StateMachine`: the single owner of the robot's composite state (zone, mode, action, target, speed, flags, cadence); drives the transition and the behaviour each tick. Deterministic. |
+| `state/behavior.py`| The motion policies (wander / random / track) + clamp helpers, as free functions the machine's `step` dispatches to. |
+| `state/zones.py`  | Zone/pose data (safe areas, start/exit poses, per-edge `exitposes`, per-zone default `mode`, actions, named poses). |
+| `brain/brain.py`  | `Brain`: a thin **command interpreter** — maps `Command` objects onto the machine's operations; holds no robot state. The plug-in seam for the LLM / realtime control. |
 | `robot/base.py`   | `RobotBase` interface (implemented by Kuka and Sim).                  |
 | `robot/kuka.py`   | Real robot via `kukapy` (the EKI TCP server).                          |
 | `robot/sim.py`    | Headless robot for development without hardware.                       |
@@ -134,6 +138,18 @@ The base of everything is the state machine. Given a specific **zone** the robot
 allowed to do some things: go to specific areas, activate extra tools, music, screen,
 camera.
 
+The `StateMachine` is the **single owner of the robot's composite state** —
+`(zone, mode, action)` plus the in-progress transition, the current target pose, the
+move speed, the informational flags, and the behaviour cadence. It used to be split:
+the machine owned (zone, transition, action) and the `Brain` owned (mode, target,
+flags, cadence). That split is gone. The `Brain` is now a **thin command interpreter**
+that maps incoming `Command` objects onto the machine's operations and holds no state of
+its own; the per-tick decision is made by the machine's `step` driver, which dispatches
+to the pure motion policies in `state/behavior.py` (wander / random / track + the clamp
+helpers). This lets the machine be driven and tested in isolation, and keeps the
+`Brain` as the plug-in seam where an LLM or realtime controller changes what a command
+does.
+
 A **zone** is an axial area. Given the 6 axes, it defines what safe positions at all
 times when in a current zone:
 
@@ -149,9 +165,13 @@ the `kr60ha` xacro (`HARDWARE_LIMITS` in `state/zones.py`, exposed read-only by
 `GET /api/limits`). Every commanded pose is clamped to the **intersection** of the
 current zone's safezone and the hardware limits (`effective_limits`), so a safezone wider
 than the hardware range safely shrinks to the hardware range. Note **A6** (the rotary
-wrist) is now limited too — it was previously treated as free. The brain applies this
-floor to every pose it emits (wander / random / action / track / hold / transitions), so
-the published `target_pose` snapshot is always within the floor.
+wrist) is now limited too — it was previously treated as free. The state machine applies
+this floor to every pose it emits (wander / random / action / track / hold), so the
+published `target_pose` snapshot is always within the floor. Zone-transition targets are
+the one exception: the exit/start hand-off poses sit outside the current zone's safezone
+by design, so `step` floors them to the **hardware** limits only (`behavior.hardware_clamp`)
+— flooring them to the safezone would move them and the transition would never arrive
+(guarded by `tests/test_transition.py`).
 
 A zone also declares:
 
@@ -162,13 +182,31 @@ A zone also declares:
 
 ### Zones
 
-`init → rest → wakeup → {stretch, wander} → wildwander` (see `state/zones.py` for the
-graph and the exact limits). A `goto_zone` is **path-routed** through the zone `exits`
-graph: `Zones.find_path(from, to)` (a BFS) returns the shortest sequence of zones, and
-`StateMachine.request_zone` builds the step list by walking it — for each hop it appends
-the current zone's `exitpos` then the next zone's `startpos`. A target with no path is
-rejected (logged, no transition). The old direct transition is the path-length-2 case.
-`StateMachine.update` advances the step list one pose per tick; nothing blocks.
+The live graph (see **`zones.json`** — the editable source of truth — for the exact
+limits and the seeded per-zone default `mode`):
+
+```
+init ─▶ rest ─▶ wakeup ─▶ stretch ─▶ wander ─▶ wildwander
+        ▲        │          ▲           │
+        └────────┘          └───────────┘   (back-edges: rest→init,
+                                             wakeup→rest, stretch→wakeup,
+                                             wander→stretch, wildwander→wander)
+```
+
+A zone's `exits` list is the set of zones it can transition to (the edges above,
+including the back-edges). Each zone declares an optional **default `mode`** (the
+behaviour it adopts on entry — `init`/`rest` → `hold`, `wakeup`/`stretch` → `action`,
+`wander`/`wildwander` → `wander`); on committing a transition the machine adopts that
+default and clears any playing action (a zone without a `mode` keeps the current mode).
+
+A `goto_zone` is **path-routed** through the zone `exits` graph: `Zones.find_path(from,
+to)` (a BFS) returns the shortest sequence of zones, and `StateMachine.request_zone`
+builds the step list by walking it — for each hop it appends the current zone's
+**per-edge exit pose** (`Zones.exitpose_for(next)`: the `exitposes[next]` override if
+declared, else the zone's single `exitpos`) then the next zone's `startpos`. A target
+with no path is rejected (logged, no transition); the old direct transition is the
+path-length-2 case. `StateMachine.update` advances the step list one pose per tick;
+nothing blocks.
 
 ### Actions
 
@@ -180,12 +218,12 @@ the next action.
 Some actions do not act on motors but enable the camera or an image on the display.
 
 Actions are **per-zone**: each zone's `actions` table lists only the actions that zone
-*offers* (the master set is the union of all zones' action names). An action a zone does
-not list simply does not exist there — `play_action` rejects it, so the robot can never
-perform an action the zone does not allow. `editor.html` lets you **include / exclude**
-each action per zone (a checkbox per action; including one the zone lacks seeds its poses
-from another zone that offers the same action), and `client.html` only shows — and only
-lets you select — the actions the current zone offers.
+*offers* (there is no shared catalog — each zone owns its actions independently, so the
+same action name can carry different poses in different zones). An action a zone does not
+list simply does not exist there — `play_action` rejects it, so the robot can never perform
+an action the zone does not allow. `editor.html` edits a zone's own actions (the "+ add
+action" button adds to the current zone), and `client.html` only shows — and only lets you
+select — the actions the current zone offers.
 
 ## Control
 
@@ -208,17 +246,20 @@ Inputs are **commands** (see `core/commands.py`). They are flat JSON, e.g.
 | `set_flag`        | Toggle an informational flag (`wandermode`, `dynmode`, ...). |
 | `random_wrist`    | Randomise A4/A5 of the current target (then `hold`).|
 | `set_screen_patch`| Push a hydra patch to the screens (sets the `Patches` screen override); `code: null` clears it so the screens follow the live state match. |
-| `stop`            | Defined in the `Cmd` enum but **not handled** by the brain — currently a no-op. |
+| `stop`            | Defined in the `Cmd` enum but **not handled** (the brain's `on_command` has no case for it) — currently a no-op. |
 
-Outputs are **events** the `StateBus` publishes: `zone_changed`, `mode_changed`,
-`action_changed`, `pose_updated`, and a full `snapshot` each tick. The `snapshot` is a
+Outputs are **events** the `StateBus` publishes: a full `snapshot` each tick, plus
+`zone_changed` / `mode_changed` / `action_changed` — the engine compares the machine's
+`(zone, mode, action)` to the previous tick and publishes each that changed (so the
+camera and display handlers, which subscribe to them, fire for real). The `snapshot` is a
 flat JSON structure (`zone`, `mode`, `action`, `joint_pose`, `cart_pose`, `target_pose`,
 `speed`, `flags`, `moving`) — this is what the display and any external client see.
 
-### The brain's behaviour modes
+### The behaviour modes
 
-The `Brain` owns the behaviour policy and turns the current state + pending commands
-into one target pose per tick:
+The `StateMachine` owns the behaviour policy. Its per-tick `step` driver dispatches to
+the pure policies in `state/behavior.py` (each takes the machine explicitly and reads the
+zone / `limitadjust` / `track_speed` / `tick_hz` from it):
 
 - **wander** (default): gentle continuous drift of A1–A3 inside the current zone's
   safezone; the wrist (A5) is derived as `-(A2+A3)` and clamped.
@@ -229,8 +270,10 @@ into one target pose per tick:
 
 A `set_joint_pose` / `random_wrist` command sets the target directly and switches to
 `hold` (the robot goes there and stays, until told otherwise). Zone transitions are
-handled by the `StateMachine`; while one is in progress the brain simply forwards its
-target.
+handled by the machine; while one is in progress its `step` forwards the transition
+target (floored to the hardware limits only — see the hardware-floor note above). The
+`Brain` no longer participates in the per-tick decision — it only folds commands into
+the machine (`on_command`).
 
 ### P5live / WebSocket / client.html
 
@@ -294,27 +337,51 @@ fallback when the core is unreachable). The hydra canvas has a **configurable re
 (`poses` / `lin_poses`). The built-in dicts in `state/zones.py` remain the fallback if the
 file is missing or corrupt. Each zone and action has an **`enabled`** flag (default true):
 a disabled zone is rejected by `goto_zone` (the UI dims it; the robot already inside keeps
-running and can still exit), and a disabled action is rejected by `play_action`.
+running and can still exit), and a disabled action is rejected by `play_action`. A zone may
+also declare an optional **`mode`** (its default behaviour on entry — `init`/`rest` →
+`hold`, `wakeup`/`stretch` → `action`, `wander`/`wildwander` → `wander`; a zone without a
+`mode` keeps the current mode on entry) and an optional **`exitposes`** map
+(`{"<target-zone>": [6 numbers]}`) that overrides the single `exitpos` for a specific
+exit edge (the flow tab edits both; see the editor section). Both are backward compatible —
+a `zones.json` without them works exactly as before.
 
 **`editor.html`** is the zone/action editor. It has its own 3D preview (the shared
 `rtr3d.js` Robot3D), mirrors the live robot over the same WebSocket, and lets you:
 
 - add / remove zones,
-- edit each zone (enabled, speed, startpos, exitpos, safezone lo/hi, exits),
-- **include / exclude** actions per zone (a checkbox per action in the master catalog;
-  including one the zone lacks seeds its poses from another zone that offers it), and
-  edit each included action (enabled, name, pose rows, per-pose speed),
+- edit each zone (enabled, speed, **default mode**, startpos, exitpos, safezone lo/hi,
+  exits),
+- edit a zone's **own** actions (each zone owns its actions independently — there is no
+  shared catalog; the "+ add action" button adds to the current zone), and edit each
+  action (enabled, name, pose rows, per-pose speed),
 - step through an action's poses locally with the ghost (target) arm,
 - **Save** the whole table (`POST /api/zones` → the core hot-reloads, so `client.html` and
   the live robot pick it up immediately), and **Play** an action over the WebSocket.
 
 It loads the table from `GET /api/zones` (falling back to `/zones.json`, then a built-in),
 and validates client-side before posting (all poses 6 numbers, exits reference existing
-zones; it warns, non-blocking, when a pose falls outside its zone's safezone **or** the
-hardware floor). The per-axis **hardware limits** are shown as a reference row in the 3D
-preview panel (loaded from `GET /api/limits`, falling back to a built-in constant that
-mirrors the xacro). A second **sound** tab edits the `sound.json` mapping (see the Sound
-section).
+zones; a `mode` field, if present, must be one of the behaviour modes; `exitposes`, if
+present, must be a map of existing zone → 6 numbers; it warns, non-blocking, when a pose
+falls outside its zone's safezone **or** the hardware floor). The per-axis **hardware
+limits** are shown as a reference row in the 3D preview panel (loaded from `GET
+/api/limits`, falling back to a built-in constant that mirrors the xacro).
+
+The **flow** tab (4th tab) is a 2D SVG **flowchart** of the zone graph: **nodes** are the
+zones (label = the "mood"; small text = the default mode + action count, or the live
+mode/action for the live zone, which gets an accent ring), and **arrows** are the exit
+edges (labelled **custom** when the edge has a per-edge `exitposes` override, else
+**shared**). Drag a node onto another to **draw an arrow** (appends the target to the
+source's `exits`, no duplicates; a temporary arrow follows the pointer); click a node or
+arrow to select it. Selecting a **node** opens the zone form in the right-hand detail
+panel (the same form as the zones tab, including the default-mode select); selecting an
+**arrow** opens the **edge** form: a per-edge exitpose (6-axis grid), a "use zone default"
+button (clears the override), and "remove link" (deletes the exit + any `exitposes`
+entry). Node positions are auto-laid-out by BFS depth from `init` and are draggable
+(session-only, not persisted); wheel zooms, middle-drag pans. The flow edits mutate the
+table in place, so the same **Save** posts them (`POST /api/zones`).
+
+A second **sound** tab edits the `sound.json` mapping (see the Sound section) and a third
+**patches** tab edits the `patches.json` hydra screen code (see the Patches section).
 
 ### The 3D model (real KR60 meshes)
 

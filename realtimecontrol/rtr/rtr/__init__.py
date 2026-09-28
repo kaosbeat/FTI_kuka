@@ -23,4 +23,5 @@ __all__ = [
     "display",
     "sound",
     "io",
+    "remote",
 ]

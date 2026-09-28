@@ -112,8 +112,8 @@ def validate_sound_data(data: Any) -> dict:
     """Validate a full sound data table. Returns ``data`` or raises :class:`ValueError`.
 
     Shape: ``{channel, zones, modes, actions}`` where ``zones``/``modes`` map a name to
-    a MIDI message, and ``actions`` maps a name to ``{start?, poses?}`` (a message and/or
-    a list of messages).
+    a MIDI message, and ``actions`` maps a zone name to an object mapping an action name
+    to ``{start?, poses?}`` (a message and/or a list of messages).
     """
     if not isinstance(data, dict):
         raise ValueError("data must be an object")
@@ -128,17 +128,20 @@ def validate_sound_data(data: Any) -> dict:
         validate_message(msg, f"zones[{name!r}]")
     for name, msg in data["modes"].items():
         validate_message(msg, f"modes[{name!r}]")
-    for name, act in data["actions"].items():
-        if not isinstance(act, dict):
-            raise ValueError(f"actions[{name!r}]: must be an object")
-        if "start" in act:
-            validate_message(act["start"], f"actions[{name!r}].start")
-        poses = act.get("poses")
-        if poses is not None:
-            if not isinstance(poses, list):
-                raise ValueError(f"actions[{name!r}].poses: must be a list")
-            for i, msg in enumerate(poses):
-                validate_message(msg, f"actions[{name!r}].poses[{i}]")
+    for zone, acts in data["actions"].items():
+        if not isinstance(acts, dict):
+            raise ValueError(f"actions[{zone!r}]: must be an object")
+        for name, act in acts.items():
+            if not isinstance(act, dict):
+                raise ValueError(f"actions[{zone!r}][{name!r}]: must be an object")
+            if "start" in act:
+                validate_message(act["start"], f"actions[{zone!r}][{name!r}].start")
+            poses = act.get("poses")
+            if poses is not None:
+                if not isinstance(poses, list):
+                    raise ValueError(f"actions[{zone!r}][{name!r}].poses: must be a list")
+                for i, msg in enumerate(poses):
+                    validate_message(msg, f"actions[{zone!r}][{name!r}].poses[{i}]")
     return data
 
 
@@ -266,7 +269,7 @@ class Sound:
             self._last_action = snap.action
             self._pose_idx = 0
             if snap.action is not None:
-                act = actions.get(snap.action)
+                act = actions.get(snap.zone, {}).get(snap.action)
                 if isinstance(act, dict):
                     start = act.get("start")
                     if isinstance(start, dict):
@@ -282,7 +285,7 @@ class Sound:
         if (snap.mode == "action" and snap.action is not None
                 and snap.target_pose != self._last_target):
             self._pose_idx += 1
-            act = actions.get(snap.action)
+            act = actions.get(snap.zone, {}).get(snap.action)
             poses = act.get("poses") if isinstance(act, dict) else None
             if isinstance(poses, list) and poses:
                 self._send_msg(poses[self._pose_idx % len(poses)])

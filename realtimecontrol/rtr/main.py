@@ -134,8 +134,8 @@ async def run(cfg: Config) -> None:
 
     # --- core -----------------------------------------------------------
     robot = make_robot(cfg.robot_kind, port=cfg.robot_port, tick_hz=cfg.tick_hz)
-    machine = StateMachine(zones)
-    brain = Brain(machine, zones, tick_hz=cfg.tick_hz)
+    machine = StateMachine(zones, tick_hz=cfg.tick_hz)
+    brain = Brain(machine)
     # Sound is created before the engine so the engine can hold its reload hook.
     sound = make_sound(bus, sound_loader=lambda: load_sound_data_fallback(cfg.sound_path),
                        enabled=cfg.enable_sound,
@@ -186,7 +186,7 @@ async def run(cfg: Config) -> None:
     print(f"[rtr] robot connected: {cfg.robot_kind}")
 
     print(f"[rtr] core up: robot={cfg.robot_kind} zone={machine.current_zone} "
-          f"mode={brain.mode} ws={cfg.ws_port} http={cfg.http_port if http.enabled else 'off'}")
+          f"mode={machine.mode} ws={cfg.ws_port} http={cfg.http_port if http.enabled else 'off'}")
 
     # --- run until interrupted ----------------------------------------
     engine_task = asyncio.create_task(engine.run())
