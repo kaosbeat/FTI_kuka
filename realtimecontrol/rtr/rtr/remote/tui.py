@@ -5,7 +5,9 @@ A terminal UI for the remote handheld client. It opens a live link to the core
 state:
 
 - **select an action** of the current zone (activate it), and
-- **navigate to the next zone** (a declared exit of the current zone).
+- **navigate to the next zone** (a declared exit of the current zone, or a
+  reverse exit — a zone whose exits include the current one, where the robot
+  could have come from).
 
 Navigation is manual: ``up``/``down`` move the cursor over the current zone's
 actions and exits, ``enter`` activates the selected one (sends the matching
@@ -24,12 +26,20 @@ import asyncio
 import logging
 import queue
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 try:
     import urwid
 except ImportError:
     urwid = None
+
+from ..flow import (
+    activation_commands,
+    action_enabled,
+    action_loops,
+    action_target,
+    build_items,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,20 +73,44 @@ class Theme:
         return urwid.AttrSpec(fg, bg or Theme.BG)
 
 
-def _zone_actions(z: dict) -> List[str]:
-    """The names of a zone's actions (handles both dict and list forms)."""
-    a = z.get("actions", {})
-    if isinstance(a, dict):
-        return list(a.keys())
-    if isinstance(a, list):
-        return [x for x in a if isinstance(x, str)]
-    return []
+# ---------------------------------------------------------------------------
+# Display shaping (no urwid) — the TUI renders these and the tests exercise
+# them directly. Each zone's actions carry the optional ``kind`` / ``loop`` /
+# ``target`` fields (see state/zones.py): the TUI groups the actions by kind,
+# marks the looping ones, and annotates a target hand-off. The shared pure
+# navigation helpers live in :mod:`rtr.flow`.
+# ---------------------------------------------------------------------------
+SECTION_LABELS = {
+    "entry": "ENTRY",
+    "internal": "INTERNAL",
+    "exit": "EXIT",
+    "zones": "GO TO",
+}
 
 
-def _zone_exits(z: dict) -> List[str]:
-    """The names of zones reachable from this zone."""
-    e = z.get("exits", [])
-    return [x for x in e if isinstance(x, str)] if isinstance(e, list) else []
+def item_label(item: dict) -> str:
+    """The display string for an item (name + loop marker + target annotation).
+
+    A "zones" row with ``back=True`` (a reverse-only exit) gets a ``←`` marker so
+    forward vs. back is visible in an asymmetric exits graph.
+    """
+    name = item.get("name", "")
+    if item.get("kind") != "action":
+        return f"{name} ←" if item.get("back") else name
+    a = item.get("action")
+    s = name
+    if action_loops(a):
+        s += " ↻"
+    t = action_target(a)
+    if t:
+        tz = t.get("zone")
+        if isinstance(tz, str):
+            s += f" → {tz}"
+        else:
+            ta = t.get("action")
+            if isinstance(ta, str):
+                s += f" → {ta}"
+    return s
 
 
 class RemoteTUI:
@@ -85,7 +119,7 @@ class RemoteTUI:
     def __init__(self, config):
         self.config = config
         self._q: "queue.Queue" = queue.Queue()
-        self._items: List[Tuple[str, str]] = []  # (kind, name) selectable rows
+        self._items: List[dict] = []  # selectable rows ({section, kind, name, action})
         self._cursor = 0
         self._state: Dict[str, Any] = {}
         self._state_key = object()
@@ -191,15 +225,8 @@ class RemoteTUI:
 
     def _rebuild_items(self) -> None:
         zone = self._state.get("zone")
-        items: List[Tuple[str, str]] = []
-        z = self._zones.get(zone) if zone else None
-        if z is not None:
-            for name in _zone_actions(z):
-                items.append(("action", name))
-            for name in _zone_exits(z):
-                items.append(("exit", name))
-        self._items = items
-        if self._cursor >= len(items):
+        self._items = build_items(self._zones, zone)
+        if self._cursor >= len(self._items):
             self._cursor = 0
 
     # ------------------------------------------------------------------
@@ -247,19 +274,16 @@ class RemoteTUI:
             parts.append((Theme.attr(Theme.BRIGHT, Theme.BG), str(val)))
         return urwid.AttrMap(urwid.Text(parts), {})
 
-    def _item_row(self, i: int, name: str, kind: str):
+    def _item_row(self, i: int, item: dict):
         if i == self._cursor and i < len(self._items):
-            s = f"  ▸ {name}"
+            s = f"  ▸ {item_label(item)}"
             return urwid.AttrWrap(urwid.Text(s[:self._width()]),
                                    Theme.attr("black", Theme.YELLOW, "bold"))
-        s = f"    {name}"
-        z = self._zones.get(self._state.get("zone"))
-        if z is not None and kind == "action":
-            acts = z.get("actions", {})
-            if isinstance(acts, dict) and name in acts and isinstance(acts[name], dict) \
-               and not acts[name].get("enabled", True):
-                return urwid.AttrWrap(urwid.Text(s[:self._width()]),
-                                       Theme.attr(Theme.DIM, Theme.BG))
+        s = f"    {item_label(item)}"
+        if item.get("kind") == "action" and item.get("action") is not None \
+           and not action_enabled(item["action"]):
+            return urwid.AttrWrap(urwid.Text(s[:self._width()]),
+                                   Theme.attr(Theme.DIM, Theme.BG))
         return urwid.AttrWrap(urwid.Text(s[:self._width()]),
                                Theme.attr(Theme.TEXT, Theme.BG))
 
@@ -288,18 +312,13 @@ class RemoteTUI:
             else:
                 rows.append(self._line("  (no actions or exits in this zone)", Theme.DIM))
         else:
-            first_action = True
-            first_exit = True
-            for i, (kind, name) in enumerate(self._items):
-                if kind == "action":
-                    if first_action:
-                        rows.append(self._label("ACTIONS"))
-                        first_action = False
-                else:
-                    if first_exit:
-                        rows.append(self._label("EXITS"))
-                        first_exit = False
-                rows.append(self._item_row(i, name, kind))
+            current_section = None
+            for i, item in enumerate(self._items):
+                sec = item["section"]
+                if sec != current_section:
+                    rows.append(self._label(SECTION_LABELS.get(sec, sec.upper())))
+                    current_section = sec
+                rows.append(self._item_row(i, item))
         rows.append(self._divider())
         rows.append(self._line(self._status, Theme.YELLOW_DIM))
         rows.append(self._line("↑↓ move · enter select · q quit", Theme.DIM))
@@ -340,14 +359,13 @@ class RemoteTUI:
 
     def _activate(self) -> None:
         if 0 <= self._cursor < len(self._items):
-            kind, name = self._items[self._cursor]
-            if kind == "action":
-                self._send({"cmd": "play_action", "action": name})
-                self._send({"cmd": "set_mode", "mode": "action"})
-                self._status = f"→ play {name}"
-            elif kind == "exit":
-                self._send({"cmd": "goto_zone", "zone": name})
-                self._status = f"→ goto {name}"
+            item = self._items[self._cursor]
+            for cmd in activation_commands(item):
+                self._send(cmd)
+            if item.get("kind") == "action":
+                self._status = f"→ play {item['name']}"
+            else:
+                self._status = f"→ goto {item['name']}"
             self._dirty = True
 
     def _on_unhandled(self, key):

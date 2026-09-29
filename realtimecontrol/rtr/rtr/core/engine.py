@@ -36,6 +36,7 @@ class Engine:
                  zone_loader: Callable[[], dict] = None,
                  sound_reload: Callable[[], None] = None,
                  patch_reload: Callable[[], None] = None,
+                 midi_reload: Callable[[], None] = None,
                  screen_patch_override: "Callable[[str | None], None]" = None):
         self.bus = bus
         self.robot = robot
@@ -45,6 +46,7 @@ class Engine:
         self._zone_loader = zone_loader
         self._sound_reload = sound_reload
         self._patch_reload = patch_reload
+        self._midi_reload = midi_reload
         # Sets (or clears) the manual hydra screen override; the core then pushes it in
         # every state frame so the 3D tool screen and the render page follow it.
         self._screen_patch_override = screen_patch_override
@@ -77,6 +79,14 @@ class Engine:
                 elif cmd.cmd == Cmd.RELOAD_PATCHES:
                     if self._patch_reload is not None:
                         self._patch_reload()
+                elif cmd.cmd == Cmd.RELOAD_MIDI:
+                    if self._midi_reload is not None:
+                        self._midi_reload()
+                elif cmd.cmd == Cmd.MIDI_LEARN:
+                    # A learned MIDI key captured by MidiInput (rtmidi thread). Publish
+                    # it here, inside the loop, so the display adapter can forward it to
+                    # the WebSocket (ws.broadcast needs a running loop).
+                    self.bus.publish(Event.MIDI_LEARN, cmd.payload)
                 elif cmd.cmd == Cmd.SET_SCREEN_PATCH:
                     if self._screen_patch_override is not None:
                         self._screen_patch_override(cmd.payload.get("code"))

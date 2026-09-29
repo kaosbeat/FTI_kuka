@@ -32,7 +32,13 @@ from rtr.patches import (
     DEFAULT_HYDRA_CODE,
 )
 from rtr.camera import make_camera
-from rtr.io import HttpServer, MidiInput, WebSocketServer
+from rtr.io import (
+    HttpServer,
+    MidiInput,
+    WebSocketServer,
+    builtin_midi_data,
+    load_midi_data,
+)
 
 # The directory this file lives in: where client.html / editor.html / assets / zones.json are.
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -62,6 +68,8 @@ def parse_args(argv):
                         help="zone data file (default: zones.json next to main.py)")
     parser.add_argument("--midi", type=int, default=0, help="MIDI in port index")
     parser.add_argument("--no-midi", action="store_true", help="disable MIDI input")
+    parser.add_argument("--midi-json", default="midi.json",
+                        help="MIDI-in learned mapping file (default: midi.json next to main.py)")
     parser.add_argument("--sound", default="sound.json",
                         help="sound data file (default: sound.json next to main.py)")
     parser.add_argument("--no-sound", action="store_true", help="disable sound (MIDI out)")
@@ -85,6 +93,7 @@ def build_config(args) -> Config:
     cfg.sound_path = _resolve(args.sound)
     cfg.patches_path = _resolve(args.patches)
     cfg.midi_in_port = None if args.no_midi else args.midi
+    cfg.midi_path = _resolve(args.midi_json)
     cfg.enable_sound = not args.no_sound
     cfg.enable_display = not args.no_display
     cfg.enable_camera = args.camera
@@ -123,6 +132,15 @@ def load_patches_data_fallback(path: str) -> dict:
         return builtin_patches_data()
 
 
+def load_midi_data_fallback(path: str) -> dict:
+    """Load the MIDI-in mapping file, falling back to the built-in table with a warning."""
+    try:
+        return load_midi_data(path)
+    except (OSError, ValueError) as exc:
+        print(f"[rtr] midi file {path!r} unavailable ({exc}); using built-in midi")
+        return builtin_midi_data()
+
+
 async def run(cfg: Config) -> None:
     bus = StateBus()
 
@@ -143,10 +161,18 @@ async def run(cfg: Config) -> None:
     # The hydra patches (tool screen) are data-driven too; the engine holds the
     # reload hook so a POST /api/patches hot-reloads the running table.
     patches = Patches(bus, patches_loader=lambda: load_patches_data_fallback(cfg.patches_path))
+    # The MIDI-in learned mapping is data-driven as well; created before the engine
+    # so the engine can hold its reload hook (POST /api/midi hot-reloads the table).
+    midi = MidiInput(bus, in_port=cfg.midi_in_port,
+                     enabled=cfg.midi_in_port is not None,
+                     poses=poses, lin_poses=lin_poses,
+                     zones_provider=lambda: machine.zones,
+                     midi_loader=lambda: load_midi_data_fallback(cfg.midi_path))
     engine = Engine(bus, robot, brain, machine, tick_hz=cfg.tick_hz,
                     zone_loader=lambda: load_state_data(cfg.zones_path),
                     sound_reload=sound.reload,
                     patch_reload=patches.reload,
+                    midi_reload=midi.reload,
                     screen_patch_override=patches.set_screen_override)
 
     # --- adapters -------------------------------------------------------
@@ -155,8 +181,10 @@ async def run(cfg: Config) -> None:
     http = HttpServer(bus, zones_provider=lambda: machine.zones,
                       sound_provider=sound.current_data,
                       patches_provider=patches.current_data,
+                      midi_provider=midi.current_data,
                       zones_path=cfg.zones_path, sound_path=cfg.sound_path,
-                      patches_path=cfg.patches_path, root=ROOT,
+                      patches_path=cfg.patches_path, midi_path=cfg.midi_path,
+                      midi=midi, sound=sound, root=ROOT,
                       host=cfg.http_host, port=cfg.http_port,
                       enabled=cfg.enable_http)
     # The display pushes the resolved hydra patch in every state frame (the core is
@@ -165,10 +193,6 @@ async def run(cfg: Config) -> None:
     display = make_display(bus, ws.broadcast, enabled=cfg.enable_display,
                            patch_code=patches.code_for)
     camera = make_camera(bus, enabled=cfg.enable_camera)
-    midi = MidiInput(bus, in_port=cfg.midi_in_port,
-                     enabled=cfg.midi_in_port is not None,
-                     poses=poses, lin_poses=lin_poses,
-                     zones_provider=lambda: machine.zones)
 
     # The WebSocket + HTTP bridges come up first, so the control interface is
     # always reachable (and keeps running) while we wait for the robot.

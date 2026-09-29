@@ -5,7 +5,7 @@ so the core has one place to read from. Adapters receive a :class:`Config` and n
 reach for globals.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -53,6 +53,11 @@ class Config:
     # On-disk hydra patch table (patches.json), matched to zone/mode/action.
     # The built-in DEFAULT_HYDRA_CODE is the fallback when the file is missing.
     patches_path: str = "patches.json"
+
+    # --- midi data (midi-in learned mapping) -----------------------------
+    # On-disk learned MIDI-in mapping (midi.json). The built-in empty mapping
+    # (legacy protocol fallback) is used when the file is missing or corrupt.
+    midi_path: str = "midi.json"
 
     # --- display / camera / sound ---------------------------------------
     # Only enabled when the corresponding hardware is present.

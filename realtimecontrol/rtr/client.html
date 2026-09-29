@@ -394,22 +394,21 @@ function send(cmd) {
   log("→ " + JSON.stringify(cmd));
 }
 
-// Whether `to` is reachable from `from` via the zone exits graph (BFS). Zone
-// transitions are path-routed, so a button is only dimmed if the zone is disabled
-// or genuinely unreachable (no path), not merely if it is not a *direct* exit.
-function reachable(from, to) {
-  if (to === from) return true;
-  const seen = new Set([from]);
-  const queue = [from];
-  while (queue.length) {
-    const n = queue.shift();
-    const exits = (ZONES[n] && ZONES[n].exits) ? ZONES[n].exits : [];
-    for (const e of exits) {
-      if (e === to) return true;
-      if (!seen.has(e) && ZONES[e]) { seen.add(e); queue.push(e); }
-    }
+// The zones the operator can move to from `current`: its declared `exits` plus
+// the reverse exits (zones whose `exits` include `current` — where the robot
+// could have come from). Everything else is offered dimmed; the core still
+// accepts any reachable zone (path routing), the UI only restricts what it offers.
+function availableZones(current) {
+  const set = new Set();
+  const cur = ZONES[current];
+  if (cur && Array.isArray(cur.exits)) {
+    for (const e of cur.exits) if (typeof e === "string") set.add(e);
   }
-  return false;
+  for (const name of Object.keys(ZONES)) {
+    const z = ZONES[name];
+    if (z && Array.isArray(z.exits) && z.exits.includes(current)) set.add(name);
+  }
+  return set;
 }
 
 // ------------------------------------------------------------------
@@ -448,13 +447,15 @@ function renderState(s) {
     flagEls[f].className = "chip" + (s.flags[f] ? " on" : "");
   }
 
-  // Zone buttons: active = current; dim = disabled or unreachable (no path) from current.
+  // Zone buttons: active = current; dim = disabled or not an available next
+  // state (a direct exit or a reverse exit of the current zone).
+  const avail = availableZones(s.zone);
   for (const name of Object.keys(zoneBtns)) {
     const z = ZONES[name];
     let cls = "";
     if (name === s.zone) cls = "active";
     else if (!z || z.enabled === false) cls = "dim";
-    else if (!ZONES[s.zone] || !reachable(s.zone, name)) cls = "dim";
+    else if (!avail.has(name)) cls = "dim";
     zoneBtns[name].className = cls;
   }
   for (const m of MODES) modeBtns[m].className = m === s.mode ? "active" : "";

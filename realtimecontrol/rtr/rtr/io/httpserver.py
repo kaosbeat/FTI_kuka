@@ -22,6 +22,8 @@ It serves two kinds of requests:
   - ``POST /api/sound`` → validate the mapping; on success write it atomically to
     ``sound.json`` and submit a ``RELOAD_SOUND`` command so the running core hot-reloads.
     On validation failure the file is untouched and a 400 is returned.
+  - ``GET /api/sound/ports`` → the available MIDI out ports (for the output-device
+    picker in the editor's MIDI tab).
 - **The limits API**:
   - ``GET /api/limits`` → the per-axis hardware limits (a static constant from the
     kr60ha xacro). Read-only; the hardware limits are fixed by the robot's mechanics.
@@ -34,6 +36,17 @@ It serves two kinds of requests:
 - **The screen API**:
   - ``GET /api/screen`` → the hydra patch (JS) rendered on the tool's screen, i.e. the
     ``default`` entry of the patches table.
+- **The MIDI-in API** (learned MIDI-in mapping):
+  - ``GET /api/midi`` → the current MIDI-in mapping (read fresh from ``midi.json``,
+    falling back to the running table if the file is bad).
+  - ``POST /api/midi`` → validate the mapping; on success write it atomically to
+    ``midi.json`` and submit a ``RELOAD_MIDI`` command so the running core hot-reloads.
+    On validation failure the file is untouched and a 400 is returned.
+  - ``GET /api/midi/ports`` → the available MIDI in ports (for the input-device picker).
+  - ``POST /api/midi/learn`` → arm (``{"action": "start"}``) or disarm
+    (``{"action": "stop"}``) the learn capture on the running :class:`MidiInput`.
+    A start may target a zone command (``zone``), a zone action (``zone`` +
+    ``action_name``), or a global navigation command (``nav``).
 
 Only the standard library is used (no new dependencies).
 """
@@ -51,6 +64,7 @@ from ..patches import (
     validate_patches_data,
 )
 from ..sound import load_sound_data, validate_sound_data
+from .midi import load_midi_data, validate_midi_data
 from ..state.zones import (
     HARDWARE_LIMITS,
     LIN_POSES,
@@ -82,7 +96,9 @@ class HttpServer:
                  zones_path: str, sound_path: str, root: str,
                  host: str = "0.0.0.0", port: int = 8766,
                  enabled: bool = True, screen_code: str = None,
-                 patches_provider=None, patches_path: str = None):
+                 patches_provider=None, patches_path: str = None,
+                 midi_provider=None, midi_path: str = None, midi=None,
+                 sound=None):
         self.bus = bus
         self.zones_provider = zones_provider
         self.sound_provider = sound_provider
@@ -90,6 +106,12 @@ class HttpServer:
         self.sound_path = os.path.abspath(sound_path)
         self.patches_path = os.path.abspath(patches_path) if patches_path else None
         self.patches_provider = patches_provider
+        self.midi_path = os.path.abspath(midi_path) if midi_path else None
+        self.midi_provider = midi_provider
+        # The running MidiInput (for the learn + list-ports actions); may be None.
+        self.midi = midi
+        # The running Sound (for the list-out-ports action); may be None.
+        self.sound = sound
         self.root = os.path.abspath(root)
         self.host = host
         self.port = port
@@ -143,12 +165,18 @@ def _make_handler(server: HttpServer):
                 self._get_zones()
             elif path == "/api/sound":
                 self._get_sound()
+            elif path == "/api/sound/ports":
+                self._get_sound_ports()
             elif path == "/api/patches":
                 self._get_patches()
             elif path == "/api/limits":
                 self._get_limits()
             elif path == "/api/screen":
                 self._get_screen()
+            elif path == "/api/midi":
+                self._get_midi()
+            elif path == "/api/midi/ports":
+                self._get_midi_ports()
             elif self._is_static(path):
                 self._serve_static(path)
             else:
@@ -162,6 +190,10 @@ def _make_handler(server: HttpServer):
                 self._post_sound()
             elif path == "/api/patches":
                 self._post_patches()
+            elif path == "/api/midi":
+                self._post_midi()
+            elif path == "/api/midi/learn":
+                self._post_midi_learn()
             else:
                 self._send_text(404, "not found")
 
@@ -238,6 +270,12 @@ def _make_handler(server: HttpServer):
             server.bus.submit(Command(cmd=Cmd.RELOAD_SOUND, payload={}))
             self._send_json(200, {"ok": True})
 
+        def _get_sound_ports(self):
+            if server.sound is None:
+                self._send_json(200, {"ports": []})
+                return
+            self._send_json(200, {"ports": server.sound.list_out_ports()})
+
         # ------------------------------------------------------------------
         # Patches API (hydra screen code).
         # ------------------------------------------------------------------
@@ -300,7 +338,75 @@ def _make_handler(server: HttpServer):
             # The hydra patch (JS) rendered on the tool's screen. Now data-driven:
             # it is the ``default`` entry of the patches table (see /api/patches).
             self._send_json(200, {"code": self._patches_data().get("default")
-                                   or server.screen_code or DEFAULT_HYDRA_CODE})
+                                    or server.screen_code or DEFAULT_HYDRA_CODE})
+
+        # ------------------------------------------------------------------
+        # MIDI-in API (learned MIDI-in mapping).
+        # ------------------------------------------------------------------
+        def _get_midi(self):
+            if server.midi_path:
+                try:
+                    data = load_midi_data(server.midi_path)
+                except (OSError, ValueError):
+                    data = server.midi_provider() if server.midi_provider else {}
+            else:
+                data = server.midi_provider() if server.midi_provider else {}
+            self._send_json(200, data)
+
+        def _post_midi(self):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                length = 0
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                data = json.loads(body)
+                validate_midi_data(data)
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._send_json(400, {"error": str(exc)})
+                return
+            if not server.midi_path:
+                self._send_json(500, {"error": "midi path not configured"})
+                return
+            # Atomic write: dump to a temp file, then replace.
+            tmp = server.midi_path + ".tmp"
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(tmp, server.midi_path)
+            except OSError as exc:
+                self._send_json(500, {"error": f"could not write midi: {exc}"})
+                return
+            # Ask the running core to hot-reload the new mapping.
+            server.bus.submit(Command(cmd=Cmd.RELOAD_MIDI, payload={}))
+            self._send_json(200, {"ok": True})
+
+        def _get_midi_ports(self):
+            if server.midi is None:
+                self._send_json(200, {"ports": []})
+                return
+            self._send_json(200, {"ports": server.midi.list_ports()})
+
+        def _post_midi_learn(self):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                length = 0
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                req = json.loads(body)
+            except (ValueError, json.JSONDecodeError):
+                req = {}
+            action = req.get("action", "start")
+            if server.midi is None:
+                self._send_json(500, {"error": "midi input not configured"})
+                return
+            if action == "stop":
+                server.midi.stop_learn()
+            else:
+                server.midi.start_learn(
+                    req.get("zone"), req.get("action_name"), req.get("nav"))
+            self._send_json(200, {"ok": True, "learning": server.midi.is_learning})
 
         # ------------------------------------------------------------------
         # Static files.

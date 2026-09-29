@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import os
 import struct
 import sys
 
@@ -9,7 +8,7 @@ device = sys.argv[1] if len(sys.argv) > 1 else "/dev/input/event3"
 EVENT = struct.Struct("llHHI")
 
 with open(device, "rb") as f:
-    print(f"Reading", device)
+    print("Reading", device)
     print("Press buttons; Ctrl-C exits.\n")
 
     while True:

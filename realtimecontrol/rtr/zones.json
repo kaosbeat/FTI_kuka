@@ -184,7 +184,11 @@
           ],
           "speed": [
             10
-          ]
+          ],
+          "kind": "entry",
+          "target": {
+            "action": "breathe"
+          }
         }
       }
     },
@@ -271,7 +275,20 @@
             10,
             10,
             10
-          ]
+          ],
+          "kind": "exit",
+          "target": {
+            "zone": "rest",
+            "pose": [
+              -3,
+              -97,
+              16,
+              -2,
+              90,
+              0
+            ],
+            "action": "yawn"
+          }
         },
         "look": {
           "enabled": true,
@@ -384,7 +401,7 @@
               -97,
               17,
               -2,
-              0,
+              0.3,
               0
             ],
             [
@@ -408,7 +425,12 @@
             100,
             100,
             100
-          ]
+          ],
+          "kind": "entry",
+          "loop": false,
+          "target": {
+            "action": "look"
+          }
         }
       }
     },

@@ -25,7 +25,9 @@ class Cmd(str, Enum):
     RANDOM_WRIST = "random_wrist"
     RELOAD_ZONES = "reload_zones"
     RELOAD_SOUND = "reload_sound"
+    RELOAD_MIDI = "reload_midi"
     RELOAD_PATCHES = "reload_patches"
+    MIDI_LEARN = "midi_learn"
     SET_SCREEN_PATCH = "set_screen_patch"
     STOP = "stop"
 
@@ -38,6 +40,8 @@ class Event(str, Enum):
     ACTION_CHANGED = "action_changed"
     ZONES_CHANGED = "zones_changed"
     SOUND_CHANGED = "sound_changed"
+    MIDI_CHANGED = "midi_changed"
+    MIDI_LEARN = "midi_learn"
     PATCHES_CHANGED = "patches_changed"
     POSE_UPDATED = "pose_updated"
     SNAPSHOT = "snapshot"

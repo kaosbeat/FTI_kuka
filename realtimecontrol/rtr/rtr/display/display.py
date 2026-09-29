@@ -11,7 +11,7 @@ decides *what* to send. It holds a ``send`` callable (the WS server's broadcast)
 has no dependency on the transport itself.
 """
 
-from typing import Callable, Optional
+from typing import Callable
 
 from ..core.bus import StateBus
 from ..core.commands import Event, Snapshot
@@ -48,6 +48,12 @@ class Display:
             self._send({"type": "sound_changed"})
         elif event == Event.PATCHES_CHANGED:
             self._send({"type": "patches_changed"})
+        elif event == Event.MIDI_CHANGED:
+            self._send({"type": "midi_changed"})
+        elif event == Event.MIDI_LEARN:
+            # A learned key captured by MidiInput; the editor writes it into the
+            # mapping. ``data`` is the {"key": ..., "msg": ...} payload.
+            self._send({"type": "midi_learn", **data})
 
     def _patch_for(self, snap: Snapshot) -> str | None:
         """The resolved hydra patch for this state, or None if resolution is unavailable.

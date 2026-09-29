@@ -119,17 +119,19 @@ starts folding commands into ticks.
 | `display/display.py`| Display adapter: turns each snapshot into a P5live frame over the WS. |
 | `sound/sound.py`  | Sound adapter: configurable MIDI-out, data-driven from `sound.json`.  |
 | `patches/patches.py`| Patches adapter: hydra screen code, data-driven from `patches.json`, matched to zone/mode/action. |
-| `io/midi.py`      | MIDI-in adapter: maps controller messages to core commands (goto-zone is path-routed; CC3 plays an action). |
+| `io/midi.py`      | MIDI-in adapter: learned-first dispatch from `midi.json`, falling back to the legacy hardcoded protocol for unmapped messages. |
 | `io/websocket.py` | WebSocket server: the single bridge for external control + state.     |
-| `io/httpserver.py`| HTTP server: serves the pages + `/api/zones`, `/api/sound`, `/api/patches`, `/api/limits`, `/api/screen` (port 8766, stdlib-only).|
+| `io/httpserver.py`| HTTP server: serves the pages + `/api/zones`, `/api/sound`, `/api/patches`, `/api/midi`, `/api/limits`, `/api/screen` (port 8766, stdlib-only).|
 | `client.html`     | Browser control page (served over HTTP; WebSocket client + patch chooser). |
 | `editor.html`     | Zone/action + sound + patches editor page (create/edit/enable-disable; hot-reloads core).|
 | `render.html`     | Fullscreen hydra render page (WebSocket-driven; the matched patch, re-eval on state change).|
 | `chatbot.py`      | Optional LLM brain: senses free-form input and answers the core with a JSON command. |
+| `rtr/remote/tui.py` | Remote TUI (urwid): a terminal/handheld client that groups the current zone's actions by kind, marks loops (`↻`) and targets, and plays an action or `goto_zone`s to an exit. |
 | `rtr3d.js`        | Shared Robot3D builder: the real KR60 (kr60ha xacro chain + visual STL meshes) + helpers (used by client + editor). |
 | `zones.json`      | On-disk zone/pose data — the editable source of truth.                |
 | `sound.json`      | On-disk MIDI-out mapping (channel + zone/mode/action messages).       |
 | `patches.json`    | On-disk hydra screen code (default + zone/mode/action patches).       |
+| `midi.json`       | On-disk MIDI-in mapping (input port + learned key → target mapping).  |
 | `assets/`         | Blender-editable environment + tool GLBs and their stdlib-only generators. |
 
 ## The state machine
@@ -225,6 +227,37 @@ an action the zone does not allow. `editor.html` edits a zone's own actions (the
 action" button adds to the current zone), and `client.html` only shows — and only lets you
 select — the actions the current zone offers.
 
+### Action kinds, looping, and targets
+
+Each action can declare three optional fields (all backward compatible — an action without
+them behaves exactly as before):
+
+- **`kind`** — `internal` (the default), `entry`, or `exit`. It is a semantic label the
+  editor and flow tab use to position and colour the action; the state machine's runtime
+  behaviour is driven by `loop` + `target` below.
+- **`loop`** — `true` (the default) wraps the action around on its last pose; `false`
+  makes it **single-run** — it does not wrap and instead hands off via `target` when its
+  last pose completes.
+- **`target`** — the hand-off, an object `{zone, action, pose}`:
+  - `zone` — the zone the action hands off to (must name an existing zone); defaults to
+    the current zone.
+  - `action` — the action to activate in the target zone on arrival (the **entry action**
+    hook).
+  - `pose` — a 6-number hand-off pose (the exit position the robot leaves at).
+
+The hand-off is resolved by `_advance_after_action` (`state/machine.py`) the moment a
+single-run action completes its last pose:
+- **no target** → the action stops (the robot holds the last pose).
+- **target in the same zone** → plays the target action (falls back to the zone's default
+  mode when there is no valid next action).
+- **target in another zone** → begins an **exit transition**: leaves at the hand-off
+  `pose`, travels to the target zone, and activates the target `action` on arrival
+  (`_commit_zone` plays the entry action and switches to `action` mode). An unreachable
+  target stops the action and falls back to the zone's default mode.
+
+An **exit** action is the natural place for a cross-zone `target`; the flow tab draws it as
+an orange arrow (see the flow-tab section below).
+
 ## Control
 
 The robot is controlled from the central server (this process). It keeps track of the
@@ -293,11 +326,50 @@ buttons, a 6-axis joint-pose editor, wander-limit sliders, random-wrist). It als
 (`set_screen_patch`); picking **auto** clears the override so the screens follow the live
 state (see the Patches section). The action
 buttons are built from the current zone's action table, so an action the zone does not
-offer has no button at all, and a disabled one is shown but not selectable. It auto-connects
+offer has no button at all, and a disabled one is shown but not selectable. The zone
+buttons keep every zone but enable only the current zone's **available next states** —
+its declared `exits` and the **reverse exits** (the zones whose `exits` include the current
+one, where the robot could have come from) — dimming the rest (the core still accepts any
+reachable zone; the UI only restricts what it offers). It auto-connects
 to `ws://localhost:8765`, retrying every 2 s. It is best served over the HTTP server
 (`http://localhost:8766/client.html`); opened from `file://` it still works against the
 WebSocket, but the environment GLB, the KR60 meshes, and the live zone table are
 unavailable (it falls back to its built-in zones, a placeholder arm, and no environment).
+
+### The remote TUI (terminal / handheld)
+
+`rtr/remote/tui.py` is a terminal client for driving the core from a handheld or a second
+screen. It opens the same two links as the other clients — a **WebSocket** to 8765 for live
+state + commands and the **HTTP** zone table on 8766 — and renders the current zone's
+actions in a urwid list. It is the canonical `run()` for the remote module; the top-level
+`remote/tui.py` is a thin launcher that delegates to it.
+
+The list groups the current zone's actions by their `kind` (see the action-model section
+above) and ends with the zone's **available next states** — its declared `exits` plus the
+**reverse exits** (the zones whose `exits` include this one, where the robot could have
+come from):
+
+- **ENTRY / INTERNAL / EXIT** — the zone's actions, grouped by `kind`. A looping action is
+  marked `↻`, and an action with a `target` is annotated with its hand-off (`→ <zone>` or
+  `→ <action>`). A disabled action is dimmed.
+- **GO TO** — the zone's `exits` (declared order) followed by the reverse-only entries,
+  marked `←` (a zone you could have come from, in a one-directional graph); selecting one
+  sends a direct `goto_zone`.
+
+Selecting an **action** (any kind) plays it: it sends `play_action` + `set_mode action`, and
+the core's `_advance_after_action` resolves an exit action's `target` hand-off on completion.
+Navigation is manual: `↑`/`↓` move the cursor, `enter` activates the selected row, and
+`q`/`escape` quits.
+
+```bash
+# from the rtr/ directory — the top-level launcher, or the canonical module directly
+python remote/tui.py --core-host 127.0.0.1 --core-port 8765
+python rtr/remote/tui.py --core-host 127.0.0.1 --core-port 8765
+```
+
+The pure navigation logic (`build_items`, `item_label`, `activation_commands`, and the
+`action_kind` / `action_loops` / `action_target` / `action_enabled` helpers) is exercised
+headlessly in `tests/test_remote_tui.py`.
 
 ### The HTTP server, editor, and zones.json
 
@@ -321,6 +393,12 @@ assets (three.js, the environment GLB, shared JS) from a `file://` page. It serv
   (mirrors `/api/zones`). On validation failure the file is untouched and a 400 is returned.
 - `GET /api/screen` → the **hydra patch** (JS) rendered on the tool's screen: the `default`
   entry of the patches table (data-driven; see the Patches section). Read-only.
+- `GET /api/midi` → the current **MIDI-in** mapping (read fresh from `midi.json`, falling
+  back to the running table; see the MIDI-in section).
+- `POST /api/midi` → validates the mapping; on success writes it atomically to `midi.json`
+  and submits a `reload_midi` command so the running core **hot-reloads** (mirrors
+  `/api/zones`). On validation failure the file is untouched and a 400 is returned.
+  (`/api/midi/ports` and `/api/midi/learn` are the extra MIDI-in endpoints below.)
 
 **The tool screen.** The tool GLB (`assets/tool.glb`) carries a red mesh that stands in for
 a screen. `rtr3d.js` renders a hydra patch onto a dedicated canvas and maps that canvas onto
@@ -366,6 +444,16 @@ falls outside its zone's safezone **or** the hardware floor). The per-axis **har
 limits** are shown as a reference row in the 3D preview panel (loaded from `GET
 /api/limits`, falling back to a built-in constant that mirrors the xacro).
 
+The **action editor** is a modal opened from a zone's action list (the **edit** button on
+each action row) or by clicking an action row in the flow tab. It edits one action's
+**kind** / **loop** / **enabled**, its **poses** (one row per pose, with add / swap /
+remove and out-of-bounds highlighting), its **target** (`zone` / `action` / `pose` — the
+selects appear only for the relevant kinds), and its per-pose **MIDI sound** (reconciled to
+the pose count). It has a live hydra **patch preview** (a second, lazily-created `Hydra`
+canvas that re-evals the action's patch code as you type) and saves all three tables in
+parallel (`POST /api/zones` + `/api/sound` + `/api/patches`), re-running the client-side
+`validate()` (which now also checks the `kind` / `loop` / `target` rules) before posting.
+
 The **flow** tab (4th tab) is a 2D SVG **flowchart** of the zone graph: **nodes** are the
 zones (label = the "mood"; small text = the default mode + action count, or the live
 mode/action for the live zone, which gets an accent ring), and **arrows** are the exit
@@ -379,6 +467,16 @@ button (clears the override), and "remove link" (deletes the exit + any `exitpos
 entry). Node positions are auto-laid-out by BFS depth from `init` and are draggable
 (session-only, not persisted); wheel zooms, middle-drag pans. The flow edits mutate the
 table in place, so the same **Save** posts them (`POST /api/zones`).
+
+Each node also shows its **actions as rows** (one per action, stacked below the label): an
+**entry** action is a left-aligned row with a connector dot on the left, an **exit** action
+is a right-aligned row with a dot on the right, and an **internal** action is centred with
+no dot; a looping action appends a `↻` marker. The node grows to fit its rows (`nodeH`),
+and the layout / fit / hit-test / edge anchoring all derive from it, so they stay consistent
+as actions are added or removed. Clicking a row opens the **action editor** modal (the rows
+themselves are read-only). Cross-zone **target** edges are drawn as orange dashed arrows
+(the `flowArrowTarget` marker) from an exit action's row to the target zone's entry action
+(or the zone center when none is named), so the hand-off graph is visible at a glance.
 
 A second **sound** tab edits the `sound.json` mapping (see the Sound section) and a third
 **patches** tab edits the `patches.json` hydra screen code (see the Patches section).
@@ -570,19 +668,100 @@ built-in default code and log the failure; the core keeps running either way.
 
 ### MIDI-in
 
-The `io/midi.py` adapter maps controller messages to core commands (the same physical
-protocol the legacy controller used). The additions from this round:
+The `io/midi.py` adapter maps controller messages to core commands. The mapping is
+**data-driven**: it lives in **`midi.json`** (edited in `editor.html`, served/saved over
+`/api/midi`, hot-reloaded), mirroring `sound.json`. A **mapping key** is one of:
 
-- **`goto_zone` (CC1, value 1-6)** — now benefits from **path-finding** automatically: the
-  command is the same, but the state machine routes it through the exits graph (see Zones).
-- **`play_action` (CC3, value `i`)** — plays the `i`-th action (**1-based**) in the current
-  zone; `0` clears the active action. The index is resolved against the current zone's
-  action table (in order), so it tracks hot-reloaded zone data. A bad index or a zone with
-  no actions is a logged no-op.
+- `cc:<cc>:<value>` — a control change (channel 0, matching the legacy protocol),
+- `note:<ch>:<note>` — a note-on (channel 0-7; velocity is ignored, and a note-off reuses
+  its note-on's key),
+- `program:<ch>:<prog>` — a program change (channel 0-7).
 
-The other mappings are unchanged: CC2 → `set_mode` (wander/action), CC13 → `set_flag`,
-CC20/21/22 → `adjust_limit`, CC30 → `set_mode` (random/wander), and the note mappings for
-joint poses / random wrist / linear poses.
+A **target** is `{"target": "<kind>", ...}` where the kind is one of:
+
+| kind | extra fields | dispatches |
+|------|--------------|------------|
+| `zone` | `zone` | `goto_zone` (path-routed through the exits graph) |
+| `mode` | `mode` | `set_mode` |
+| `action` | `zone`, `action` | `play_action` for `action` (played in the **current** zone; the `zone` field is required by the validator but informational at dispatch) |
+| `clear` | — | `clear_action` |
+| `random_action` | `zone` | a random **enabled** action in `zone` (preferring non-looping ones) |
+
+The schema:
+
+```json
+{
+  "in_port": 0,
+  "enabled": true,
+  "mapping": {
+    "cc:7:42":     { "target": "zone", "zone": "wander" },
+    "note:0:60":   { "target": "mode", "mode": "action" },
+    "program:0:5": { "target": "action", "zone": "wander", "action": "look" },
+    "cc:9:0":      { "target": "clear" },
+    "cc:4:7":      { "target": "random_action", "zone": "wander" }
+  }
+}
+```
+
+**Learned-first dispatch.** A message that matches a mapping key dispatches its learned
+target; a message with **no** mapping falls back to the **legacy hardcoded protocol** below,
+so an existing controller keeps working until a mapping exists. The built-in
+`builtin_midi_data` table has an **empty** `mapping`, so the legacy protocol is the effective
+default until `midi.json` supplies one.
+
+**The legacy fallback** (the physical protocol the Tidal / MIDI controller already uses):
+
+- **CC1 (value 1-6)** → `goto_zone` (`init`/`rest`/`wakeup`/`stretch`/`wander`/`wildwander`),
+  path-routed through the exits graph.
+- **CC2 (0/1)** → `set_mode` (`wander`/`action`).
+- **CC3 (value `i`)** → plays the `i`-th action (**1-based**) in the current zone; `0` clears.
+  The index is resolved against the current zone's action table (in order), so it tracks
+  hot-reloaded zone data; a bad index or a zone with no actions is a logged no-op.
+- **CC13** → `set_flag` (`dynvel`); **CC20/21/22** → `adjust_limit`; **CC30 (1/2)** →
+  `set_mode` (`random`/`wander`).
+- **Note ch1** 41/42/73/74 → `set_flag` (`wandermode`/`randomwristmode`/`dynmode`/`reachmode`);
+  **ch1/ch2** 61-64 → `set_joint_pose` (named poses); **ch3** → `random_wrist`; **ch6** →
+  `set_linear_pose`.
+
+**Learn.** The editor captures a live controller message and writes it into the mapping.
+`POST /api/midi/learn` with `{"action": "start"}` arms the capture on the running
+`MidiInput`; the next mappable message is **not** dispatched — it is submitted as a
+`midi_learn` command, the core publishes a `MIDI_LEARN` event, and the display forwards it to
+the WebSocket as `{"type": "midi_learn", "key": ..., "msg": ...}`. The editor writes the
+captured `key` into the mapping (replacing a row's key, or creating a new row) and rebuilds.
+`{"action": "stop"}` disarms. Learn is **single-shot**: it disarms after one capture.
+
+**Input device.** The `in_port` field selects the MIDI in port (a non-negative integer);
+when it is absent or `null`, the `--midi` port (default 0) is used. `GET /api/midi/ports` lists the
+available in ports (`{"ports": [{"index", "name"}, ...]}`) for the picker. `enabled` is the
+soft on/off switch (the constructor switch is the hard one; MIDI works only when both are on).
+The mapping file is `--midi-json` (default `midi.json` next to `main.py`); if it is missing
+or corrupt the built-in table is used (logged), so the core always starts.
+
+`midi.json` is served and saved over the same HTTP server as `zones.json`:
+
+- `GET /api/midi` → the current mapping (read fresh from `midi.json`, falling back to the
+  running table).
+- `POST /api/midi` → validates the mapping; on success writes it atomically and submits a
+  `reload_midi` command so the running core **hot-reloads** (the adapter re-reads the file,
+  swaps its table, publishes `midi_changed`, and reconnects the in port). On validation
+  failure the file is untouched and a 400 is returned.
+- `GET /api/midi/ports` → the available MIDI in ports (for the input-device picker).
+- `POST /api/midi/learn` → arm (`{"action": "start"}`) or disarm (`{"action": "stop"}`) the
+  learn capture; returns `{"ok": true, "learning": <bool>}`.
+
+**`editor.html`** has a dedicated **midi-control** tab (alongside the zone, sound, and
+patches tabs): an input-device section (an `in_port` picker from `GET /api/midi/ports` with a
+`default (no override)` option, an **enabled** checkbox, a **refresh** button, and a
+port-count / no-device hint) and a learned-mapping section (a table of `key → target` rows
+with an editable key, a target-kind select, the kind's name field(s), a **learn** button, and
+a remove button; a **+ add mapping** button and a **stop learn** button sit below). It loads
+from `GET /api/midi` (falling back to `/midi.json`, then a built-in), validates client-side,
+and saves to `POST /api/midi`; it re-fetches on the `midi_changed` frame and writes captured
+keys on the `midi_learn` frame.
+
+When no MIDI-in device is open (sim / no rig), the adapter degrades to doing nothing on each
+message; the core keeps running either way.
 
 ### The chatbot (an LLM brain)
 
@@ -688,7 +867,8 @@ With the core running, open the pages over the HTTP server (port 8766):
 
 `GET http://localhost:8766/api/zones` returns the live zone table; `POST` to the same URL
 saves it (the core hot-reloads). `GET/POST /api/sound` do the same for the MIDI-out
-mapping. `GET /api/limits` returns the per-axis hardware limits (read-only). Use
+mapping, and `GET/POST /api/midi` do the same for the MIDI-in mapping. `GET /api/limits`
+returns the per-axis hardware limits (read-only). Use
 `--http-port` to change the port or `--no-http` to disable the server (the WebSocket on
 8765 still works).
 
