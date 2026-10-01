@@ -30,6 +30,10 @@ class Cmd(str, Enum):
     MIDI_LEARN = "midi_learn"
     SET_SCREEN_PATCH = "set_screen_patch"
     STOP = "stop"
+    CAM_STATUS = "cam_status"
+    CAM_CANDIDATES = "cam_candidates"
+    CAM_TRACK = "cam_track"
+    CAM_FACE = "cam_face"
 
 
 class Event(str, Enum):
@@ -45,6 +49,7 @@ class Event(str, Enum):
     PATCHES_CHANGED = "patches_changed"
     POSE_UPDATED = "pose_updated"
     SNAPSHOT = "snapshot"
+    CAM_CONTROL = "cam_control"
 
 
 @dataclass

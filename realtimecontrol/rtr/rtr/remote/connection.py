@@ -65,13 +65,18 @@ class Connection:
         Callback with the full zone table (``{"name": zone_data}``).
     on_error : Callable[[str], None]
         Optional callback for errors.
+    on_event : Callable[[Dict[str, Any]], None]
+        Optional callback for each non-``state`` event frame (zone / mode /
+        cam_control / ...). Lets a client react to specific event frames without
+        wrapping the low-level message handler.
     """
 
     def __init__(self, ws_host: str, ws_port: int, http_host: Optional[str] = None,
                  http_port: int = 8766, http_poll: int = 30,
                  on_state: Optional[Callable[[Dict[str, Any]], None]] = None,
                  on_zones: Optional[Callable[[Dict[str, dict]], None]] = None,
-                 on_error: Optional[Callable[[str], None]] = None):
+                 on_error: Optional[Callable[[str], None]] = None,
+                 on_event: Optional[Callable[[Dict[str, Any]], None]] = None):
         self.ws_host = ws_host
         self.ws_port = ws_port
         self.http_host = http_host or ws_host
@@ -80,6 +85,7 @@ class Connection:
         self.on_state = on_state or (lambda _s: None)
         self.on_zones = on_zones or (lambda _z: None)
         self.on_error = on_error or (lambda _e: None)
+        self.on_event = on_event or (lambda _d: None)
 
         self.connected = False  # True while the WebSocket link is up.
         self._ws: Optional[Any] = None
@@ -133,10 +139,14 @@ class Connection:
         t = data.get("type")
         if t == "state":
             self.on_state(data)
-        elif t in ("zone", "mode", "zones_changed", "sound_changed", "patches_changed"):
-            logger.debug("event frame: %s", data)
         else:
-            logger.debug("unknown frame: %s", data)
+            # Non-state event frame: hand it to the client's event callback (the
+            # camera remote reacts to ``cam_control`` this way).
+            self.on_event(data)
+            if t in ("zone", "mode", "zones_changed", "sound_changed", "patches_changed"):
+                logger.debug("event frame: %s", data)
+            else:
+                logger.debug("unknown frame: %s", data)
 
     async def _ws_task(self) -> None:
         """Keep a WebSocket link up; reconnect on drop until stopped."""

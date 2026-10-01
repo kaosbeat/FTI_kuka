@@ -153,7 +153,8 @@ async def run(cfg: Config) -> None:
     # --- core -----------------------------------------------------------
     robot = make_robot(cfg.robot_kind, port=cfg.robot_port, tick_hz=cfg.tick_hz)
     machine = StateMachine(zones, tick_hz=cfg.tick_hz)
-    brain = Brain(machine)
+    camera = make_camera(bus, enabled=cfg.enable_camera)
+    brain = Brain(machine, camera=camera)
     # Sound is created before the engine so the engine can hold its reload hook.
     sound = make_sound(bus, sound_loader=lambda: load_sound_data_fallback(cfg.sound_path),
                        enabled=cfg.enable_sound,
@@ -191,8 +192,7 @@ async def run(cfg: Config) -> None:
     # the single source of truth), so the pages and the 3D tool screen stay in sync
     # no matter what triggered the change (MIDI, WebSocket, HTTP).
     display = make_display(bus, ws.broadcast, enabled=cfg.enable_display,
-                           patch_code=patches.code_for)
-    camera = make_camera(bus, enabled=cfg.enable_camera)
+                           patch_code=patches.code_for, camera=camera)
 
     # The WebSocket + HTTP bridges come up first, so the control interface is
     # always reachable (and keeps running) while we wait for the robot.

@@ -11,10 +11,11 @@ decides *what* to send. It holds a ``send`` callable (the WS server's broadcast)
 has no dependency on the transport itself.
 """
 
-from typing import Callable
+from typing import Callable, Optional
 
 from ..core.bus import StateBus
 from ..core.commands import Event, Snapshot
+from ..camera.camera import CameraController
 
 
 class Display:
@@ -22,7 +23,8 @@ class Display:
 
     def __init__(self, bus: StateBus, send: Callable[[dict], None],
                  enabled: bool = True,
-                 patch_code: Callable[[str, str, str], str] = None):
+                 patch_code: Callable[[str, str, str], str] = None,
+                 camera: Optional[CameraController] = None):
         self.bus = bus
         self._send = send
         self.enabled = enabled
@@ -31,6 +33,9 @@ class Display:
         # state frame so all display clients (client.html, render.html, the 3D tool
         # screen) stay in sync no matter what triggered the change (MIDI, WS, HTTP).
         self._patch_code = patch_code
+        # The core-side camera controller; its intent is broadcast in every state
+        # frame and via CAM_CONTROL event frames for the fast path.
+        self._camera = camera
         bus.subscribe(self.on_event)
 
     def on_event(self, event: Event, data) -> None:
@@ -54,6 +59,9 @@ class Display:
             # A learned key captured by MidiInput; the editor writes it into the
             # mapping. ``data`` is the {"key": ..., "msg": ...} payload.
             self._send({"type": "midi_learn", **data})
+        elif event == Event.CAM_CONTROL:
+            # Fast-path camera control frame (emitted when the intent changes).
+            self._send({"type": "cam_control", **data})
 
     def _patch_for(self, snap: Snapshot) -> str | None:
         """The resolved hydra patch for this state, or None if resolution is unavailable.
@@ -69,9 +77,15 @@ class Display:
             return None
         return code if isinstance(code, str) and code else None
 
+    def _camera_field(self) -> Optional[dict]:
+        """The camera intent for the state frame, or None when no camera is wired."""
+        if self._camera is None:
+            return None
+        return self._camera.intent.to_dict()
+
     def _frame(self, snap: Snapshot) -> dict:
         """A P5live-friendly frame for the current state (includes the resolved patch)."""
-        return {
+        frame = {
             "type": "state",
             "zone": snap.zone,
             "mode": snap.mode,
@@ -84,8 +98,13 @@ class Display:
             "moving": snap.moving,
             "flags": dict(snap.flags),
         }
+        cam = self._camera_field()
+        if cam is not None:
+            frame["camera"] = cam
+        return frame
 
 
 def make_display(bus: StateBus, send: Callable[[dict], None], enabled: bool,
-                 patch_code: Callable[[str, str, str], str] = None) -> Display:
-    return Display(bus, send, enabled=enabled, patch_code=patch_code)
+                 patch_code: Callable[[str, str, str], str] = None,
+                 camera: Optional[CameraController] = None) -> Display:
+    return Display(bus, send, enabled=enabled, patch_code=patch_code, camera=camera)

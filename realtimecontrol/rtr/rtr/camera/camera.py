@@ -1,93 +1,92 @@
-"""Camera control adapter.
+"""Core-side camera controller.
 
-The camera is the robot's primary input. Per the project notes it runs two modes:
+Owns the camera intent (which camera is active, in which mode, with which lock)
+and the latest telemetry from the RPI. The brain drives the intent; the display
+reads it for the state frame and the ``CAM_CONTROL`` event for the fast path.
 
-- **track** – follows a person, emits fast control commands,
-- **analyze** – decodes emotion, emits slow control commands.
-
-This adapter is the *control* side of the camera: it reacts to the core's state
-(which zone / mode is active) and configures the camera backend accordingly, and it is
-the seam where the actual vision pipeline (``input_processing/``) plugs in. The heavy
-vision work is delegated to a :class:`CameraBackend`, so this module stays small and
-testable.
-
-The backend reports detections back to the core as commands (e.g. a tracked person
-becomes a ``goto_zone`` / ``set_joint_pose`` for the head to follow).
+The RPI runs the physical cameras + vision pipeline (YOLO/ByteTrack/face) and
+sends ``CAM_*`` telemetry to the core via the existing WS. The brain receives
+that telemetry, decides the lock / camera switch / move, and updates the intent
+here. The display broadcasts the intent on every state frame and emits a
+``cam_control`` event frame when it changes.
 """
 
-from typing import Callable, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
 from ..core.bus import StateBus
-from ..core.commands import Command, Event
+from ..core.commands import Cmd, Event
 
+
+CAMERA_CHOICES = ("wide", "close", "both")
 CAMERA_MODES = ("idle", "track", "analyze")
 
 
-class CameraBackend:
-    """Interface for the concrete vision pipeline (e.g. the YOLO trackers)."""
+@dataclass
+class CameraIntent:
+    """The brain's current camera configuration for the RPI."""
 
-    def configure(self, mode: str) -> None:
-        raise NotImplementedError
+    active: str = "wide"
+    mode: str = "idle"
+    lock_id: Optional[int] = None
 
-    def update(self, snapshot) -> Optional[Command]:
-        """Optional: return a Command for the core based on the latest frame."""
-        return None
-
-
-class NullCameraBackend(CameraBackend):
-    """No-op backend used when the camera hardware is absent."""
-
-    def configure(self, mode: str) -> None:
-        pass
+    def to_dict(self) -> Dict[str, Any]:
+        return {"active": self.active, "mode": self.mode, "lock_id": self.lock_id}
 
 
-class Camera:
-    """Drives the camera backend from the core's state."""
+class CameraController:
+    """Owns the camera intent and the latest RPI telemetry.
 
-    def __init__(self, bus: StateBus, backend: CameraBackend = None,
-                 on_command: Callable[[Command], None] = None):
+    The brain calls :meth:`set_intent` to change the configuration and
+    :meth:`handle_telemetry` to store incoming ``CAM_*`` payloads. The display
+    reads :attr:`intent` for the state frame and subscribes to
+    ``Event.CAM_CONTROL`` for the fast-path event frame.
+    """
+
+    def __init__(self, bus: StateBus):
         self.bus = bus
-        self.backend = backend or NullCameraBackend()
-        self._on_command = on_command
-        self.mode = "idle"
-        bus.subscribe(self.on_event)
+        self.intent = CameraIntent()
+        # Latest telemetry from the RPI (updated by the brain on each CAM_* command).
+        self.status: Optional[Dict[str, Any]] = None
+        self.candidates: Optional[Dict[str, Any]] = None
+        self.track: Optional[Dict[str, Any]] = None
+        self.face: Optional[Dict[str, Any]] = None
 
-    def on_event(self, event: Event, data) -> None:
-        # Zone changes imply a new camera configuration (e.g. wide vs close).
-        if event in (Event.ZONE_CHANGED, Event.MODE_CHANGED):
-            self.apply_for_zone(data if isinstance(data, str) else self._zone_of(data))
+    def set_intent(self, active: str = None, mode: str = None,
+                   lock_id: Optional[int] = None) -> None:
+        """Change the camera intent; publish a ``CAM_CONTROL`` event on change.
 
-    def apply_for_zone(self, zone: str) -> None:
-        """Pick a camera mode for the zone and configure the backend."""
-        # Zones that are about looking / interacting track the person; rest/idle idle.
-        if zone in ("rest", "init"):
-            mode = "idle"
-        elif zone in ("wakeup", "stretch", "wander", "wildwander"):
-            mode = "track"
-        else:
-            mode = "idle"
-        self.set_mode(mode)
+        Only the supplied fields are updated; omitted fields keep their current
+        value. ``lock_id`` may be ``None`` to clear the lock.
+        """
+        changed = False
+        if active is not None and active in CAMERA_CHOICES:
+            if self.intent.active != active:
+                self.intent.active = active
+                changed = True
+        if mode is not None and mode in CAMERA_MODES:
+            if self.intent.mode != mode:
+                self.intent.mode = mode
+                changed = True
+        if lock_id is not None:
+            if self.intent.lock_id != lock_id:
+                self.intent.lock_id = lock_id
+                changed = True
+        if changed:
+            self.bus.publish(Event.CAM_CONTROL, self.intent.to_dict())
 
-    def set_mode(self, mode: str) -> None:
-        if mode not in CAMERA_MODES:
-            return
-        self.mode = mode
-        try:
-            self.backend.configure(mode)
-        except Exception as exc:  # noqa: BLE001 - camera must not kill the core
-            print(f"[camera] configure error: {exc}")
-
-    def poll(self, snapshot) -> None:
-        """Call from the engine each tick to let the backend emit a command."""
-        cmd = self.backend.update(snapshot)
-        if cmd is not None and self._on_command:
-            self._on_command(cmd)
-
-    @staticmethod
-    def _zone_of(snapshot) -> str:
-        return getattr(snapshot, "zone", "init")
+    def handle_telemetry(self, cmd: Cmd, payload: Dict[str, Any]) -> None:
+        """Store the latest telemetry from a ``CAM_*`` command (called by the brain)."""
+        if cmd == Cmd.CAM_STATUS:
+            self.status = payload
+        elif cmd == Cmd.CAM_CANDIDATES:
+            self.candidates = payload
+        elif cmd == Cmd.CAM_TRACK:
+            self.track = payload
+        elif cmd == Cmd.CAM_FACE:
+            self.face = payload
 
 
-def make_camera(bus: StateBus, enabled: bool, on_command=None) -> Camera:
-    """Build a camera adapter (disabled -> null backend)."""
-    return Camera(bus, backend=NullCameraBackend(), on_command=on_command)
+def make_camera(bus: StateBus, enabled: bool = True, **kwargs) -> CameraController:
+    """Build the core-side camera controller."""
+    return CameraController(bus)
