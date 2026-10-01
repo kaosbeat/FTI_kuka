@@ -1,2 +1,5 @@
+*.pt
+__pycache__/
 vit-micro-facial-expressions/*
 vit-micro-facial-expressions
+yolo26n_ncnn_model/
