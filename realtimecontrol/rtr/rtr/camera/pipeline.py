@@ -7,6 +7,7 @@ per-frame results (candidates, tracked offset, face) for the camera remote to
 send as ``CAM_*`` telemetry.
 """
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -22,6 +23,19 @@ CAMERA_BOTH = "both"
 MODE_IDLE = "idle"
 MODE_TRACK = "track"
 MODE_ANALYZE = "analyze"
+
+# Local model directory (excluded from git; drop .pt weights here).
+MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+
+
+def resolve_model(path: str) -> str:
+    """Resolve a model path: use it as-is if it exists, else look in MODEL_DIR."""
+    if os.path.isabs(path) or os.path.exists(path):
+        return path
+    local = os.path.join(MODEL_DIR, path)
+    if os.path.exists(local):
+        return local
+    return path
 
 
 @dataclass
@@ -46,7 +60,7 @@ class Camera:
     def __init__(self, name: str, camera_num: int = 0,
                  width: int = 640, height: int = 480,
                  frame_rate: int = 30,
-                 model_path: str = "yolo26n_ncnn_model",
+                 model_path: str = "yolo26n.pt",
                  tracker_cfg: str = "bytetrack.yaml"):
         self.name = name
         self.camera_num = camera_num
@@ -73,7 +87,7 @@ class Camera:
     def _ensure_model(self):
         if self._model is None:
             from ultralytics import YOLO
-            self._model = YOLO(self.model_path)
+            self._model = YOLO(resolve_model(self.model_path))
 
     def _ensure_cam(self):
         if self._cam is None:
@@ -221,7 +235,7 @@ class Camera:
 class FaceDetector:
     """Face analysis for the close camera (stub; deepface integration is a follow-up)."""
 
-    def __init__(self, model_path: str = "yolo26n_ncnn_model"):
+    def __init__(self, model_path: str = "yolov12n-face.pt"):
         self.model_path = model_path
         self._model = None
 
@@ -229,7 +243,7 @@ class FaceDetector:
         if self._model is None:
             try:
                 from ultralytics import YOLO
-                self._model = YOLO(self.model_path)
+                self._model = YOLO(resolve_model(self.model_path))
             except Exception:
                 self._model = None
 
@@ -260,7 +274,7 @@ class Pipeline:
                  width: int = 640,
                  height: int = 480,
                  frame_rate: int = 30,
-                 model_path: str = "yolo26n_ncnn_model",
+                 model_path: str = "yolo26n.pt",
                  tracker_cfg: str = "bytetrack.yaml"):
         self.wide = Camera(CAMERA_WIDE, camera_num=wide_cam_num,
                             width=width, height=height, frame_rate=frame_rate,

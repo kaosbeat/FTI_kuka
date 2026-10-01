@@ -31,9 +31,9 @@ class CameraRemote:
                  http_port: int = 8766,
                  wide_cam_num: int = 0, close_cam_num: int = 1,
                  width: int = 640, height: int = 480,
-                 frame_rate: int = 30,
-                 model_path: str = "yolo26n_ncnn_model",
-                 tracker_cfg: str = "bytetrack.yaml"):
+                  frame_rate: int = 30,
+                  model_path: str = "yolo26n.pt",
+                  tracker_cfg: str = "bytetrack.yaml"):
         self.core_host = core_host
         self.core_port = core_port
         self.http_port = http_port
@@ -151,7 +151,7 @@ def parse_args(argv=None):
     parser.add_argument("--width", type=int, default=640, help="frame width")
     parser.add_argument("--height", type=int, default=480, help="frame height")
     parser.add_argument("--fps", type=int, default=30, help="target frame rate")
-    parser.add_argument("--model", default="yolo26n_ncnn_model", help="YOLO model path")
+    parser.add_argument("--model", default="yolo26n.pt", help="YOLO model path (resolved in rtr/camera/models)")
     parser.add_argument("--tracker", default="bytetrack.yaml", help="tracker config")
     parser.add_argument("--log-level", default="INFO", help="log level")
     return parser.parse_args(argv)
