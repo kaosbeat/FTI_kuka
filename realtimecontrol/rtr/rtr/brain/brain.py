@@ -12,6 +12,7 @@ The per-tick decision (which target to command the robot to) is made by the
 commands into the machine; the engine calls ``machine.step`` every tick.
 """
 
+import time
 from typing import List, Optional
 
 from ..core.commands import Cmd, Command
@@ -39,6 +40,16 @@ class Brain:
                  camera=None):
         self.machine = machine
         self.camera = camera
+        # Receive-side visibility: log CAM_* telemetry (throttled).
+        self._last_cand_ids = None
+        self._cam_log_ts: dict = {}
+
+    def _cam_log(self, key: str, msg: str, force: bool = False) -> None:
+        """Log camera telemetry at most once per second (force overrides)."""
+        now = time.time()
+        if force or now - self._cam_log_ts.get(key, 0.0) >= 1.0:
+            print(f"[brain] cam {msg}")
+            self._cam_log_ts[key] = now
 
     # ------------------------------------------------------------------
     # Command intake.
@@ -85,6 +96,7 @@ class Brain:
     # ------------------------------------------------------------------
     def _handle_cam_status(self, p: dict) -> None:
         """Store the camera health/status telemetry."""
+        self._cam_log("status", f"status: camera={p.get('camera')} fps={p.get('fps', 0):.1f} ok={p.get('ok')}")
         if self.camera is not None:
             self.camera.handle_telemetry(Cmd.CAM_STATUS, p)
 
@@ -97,6 +109,13 @@ class Brain:
         if self.camera is not None:
             self.camera.handle_telemetry(Cmd.CAM_CANDIDATES, p)
         cands = p.get("candidates", [])
+        ids = tuple(c.get("id") for c in cands)
+        changed = ids != self._last_cand_ids
+        self._last_cand_ids = ids
+        if cands:
+            self._cam_log("cand", f"candidates: ids={list(ids)} conf={[round(c.get('conf', 0), 2) for c in cands]}", force=changed)
+        elif self._cam_log_ts.get("cand"):
+            self._cam_log("cand", "candidates: (none)")
         if not cands:
             return
         best = None
@@ -125,6 +144,7 @@ class Brain:
         """
         if self.camera is not None:
             self.camera.handle_telemetry(Cmd.CAM_TRACK, p)
+        self._cam_log("track", f"track: id={p.get('id')} dx={p.get('dx', 0):.1f} dy={p.get('dy', 0):.1f}")
 
         zone = self.machine.current_zone
         if zone in STILL_ZONES:
@@ -162,3 +182,4 @@ class Brain:
             # Simple heuristic: face detected → close camera + analyze mode.
             if p.get("bbox") is not None:
                 self.camera.set_intent(active="close", mode="analyze")
+                self._cam_log("face", f"face: id={p.get('id')} bbox={p.get('bbox')}")

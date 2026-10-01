@@ -17,9 +17,11 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
+import cv2
+
 from ..core.commands import Cmd
 from ..remote.connection import Connection
-from .pipeline import Pipeline
+from .pipeline import Pipeline, annotate
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,8 @@ class CameraRemote:
                  width: int = 640, height: int = 480,
                   frame_rate: int = 30,
                   model_path: str = "yolo26n.pt",
-                  tracker_cfg: str = "bytetrack.yaml"):
+                  tracker_cfg: str = "bytetrack.yaml",
+                  show: bool = False):
         self.core_host = core_host
         self.core_port = core_port
         self.http_port = http_port
@@ -53,6 +56,11 @@ class CameraRemote:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         # Current intent from the core (active, mode, lock_id).
         self._intent = {"active": "wide", "mode": "idle", "lock_id": None}
+        # Debug display + telemetry bookkeeping.
+        self._show = show
+        self._known_ids: set = set()
+        self._sent = {"status": 0, "candidates": 0, "track": 0, "face": 0}
+        self._last_stats = 0.0
 
     def _on_state(self, data: Dict[str, Any]) -> None:
         """Handle a state frame from the core; extract the camera intent."""
@@ -83,27 +91,46 @@ class CameraRemote:
         """Send CAM_* telemetry to the core via the WS connection."""
         if self._conn is None or not self._conn.connected:
             return
-        if "status" in payloads:
-            self._conn.send_command({"cmd": Cmd.CAM_STATUS.value, **payloads["status"]})
-        if "candidates" in payloads:
-            self._conn.send_command({"cmd": Cmd.CAM_CANDIDATES.value, **payloads["candidates"]})
-        if "track" in payloads:
-            self._conn.send_command({"cmd": Cmd.CAM_TRACK.value, **payloads["track"]})
-        if "face" in payloads:
-            self._conn.send_command({"cmd": Cmd.CAM_FACE.value, **payloads["face"]})
+        for key, cmd in (("status", Cmd.CAM_STATUS), ("candidates", Cmd.CAM_CANDIDATES),
+                         ("track", Cmd.CAM_TRACK), ("face", Cmd.CAM_FACE)):
+            if key in payloads:
+                self._conn.send_command({"cmd": cmd.value, **payloads[key]})
+                self._sent[key] += 1
+
+    def _log_targets(self, result) -> None:
+        """Log when candidate targets appear or disappear."""
+        if not result.active:
+            return
+        ids = {c["id"] for c in result.candidates}
+        for cid in sorted(ids - self._known_ids):
+            c = next(x for x in result.candidates if x["id"] == cid)
+            logger.info("target found: id=%s conf=%.2f (%d candidates)", cid, c["conf"], len(ids))
+        for cid in sorted(self._known_ids - ids):
+            logger.info("target lost: id=%s", cid)
+        self._known_ids = ids
 
     async def _pipeline_loop(self) -> None:
         """Run the pipeline at the target frame rate; send telemetry each frame."""
         interval = 1.0 / self.pipeline.wide.frame_rate
         while self._running:
             start = time.time()
+            result = None
             try:
                 result = self.pipeline.process()
                 payloads = self.pipeline.to_telemetry(result)
                 self._send_telemetry(payloads)
+                self._log_targets(result)
+                if self._show and result.frame is not None:
+                    cv2.imshow("camera debug", annotate(result.frame, result))
+                    cv2.waitKey(1)
             except Exception as exc:
                 logger.error("pipeline error: %s", exc)
-            elapsed = time.time() - start
+            now = time.time()
+            if now - self._last_stats >= 5.0:
+                logger.info("telemetry sent: %s",
+                            " ".join(f"{k}={v}" for k, v in self._sent.items()))
+                self._last_stats = now
+            elapsed = now - start
             sleep_for = interval - elapsed
             if sleep_for > 0:
                 await asyncio.sleep(sleep_for)
@@ -136,6 +163,8 @@ class CameraRemote:
             self._running = False
             pipeline_task.cancel()
             await asyncio.gather(pipeline_task, return_exceptions=True)
+            if self._show:
+                cv2.destroyAllWindows()
             await self._conn.stop()
             self.pipeline.stop()
             logger.info("camera remote stopped")
@@ -153,6 +182,7 @@ def parse_args(argv=None):
     parser.add_argument("--fps", type=int, default=30, help="target frame rate")
     parser.add_argument("--model", default="yolo26n.pt", help="YOLO model path (resolved in rtr/camera/models)")
     parser.add_argument("--tracker", default="bytetrack.yaml", help="tracker config")
+    parser.add_argument("--show", action="store_true", help="open the debug display window")
     parser.add_argument("--log-level", default="INFO", help="log level")
     return parser.parse_args(argv)
 
@@ -172,6 +202,7 @@ def main(argv=None) -> int:
         frame_rate=args.fps,
         model_path=args.model,
         tracker_cfg=args.tracker,
+        show=args.show,
     )
 
     try:

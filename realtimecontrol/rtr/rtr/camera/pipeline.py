@@ -52,6 +52,27 @@ class FrameResult:
     track: Optional[Dict[str, Any]] = None
     # Face analysis (close camera only).
     face: Optional[Dict[str, Any]] = None
+    # Raw BGR frame from the active camera (debug display).
+    frame: Optional[np.ndarray] = None
+
+
+def annotate(frame: np.ndarray, result: FrameResult) -> np.ndarray:
+    """Draw candidates, the locked target, and a status overlay (debug window)."""
+    img = frame.copy()
+    for c in result.candidates:
+        x1, y1 = int(c["x1"]), int(c["y1"])
+        x2, y2 = int(c["x2"]), int(c["y2"])
+        locked = result.track is not None and c["id"] == result.track["id"]
+        color = (0, 255, 0) if locked else (0, 160, 255)
+        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+        label = f"#{c['id']} {c['conf']:.2f}" + (" LOCK" if locked else "")
+        cv2.putText(img, label, (x1, max(0, y1 - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    lock_txt = result.track["id"] if result.track else "-"
+    text = (f"{result.camera} | mode={result.mode} | lock={lock_txt} | "
+            f"{result.fps:.0f} fps | {len(result.candidates)} cand")
+    cv2.putText(img, text, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    return img
 
 
 class Camera:
@@ -221,6 +242,7 @@ class Camera:
             ok=True,
             candidates=candidates,
             track=track,
+            frame=frame,
         )
 
     def stop(self):
@@ -307,11 +329,13 @@ class Pipeline:
             result = self.wide.process()
             if self.mode == MODE_ANALYZE and result.track is not None:
                 result.face = self._analyze_face(result)
+            result.mode = self.mode
             return result
         elif self.active == CAMERA_CLOSE:
             result = self.close.process()
             if self.mode == MODE_ANALYZE and result.track is not None:
                 result.face = self._analyze_face(result)
+            result.mode = self.mode
             return result
         elif self.active == CAMERA_BOTH:
             # Run both; return the wide result (primary) with close face data.
@@ -319,6 +343,7 @@ class Pipeline:
             close_result = self.close.process()
             if self.mode == MODE_ANALYZE and close_result.track is not None:
                 result.face = self._analyze_face(close_result)
+            result.mode = self.mode
             return result
         return FrameResult(camera=self.active, active=False)
 
