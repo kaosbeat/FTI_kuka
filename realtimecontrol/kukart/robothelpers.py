@@ -1,5 +1,31 @@
 from typing import List, Optional
 import numpy as np
+import random
+import time
+from threading import Thread
+
+# class KukaLoop(Thread):
+#     def __init__(self, kukastate):
+#         self.robot = Robot(port=18735)
+#         self.robot.connect()
+#         self.kukastate = KukaState(robot)
+#         # self.input_queue = Queue()
+#         # self.output_queue = Queue()
+#         print(f"kuka state initiated: {self.kukastate.state.get("robot")}")
+    
+#     def run(self) -> None:
+#         while True:
+#             print(".")
+#             time.sleep(0.001)
+
+#     def move_to(self) -> bool:
+#         return True
+
+#     def get_state(self) -> KukaState:
+#         return self.kukastate.state
+
+#     def close(self):
+#         self.kukastate.state["robot"].disconnect()
 
 
 def rotation_matrix(axis, theta):
@@ -31,7 +57,7 @@ def calculate_away_and_horizon_angle(q1, q2, q3, q4, L1, L2):
     
     # 3. Get current tool orientation (FK rotation up to axis 4)
     R0_4 = rotation_matrix('z', q1) @ rotation_matrix('y', q2) @ \
-           rotation_matrix('y', q3) @ rotation_matrix('x', q4)
+        rotation_matrix('y', q3) @ rotation_matrix('x', q4)
     
     v_tool = R0_4[:, 2] # The local Z-axis of the tool
     
@@ -46,7 +72,6 @@ def calculate_away_and_horizon_angle(q1, q2, q3, q4, L1, L2):
     print(np.rad2deg(angle_diff * direction))
     return np.rad2deg(angle_diff * direction)
 
-
 def comparelist(
     list1: List[float], 
     list2: List[float], 
@@ -60,7 +85,7 @@ def comparelist(
         list2: The second list of numbers.
         margin: The allowed tolerance/margin (a positive float).
         count: (Optional) The number of initial elements to compare. 
-               If None, the entire lists are compared.
+            If None, the entire lists are compared.
 
     Returns:
         True if all compared pairs are within the margin, False otherwise.
@@ -127,6 +152,73 @@ def posSafe(pos, limits):
                 return False
     return True
 
+def moveRandomInZoneLimits(state):
+    pose = state.get("curjpos")
+    currentzone = state.get("currentzone")
+    # print(currentzone, pose)
+    # print(state.get("zones")[currentzone]["safezone"])
+    for i,jointlimit in enumerate(state.get("zones")[currentzone]["safezone"]):
+        # if self.state.get("actionmode"):
+        for i in range(3):
+            # print(" joint ", i, " limit", jointlimit)
+            val = (0.5 - random.random())*state.get("limitadjust")[i]
+            # print("val=" , val)
+            pose[i] = pose[i] + val
+            # print("poseprefit =", pose)
+            pose[i] = fitlimits(i,pose[i],state.get("zones")[currentzone]["safezone"])
+            # print("posepostfit =", pose)
+            
+
+        # pass
+    pose[4] = -(pose[1] + pose[2])
+    pose[4] = fitlimits(4,pose[4], state.get("zones")[currentzone]["safezone"])
+    # a5_required = calculate_away_and_horizon_angle(pose[0], pose[1],pose[2], pose[3], 1, 1)
+    # pose[4] = a5_required
+    # print(pose)
+    state.update({"nextjpos":pose})
+
+def trackInZoneLimits(state, speed):
+    '''
+    speed: negative is CCW, positive is CW
+    returns False if tracking is no longer possible in current zone at current speed
+    '''
+    currentzone = state.get("currentzone")
+    pose = state.get("curjpos")
+    limits =  state.get("zones")[currentzone]["safezone"]
+    pose[0] = pose[0] + speed
+    print(posSafe(pose, limits))
+    if (not posSafe(pose, limits)):
+        pose[0] = fitlimits(0,pose[0], state.get("zones")[currentzone]["safezone"])
+        return False
+    else:
+        pose[0] = fitlimits(0,pose[0], state.get("zones")[currentzone]["safezone"])
+        state.update({"nextjpos":pose})
+        return True
+
+
+
+# def doAction(self, state):
+def doAction(state):
+    currentaction = state.get("currentaction") 
+    currentzone = state.get("currentzone")
+    pose = state.get("curjpos")
+    actionindex = state.get("actionindex")
+    actionlength = len(state.get("zones")[currentzone]["actions"][currentaction])
+    print(currentaction)
+    print(actionindex, "/" , actionlength-1)
+    for i,jointlimit in enumerate(state.get("zones")[currentzone]["safezone"]):
+        pose[i] = state.get("zones")[currentzone]["actions"][currentaction]["pos"][actionindex][i]
+        pose[i] = fitlimits(i,pose[i],state.get("zones")[currentzone]["safezone"])
+        # print(pose)
+    state.update({"speed":state.get("zones")[currentzone]["actions"][currentaction]["speed"][actionindex]})
+    actionindex+=1
+    if actionindex > actionlength:
+        actionindex = 0
+    print("actionindex: ", actionindex)
+    state.update({"actionindex":actionindex})
+    state.update({"nextjpos":pose})
+
+
 
 
 def activateZone(zone, state):
@@ -139,13 +231,15 @@ def activateZone(zone, state):
     # block state changes
     state.update({"modechange":True})
     # get current pos    
-    print(posSafe(state.get("curjpos"), state.get("zones")[zone]["safezone"]))
+    # print(posSafe(state.get("curjpos"), state.get("zones")[zone]["safezone"]))
     if (not posSafe(state.get("curjpos"), state.get("zones")[zone]["safezone"])): # is current pos in safe zone of new limits?
         print(" not in safezone ")
         pose = state.get("zones")[currentzone]["exitpos"] # goto exit pos 
         state.update({"nextjpos":pose}) 
-        # while (not (comparelist(state.get("curjpos"), state.get("nextjpos"),0.1,5))):
-            # print("moving to exit position")
+        while (not (comparelist(state.get("curjpos"), state.get("nextjpos"),0.1,5))):
+            print("moving to exit position")
+            print(state.get("curjpos"))
+            time.sleep(0.5)
             # robot.move("joint", state.get("nextjpos") , 100)   
         print("moved to exit position")
         # if (not posSafe(state.get("curjpos"), state.get("zones")[zone]["safezone"])): # is current pos in safe zone?
@@ -173,8 +267,51 @@ def activateZone(zone, state):
 
     # set new state
     state.update({"currentzone":zone})
-    print(state.get("currentzone"))
     state.update({"speed":state.get("zones")[zone]["speed"]})
      # unblock state changes 
     state.update({"modechange":False})
+    print(state.get("currentzone"))
 
+def activateMode(mode, state):
+    if (mode == "action"):
+        #action mode on
+        # self.state.update(({"actionmode" :True}))
+        state.update(({"mode": "action"}))
+        currentzone = state.get("currentzone")
+        actions = len(state.get("zones")[currentzone]["actions"])
+        currentaction = state.get("currentaction") 
+        if currentaction ==  None:
+            print("trying to set action")
+            print(currentaction, currentzone)
+            currentaction = list(state.get("zones")[currentzone]["actions"].keys())[0]
+            print("setting first action to", currentaction)
+        else:
+            print("trying to set next action")
+            actionsindex = list(state.get("zones")[currentzone]["actions"]).index(currentaction)
+            print(actionsindex)
+            if actionsindex + 1 >= actions:
+                newindex = 0
+            else:
+                newindex = actionsindex + 1
+            print(newindex)
+            currentaction =  list(state.get("zones")[currentzone]["actions"].keys())[newindex]
+        print(currentaction)
+        state.update({"currentaction":currentaction}) 
+        # other modes off
+        # self.state.update({"randommode":False })       
+        print("action mode")
+
+    if (mode == "random"):
+        #random mode on
+        state.update(({"mode": "random"}))
+        # self.state.update({"randommode":True })       
+        # other modes off
+        # self.state.update(({"actionmode" :False}))
+        state.update(({"currentaction" :None}))
+        print("random mode")
+
+
+    if (mode == "track"):
+        state.update(({"mode": "track"}))
+        state.update(({"currentaction" :None}))
+        print("track mode")

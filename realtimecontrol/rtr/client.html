@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RTR control</title>
+<style>
+  :root {
+    --bg: #111318; --panel: #181c24; --border: #2a2f3a;
+    --text: #d7dbe2; --dim: #7c8494; --accent: #4fc08d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font: 14px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #e05d5d; }
+  .dot.on { background: var(--accent); }
+  #status { color: var(--dim); }
+  #host { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
+          padding: 6px 8px; width: 260px; font: inherit; }
+  button {
+    background: #22262f; color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 5px 10px; cursor: pointer; font: inherit;
+  }
+  button:hover { border-color: var(--accent); }
+  button.active { background: var(--accent); color: #0b0d10; border-color: var(--accent); }
+  button.dim { opacity: .45; }
+  main { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+       color: var(--dim); margin: 0 0 10px; }
+  .kv { display: flex; justify-content: space-between; padding: 3px 0;
+        border-bottom: 1px solid #20242d; }
+  .kv > span:first-child { color: var(--dim); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .chip { border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; color: var(--dim); font-size: 12px; }
+  .chip.on { color: var(--accent); border-color: var(--accent); }
+  .axis { margin-bottom: 10px; }
+  .axis .row { display: flex; justify-content: space-between; font-size: 13px; }
+  .axis .tgt { color: var(--dim); }
+  .bar { height: 6px; background: #0d0f13; border-radius: 3px; margin-top: 3px;
+         position: relative; overflow: hidden; }
+  .bar .mark { position: absolute; top: 0; bottom: 0; width: 4px; background: var(--accent); }
+  .btnrow { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; align-items: center; }
+  .poseGrid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-bottom: 8px; }
+  .poseGrid label { display: flex; flex-direction: column; font-size: 11px; color: var(--dim); gap: 2px; }
+  input[type=number] { width: 100%; background: #0d0f13; color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; font: inherit; }
+  input[type=range] { width: 130px; vertical-align: middle; }
+  .limrow { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+  #log { height: 180px; overflow-y: auto; font-size: 12px; color: var(--dim);
+         white-space: pre-wrap; word-break: break-all; }
+  #robot3d-section { grid-column: 1 / -1; }
+  #robot3d { width: 100%; height: 360px; border: 1px solid var(--border);
+            border-radius: 6px; overflow: hidden; background: #0d0f13; }
+  #robot3d canvas { display: block; }
+  /* Fill-window mode: the 3D section takes over the whole window; the other cards are hidden. */
+  body.fill3d { display: flex; flex-direction: column; height: 100vh; padding-bottom: 0; }
+  body.fill3d main { flex: 1; min-height: 0; grid-template-rows: 1fr; }
+  body.fill3d main section:not(#robot3d-section) { display: none; }
+  body.fill3d #robot3d-section { display: flex; flex-direction: column; min-height: 0; }
+  body.fill3d #robot3d { flex: 1; min-height: 0; height: auto; }
+  /* Browser fullscreen: the section fills the screen and the 3D div takes the leftover space. */
+  #robot3d-section:fullscreen { display: flex; flex-direction: column; }
+  #robot3d-section:fullscreen #robot3d { flex: 1; min-height: 0; height: auto; }
+  .legend { font-size: 11px; color: var(--dim); margin-top: 6px; }
+  .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+                margin: 0 4px 0 0; vertical-align: middle; }
+  #patchSel { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
+              border-radius: 4px; padding: 4px 6px; font: inherit; width: 200px; }
+  #patchPreview { width: 100%; height: 200px; border: 1px solid var(--border);
+                  border-radius: 6px; overflow: hidden; background: #0d0f13; margin-top: 8px; }
+  #patchPreview canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Exhibiting Intelligence - direct brain interface</h1>
+  <span class="dot" id="dot"></span><span id="status">disconnected</span>
+  <input id="host" value="ws://localhost:8765" spellcheck="false">
+  <button id="connect">connect</button>
+</header>
+
+<main>
+  <section id="robot3d-section">
+    <h2>3d view</h2>
+    <div id="robot3d"></div>
+    <div class="legend"><span class="sw" style="background:#f67828"></span>current
+      &nbsp;<span class="sw" style="background:#4fc08d"></span>target</div>
+    <div class="btnrow" style="margin-top:6px"><button id="ghostToggle" class="active">ghost arm</button><button id="fillToggle">fill window</button><button id="fsToggle">fullscreen</button></div>
+    <div class="kv" style="margin-top:8px"><span>tool (x, y, z)</span><span id="toolPos">&#8211;</span></div>
+  </section>
+
+  <section>
+    <h2>state</h2>
+    <div class="kv"><span>zone</span><span id="zone">&#8211;</span></div>
+    <div class="kv"><span>mode</span><span id="mode">&#8211;</span></div>
+    <div class="kv"><span>action</span><span id="action">&#8211;</span></div>
+    <div class="kv"><span>speed</span><span id="speed">&#8211;</span></div>
+    <div class="kv"><span>moving</span><span id="moving">&#8211;</span></div>
+    <div class="chips" id="flags"></div>
+  </section>
+
+  <section>
+    <h2>axes (cur / target)</h2>
+    <div id="axes"></div>
+    <h2 style="margin-top:12px">cartesian (sim)</h2>
+    <div class="kv"><span>cart</span><span id="cart" style="font-size:12px">&#8211;</span></div>
+  </section>
+
+  <section>
+    <h2>patches (hydra)</h2>
+    <div class="btnrow">
+      <select id="patchSel"></select>
+    </div>
+    <div id="patchPreview"></div>
+    <div class="kv" style="margin-top:8px"><span>pushed to screen</span><span id="patchPush">&#8211;</span></div>
+    <div class="kv"><span>auto (live state)</span><span id="patchAuto">&#8211;</span></div>
+    <div class="kv"><span>render</span><span><a href="render.html" style="color:var(--accent)">fullscreen &#8594;</a></span></div>
+  </section>
+
+  <section>
+    <h2>zones</h2>
+    <div class="btnrow" id="zones"></div>
+    <h2>modes</h2>
+    <div class="btnrow" id="modes"></div>
+    <h2>actions</h2>
+    <div class="btnrow" id="actions"></div>
+    <h2>joint pose</h2>
+    <div class="poseGrid" id="poseGrid"></div>
+    <div class="btnrow">
+      <button id="poseGo">go (hold)</button>
+      <button id="poseLoad">load current</button>
+    </div>
+    <h2>wander limit (deg/trigger)</h2>
+    <div id="limits"></div>
+    <div class="btnrow"><button id="randomWrist">random wrist</button></div>
+  </section>
+
+  <section>
+    <h2>log</h2>
+    <div id="log"></div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hydra-synth/dist/hydra-synth.js"></script>
+<script src="rtr3d.js"></script>
+<script>
+"use strict";
+
+// Built-in fallback zone table (mirrors rtr/state/zones.py: safezones + exits +
+// action names). Used when the HTTP API is unreachable (e.g. opened from file://).
+// Over HTTP it is replaced by GET /api/zones (the live, editable table).
+const FALLBACK_ZONES = {
+  init:       { safezone: [[-94,122],[-105,-65],[89,115],[-15,15],[-15,45],[-357,357]],  exits: ["rest"],                    actions: {} },
+  rest:       { safezone: [[-5,5],[-134,-130],[155,157],[-3,3],[-10,10],[-357,357]],     exits: ["wakeup"],                  actions: {breathe:{},look:{}} },
+  wakeup:     { safezone: [[-94,122],[-134,-123],[136,157],[-23,23],[-25,25],[-357,357]],exits: ["stretch","wander"],        actions: {breathe:{},look:{}} },
+  stretch:    { safezone: [[-94,122],[-98,-96],[13,19],[-2,2],[85,95],[-357,357]],       exits: ["wander"],                  actions: {breathe:{},look:{}} },
+  wander:     { safezone: [[-94,122],[-70,-60],[29,100],[-4,4],[-118,118],[-357,357]],   exits: ["stretch","wildwander"],    actions: {breathe:{},look:{}} },
+  wildwander: { safezone: [[-94,122],[-124,-60],[-19,157],[-1,1],[-118,118],[-357,357]], exits: ["stretch","wander"],        actions: {breathe:{},look:{}} },
+};
+let ZONES = FALLBACK_ZONES;
+let currentZone = null;
+
+const AXES = ["A1","A2","A3","A4","A5","A6"];
+const MODES = ["wander","random","action","track","hold"];
+const FLAGS = ["wandermode","randomwristmode","dynmode","reachmode"];
+
+const $ = (id) => document.getElementById(id);
+
+// Fetch the live zone table from the core's HTTP API (same origin). Falls back to
+// FALLBACK_ZONES when the request fails (file:// usage or the core is down).
+async function fetchZones() {
+  try {
+    const r = await fetch("/api/zones", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    if (data && data.zones) {
+      ZONES = data.zones;
+      buildZoneButtons();
+      buildActionButtons(currentZone);
+    }
+  } catch (err) {
+    console.log("zones fetch failed, keeping fallback:", err);
+  }
+  // The patch chooser's zone slots follow the zone table; rebuild it on every fetch.
+  fetchPatches();
+}
+
+// ------------------------------------------------------------------
+// Patch chooser (hydra). Pick a patch slot to preview, or follow the live state.
+// The table comes from /api/patches (matched action > mode > zone > default).
+// ------------------------------------------------------------------
+const PATCH_DEFAULT = "osc(4, 0.1, 1.2).out()";
+let PATCHES = { default: PATCH_DEFAULT, zones: {}, modes: {}, actions: {} };
+let patchHydra = null;
+let patchLastCode = null;
+let patchSelValue = "auto";
+
+async function fetchPatches() {
+  let data = null;
+  try {
+    const r = await fetch("/api/patches", { cache: "no-store" });
+    if (r.ok) data = await r.json();
+  } catch (e) {}
+  if (!data) {
+    try {
+      const r = await fetch("/patches.json", { cache: "no-store" });
+      if (r.ok) data = await r.json();
+    } catch (e) {}
+  }
+  if (!data) data = { default: PATCH_DEFAULT, zones: {}, modes: {}, actions: {} };
+  PATCHES = data;
+  if (typeof PATCHES.default !== "string") PATCHES.default = PATCH_DEFAULT;
+  if (!PATCHES.zones) PATCHES.zones = {};
+  if (!PATCHES.modes) PATCHES.modes = {};
+  if (!PATCHES.actions) PATCHES.actions = {};
+  buildPatchChooser();
+  updatePatchPreview();
+}
+
+// Match precedence: action > mode > zone > default (mirrors the core's match_patch).
+// The actions table is two-level (zone -> action -> code), so the action lookup is
+// scoped to the zone.
+function matchPatch(zone, mode, action) {
+  if (zone && action) {
+    const code = (PATCHES.actions || {})[zone] && (PATCHES.actions || {})[zone][action];
+    if (typeof code === "string" && code) return code;
+  }
+  if (mode) {
+    const code = (PATCHES.modes || {})[mode];
+    if (typeof code === "string" && code) return code;
+  }
+  if (zone) {
+    const code = (PATCHES.zones || {})[zone];
+    if (typeof code === "string" && code) return code;
+  }
+  const d = PATCHES.default;
+  return (typeof d === "string" && d) ? d : PATCH_DEFAULT;
+}
+
+function patchAutoLabel(m) {
+  if (m.zone && m.action && (PATCHES.actions || {})[m.zone] && (PATCHES.actions || {})[m.zone][m.action]) return "action:" + m.action;
+  if (m.mode && (PATCHES.modes || {})[m.mode]) return "mode:" + m.mode;
+  if (m.zone && (PATCHES.zones || {})[m.zone]) return "zone:" + m.zone;
+  return "default";
+}
+
+function currentPatchCode() {
+  if (patchSelValue === "auto") {
+    const s = lastSnap || {};
+    // The core pushes the resolved patch in the state frame (single source of truth);
+    // prefer it. Fall back to local matching when it is absent (file:// or an older
+    // core that does not push the patch).
+    if (typeof s.patch === "string" && s.patch) return s.patch;
+    return matchPatch(s.zone, s.mode, s.action);
+  }
+  if (patchSelValue === "default") return PATCHES.default;
+  const idx = patchSelValue.indexOf(".");
+  const scope = patchSelValue.slice(0, idx), name = patchSelValue.slice(idx + 1);
+  if (scope === "actions") {
+    const ai = name.indexOf(".");
+    const zn = name.slice(0, ai), an = name.slice(ai + 1);
+    return ((PATCHES.actions || {})[zn] && (PATCHES.actions || {})[zn][an]) || PATCHES.default;
+  }
+  return (PATCHES[scope] && PATCHES[scope][name]) || PATCHES.default;
+}
+
+function ensurePatchHydra() {
+  if (patchHydra) return patchHydra;
+  if (typeof Hydra === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  // Match the 3D tool-screen resolution (single source of truth in rtr3d.js).
+  const res = typeof Robot3D !== "undefined" ? Robot3D.screenResolution() : [640, 360];
+  canvas.width = res[0]; canvas.height = res[1];
+  $("patchPreview").appendChild(canvas);
+  patchHydra = new Hydra({ canvas, detectAudio: false, makeGlobal: true, autoLoop: true });
+  return patchHydra;
+}
+
+function updatePatchPreview() {
+  const code = currentPatchCode();
+  const h = ensurePatchHydra();
+  if (!h) return;
+  if (code === patchLastCode) return;
+  try {
+    h.eval(code || PATCH_DEFAULT);
+    patchLastCode = code || PATCH_DEFAULT;
+  } catch (e) {
+    log("patch preview failed: " + e);
+  }
+}
+
+// Push the selected slot to the core so the 3D tool screen and the fullscreen
+// render page follow it (the core re-broadcasts it in every state frame).
+// Selecting "auto" clears the override, so the screens fall back to the live
+// zone/mode/action match.
+function pushScreenPatch() {
+  if (patchSelValue === "auto") {
+    send({ cmd: "set_screen_patch", code: null });
+    $("patchPush").textContent = "auto (following state)";
+    return;
+  }
+  const code = currentPatchCode();
+  send({ cmd: "set_screen_patch", code: code });
+  $("patchPush").textContent = code;
+}
+
+function buildPatchChooser() {
+  const sel = $("patchSel");
+  const prev = sel.value || patchSelValue;
+  sel.innerHTML = "";
+  const addOpt = (val, label) => {
+    const o = document.createElement("option");
+    o.value = val; o.textContent = label;
+    sel.appendChild(o);
+  };
+  addOpt("auto", "auto (follow state)");
+  addOpt("default", "default");
+  const zGroup = document.createElement("optgroup"); zGroup.label = "zones";
+  Object.keys(ZONES).forEach((n) => { const o = document.createElement("option"); o.value = "zones." + n; o.textContent = n; zGroup.appendChild(o); });
+  sel.appendChild(zGroup);
+  const mGroup = document.createElement("optgroup"); mGroup.label = "modes";
+  MODES.forEach((m) => { const o = document.createElement("option"); o.value = "modes." + m; o.textContent = m; mGroup.appendChild(o); });
+  sel.appendChild(mGroup);
+  const aGroup = document.createElement("optgroup"); aGroup.label = "actions";
+  Object.keys(PATCHES.actions || {}).forEach((zn) => {
+    Object.keys(PATCHES.actions[zn] || {}).forEach((an) => {
+      const o = document.createElement("option"); o.value = "actions." + zn + "." + an; o.textContent = zn + " / " + an; aGroup.appendChild(o);
+    });
+  });
+  sel.appendChild(aGroup);
+  sel.value = prev;
+  patchSelValue = sel.value || "auto";
+  $("patchPush").textContent = patchSelValue === "auto" ? "auto (following state)" : (currentPatchCode() || PATCH_DEFAULT);
+  sel.onchange = () => { patchSelValue = sel.value; pushScreenPatch(); updatePatchPreview(); };
+}
+
+// ------------------------------------------------------------------
+// Log.
+// ------------------------------------------------------------------
+const logLines = [];
+function log(line) {
+  logLines.unshift("[" + new Date().toLocaleTimeString() + "] " + line);
+  if (logLines.length > 100) logLines.pop();
+  $("log").textContent = logLines.join("\n");
+}
+
+// ------------------------------------------------------------------
+// WebSocket.
+// ------------------------------------------------------------------
+let ws = null;
+
+function setConn(on) {
+  $("dot").className = "dot" + (on ? " on" : "");
+  $("status").textContent = on ? "connected" : "disconnected";
+}
+
+function connect() {
+  const url = $("host").value.trim();
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  ws = new WebSocket(url);
+  ws.onopen = () => { setConn(true); log("connected to " + url); fetchZones(); };
+  ws.onclose = () => {
+    setConn(false);
+    log("disconnected; retrying in 2s");
+    setTimeout(connect, 2000);
+  };
+  ws.onmessage = (e) => {
+    let m;
+    try { m = JSON.parse(e.data); } catch (err) { log("bad message: " + err); return; }
+    if (m.type === "state") {
+      renderState(m);
+      $("patchAuto").textContent = patchAutoLabel(m);
+      if (patchSelValue === "auto") updatePatchPreview();
+    }
+    else if (m.type === "zones_changed") { fetchZones(); log("zones changed; re-fetching"); }
+    else if (m.type === "patches_changed") { fetchPatches(); log("patches changed; re-fetching"); }
+    else log("event " + m.type + " = " + (m.zone !== undefined ? m.zone : m.mode));
+  };
+}
+
+function send(cmd) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) { log("not connected: " + JSON.stringify(cmd)); return; }
+  ws.send(JSON.stringify(cmd));
+  log("→ " + JSON.stringify(cmd));
+}
+
+// The zones the operator can move to from `current`: its declared `exits` plus
+// the reverse exits (zones whose `exits` include `current` — where the robot
+// could have come from). Everything else is offered dimmed; the core still
+// accepts any reachable zone (path routing), the UI only restricts what it offers.
+function availableZones(current) {
+  const set = new Set();
+  const cur = ZONES[current];
+  if (cur && Array.isArray(cur.exits)) {
+    for (const e of cur.exits) if (typeof e === "string") set.add(e);
+  }
+  for (const name of Object.keys(ZONES)) {
+    const z = ZONES[name];
+    if (z && Array.isArray(z.exits) && z.exits.includes(current)) set.add(name);
+  }
+  return set;
+}
+
+// ------------------------------------------------------------------
+// Render snapshots.
+// ------------------------------------------------------------------
+const valEls = [], tgtEls = [], markEls = [], flagEls = {};
+const zoneBtns = {}, modeBtns = {}, actionBtns = {};
+const poseInputs = [];
+
+function renderState(s) {
+  // Actions are per-zone: rebuild the action buttons whenever the zone changes.
+  if (s.zone !== currentZone) {
+    currentZone = s.zone;
+    buildActionButtons(currentZone);
+  }
+
+  $("zone").textContent = s.zone;
+  $("mode").textContent = s.mode;
+  $("action").textContent = s.action === null ? "—" : (s.action || "—");
+  $("speed").textContent = s.speed;
+  $("moving").textContent = s.moving ? "yes" : "no";
+  $("cart").textContent = s.cart.map(fmt).join(" ");
+
+  for (let i = 0; i < 6; i++) {
+    valEls[i].textContent = fmt(s.joints[i]);
+    tgtEls[i].textContent = "→ " + fmt(s.target[i]);
+    const z = ZONES[s.zone] ? ZONES[s.zone].safezone[i] : null;
+    if (z) {
+      const [lo, hi] = z;
+      const pct = hi > lo ? ((s.joints[i] - lo) / (hi - lo)) * 100 : 50;
+      markEls[i].style.left = Math.max(0, Math.min(100, pct)) + "%";
+    }
+  }
+
+  for (const f of FLAGS) {
+    flagEls[f].className = "chip" + (s.flags[f] ? " on" : "");
+  }
+
+  // Zone buttons: active = current; dim = disabled or not an available next
+  // state (a direct exit or a reverse exit of the current zone).
+  const avail = availableZones(s.zone);
+  for (const name of Object.keys(zoneBtns)) {
+    const z = ZONES[name];
+    let cls = "";
+    if (name === s.zone) cls = "active";
+    else if (!z || z.enabled === false) cls = "dim";
+    else if (!avail.has(name)) cls = "dim";
+    zoneBtns[name].className = cls;
+  }
+  for (const m of MODES) modeBtns[m].className = m === s.mode ? "active" : "";
+  // Action buttons: active = current action; dim = not available in this zone.
+  for (const a of Object.keys(actionBtns)) {
+    const act = (ZONES[currentZone] && ZONES[currentZone].actions) ? ZONES[currentZone].actions[a] : null;
+    const unavailable = act && act.enabled === false;
+    let cls = "";
+    if (unavailable) cls = "dim";
+    else if (a === s.action) cls = "active";
+    actionBtns[a].className = cls;
+  }
+}
+
+// ------------------------------------------------------------------
+// Zone + action buttons (rebuilt when the zone table or current zone changes).
+// ------------------------------------------------------------------
+function buildZoneButtons() {
+  const el = $("zones");
+  el.innerHTML = "";
+  for (const k in zoneBtns) delete zoneBtns[k];
+  Object.keys(ZONES).forEach((name) => {
+    const b = document.createElement("button");
+    b.textContent = name;
+    b.onclick = () => send({ cmd: "goto_zone", zone: name });
+    el.appendChild(b);
+    zoneBtns[name] = b;
+  });
+}
+
+function buildActionButtons(zoneName) {
+  const el = $("actions");
+  el.innerHTML = "";
+  for (const k in actionBtns) delete actionBtns[k];
+  const z = ZONES[zoneName];
+  const actions = (z && z.actions) ? z.actions : {};
+  const names = Object.keys(actions);
+  if (!names.length) {
+    const s = document.createElement("span");
+    s.style.cssText = "color:var(--dim);font-size:12px";
+    s.textContent = "no actions available in this zone";
+    el.appendChild(s);
+    return;
+  }
+  names.forEach((a) => {
+    const act = actions[a];
+    const b = document.createElement("button");
+    b.textContent = a;
+    // An action the zone does not allow (disabled) is shown but never selectable:
+    // excluded actions are absent from the zone's table and so get no button at all.
+    if (act && act.enabled === false) {
+      b.disabled = true;
+      b.title = "not available in this zone";
+    }
+    b.onclick = () => {
+      if (b.disabled) return;
+      send({ cmd: "play_action", action: a });
+    };
+    el.appendChild(b);
+    actionBtns[a] = b;
+  });
+}
+
+// ------------------------------------------------------------------
+// Build the UI.
+// ------------------------------------------------------------------
+function buildUI() {
+  // axes
+  AXES.forEach((n, i) => {
+    const d = document.createElement("div");
+    d.className = "axis";
+    d.innerHTML =
+      '<div class="row"><span>' + n + ' <span class="tgt" id="tgt' + i + '"></span></span>' +
+      '<span id="val' + i + '"></span></div>' +
+      '<div class="bar"><div class="mark" id="mark' + i + '"></div></div>';
+    $("axes").appendChild(d);
+    valEls[i] = d.querySelector("#val" + i);
+    tgtEls[i] = d.querySelector("#tgt" + i);
+    markEls[i] = d.querySelector("#mark" + i);
+  });
+
+  // flags
+  FLAGS.forEach((f) => {
+    const c = document.createElement("span");
+    c.className = "chip";
+    c.textContent = f;
+    $("flags").appendChild(c);
+    flagEls[f] = c;
+  });
+
+  // zones (built from the current zone table; rebuilt on fetch)
+  buildZoneButtons();
+
+  // modes
+  MODES.forEach((m) => {
+    const b = document.createElement("button");
+    b.textContent = m;
+    b.onclick = () => send({ cmd: "set_mode", mode: m });
+    $("modes").appendChild(b);
+    modeBtns[m] = b;
+  });
+
+  // actions (per-zone; rebuilt when the zone changes)
+  buildActionButtons(null);
+
+  // joint pose inputs
+  AXES.forEach((n, i) => {
+    const l = document.createElement("label");
+    l.textContent = n;
+    const inp = document.createElement("input");
+    inp.type = "number";
+    inp.step = "0.1";
+    l.appendChild(inp);
+    $("poseGrid").appendChild(l);
+    poseInputs.push(inp);
+  });
+  $("poseGo").onclick = () => {
+    const pose = poseInputs.map((el) => parseFloat(el.value));
+    if (pose.some((v) => isNaN(v))) { log("pose: all 6 values required"); return; }
+    send({ cmd: "set_joint_pose", pose });
+  };
+  $("poseLoad").onclick = () => {
+    const s = lastSnap;
+    if (!s) return;
+    poseInputs.forEach((el, i) => { el.value = Math.round(s.joints[i] * 10) / 10; });
+  };
+
+  // wander limit sliders (A1/A2/A3)
+  for (let i = 0; i < 3; i++) {
+    const row = document.createElement("div");
+    row.className = "limrow";
+    row.innerHTML = "<span>" + AXES[i] + "</span>";
+    const r = document.createElement("input");
+    r.type = "range"; r.min = "0"; r.max = "20"; r.step = "0.5"; r.value = "5";
+    const v = document.createElement("span");
+    v.textContent = "5.0";
+    r.oninput = () => {
+      v.textContent = parseFloat(r.value).toFixed(1);
+      send({ cmd: "adjust_limit", index: i, value: parseFloat(r.value) });
+    };
+    row.appendChild(r);
+    row.appendChild(v);
+    $("limits").appendChild(row);
+  }
+
+  $("randomWrist").onclick = () => send({ cmd: "random_wrist" });
+  $("connect").onclick = () => { const u = $("host").value.trim(); $("host").value = u; connect(); };
+}
+
+// The Robot3D schematic builder + fmt helper live in rtr3d.js (shared with editor.html).
+
+let lastSnap = null;
+const _renderDom = renderState;
+// Drive the 3D arm first (like editor.html) so it keeps moving even if the DOM
+// snapshot render throws; the render is guarded so one bad frame can't freeze the view.
+renderState = (s) => { lastSnap = s; Robot3D.update(s); try { _renderDom(s); } catch (e) { log("render failed: " + e); } };
+
+buildUI();
+Robot3D.init($("robot3d"), { toolEl: $("toolPos"), log: log, environment: true });
+// Toggle the green ghost (target) arm in the 3D view.
+let ghostVisible = true;
+$("ghostToggle").onclick = () => {
+  ghostVisible = !ghostVisible;
+  Robot3D.setGhostVisible(ghostVisible);
+  $("ghostToggle").className = ghostVisible ? "active" : "";
+};
+
+// Fill-window mode: the 3D section takes over the whole window (the other cards are
+// hidden). rtr3d.js resizes the renderer from the container size on a window resize,
+// so dispatch one after the layout change to re-fit the WebGL canvas.
+function setFill3D(on) {
+  document.body.classList.toggle("fill3d", on);
+  $("fillToggle").className = on ? "active" : "";
+  window.dispatchEvent(new Event("resize"));
+}
+$("fillToggle").onclick = () => setFill3D(!document.body.classList.contains("fill3d"));
+
+// Browser fullscreen on the 3D section (Escape exits; the button tracks the state).
+$("fsToggle").onclick = () => {
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    const p = $("robot3d-section").requestFullscreen();
+    if (p && p.catch) p.catch((e) => log("fullscreen failed: " + e));
+  }
+};
+document.addEventListener("fullscreenchange", () => {
+  $("fsToggle").className = document.fullscreenElement ? "active" : "";
+  window.dispatchEvent(new Event("resize"));
+});
+connect();
+</script>
+</body>
+</html>

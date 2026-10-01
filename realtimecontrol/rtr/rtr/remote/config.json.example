@@ -1,0 +1,19 @@
+{
+  "core_host": "127.0.0.1",
+  "core_port": 8765,
+  "device": "/dev/input/event3",
+  "height": 4,
+  "theme": {
+    "colors": {
+      "normal": "#111111",
+      "bright": "#cccccc",
+      "highlight": "#4444aa",
+      "reverse": "#4444aa",
+      "error": "#ff3333",
+      "warning": "#ffaa00",
+      "success": "#33ff33"
+    },
+    "font": "monospace"
+  },
+  "http_poll": 30
+}

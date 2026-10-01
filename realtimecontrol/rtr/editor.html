@@ -1,0 +1,2682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exhibiting Intelligence - brain editor</title>
+<style>
+  :root { --bg: #111318; --panel: #181c24; --border: #2a2f3a; --text: #d7dbe2; --dim: #7c8494; --accent: #4fc08d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+         font: 14px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #e05d5d; }
+  .dot.on { background: var(--accent); }
+  #status { color: var(--dim); }
+  #host { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
+          padding: 6px 8px; width: 220px; font: inherit; }
+  button { background: #22262f; color: var(--text); border: 1px solid var(--border);
+           border-radius: 4px; padding: 5px 10px; cursor: pointer; font: inherit; }
+  button:hover { border-color: var(--accent); }
+  button.active { background: var(--accent); color: #0b0d10; border-color: var(--accent); }
+  button.small { padding: 2px 7px; font-size: 12px; }
+  #saveMsg { color: var(--dim); font-size: 12px; }
+  #saveMsg.err { color: #e05d5d; }
+  main { display: grid; gap: 16px; grid-template-columns: 210px 1fr 380px; align-items: start; }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 0 0 10px; }
+  h3 { font-size: 12px; color: var(--dim); margin: 14px 0 6px; }
+  .row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+  .grid6 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
+  label { font-size: 11px; color: var(--dim); display: flex; flex-direction: column; gap: 2px; }
+  label.inline { flex-direction: row; justify-content: space-between; align-items: center; font-size: 13px; }
+  input[type=number] { width: 100%; background: #0d0f13; color: var(--text); border: 1px solid var(--border);
+                       border-radius: 4px; padding: 3px 5px; font: inherit; }
+  input[type=checkbox] { width: 16px; height: 16px; }
+  .zoneList { display: flex; flex-direction: column; gap: 4px; }
+  .zoneList button { width: 100%; text-align: left; }
+  .action { border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin-bottom: 8px; }
+  .actionHead { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .actionHead input[type=text] { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
+                                 border-radius: 4px; padding: 3px 6px; font: inherit; width: 110px; }
+  .poseRow { display: grid; grid-template-columns: repeat(6, 1fr) 56px 22px; gap: 4px;
+             margin-bottom: 4px; align-items: center; }
+  .poseRow input[type=number] { padding: 2px 4px; }
+  #robot3d { width: 100%; height: 320px; border: 1px solid var(--border); border-radius: 6px;
+             overflow: hidden; background: #0d0f13; }
+  #robot3d canvas { display: block; }
+  .axis { margin-bottom: 8px; }
+  .axis .row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 0; }
+  .bar { height: 6px; background: #0d0f13; border-radius: 3px; margin-top: 3px; position: relative; overflow: hidden; }
+  .bar .mark { position: absolute; top: 0; bottom: 0; width: 4px; background: var(--accent); }
+  .stateRow { display: flex; justify-content: space-between; padding: 2px 0;
+               border-bottom: 1px solid #20242d; font-size: 13px; }
+  .stateRow > span:first-child { color: var(--dim); }
+  .warn { color: #e0a030; font-size: 12px; }
+  .hwlims { display: flex; flex-wrap: wrap; gap: 3px 10px; font-size: 11px; color: var(--dim); margin-bottom: 8px; }
+  #tabZones { font-size: 12px; }
+  .sndMain { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); align-items: start; }
+  .sndRow { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+  .sndName { min-width: 78px; font-size: 13px; }
+  .msgForm { display: inline-flex; gap: 4px; align-items: center; }
+  .msgType { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
+             border-radius: 4px; padding: 2px 4px; font: inherit; }
+  .msgFields { display: inline-flex; gap: 4px; align-items: center; }
+  .msgFields label { display: inline-flex; gap: 3px; align-items: baseline; font-size: 11px; color: var(--dim); }
+  .msgFields input[type=number] { width: 62px; background: #0d0f13; color: var(--text);
+                                   border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; font: inherit; }
+  .sndPoses { margin: 2px 0 6px 86px; }
+  #patchesMain { display: grid; gap: 16px; grid-template-columns: 210px 1fr 380px; align-items: start; }
+  .patchList { display: flex; flex-direction: column; gap: 4px; }
+  .patchList button { width: 100%; text-align: left; }
+  .patchList .grp { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+                     color: var(--dim); margin: 8px 0 2px; }
+  .patchList .grp:first-child { margin-top: 0; }
+  #patchCode { width: 100%; min-height: 220px; resize: vertical; background: #0d0f13;
+               color: var(--text); border: 1px solid var(--border); border-radius: 4px;
+               padding: 8px; font: inherit; white-space: pre; }
+  #patchPreview { width: 100%; height: 360px; border: 1px solid var(--border);
+                  border-radius: 6px; overflow: hidden; background: #0d0f13; }
+  #patchPreview canvas { display: block; width: 100%; height: 100%; }
+  #patchInfo { font-size: 12px; color: var(--dim); margin-top: 6px; }
+  #flowMain { display: grid; gap: 16px; grid-template-columns: 1fr 380px; align-items: start; }
+  #flowSvgWrap { height: 560px; border: 1px solid var(--border); border-radius: 6px;
+                 background: #0d0f13; overflow: hidden; }
+  #flowSvg { width: 100%; height: 100%; display: block; }
+  .fnodeBody { fill: #22262f; stroke: var(--border); stroke-width: 1.5; }
+  .fnodeLabel { fill: var(--text); font-size: 15px; font-weight: bold; }
+  .fnodeSub { fill: var(--dim); font-size: 11px; }
+  .fnode.flive .fnodeBody { stroke: var(--accent); stroke-width: 2.5; }
+  .fnode.fsel .fnodeBody { stroke: #ffffff; stroke-width: 2.5; }
+  .fnode.off { opacity: 0.45; }
+  .fnode { cursor: move; }
+  .fedge { fill: none; stroke: var(--dim); stroke-width: 2; }
+  .fedge.fedgeCustom { stroke: var(--accent); }
+  .fedge.fedgeSel { stroke: #ffffff; stroke-width: 3; }
+  .fedgeHit { fill: none; stroke: transparent; stroke-width: 18; cursor: pointer; }
+  .fedgeLabel { fill: var(--dim); font-size: 10px; pointer-events: none; }
+  .fedgeLabel.fedgeLabelCustom { fill: var(--accent); }
+  /* Action editor modal (Step 3). */
+  #actionEditor { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; z-index: 20; }
+  #actionEditor.open { display: block; }
+  #aePanel { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+             width: 760px; max-width: 94vw; max-height: 92vh; overflow: auto;
+             background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .aeHead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 10px; }
+  .aeHead h2 { margin: 0; color: var(--text); text-transform: none; letter-spacing: 0; font-size: 15px; }
+  .aeSec { margin-bottom: 14px; border-bottom: 1px solid #20242d; padding-bottom: 10px; }
+  .aeSec h3 { margin: 0 0 8px; }
+  .aePoseRow { display: grid; grid-template-columns: repeat(6, 1fr) 56px 84px; gap: 4px;
+                margin-bottom: 4px; align-items: center; }
+  .aePoseRow input[type=number] { padding: 2px 4px; }
+  .aePoseRow input.oob { border-color: #e0a030; color: #e0a030; }
+  .aePoseCtl { display: flex; gap: 3px; }
+  .aePoseCtl button { padding: 1px 5px; font-size: 11px; }
+  .aePatch { width: 100%; min-height: 120px; resize: vertical; background: #0d0f13;
+             color: var(--text); border: 1px solid var(--border); border-radius: 4px;
+             padding: 8px; font: inherit; white-space: pre; }
+  .aePreview { width: 100%; height: 180px; border: 1px solid var(--border);
+               border-radius: 6px; overflow: hidden; background: #0d0f13; margin-top: 6px; }
+  .aePreview canvas { display: block; width: 100%; height: 100%; }
+  .aeStatus { font-size: 12px; color: var(--dim); margin-top: 4px; }
+  #aeSaveStatus.err { color: #e05d5d; }
+  /* Flow action rows (Step 4). */
+  .fnode .fnodeBody { fill: #22262f; }
+  .faRow { font-size: 11px; }
+  .faRow.entry { fill: var(--accent); }
+  .faLabel { fill: var(--text); font-size: 11px; }
+  .faLoop { fill: #e0a030; font-size: 11px; }
+  .faDot { fill: var(--accent); stroke: #0d0f13; stroke-width: 1; }
+  .fedge.fedgeTarget { stroke: #e0a030; stroke-dasharray: 4 3; }
+  /* Midi-in editor tab. */
+  #midiMain { display: grid; gap: 16px; grid-template-columns: 300px 1fr; align-items: start; }
+  #midiPort { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
+              border-radius: 4px; padding: 3px 5px; font: inherit; width: 190px; }
+  .midiRow { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+  .midiKey input[type=text] { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
+                              border-radius: 4px; padding: 3px 6px; font: inherit; width: 150px; }
+  .midiTarget { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
+                border-radius: 4px; padding: 2px 4px; font: inherit; }
+  .midiName { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
+              border-radius: 4px; padding: 3px 6px; font: inherit; width: 110px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Exhibiting Intelligence - brain editor</h1>
+  <span class="dot" id="dot"></span><span id="status">disconnected</span>
+  <input id="host" value="ws://localhost:8765" spellcheck="false">
+  <button id="connect">connect</button>
+  <button id="tabZones" class="active">zones</button>
+  <button id="tabPatches">patches</button>
+  <button id="tabMidi">midi</button>
+  <button id="tabFlow">flow</button>
+  <button id="save">save</button>
+  <span id="saveMsg"></span>
+</header>
+
+<main id="zoneMain">
+  <section>
+    <h2>zones</h2>
+    <div class="zoneList" id="zoneList"></div>
+    <div class="row" style="margin-top:8px">
+      <button id="addZone">+ add zone</button>
+      <button id="delZone" class="small">remove</button>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="zoneTitle">zone</h2>
+    <div id="zoneForm"></div>
+  </section>
+
+  <section>
+    <h2>3d preview</h2>
+    <div id="robot3d"></div>
+    <div class="row" style="margin-top:6px"><button id="ghostToggle" class="active">ghost arm</button></div>
+    <h3>safezone (selected zone)</h3>
+    <div id="bars"></div>
+    <h3>hardware limits (xacro floor)</h3>
+    <div id="hwLimits" class="hwlims"></div>
+    <h3>ghost arm — step action poses</h3>
+    <div class="row">
+      <button id="ghostPrev">prev</button>
+      <button id="ghostNext">next</button>
+      <span id="ghostInfo" style="font-size:12px;color:var(--dim)"></span>
+    </div>
+    <h3>live state</h3>
+    <div id="liveState"><span style="color:var(--dim);font-size:13px">waiting…</span></div>
+  </section>
+</main>
+
+
+
+<main id="patchesMain" style="display:none">
+  <section>
+    <h2>patch slots</h2>
+    <div class="patchList" id="patchList"></div>
+  </section>
+  <section>
+    <h2 id="patchTitle">patch code</h2>
+    <div class="row" style="margin-bottom:8px">
+      <button id="patchAdd">+ add action patch</button>
+      <button id="patchRemove" class="small">remove</button>
+    </div>
+    <textarea id="patchCode" spellcheck="false"></textarea>
+    <div id="patchInfo"></div>
+  </section>
+  <section>
+    <h2>live preview</h2>
+    <div id="patchPreview"></div>
+    <div id="patchStatus" style="font-size:12px;color:var(--dim);margin-top:6px">preview</div>
+  </section>
+</main>
+
+<main id="flowMain" style="display:none">
+  <section>
+    <h2>flow</h2>
+    <div class="row">
+      <button id="flowAddZone">+ add zone</button>
+      <button id="flowDelZone" class="small">remove</button>
+      <button id="flowAutoLayout" class="small">auto layout</button>
+      <button id="flowFit" class="small">fit view</button>
+      <span style="font-size:11px;color:var(--dim)">drag a node onto another to draw an arrow · click a node/arrow to select · wheel = zoom · middle-drag = pan</span>
+    </div>
+    <div id="flowSvgWrap">
+      <svg id="flowSvg"></svg>
+    </div>
+  </section>
+  <section>
+    <h2 id="flowDetailTitle">flow detail</h2>
+    <div id="flowDetail"></div>
+  </section>
+</main>
+
+<main id="midiMain" style="display:none">
+  <div class="row" id="midiToggleRow" style="margin-bottom:12px">
+    <button id="midiTabOut" class="small">out</button>
+    <button id="midiTabIn" class="small">in</button>
+  </div>
+  <div id="midiOutView">
+    <section>
+      <h2>global</h2>
+      <div class="row" id="sndOutPortRow" style="align-items:center">
+        <label>out port</label>
+        <select id="sndOutPort"></select>
+        <button id="sndRefreshPorts" class="small">refresh</button>
+      </div>
+      <div id="sndOutPortInfo" style="font-size:12px;color:var(--dim);margin-top:6px"></div>
+      <div id="sndChannel" style="margin-top:8px"></div>
+    </section>
+    <section>
+      <h2>zone</h2>
+      <div class="row" id="sndZoneSelRow" style="align-items:center">
+        <label>zone</label>
+        <select id="sndZoneSel"></select>
+      </div>
+      <div id="sndZoneDetail"></div>
+    </section>
+  </div>
+  <div id="midiInView" style="display:none">
+    <section>
+      <h2>global navigation</h2>
+      <div id="midiNav"></div>
+    </section>
+    <section>
+      <h2>zones (per-zone input)</h2>
+      <div id="midiZones"></div>
+    </section>
+    <div class="row" style="margin-top:8px">
+      <button id="midiStopLearn" class="small" style="display:none">stop learn</button>
+      <span id="midiStatus" style="font-size:12px;color:var(--dim)"></span>
+    </div>
+  </div>
+</main>
+
+<div id="actionEditor">
+  <div id="aePanel">
+    <div class="aeHead">
+      <h2 id="aeTitle">action</h2>
+      <div class="row">
+        <button id="aeSave">save</button>
+        <button id="aeClose" class="small">close</button>
+      </div>
+    </div>
+    <div id="aeBody"></div>
+    <div class="aeSec"><h3>patch</h3>
+      <textarea id="aePatchCode" class="aePatch" spellcheck="false"></textarea>
+      <div id="aePreview" class="aePreview"></div>
+      <div id="aePatchStatus" class="aeStatus"></div></div>
+    <div id="aeSaveStatus" class="aeStatus"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hydra-synth/dist/hydra-synth.js"></script>
+<script src="rtr3d.js"></script>
+<script>
+"use strict";
+
+const AXES = ["A1", "A2", "A3", "A4", "A5", "A6"];
+const MODES = ["wander", "random", "action", "track", "hold"];
+const NAV_COMMANDS = ["next_action", "next_zone", "back", "retrigger"];
+const $ = (id) => document.getElementById(id);
+
+// Minimal fallback table (last resort when both /api/zones and /zones.json fail,
+// e.g. opened from file://). The real table comes from the core over HTTP.
+const FALLBACK = {
+  zones: {
+    init: { safezone: [[-94,122],[-105,-65],[89,115],[-15,15],[-15,45],[-357,357]],
+            exits: ["rest"], actions: {}, startpos: [-60,-90,90,0,15,0],
+            exitpos: [-4,-131,155,3,-10,0], speed: 20, enabled: true},
+  },
+  poses: {}, lin_poses: {},
+};
+
+// Last-resort sound mapping (mirrors rtr/sound/sound.py ZONE_NOTES/MODE_CCS). Used
+// when both /api/sound and /sound.json fail (e.g. opened from file://).
+const SOUND_FALLBACK = {
+  channel: 0,
+  zones: {
+    init: {note:48, velocity:60}, rest: {note:36, velocity:50}, wakeup: {note:52, velocity:70},
+    stretch: {note:55, velocity:75}, wander: {note:60, velocity:80}, wildwander: {note:64, velocity:90},
+  },
+  // No `modes` block: the mode CCs are actions on the rest zone (see sound.json).
+  actions: {
+    rest: {
+      wander: { start: {cc:70, value:32}, poses: [] },
+      random: { start: {cc:70, value:64}, poses: [] },
+      action: { start: {cc:70, value:96}, poses: [] },
+      track:  { start: {cc:70, value:127}, poses: [] },
+      hold:   { start: {cc:70, value:0}, poses: [] },
+    },
+  },
+};
+
+// Hardware joint limits (deg) from the kr60ha xacro — the hard safety floor the core
+// clamps every pose to. Fallback mirrors the xacro; over HTTP it is replaced by
+// GET /api/limits (same pattern as the zones/sound fallbacks).
+const HW_LIMITS_FALLBACK = [
+  [-185, 185],   // A1
+  [-135, 35],    // A2
+  [-120, 158],   // A3
+  [-350, 350],   // A4
+  [-119, 119],   // A5
+  [-350, 350],   // A6
+];
+let HW_LIMITS = HW_LIMITS_FALLBACK.slice();
+
+let TABLE = null;
+let SOUND = null;
+let PATCHES = null;
+let MIDI = null;
+let sndZoneSel = null;  // the zone shown in the MIDI-out view (session only)
+let sndPorts = [];  // available MIDI-out ports (GET /api/sound/ports)
+let patchView = false;
+let midiView = false;
+let midiSubView = "out";  // "out" or "in"
+let midiLearnPending = null;  // {zone, action_name} awaiting the next learned message
+let selectedZone = null;
+let selectedAction = null;
+let selectedPatch = null;   // the current patch slot key
+let patchHydra = null;      // the live-preview hydra instance
+let patchTimer = null;      // debounce timer for the live preview
+let ghostIndex = 0;
+let ws = null;
+let flowView = false;
+// Flow-tab state (session only — node positions are not persisted to zones.json).
+const FLOW = {
+  pos: {},        // zone -> {x, y}
+  sel: null,       // {type:"node",zone} | {type:"edge",from,to} | null
+  live: null,      // {zone,mode,action} from the latest WS state frame
+  nodeEls: {},     // zone -> <g> element (for in-place live updates)
+  drag: null,      // {from, startPt, startNode, moved}
+  layoutKey: null, // the zone-name set the current layout was computed for
+  view: null,      // {x,y,w,h} viewBox — the user's zoom/pan (null until first fit)
+  pan: null,       // {ctm, startScreen, startView} middle-drag pan state
+};
+const NODE_W = 140, NODE_H = 70;
+// Flow action rows (Step 4): the first action row sits at FA_Y0 (below the label/sub),
+// each row is FA_ROW tall. nodeH grows the node to fit its action rows (NODE_H is the min).
+const FA_Y0 = 54, FA_ROW = 16;
+function nodeActionCount(name) {
+  const z = TABLE.zones[name];
+  return z && z.actions ? Object.keys(z.actions).length : 0;
+}
+function nodeH(name) {
+  return Math.max(NODE_H, FA_Y0 + nodeActionCount(name) * FA_ROW + 8);
+}
+function rowY(name, an) {
+  const z = TABLE.zones[name];
+  if (!z || !z.actions) return FA_Y0 + FA_ROW / 2;
+  const idx = Object.keys(z.actions).indexOf(an);
+  return FA_Y0 + (idx >= 0 ? idx : 0) * FA_ROW + FA_ROW / 2;
+}
+// Action editor (Step 3) modal state: the zone/action being edited + its hydra preview.
+const AE = { zone: null, action: null, hydra: null, timer: null };
+const ACTION_KINDS = ["internal", "entry", "exit"];
+
+// Last-resort patches table (mirrors rtr/patches/patches.py DEFAULT_HYDRA_CODE).
+// Used when both /api/patches and /patches.json fail (e.g. opened from file://).
+const PATCHES_FALLBACK = {
+  default: "osc(4, 0.1, 1.2).out()",
+  zones: {}, modes: {}, actions: {},
+};
+
+// ---------------------------------------------------------------------------
+// WebSocket (live mirror: the current arm follows the robot).
+// ---------------------------------------------------------------------------
+function connect() {
+  const url = $("host").value.trim();
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  ws = new WebSocket(url);
+  ws.onopen = () => { $("dot").className = "dot on"; $("status").textContent = "connected"; };
+  ws.onclose = () => {
+    $("dot").className = "dot"; $("status").textContent = "disconnected";
+    setTimeout(connect, 2000);
+  };
+  ws.onmessage = (e) => {
+    let m; try { m = JSON.parse(e.data); } catch (err) { return; }
+    if (m.type === "state") {
+      Robot3D.update({ joints: m.joints, target: m.target, patch: m.patch });
+      $("liveState").innerHTML =
+        `<div class="stateRow"><span>zone</span><span>${m.zone}</span></div>` +
+        `<div class="stateRow"><span>mode</span><span>${m.mode}</span></div>` +
+        `<div class="stateRow"><span>action</span><span>${m.action ? m.action : "—"}</span></div>` +
+        `<div class="stateRow"><span>speed</span><span>${m.speed}</span></div>` +
+        `<div class="stateRow"><span>moving</span><span>${m.moving ? "yes" : "no"}</span></div>`;
+      FLOW.live = { zone: m.zone, mode: m.mode, action: m.action };
+      if (flowView) applyFlowHighlight();
+    } else if (m.type === "sound_changed") {
+      // The running core reloaded the sound mapping; re-fetch it.
+      loadSound().then(() => { if (midiView) buildMidiOutForm(); });
+    } else if (m.type === "patches_changed") {
+      // The running core reloaded the hydra patches; re-fetch them.
+      loadPatches().then(() => { if (patchView) buildPatchesForm(); });
+    } else if (m.type === "midi_changed") {
+      // The running core reloaded the midi-in mapping; re-fetch it.
+      loadMidi().then(() => { if (midiView) buildMidiInForm(); });
+    } else if (m.type === "midi_learn") {
+      // A learned key was captured; write it into the pending learn slot.
+      // The payload is {key, msg, zone, action} (action is null for a zone command).
+      if (midiLearnPending && MIDI) {
+        if (midiLearnPending.nav_name) {
+          if (!MIDI.nav) MIDI.nav = {};
+          MIDI.nav[midiLearnPending.nav_name] = m.key;
+        } else {
+          const z = MIDI.zones[midiLearnPending.zone];
+          if (z) {
+            if (midiLearnPending.action_name) z.actions[midiLearnPending.action_name] = m.key;
+            else z.command = m.key;
+          }
+        }
+        midiLearnPending = null;
+        buildMidiInForm();
+        $("midiStatus").textContent = `learned ${m.key}`;
+      }
+    }
+  };
+}
+
+function send(cmd) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) { $("saveMsg").textContent = "not connected"; return; }
+  ws.send(JSON.stringify(cmd));
+}
+
+// ---------------------------------------------------------------------------
+// Load the zone table (API -> zones.json -> built-in fallback).
+// ---------------------------------------------------------------------------
+async function loadTable() {
+  let data = null, source = "fallback";
+  try {
+    const r = await fetch("/api/zones", { cache: "no-store" });
+    if (r.ok) { data = await r.json(); source = "api"; }
+  } catch (e) {}
+  if (!data) {
+    try {
+      const r = await fetch("/zones.json", { cache: "no-store" });
+      if (r.ok) { data = await r.json(); source = "file"; }
+    } catch (e) {}
+  }
+  if (!data) data = FALLBACK;
+  TABLE = data;
+  if (!TABLE.zones) TABLE.zones = {};
+  const names = Object.keys(TABLE.zones);
+  selectedZone = names[0] || null;
+  buildZoneList();
+  selectZone(selectedZone);
+  $("saveMsg").textContent = source === "api" ? "live" : (source === "file" ? "from zones.json" : "offline (built-in)");
+}
+
+// ---------------------------------------------------------------------------
+// Load the hardware limits (API -> built-in fallback mirroring the xacro).
+// ---------------------------------------------------------------------------
+async function loadLimits() {
+  try {
+    const r = await fetch("/api/limits", { cache: "no-store" });
+    if (r.ok) {
+      const data = await r.json();
+      if (data && Array.isArray(data.hardware_limits) && data.hardware_limits.length === 6) {
+        HW_LIMITS = data.hardware_limits;
+      }
+    }
+  } catch (e) {}
+  buildHwLimitsRow();
+}
+
+// Render the per-axis hardware limits as a compact reference row (a static floor —
+// it does not depend on the selected zone).
+function buildHwLimitsRow() {
+  const el = $("hwLimits");
+  if (!el) return;
+  el.innerHTML = "";
+  AXES.forEach((n, i) => {
+    const [lo, hi] = HW_LIMITS[i];
+    const s = document.createElement("span");
+    s.textContent = n + " [" + lo + ", " + hi + "]";
+    el.appendChild(s);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Load the sound mapping (API -> sound.json -> built-in fallback).
+// ---------------------------------------------------------------------------
+async function loadSound() {
+  let data = null;
+  try {
+    const r = await fetch("/api/sound", { cache: "no-store" });
+    if (r.ok) data = await r.json();
+  } catch (e) {}
+  if (!data) {
+    try {
+      const r = await fetch("/sound.json", { cache: "no-store" });
+      if (r.ok) data = await r.json();
+    } catch (e) {}
+  }
+  if (!data) data = JSON.parse(JSON.stringify(SOUND_FALLBACK));
+  SOUND = data;
+  if (SOUND.zones === undefined) SOUND.zones = {};
+  if (SOUND.actions === undefined) SOUND.actions = {};
+  if (SOUND.channel === undefined) SOUND.channel = 0;
+  // Legacy migration: an old `modes` block (bare mode CC messages) is folded into
+  // the rest zone's actions and then dropped, mirroring validate_sound_data.
+  if (SOUND.modes) {
+    if (!SOUND.actions.rest) SOUND.actions.rest = {};
+    for (const [mn, mm] of Object.entries(SOUND.modes)) {
+      if (!SOUND.actions.rest[mn]) SOUND.actions.rest[mn] = { start: mm, poses: [] };
+    }
+    delete SOUND.modes;
+  }
+  // Seed per-zone entries: ensure each zone has {out_port, command} (filling missing).
+  Object.keys(TABLE.zones || {}).forEach((zn) => {
+    if (!SOUND.zones[zn] || typeof SOUND.zones[zn] !== "object") {
+      SOUND.zones[zn] = { out_port: null, command: { note: 60, velocity: 60 } };
+    } else {
+      if (SOUND.zones[zn].out_port === undefined) SOUND.zones[zn].out_port = null;
+      if (!SOUND.zones[zn].command) SOUND.zones[zn].command = { note: 60, velocity: 60 };
+    }
+  });
+  // Seed the action list per zone: for each zone, ensure SOUND.actions[zone] exists
+  // and seed each of that zone's actions (only filling missing entries), so an edited
+  // mapping keeps its own actions.
+  Object.keys(TABLE.zones || {}).forEach((zn) => {
+    if (!SOUND.actions[zn]) SOUND.actions[zn] = {};
+    Object.keys(TABLE.zones[zn].actions || {}).forEach((an) => {
+      if (!SOUND.actions[zn][an]) SOUND.actions[zn][an] = { start: { note: 60, velocity: 60 }, poses: [] };
+    });
+  });
+  try {
+    const r = await fetch("/api/sound/ports", { cache: "no-store" });
+    if (r.ok) { const b = await r.json(); sndPorts = Array.isArray(b.ports) ? b.ports : []; }
+    else sndPorts = [];
+  } catch (e) { sndPorts = []; }
+  if (midiView) buildMidiOutForm();
+  return SOUND;
+}
+
+// ---------------------------------------------------------------------------
+// Sound editor.
+//
+// A MIDI message is one of: {note, velocity}, {cc, value}, or {program}. Each is
+// edited inline; the global channel is applied by the core when sending.
+// ---------------------------------------------------------------------------
+function msgType(msg) {
+  if (msg && (msg.note !== undefined || msg.velocity !== undefined)) return "note";
+  if (msg && (msg.cc !== undefined || msg.value !== undefined)) return "cc";
+  if (msg && msg.program !== undefined) return "program";
+  return "note";
+}
+
+function freshMsg(type) {
+  if (type === "cc") return { cc: 70, value: 64 };
+  if (type === "program") return { program: 0 };
+  return { note: 60, velocity: 60 };
+}
+
+// Build an inline MIDI-message editor. Field edits mutate ``msg`` in place; a type
+// change calls ``onType(freshMsg)`` so the caller can swap the object and rebuild.
+function msgEditor(msg, onType) {
+  const root = document.createElement("div");
+  root.className = "msgForm";
+  const sel = document.createElement("select");
+  sel.className = "msgType";
+  ["note", "cc", "program"].forEach((t) => {
+    const o = document.createElement("option");
+    o.value = t; o.textContent = t;
+    sel.appendChild(o);
+  });
+  sel.value = msgType(msg);
+  root.appendChild(sel);
+  const fields = document.createElement("div");
+  fields.className = "msgFields";
+  root.appendChild(fields);
+
+  function renderFields() {
+    fields.innerHTML = "";
+    const t = msgType(msg);
+    const keys = t === "note" ? ["note", "velocity"] : t === "cc" ? ["cc", "value"] : ["program"];
+    keys.forEach((k) => {
+      const l = document.createElement("label");
+      l.textContent = k;
+      const inp = document.createElement("input");
+      inp.type = "number"; inp.step = "1";
+      inp.value = msg[k] !== undefined ? msg[k] : 0;
+      inp.oninput = () => { msg[k] = parseInt(inp.value, 10); if (isNaN(msg[k])) msg[k] = 0; };
+      l.appendChild(inp);
+      fields.appendChild(l);
+    });
+  }
+  renderFields();
+  sel.onchange = () => { if (onType) onType(freshMsg(sel.value)); };
+  return root;
+}
+
+// The MIDI-out device picker (mirrors the MIDI-in port picker). Selects SOUND.out_port
+// (an index into GET /api/sound/ports) or "default (auto)" (the core picks the first
+// out device). Choosing a port clears the optional out_device name so the picker is the
+// single source of truth for the out device.
+function buildSoundOutPorts() {
+  const sel = $("sndOutPort");
+  sel.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "default (auto)";
+  sel.appendChild(none);
+  sndPorts.forEach((p) => {
+    const o = document.createElement("option");
+    o.value = String(p.index);
+    o.textContent = `${p.index} — ${p.name}`;
+    sel.appendChild(o);
+  });
+  const op = SOUND.out_port;
+  sel.value = (op === null || op === undefined) ? "" : String(op);
+  sel.onchange = () => {
+    SOUND.out_port = sel.value === "" ? null : parseInt(sel.value, 10);
+    delete SOUND.out_device;
+  };
+  $("sndOutPortInfo").textContent = sndPorts.length
+    ? `${sndPorts.length} port(s) available`
+    : "no MIDI output ports (rtmidi unavailable or no device)";
+}
+
+// The MIDI-out view is zone-centric: a zone selector picks the zone, then the view
+// shows that zone's out_port + command (the zone-entry MIDI message) and the zone's
+// actions (seeded from zones.json), each with read-only attributes (kind / loop /
+// target / enabled) plus editable start + poses (from sound.json).
+function buildMidiOutForm() {
+  // output device picker (global fallback)
+  buildSoundOutPorts();
+
+  // channel
+  const chEl = $("sndChannel");
+  chEl.innerHTML = "";
+  const ch = document.createElement("label");
+  ch.className = "inline";
+  ch.innerHTML = "channel <input type='number' step='1' min='0' max='15' value='" +
+                 (SOUND.channel !== undefined ? SOUND.channel : 0) + "'>";
+  ch.querySelector("input").oninput = (e) => {
+    SOUND.channel = parseInt(e.target.value, 10); if (isNaN(SOUND.channel)) SOUND.channel = 0;
+  };
+  chEl.appendChild(ch);
+
+  const zoneNames = Object.keys(TABLE.zones);
+  // zone selector (defaults to the zones-tab selection)
+  if (!sndZoneSel || !zoneNames.includes(sndZoneSel)) sndZoneSel = zoneNames[0] || null;
+  const selEl = $("sndZoneSel");
+  selEl.innerHTML = "";
+  zoneNames.forEach((zn) => {
+    const o = document.createElement("option");
+    o.value = zn; o.textContent = zn;
+    selEl.appendChild(o);
+  });
+  selEl.value = sndZoneSel || "";
+  selEl.onchange = () => { sndZoneSel = selEl.value; buildMidiOutForm(); };
+
+  const zn = sndZoneSel;
+  const detail = $("sndZoneDetail");
+  detail.innerHTML = "";
+  if (!zn || !TABLE.zones[zn]) {
+    const empty = document.createElement("div");
+    empty.style.cssText = "font-size:12px;color:var(--dim)";
+    empty.textContent = "no zones in the table";
+    detail.appendChild(empty);
+    return;
+  }
+
+  const zd = SOUND.zones[zn] || (SOUND.zones[zn] = { out_port: null, command: { note: 60, velocity: 60 } });
+  const rebuild = () => buildMidiOutForm();
+
+  // zone-entry out port picker + command message
+  const row = document.createElement("div");
+  row.className = "sndRow";
+  const lbl = document.createElement("span");
+  lbl.className = "sndName"; lbl.textContent = "out";
+  row.appendChild(lbl);
+  const sel = document.createElement("select");
+  sel.className = "sndOutPort";
+  const none = document.createElement("option");
+  none.value = ""; none.textContent = "global";
+  sel.appendChild(none);
+  sndPorts.forEach((p) => {
+    const o = document.createElement("option");
+    o.value = String(p.index); o.textContent = `${p.index} — ${p.name}`;
+    sel.appendChild(o);
+  });
+  const op = zd.out_port;
+  sel.value = (op === null || op === undefined) ? "" : String(op);
+  sel.onchange = () => { zd.out_port = sel.value === "" ? null : parseInt(sel.value, 10); };
+  row.appendChild(sel);
+  row.appendChild(msgEditor(zd.command, (fresh) => { zd.command = fresh; rebuild(); }));
+  detail.appendChild(row);
+
+  // actions (read-only attributes from the table; editable start + poses)
+  if (!SOUND.actions[zn]) SOUND.actions[zn] = {};
+  const acts = SOUND.actions[zn];
+  const tacts = (TABLE.zones[zn] && TABLE.zones[zn].actions) ? TABLE.zones[zn].actions : {};
+  const ag = document.createElement("div");
+  ag.className = "sndZoneGroup";
+  ag.appendChild(h3("actions"));
+  Object.keys(acts).forEach((name) => {
+    const act = acts[name];
+    const tinfo = tacts[name] || {};
+    const box = document.createElement("div");
+    box.className = "action";
+    // header: name + remove
+    const head = document.createElement("div");
+    head.className = "actionHead";
+    const nm = document.createElement("input");
+    nm.type = "text"; nm.value = name;
+    nm.onchange = () => {
+      const nn = nm.value.trim();
+      if (!nn || nn === name) { nm.value = name; return; }
+      acts[nn] = act; delete acts[name];
+      rebuild();
+    };
+    const rm = document.createElement("button");
+    rm.className = "small"; rm.textContent = "remove";
+    rm.onclick = () => { delete acts[name]; rebuild(); };
+    head.appendChild(nm); head.appendChild(rm);
+    box.appendChild(head);
+    // read-only attributes (kind / loop / target / enabled) from the table
+    const attrs = document.createElement("div");
+    attrs.style.cssText = "font-size:11px;color:var(--dim)";
+    const kind = tinfo.kind || "internal";
+    let atxt = `kind ${kind}`;
+    if (tinfo.loop !== false) atxt += " · loop";
+    if (kind !== "internal" && tinfo.target) atxt += ` · target ${tinfo.target}`;
+    if (tinfo.enabled === false) atxt += " · disabled";
+    attrs.textContent = atxt;
+    box.appendChild(attrs);
+    // start message
+    if (!act.start) act.start = { note: 60, velocity: 60 };
+    const s = document.createElement("div");
+    s.className = "sndRow";
+    const sl = document.createElement("span");
+    sl.className = "sndName"; sl.textContent = "start";
+    s.appendChild(sl);
+    s.appendChild(msgEditor(act.start, (fresh) => { act.start = fresh; rebuild(); }));
+    box.appendChild(s);
+    // per-pose messages
+    if (!act.poses) act.poses = [];
+    const pw = document.createElement("div");
+    pw.className = "sndPoses";
+    act.poses.forEach((pm, pi) => {
+      const prow = document.createElement("div");
+      prow.className = "sndRow";
+      const pl = document.createElement("span");
+      pl.className = "sndName"; pl.textContent = "pose " + (pi + 1);
+      prow.appendChild(pl);
+      prow.appendChild(msgEditor(pm, (fresh) => { act.poses[pi] = fresh; rebuild(); }));
+      const prx = document.createElement("button");
+      prx.className = "small"; prx.textContent = "×";
+      prx.onclick = () => { act.poses.splice(pi, 1); rebuild(); };
+      prow.appendChild(prx);
+      pw.appendChild(prow);
+    });
+    const addP = document.createElement("button");
+    addP.className = "small"; addP.textContent = "+ pose";
+    addP.onclick = () => { act.poses.push({ note: 60, velocity: 60 }); rebuild(); };
+    pw.appendChild(addP);
+    box.appendChild(pw);
+    ag.appendChild(box);
+  });
+  // add action (scoped to the selected zone)
+  const addA = document.createElement("button");
+  addA.className = "small"; addA.textContent = "+ action";
+  addA.onclick = () => {
+    const nm2 = prompt("action name:", "new");
+    if (!nm2 || acts[nm2]) return;
+    acts[nm2] = { start: { note: 60, velocity: 60 }, poses: [] };
+    rebuild();
+  };
+  ag.appendChild(addA);
+  detail.appendChild(ag);
+}
+
+// ---------------------------------------------------------------------------
+// Sound save (validate + POST the whole mapping).
+// ---------------------------------------------------------------------------
+function validMsg(msg) {
+  if (typeof msg !== "object" || msg === null) return "message must be an object";
+  const t = msgType(msg);
+  const inRange = (v) => Number.isInteger(v) && v >= 0 && v <= 127;
+  if (t === "note") return (inRange(msg.note) && inRange(msg.velocity)) ? "" : "note-on needs note + velocity (0-127)";
+  if (t === "cc") return (inRange(msg.cc) && inRange(msg.value)) ? "" : "cc needs cc + value (0-127)";
+  return inRange(msg.program) ? "" : "program change needs program (0-127)";
+}
+
+function validateSound() {
+  const errs = [];
+  const ch = SOUND.channel;
+  if (!Number.isInteger(ch) || ch < 0 || ch > 15) errs.push("channel must be an int 0-15");
+  const op = SOUND.out_port;
+  if (op !== null && op !== undefined) {
+    if (!Number.isInteger(op) || op < 0) errs.push("out_port must be a non-negative int or null");
+  }
+  const od = SOUND.out_device;
+  if (od !== null && od !== undefined) {
+    if (typeof od !== "string") errs.push("out_device must be a string or null");
+  }
+  // zones: per-zone {out_port, command}
+  for (const name of Object.keys(SOUND.zones)) {
+    const zd = SOUND.zones[name];
+    if (zd.out_port !== null && zd.out_port !== undefined) {
+      if (!Number.isInteger(zd.out_port) || zd.out_port < 0) errs.push(`zones[${name}].out_port: must be a non-negative int or null`);
+    }
+    const e = validMsg(zd.command);
+    if (e) errs.push(`zones[${name}].command: ${e}`);
+  }
+  for (const zn of Object.keys(SOUND.actions)) {
+    const acts = SOUND.actions[zn];
+    if (typeof acts !== "object" || acts === null || Array.isArray(acts)) {
+      errs.push(`actions[${zn}]: must be an object`);
+      continue;
+    }
+    for (const name of Object.keys(acts)) {
+      const act = acts[name];
+      if (act.start) { const e = validMsg(act.start); if (e) errs.push(`actions[${zn}][${name}].start: ${e}`); }
+      (act.poses || []).forEach((pm, i) => { const e = validMsg(pm); if (e) errs.push(`actions[${zn}][${name}].poses[${i}]: ${e}`); });
+    }
+  }
+  return errs;
+}
+
+// ---------------------------------------------------------------------------
+// Midi-in editor (per-zone dispatch mapping, edited over /api/midi).
+//
+// The mapping lives in midi.json (hot-reloaded by the core). Each zone has its own
+// in_port (MIDI-in device index; null = default port), a command key that activates
+// the zone, and an actions map for per-action keys. Keys are captured by learn:
+// arm learn (per zone command or action), send a MIDI message, and the captured key
+// is written into the zone. The input device is picked from GET /api/midi/ports.
+// ---------------------------------------------------------------------------
+let midiPorts = [];
+
+function midiKeyValid(key) {
+  if (typeof key !== "string") return false;
+  const parts = key.split(":");
+  if (parts.length !== 3) return false;
+  const [kind, a, b] = parts;
+  const num = (s) => /^\d+$/.test(s);
+  if (kind === "cc") return num(a) && num(b) && +a <= 127 && +b <= 127;
+  if (kind === "note" || kind === "program") return num(a) && num(b) && +a <= 7 && +b <= 127;
+  return false;
+}
+
+function validateMidi() {
+  const errs = [];
+  if (typeof MIDI.enabled !== "boolean") errs.push("enabled must be a bool");
+  // global navigation: each key is a valid MIDI key or null
+  if (MIDI.nav) {
+    for (const [nav, nkey] of Object.entries(MIDI.nav)) {
+      if (nkey !== null && nkey !== undefined && !midiKeyValid(nkey)) {
+        errs.push(`nav[${nav}]: must be a valid key`);
+      }
+    }
+  }
+  for (const [zone, zd] of Object.entries(MIDI.zones || {})) {
+    if (zd.in_port !== null && zd.in_port !== undefined) {
+      if (!Number.isInteger(zd.in_port) || zd.in_port < 0) errs.push(`zones[${zone}].in_port: must be a non-negative int or null`);
+    }
+    if (zd.command !== null && zd.command !== undefined && !midiKeyValid(zd.command)) {
+      errs.push(`zones[${zone}].command: must be cc:<cc>:<value>, note:<ch>:<note>, or program:<ch>:<prog>`);
+    }
+    for (const [action, akey] of Object.entries(zd.actions || {})) {
+      if (akey !== null && akey !== undefined && !midiKeyValid(akey)) {
+        errs.push(`zones[${zone}].actions[${action}]: must be a valid key`);
+      }
+    }
+  }
+  return errs;
+}
+
+async function loadMidi() {
+  let data = null;
+  try {
+    const r = await fetch("/api/midi", { cache: "no-store" });
+    if (r.ok) data = await r.json();
+  } catch (e) {}
+  if (!data) {
+    try {
+      const r = await fetch("/midi.json", { cache: "no-store" });
+      if (r.ok) data = await r.json();
+    } catch (e) {}
+  }
+  if (!data) data = { enabled: true, zones: {} };
+  if (data.zones === undefined) data.zones = {};
+  if (data.enabled === undefined) data.enabled = true;
+  // Seed the global navigation section: each of the four nav commands is a MIDI key or null.
+  if (!data.nav || typeof data.nav !== "object") data.nav = {};
+  NAV_COMMANDS.forEach((n) => { if (data.nav[n] === undefined) data.nav[n] = null; });
+  MIDI = data;
+  // Seed per-zone entries: ensure each zone has {in_port, command, actions}.
+  Object.keys(TABLE.zones || {}).forEach((zn) => {
+    if (!MIDI.zones[zn] || typeof MIDI.zones[zn] !== "object") {
+      MIDI.zones[zn] = { in_port: null, command: null, actions: {} };
+    } else {
+      if (MIDI.zones[zn].in_port === undefined) MIDI.zones[zn].in_port = null;
+      if (MIDI.zones[zn].command === undefined) MIDI.zones[zn].command = null;
+      if (!MIDI.zones[zn].actions) MIDI.zones[zn].actions = {};
+    }
+  });
+  try {
+    const r = await fetch("/api/midi/ports", { cache: "no-store" });
+    if (r.ok) { const b = await r.json(); midiPorts = Array.isArray(b.ports) ? b.ports : []; }
+    else midiPorts = [];
+  } catch (e) { midiPorts = []; }
+  if (midiView) buildMidiInForm();
+  return MIDI;
+}
+
+function buildMidiInForm() {
+  if (!MIDI) return;
+  $("midiStopLearn").style.display = midiLearnPending ? "" : "none";
+  buildMidiNav();
+  const tbl = $("midiZones");
+  tbl.innerHTML = "";
+  const zoneNames = Object.keys(TABLE.zones);
+  if (zoneNames.length === 0) {
+    const empty = document.createElement("div");
+    empty.style.cssText = "font-size:12px;color:var(--dim)";
+    empty.textContent = "no zones in the table";
+    tbl.appendChild(empty);
+    return;
+  }
+  zoneNames.forEach((zone) => {
+    const zd = MIDI.zones[zone] || (MIDI.zones[zone] = { in_port: null, command: null, actions: {} });
+    const box = document.createElement("div");
+    box.className = "action";
+    // header: zone name + in_port picker + enabled
+    const head = document.createElement("div");
+    head.className = "actionHead";
+    const zl = document.createElement("span");
+    zl.className = "sndName"; zl.textContent = zone;
+    head.appendChild(zl);
+    // in_port picker
+    const sel = document.createElement("select");
+    sel.className = "midiKey";
+    const none = document.createElement("option");
+    none.value = ""; none.textContent = "default";
+    sel.appendChild(none);
+    midiPorts.forEach((p) => {
+      const o = document.createElement("option");
+      o.value = String(p.index); o.textContent = `${p.index} — ${p.name}`;
+      sel.appendChild(o);
+    });
+    const ip = zd.in_port;
+    sel.value = (ip === null || ip === undefined) ? "" : String(ip);
+    sel.onchange = () => { zd.in_port = sel.value === "" ? null : parseInt(sel.value, 10); };
+    head.appendChild(sel);
+    // enabled checkbox
+    const en = document.createElement("label");
+    en.style.cssText = "margin-left:12px;font-size:12px";
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.checked = !!MIDI.enabled;
+    cb.onchange = () => { MIDI.enabled = cb.checked; };
+    en.appendChild(cb); en.appendChild(document.createTextNode(" enabled"));
+    head.appendChild(en);
+    box.appendChild(head);
+    // command key row
+    const cmdRow = document.createElement("div");
+    cmdRow.className = "sndRow";
+    const cmdLbl = document.createElement("span");
+    cmdLbl.className = "sndName"; cmdLbl.textContent = "command";
+    cmdRow.appendChild(cmdLbl);
+    const cmdInp = document.createElement("input");
+    cmdInp.type = "text"; cmdInp.className = "midiName";
+    cmdInp.value = zd.command || "";
+    cmdInp.onchange = () => { zd.command = cmdInp.value.trim() || null; };
+    cmdRow.appendChild(cmdInp);
+    const learnCmdBtn = document.createElement("button");
+    learnCmdBtn.className = "small"; learnCmdBtn.textContent = "learn";
+    learnCmdBtn.onclick = () => midiLearn(zone, null);
+    cmdRow.appendChild(learnCmdBtn);
+    box.appendChild(cmdRow);
+    // actions
+    const acts = zd.actions;
+    Object.keys(acts).forEach((action) => {
+      const aRow = document.createElement("div");
+      aRow.className = "sndRow";
+      const aLbl = document.createElement("span");
+      aLbl.className = "sndName"; aLbl.textContent = action;
+      aRow.appendChild(aLbl);
+      const aInp = document.createElement("input");
+      aInp.type = "text"; aInp.className = "midiName";
+      aInp.value = acts[action] || "";
+      aInp.onchange = () => { acts[action] = aInp.value.trim() || null; };
+      aRow.appendChild(aInp);
+      const learnBtn = document.createElement("button");
+      learnBtn.className = "small"; learnBtn.textContent = "learn";
+      learnBtn.onclick = () => midiLearn(zone, action);
+      aRow.appendChild(learnBtn);
+      const rmBtn = document.createElement("button");
+      rmBtn.className = "small"; rmBtn.textContent = "×";
+      rmBtn.onclick = () => { delete acts[action]; buildMidiInForm(); };
+      aRow.appendChild(rmBtn);
+      box.appendChild(aRow);
+    });
+    // add action button
+    const addBtn = document.createElement("button");
+    addBtn.className = "small"; addBtn.textContent = "+ action";
+    addBtn.onclick = () => {
+      const nm = prompt("action name:");
+      if (!nm) return;
+      if (acts[nm]) return;
+      acts[nm] = null;
+      buildMidiInForm();
+    };
+    box.appendChild(addBtn);
+    tbl.appendChild(box);
+  });
+}
+
+// The global navigation section: four commands (next_action / next_zone / back /
+// retrigger), each with a key editor + learn button. Keys are written to MIDI.nav.
+function buildMidiNav() {
+  const el = $("midiNav");
+  el.innerHTML = "";
+  if (!MIDI.nav) MIDI.nav = {};
+  NAV_COMMANDS.forEach((nav) => {
+    if (MIDI.nav[nav] === undefined) MIDI.nav[nav] = null;
+    const row = document.createElement("div");
+    row.className = "sndRow";
+    const lbl = document.createElement("span");
+    lbl.className = "sndName"; lbl.textContent = nav;
+    row.appendChild(lbl);
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.className = "midiName";
+    inp.value = MIDI.nav[nav] || "";
+    inp.onchange = () => { MIDI.nav[nav] = inp.value.trim() || null; };
+    row.appendChild(inp);
+    const btn = document.createElement("button");
+    btn.className = "small"; btn.textContent = "learn";
+    btn.onclick = () => midiLearn(null, null, nav);
+    row.appendChild(btn);
+    el.appendChild(row);
+  });
+}
+
+function midiLearn(zone, actionName, navName) {
+  if (midiLearnPending) { $("midiStatus").textContent = "already learning — send a MIDI message first"; return; }
+  midiLearnPending = { zone, action_name: actionName, nav_name: navName || null };
+  fetch("/api/midi/learn", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "start", zone, action_name: actionName, nav: navName || null }),
+  }).then((r) => r.json().then((b) => ({ ok: r.ok, b }))).then(({ ok, b }) => {
+    const label = navName ? navName : (actionName ? `${zone}/${actionName}` : zone);
+    if (ok) $("midiStatus").textContent = `learning "${label}" — send a MIDI message`;
+    else $("midiStatus").textContent = "learn failed: " + (b.error || r.status);
+  }).catch((e) => { $("midiStatus").textContent = "learn failed: " + e; });
+}
+
+function midiStopLearn() {
+  midiLearnPending = null;
+  fetch("/api/midi/learn", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "stop" }),
+  }).then((r) => r.json().then((b) => ({ ok: r.ok, b }))).then(({ ok, b }) => {
+    $("midiStatus").textContent = ok ? "learn stopped" : ("stop failed: " + (b.error || r.status));
+    buildMidiInForm();
+  }).catch((e) => { $("midiStatus").textContent = "stop failed: " + e; buildMidiInForm(); });
+}
+
+// The merged MIDI view saves both the out mapping (SOUND -> /api/sound) and the in
+// mapping (MIDI -> /api/midi) in one go. Validate both first; POST both; report a
+// combined status.
+function saveMidiAll() {
+  const errs = [...validateSound(), ...validateMidi()];
+  if (errs.length) {
+    $("saveMsg").textContent = errs.join("; ");
+    $("saveMsg").className = "err";
+    return;
+  }
+  const postSound = fetch("/api/sound", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(SOUND),
+  }).then((r) => r.json().then((body) => ({ ok: r.ok, body })));
+  const postMidi = fetch("/api/midi", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(MIDI),
+  }).then((r) => r.json().then((body) => ({ ok: r.ok, body })));
+  Promise.all([postSound, postMidi]).then(([s, m]) => {
+    if (s.ok && m.ok) {
+      $("saveMsg").textContent = "midi saved (out + in)";
+      $("saveMsg").className = "";
+    } else {
+      const bits = [];
+      if (!s.ok) bits.push("out: " + (s.body.error || "?"));
+      if (!m.ok) bits.push("in: " + (m.body.error || "?"));
+      $("saveMsg").textContent = "midi save failed: " + bits.join(", ");
+      $("saveMsg").className = "err";
+    }
+  }).catch((e) => { $("saveMsg").textContent = "midi save failed: " + e; $("saveMsg").className = "err"; });
+}
+
+// ---------------------------------------------------------------------------
+// Patches editor (hydra screen code).
+//
+// A patches table maps state to hydra code: ``default`` (the fallback) plus
+// per-zone / per-mode / per-action entries. Match precedence is action > mode >
+// zone > default (the core resolves this; the editor just edits the table). The
+// live preview renders the selected slot's code on a dedicated hydra canvas.
+// ---------------------------------------------------------------------------
+function getPatchCode(key) {
+  if (key === "default") return PATCHES.default;
+  const idx = key.indexOf(".");
+  const scope = key.slice(0, idx), name = key.slice(idx + 1);
+  if (scope === "actions") {
+    const ai = name.indexOf(".");
+    const zn = name.slice(0, ai), an = name.slice(ai + 1);
+    return (PATCHES.actions[zn] && PATCHES.actions[zn][an]) || "";
+  }
+  return (PATCHES[scope] && PATCHES[scope][name]) || "";
+}
+
+function setPatchCode(key, code) {
+  if (key === "default") { PATCHES.default = code; return; }
+  const idx = key.indexOf(".");
+  const scope = key.slice(0, idx), name = key.slice(idx + 1);
+  if (scope === "actions") {
+    const ai = name.indexOf(".");
+    const zn = name.slice(0, ai), an = name.slice(ai + 1);
+    if (!PATCHES.actions[zn]) PATCHES.actions[zn] = {};
+    PATCHES.actions[zn][an] = code;
+    return;
+  }
+  if (!PATCHES[scope]) PATCHES[scope] = {};
+  PATCHES[scope][name] = code;
+}
+
+// Commit the textarea back to the selected slot (the textarea is the live edit buffer).
+function commitPatchEditor() {
+  if (selectedPatch) setPatchCode(selectedPatch, $("patchCode").value);
+}
+
+async function loadPatches() {
+  let data = null;
+  try {
+    const r = await fetch("/api/patches", { cache: "no-store" });
+    if (r.ok) data = await r.json();
+  } catch (e) {}
+  if (!data) {
+    try {
+      const r = await fetch("/patches.json", { cache: "no-store" });
+      if (r.ok) data = await r.json();
+    } catch (e) {}
+  }
+  if (!data) data = JSON.parse(JSON.stringify(PATCHES_FALLBACK));
+  PATCHES = data;
+  if (typeof PATCHES.default !== "string") PATCHES.default = PATCHES_FALLBACK.default;
+  if (!PATCHES.zones) PATCHES.zones = {};
+  if (!PATCHES.modes) PATCHES.modes = {};
+  if (!PATCHES.actions) PATCHES.actions = {};
+  // Seed every zone / mode / action slot with the default code so the editor shows a
+  // complete, offline-editable table. Only fills names not already present.
+  const def = PATCHES.default;
+  Object.keys(TABLE.zones).forEach((n) => { if (PATCHES.zones[n] === undefined) PATCHES.zones[n] = def; });
+  MODES.forEach((m) => { if (PATCHES.modes[m] === undefined) PATCHES.modes[m] = def; });
+  // actions are zone-scoped: seed each zone's actions with the default code (only filling
+  // missing entries), so the editor shows a complete, offline-editable table.
+  Object.keys(TABLE.zones).forEach((zn) => {
+    if (!PATCHES.actions[zn]) PATCHES.actions[zn] = {};
+    Object.keys(TABLE.zones[zn].actions || {}).forEach((an) => {
+      if (PATCHES.actions[zn][an] === undefined) PATCHES.actions[zn][an] = def;
+    });
+  });
+  if (selectedPatch === null) selectedPatch = "default";
+  if (patchView) buildPatchesForm();
+  return PATCHES;
+}
+
+// The live-preview hydra (one instance, created lazily on first use).
+function ensurePatchHydra() {
+  if (patchHydra) return patchHydra;
+  if (typeof Hydra === "undefined") {
+    $("patchStatus").textContent = "hydra-synth not loaded";
+    return null;
+  }
+  const container = $("patchPreview");
+  const canvas = document.createElement("canvas");
+  // Match the 3D tool-screen resolution (single source of truth in rtr3d.js).
+  const res = typeof Robot3D !== "undefined" ? Robot3D.screenResolution() : [640, 360];
+  canvas.width = res[0]; canvas.height = res[1];
+  container.appendChild(canvas);
+  patchHydra = new Hydra({ canvas, detectAudio: false, makeGlobal: true, autoLoop: true });
+  return patchHydra;
+}
+
+function evalPatchPreview(code) {
+  const h = ensurePatchHydra();
+  if (!h) return;
+  try {
+    h.eval(code || PATCHES_FALLBACK.default);
+    $("patchStatus").textContent = "preview: running";
+  } catch (e) {
+    $("patchStatus").textContent = "preview error: " + (e && e.message ? e.message : e);
+  }
+}
+
+function buildPatchesForm() {
+  const listEl = $("patchList");
+  listEl.innerHTML = "";
+  const addGroup = (label) => {
+    const g = document.createElement("div");
+    g.className = "grp"; g.textContent = label;
+    listEl.appendChild(g);
+  };
+  const addSlot = (key, label) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.className = key === selectedPatch ? "active" : "";
+    b.onclick = () => {
+      commitPatchEditor();
+      selectedPatch = key;
+      buildPatchesForm();
+    };
+    listEl.appendChild(b);
+  };
+  addGroup("default");
+  addSlot("default", "default");
+  addGroup("zones");
+  Object.keys(TABLE.zones).forEach((n) => addSlot("zones." + n, n));
+  addGroup("modes");
+  MODES.forEach((m) => addSlot("modes." + m, m));
+  addGroup("actions");
+  Object.keys(TABLE.zones).forEach((zn) => {
+    if (!PATCHES.actions[zn]) PATCHES.actions[zn] = {};
+    Object.keys(PATCHES.actions[zn]).forEach((an) => addSlot("actions." + zn + "." + an, zn + " / " + an));
+  });
+
+  const code = getPatchCode(selectedPatch);
+  $("patchCode").value = code;
+  $("patchTitle").textContent = "patch: " + selectedPatch;
+  $("patchInfo").textContent = "match precedence: action > mode > zone > default";
+  evalPatchPreview(code);
+}
+
+function addPatchAction() {
+  const zn = prompt("zone:", selectedZone || "") || selectedZone;
+  if (!zn || !TABLE.zones[zn]) return;
+  const nm = prompt("action name:", "new");
+  if (!nm) return;
+  if (!PATCHES.actions[zn]) PATCHES.actions[zn] = {};
+  if (PATCHES.actions[zn][nm]) return;
+  PATCHES.actions[zn][nm] = PATCHES.default || PATCHES_FALLBACK.default;
+  selectedPatch = "actions." + zn + "." + nm;
+  buildPatchesForm();
+}
+
+function removePatchSlot() {
+  if (!selectedPatch || selectedPatch === "default") {
+    $("saveMsg").textContent = "only action patches can be removed";
+    $("saveMsg").className = "err";
+    setTimeout(() => { $("saveMsg").className = ""; }, 3000);
+    return;
+  }
+  const idx = selectedPatch.indexOf(".");
+  const scope = selectedPatch.slice(0, idx), name = selectedPatch.slice(idx + 1);
+  if (scope !== "actions") {
+    $("saveMsg").textContent = "zone/mode patches follow the zone table; only actions can be removed";
+    $("saveMsg").className = "err";
+    setTimeout(() => { $("saveMsg").className = ""; }, 3000);
+    return;
+  }
+  const ai = name.indexOf(".");
+  const zn = name.slice(0, ai), an = name.slice(ai + 1);
+  if (PATCHES.actions[zn]) delete PATCHES.actions[zn][an];
+  selectedPatch = "default";
+  buildPatchesForm();
+}
+
+function validatePatches() {
+  const errs = [];
+  if (typeof PATCHES.default !== "string" || !PATCHES.default) errs.push("default: must be a non-empty string");
+  for (const [scope, table] of [["zones", PATCHES.zones], ["modes", PATCHES.modes]]) {
+    for (const name of Object.keys(table)) {
+      if (typeof table[name] !== "string" || !table[name]) errs.push(`${scope}[${name}]: must be a non-empty string`);
+    }
+  }
+  for (const zn of Object.keys(PATCHES.actions)) {
+    const acts = PATCHES.actions[zn];
+    if (typeof acts !== "object" || acts === null || Array.isArray(acts)) { errs.push(`actions[${zn}]: must be an object`); continue; }
+    for (const an of Object.keys(acts)) {
+      if (typeof acts[an] !== "string" || !acts[an]) errs.push(`actions[${zn}][${an}]: must be a non-empty string`);
+    }
+  }
+  return errs;
+}
+
+function savePatches() {
+  commitPatchEditor();
+  const errs = validatePatches();
+  if (errs.length) {
+    $("saveMsg").textContent = errs.join("; ");
+    $("saveMsg").className = "err";
+    return;
+  }
+  fetch("/api/patches", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(PATCHES),
+  }).then((r) => r.json().then((body) => ({ ok: r.ok, body }))).then(({ ok, body }) => {
+    if (ok) {
+      $("saveMsg").textContent = "patches saved";
+      $("saveMsg").className = "";
+    } else {
+      $("saveMsg").textContent = "patches save failed: " + (body.error || r.status);
+      $("saveMsg").className = "err";
+    }
+  }).catch((e) => { $("saveMsg").textContent = "patches save failed: " + e; $("saveMsg").className = "err"; });
+}
+
+// ---------------------------------------------------------------------------
+// Action editor (Step 3): a modal editing one action — poses (bounded by the zone
+// safezone), kind, loop, target, its hydra patch, and per-pose MIDI sound. Save
+// (A5) writes zones.json + sound.json + patches.json in parallel.
+// ---------------------------------------------------------------------------
+
+// Lazily create the modal's second hydra (makeGlobal:false so it does not clobber the
+// patches tab's global preview). Mirrors ensurePatchHydra, but into #aePreview.
+function ensureAeHydra() {
+  if (AE.hydra) return AE.hydra;
+  if (typeof Hydra === "undefined") {
+    $("aePatchStatus").textContent = "hydra-synth not loaded";
+    return null;
+  }
+  const container = $("aePreview");
+  const canvas = document.createElement("canvas");
+  const res = typeof Robot3D !== "undefined" ? Robot3D.screenResolution() : [640, 360];
+  canvas.width = res[0]; canvas.height = res[1];
+  container.appendChild(canvas);
+  AE.hydra = new Hydra({ canvas, detectAudio: false, makeGlobal: false, autoLoop: true });
+  return AE.hydra;
+}
+
+function evalAePatchPreview(code) {
+  const h = ensureAeHydra();
+  if (!h) return;
+  try {
+    h.eval(code || PATCHES_FALLBACK.default);
+    $("aePatchStatus").textContent = "preview: running";
+  } catch (e) {
+    $("aePatchStatus").textContent = "preview error: " + (e && e.message ? e.message : e);
+  }
+}
+
+// Swap two poses (and their speed + sound entries) in place, so reordering keeps the
+// per-pose sound aligned. Mirrors the zones-tab pose handling but also swaps sound.
+function aeSwapPoses(zn, an, i, j) {
+  const z = TABLE.zones[zn];
+  if (!z || !z.actions || !z.actions[an]) return;
+  const a = z.actions[an];
+  const swap = (arr) => {
+    if (Array.isArray(arr) && arr[i] !== undefined && arr[j] !== undefined) {
+      const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+    }
+  };
+  swap(a.pos);
+  swap(a.speed);
+  const s = SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an];
+  if (s && Array.isArray(s.poses)) swap(s.poses);
+  buildActionEditor();
+}
+
+// Ensure SOUND.actions[zn][an] exists with a start message and a poses array whose
+// length matches the action's pose count (pad with a default note, truncate extras).
+// Keeps the sound buffer aligned with the poses edited in the modal.
+function reconcileActionSound(zn, an) {
+  if (!SOUND.actions[zn]) SOUND.actions[zn] = {};
+  if (!SOUND.actions[zn][an]) SOUND.actions[zn][an] = { start: { note: 60, velocity: 60 }, poses: [] };
+  const s = SOUND.actions[zn][an];
+  if (!s.start) s.start = { note: 60, velocity: 60 };
+  if (!Array.isArray(s.poses)) s.poses = [];
+  const a = TABLE.zones[zn].actions[an];
+  const n = (a.pos || []).length;
+  while (s.poses.length < n) s.poses.push({ note: 60, velocity: 60 });
+  if (s.poses.length > n) s.poses.length = n;
+  return s;
+}
+
+// Rebuild the modal body (#aeBody) for AE.zone / AE.action. A3: the **action** section
+// (kind / loop / enabled) and the **poses** section (one row per pose + add). A4 adds
+// the target + sound sections. The static patch section + #aeSaveStatus are siblings of
+// #aeBody, so they are never clobbered here.
+function buildActionEditor() {
+  const zn = AE.zone, an = AE.action;
+  const el = $("aeBody");
+  el.innerHTML = "";
+  if (!zn || !an) return;
+  const z = TABLE.zones[zn];
+  if (!z || !z.actions || !z.actions[an]) return;
+  const a = z.actions[an];
+  if (!a.pos) a.pos = [];
+  if (!a.speed) a.speed = [];
+
+  // --- action section: kind / loop / enabled ---
+  const sec = document.createElement("div");
+  sec.className = "aeSec";
+  sec.appendChild(h3("action"));
+  const arow = document.createElement("div");
+  arow.className = "row";
+  const kl = document.createElement("label");
+  kl.className = "inline";
+  kl.innerHTML = "kind <select class='aeKind'></select>";
+  const ksel = kl.querySelector("select");
+  ACTION_KINDS.forEach((k) => { const o = document.createElement("option"); o.value = k; o.textContent = k; ksel.appendChild(o); });
+  ksel.value = a.kind || "internal";
+  ksel.onchange = () => { a.kind = ksel.value; buildActionEditor(); };
+  arow.appendChild(kl);
+  const lp = document.createElement("label");
+  lp.className = "inline";
+  lp.innerHTML = `<input type="checkbox" ${a.loop !== false ? "checked" : ""}> loop`;
+  lp.querySelector("input").onchange = (e) => { a.loop = e.target.checked; };
+  arow.appendChild(lp);
+  const en = document.createElement("label");
+  en.className = "inline";
+  en.innerHTML = `<input type="checkbox" ${a.enabled !== false ? "checked" : ""}> enabled`;
+  en.querySelector("input").onchange = (e) => { a.enabled = e.target.checked; };
+  arow.appendChild(en);
+  sec.appendChild(arow);
+  el.appendChild(sec);
+
+  // --- poses section: one row per pose (6 values + speed + ▲ ▼ ×) + add ---
+  const psec = document.createElement("div");
+  psec.className = "aeSec";
+  psec.appendChild(h3("poses"));
+  a.pos.forEach((pose, pi) => {
+    const p = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
+    const pr = document.createElement("div");
+    pr.className = "aePoseRow";
+    for (let i = 0; i < 6; i++) {
+      const inp = document.createElement("input");
+      inp.type = "number"; inp.step = "0.1";
+      inp.value = p[i] != null ? p[i] : 0;
+      if (z.safezone) {
+        const [lo, hi] = z.safezone[i];
+        if (p[i] < lo || p[i] > hi) inp.className = "oob";
+      }
+      inp.oninput = () => {
+        a.pos[pi][i] = parseFloat(inp.value);
+        if (z.safezone) {
+          const [lo, hi] = z.safezone[i];
+          inp.className = (a.pos[pi][i] < lo || a.pos[pi][i] > hi) ? "oob" : "";
+        }
+      };
+      pr.appendChild(inp);
+    }
+    const spd = document.createElement("input");
+    spd.type = "number"; spd.step = "1";
+    spd.value = a.speed[pi] != null ? a.speed[pi] : 10;
+    spd.oninput = () => { a.speed[pi] = parseFloat(spd.value); };
+    pr.appendChild(spd);
+    const ctl = document.createElement("div");
+    ctl.className = "aePoseCtl";
+    const up = document.createElement("button");
+    up.textContent = "▲";
+    up.onclick = () => { if (pi > 0) aeSwapPoses(zn, an, pi, pi - 1); };
+    const down = document.createElement("button");
+    down.textContent = "▼";
+    down.onclick = () => { if (pi < a.pos.length - 1) aeSwapPoses(zn, an, pi, pi + 1); };
+    const del = document.createElement("button");
+    del.textContent = "×";
+    del.onclick = () => {
+      a.pos.splice(pi, 1);
+      a.speed.splice(pi, 1);
+      const s = SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an];
+      if (s && Array.isArray(s.poses)) s.poses.splice(pi, 1);
+      buildActionEditor();
+    };
+    ctl.appendChild(up); ctl.appendChild(down); ctl.appendChild(del);
+    pr.appendChild(ctl);
+    psec.appendChild(pr);
+  });
+  const addR = document.createElement("button");
+  addR.className = "small"; addR.textContent = "+ pose row";
+  addR.onclick = () => {
+    a.pos.push([0,0,0,0,0,0]);
+    a.speed.push(10);
+    const s = SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an];
+    if (s) { s.poses = s.poses || []; s.poses.push({ note: 60, velocity: 60 }); }
+    buildActionEditor();
+  };
+  psec.appendChild(addR);
+  el.appendChild(psec);
+
+  // --- target section (rendered only when kind is not "internal") ---
+  const kind = a.kind || "internal";
+  if (kind !== "internal") {
+    const t = a.target || {};
+    const isExit = (kind === "exit");
+    const tsec = document.createElement("div");
+    tsec.className = "aeSec";
+    tsec.appendChild(h3("target"));
+    // zone select: exit picks any zone (with a (none) placeholder); entry is fixed here
+    const zl = document.createElement("label");
+    zl.className = "inline";
+    zl.innerHTML = "zone <select class='aeTgtZone'></select>";
+    const zsel = zl.querySelector("select");
+    if (isExit) {
+      const none = document.createElement("option");
+      none.value = ""; none.textContent = "(none)";
+      zsel.appendChild(none);
+      Object.keys(TABLE.zones).forEach((on) => {
+        const o = document.createElement("option"); o.value = on; o.textContent = on; zsel.appendChild(o);
+      });
+    } else {
+      const o = document.createElement("option"); o.value = zn; o.textContent = zn; zsel.appendChild(o);
+    }
+    zsel.value = t.zone || (isExit ? "" : zn);
+    zsel.onchange = () => {
+      if (zsel.value === "") delete t.zone; else t.zone = zsel.value;
+      a.target = t;
+      buildActionEditor();
+    };
+    tsec.appendChild(zl);
+    // action select: populated from the target zone's actions
+    const targetZone = isExit ? (t.zone || null) : zn;
+    const al = document.createElement("label");
+    al.className = "inline";
+    al.innerHTML = "action <select class='aeTgtAction'></select>";
+    const asel = al.querySelector("select");
+    const noneA = document.createElement("option");
+    noneA.value = ""; noneA.textContent = "(none)";
+    asel.appendChild(noneA);
+    const tz = targetZone ? TABLE.zones[targetZone] : null;
+    if (tz && tz.actions) {
+      Object.keys(tz.actions).forEach((on) => {
+        const o = document.createElement("option"); o.value = on; o.textContent = on; asel.appendChild(o);
+      });
+    }
+    asel.value = t.action || "";
+    asel.onchange = () => {
+      if (asel.value === "") delete t.action; else t.action = asel.value;
+      a.target = t;
+      buildActionEditor();
+    };
+    tsec.appendChild(al);
+    // hand-off pose checkbox: unchecked clears t.pose, checked seeds it from exitpos/startpos
+    const hp = document.createElement("label");
+    hp.className = "inline";
+    hp.innerHTML = `<input type="checkbox" ${t.pose ? "checked" : ""}> hand-off pose`;
+    hp.querySelector("input").onchange = (e) => {
+      if (e.target.checked) {
+        const src = isExit ? z.exitpos : z.startpos;
+        t.pose = (src && src.length === 6) ? src.slice() : [0,0,0,0,0,0];
+      } else {
+        delete t.pose;
+      }
+      a.target = t;
+      buildActionEditor();
+    };
+    tsec.appendChild(hp);
+    el.appendChild(tsec);
+  } else {
+    delete a.target;  // internal actions have no target
+  }
+
+  // --- sound section: start message + one per pose (reconciled to the pose count) ---
+  reconcileActionSound(zn, an);
+  const sd = SOUND.actions[zn][an];
+  const ssec = document.createElement("div");
+  ssec.className = "aeSec";
+  ssec.appendChild(h3("sound"));
+  const srow = document.createElement("div");
+  srow.className = "sndRow";
+  const sl = document.createElement("span");
+  sl.className = "sndName"; sl.textContent = "start";
+  srow.appendChild(sl);
+  srow.appendChild(msgEditor(sd.start, (fresh) => { sd.start = fresh; buildActionEditor(); }));
+  ssec.appendChild(srow);
+  sd.poses.forEach((pm, pi) => {
+    const prow = document.createElement("div");
+    prow.className = "sndRow";
+    const pl = document.createElement("span");
+    pl.className = "sndName"; pl.textContent = "pose " + (pi + 1);
+    prow.appendChild(pl);
+    prow.appendChild(msgEditor(pm, (fresh) => { sd.poses[pi] = fresh; buildActionEditor(); }));
+    ssec.appendChild(prow);
+  });
+  el.appendChild(ssec);
+}
+
+function openActionEditor(zn, an) {
+  if (!zn || !an) return;
+  commitPatchEditor();  // commit the patches tab first (its textarea is the buffer)
+  AE.zone = zn; AE.action = an;
+  $("actionEditor").classList.add("open");
+  $("aeTitle").textContent = zn + " / " + an;
+  $("aePatchCode").value = getPatchCode("actions." + zn + "." + an);
+  buildActionEditor();
+  evalAePatchPreview($("aePatchCode").value);
+}
+
+function closeActionEditor() {
+  if (AE.timer) { clearTimeout(AE.timer); AE.timer = null; }
+  $("actionEditor").classList.remove("open");
+  AE.zone = null; AE.action = null;
+  if (flowView) { flowRender(); buildFlowDetail(); }
+  else buildZoneForm();
+}
+
+// ---------------------------------------------------------------------------
+// View switching (zones / patches / midi / flow editors). The midi view shows the
+// per-zone out mapping and the per-zone in mapping, toggled by the In/Out buttons.
+// ---------------------------------------------------------------------------
+function switchView(v) {
+  const wasPatch = patchView;
+  patchView = v === "patches";
+  midiView = v === "midi";
+  flowView = v === "flow";
+  if (wasPatch && !patchView) commitPatchEditor();  // leaving the patches view: commit
+  const other = patchView || midiView || flowView;
+  $("zoneMain").style.display = other ? "none" : "";
+  $("patchesMain").style.display = patchView ? "" : "none";
+  $("midiMain").style.display = midiView ? "" : "none";
+  $("flowMain").style.display = flowView ? "" : "none";
+  $("tabZones").className = other ? "" : "active";
+  $("tabPatches").className = patchView ? "active" : "";
+  $("tabMidi").className = midiView ? "active" : "";
+  $("tabFlow").className = flowView ? "active" : "";
+  if (midiView) {
+    // Show/hide the In/Out sub-views based on midiSubView.
+    $("midiOutView").style.display = midiSubView === "out" ? "" : "none";
+    $("midiInView").style.display = midiSubView === "in" ? "" : "none";
+    $("midiTabOut").className = midiSubView === "out" ? "small active" : "small";
+    $("midiTabIn").className = midiSubView === "in" ? "small active" : "small";
+    buildMidiOutForm();
+    buildMidiInForm();
+  }
+  if (patchView) buildPatchesForm();
+  if (flowView) flowEnter();
+}
+
+function switchMidiSubView(v) {
+  midiSubView = v;
+  $("midiOutView").style.display = v === "out" ? "" : "none";
+  $("midiInView").style.display = v === "in" ? "" : "none";
+  $("midiTabOut").className = v === "out" ? "small active" : "small";
+  $("midiTabIn").className = v === "in" ? "small active" : "small";
+}
+
+// ---------------------------------------------------------------------------
+// Left: zone list.
+// ---------------------------------------------------------------------------
+function buildZoneList() {
+  const el = $("zoneList");
+  el.innerHTML = "";
+  Object.keys(TABLE.zones).forEach((name) => {
+    const b = document.createElement("button");
+    b.textContent = name + (TABLE.zones[name].enabled === false ? " (off)" : "");
+    b.className = name === selectedZone ? "active" : "";
+    b.onclick = () => selectZone(name);
+    el.appendChild(b);
+  });
+}
+
+function selectZone(name) {
+  selectedZone = name;
+  const acts = (name && TABLE.zones[name].actions) ? TABLE.zones[name].actions : {};
+  selectedAction = Object.keys(acts)[0] || null;
+  ghostIndex = 0;
+  buildZoneList();
+  buildZoneForm();
+  buildBars();
+  updateGhost();
+}
+
+// ---------------------------------------------------------------------------
+// Center: zone form.
+// ---------------------------------------------------------------------------
+function numGrid(id, values, oninput) {
+  const g = document.createElement("div");
+  g.className = "grid6";
+  AXES.forEach((n, i) => {
+    const l = document.createElement("label");
+    l.textContent = n;
+    const inp = document.createElement("input");
+    inp.type = "number"; inp.step = "0.1";
+    inp.value = values[i] != null ? values[i] : 0;
+    inp.oninput = () => { oninput(parseFloat(inp.value), i); };
+    l.appendChild(inp);
+    g.appendChild(l);
+  });
+  return g;
+}
+
+// Build the zone form into ``containerEl`` / ``titleEl`` for zone ``name``.
+// No-args form (the zones tab) defaults to #zoneForm / #zoneTitle / selectedZone and
+// refreshes the zones-tab list/bars/ghost. The flow tab passes its own container + a
+// ``onChanged`` that re-renders the flow canvas (so the node label tracks edits).
+function buildZoneForm(containerEl, titleEl, name, onChanged) {
+  if (containerEl === undefined) {
+    containerEl = $("zoneForm"); titleEl = $("zoneTitle"); name = selectedZone;
+    onChanged = () => { buildZoneList(); buildBars(); updateGhost(); };
+  }
+  const rebuild = () => buildZoneForm(containerEl, titleEl, name, onChanged);
+  const el = containerEl;
+  el.innerHTML = "";
+  if (!name || !TABLE.zones[name]) {
+    el.innerHTML = "<span style='color:var(--dim)'>no zone selected — add one</span>";
+    titleEl.textContent = "zone";
+    return;
+  }
+  const z = TABLE.zones[name];
+  if (!z.actions) z.actions = {};
+  titleEl.textContent = "zone: " + name;
+
+  // enabled + speed
+  const row = document.createElement("div");
+  row.className = "row";
+  const en = document.createElement("label");
+  en.className = "inline";
+  en.innerHTML = `<input type="checkbox" ${z.enabled !== false ? "checked" : ""}> enabled`;
+  en.querySelector("input").onchange = (e) => { z.enabled = e.target.checked; onChanged(); };
+  row.appendChild(en);
+  const sp = document.createElement("label");
+  sp.className = "inline";
+  sp.innerHTML = "speed <input type='number' step='1' value='" + (z.speed != null ? z.speed : 20) + "'>";
+  sp.querySelector("input").oninput = (e) => { z.speed = parseFloat(e.target.value); };
+  row.appendChild(sp);
+  el.appendChild(row);
+
+  // default mode (adopted on zone entry; "(keep current)" clears it)
+  const ml = document.createElement("label");
+  ml.className = "inline";
+  ml.innerHTML = "default mode <select class='msgType'></select>";
+  const msel = ml.querySelector("select");
+  const keepOpt = document.createElement("option");
+  keepOpt.value = ""; keepOpt.textContent = "(keep current)";
+  msel.appendChild(keepOpt);
+  MODES.forEach((m) => { const o = document.createElement("option"); o.value = m; o.textContent = m; msel.appendChild(o); });
+  msel.value = z.mode || "";
+  msel.onchange = () => { if (msel.value === "") delete z.mode; else z.mode = msel.value; onChanged(); };
+  el.appendChild(ml);
+
+  // startpos
+  el.appendChild(h3("startpos"));
+  el.appendChild(numGrid("startpos", z.startpos, (v, i) => { z.startpos = list6(z.startpos); z.startpos[i] = v; }));
+  // exitpos
+  el.appendChild(h3("exitpos"));
+  el.appendChild(numGrid("exitpos", z.exitpos, (v, i) => { z.exitpos = list6(z.exitpos); z.exitpos[i] = v; }));
+  // safezone (lo / hi per axis)
+  el.appendChild(h3("safezone (lo / hi)"));
+  const sz = document.createElement("div");
+  sz.style.display = "grid";
+  sz.style.gridTemplateColumns = "36px 1fr 1fr";
+  sz.style.gap = "4px";
+  for (let i = 0; i < 6; i++) {
+    const ax = document.createElement("span");
+    ax.style.cssText = "font-size:11px;color:var(--dim);align-self:center";
+    ax.textContent = AXES[i];
+    sz.appendChild(ax);
+    for (const k of [0, 1]) {
+      const inp = document.createElement("input");
+      inp.type = "number"; inp.step = "0.1";
+      const pair = z.safezone && z.safezone[i] ? z.safezone[i] : [0, 0];
+      inp.value = pair[k];
+      inp.oninput = () => {
+        if (!z.safezone) z.safezone = Array.from({length: 6}, () => [0, 0]);
+        z.safezone[i][k] = parseFloat(inp.value);
+        onChanged();
+      };
+      sz.appendChild(inp);
+    }
+  }
+  el.appendChild(sz);
+
+  // exits (checkboxes over other zones)
+  el.appendChild(h3("exits"));
+  const ex = document.createElement("div");
+  ex.className = "row";
+  Object.keys(TABLE.zones).forEach((on) => {
+    if (on === name) return;
+    const c = document.createElement("label");
+    c.className = "inline";
+    c.innerHTML = `<input type="checkbox" ${(z.exits || []).includes(on) ? "checked" : ""}> ${on}`;
+    c.querySelector("input").onchange = (e) => {
+      z.exits = z.exits || [];
+      z.exits = e.target.checked ? [...z.exits, on] : z.exits.filter((x) => x !== on);
+      onChanged();
+    };
+    ex.appendChild(c);
+  });
+  el.appendChild(ex);
+
+  // actions: this zone's own actions (each zone owns its actions independently)
+  el.appendChild(h3("actions"));
+  buildActionList(el, name, z, rebuild, onChanged);
+
+  const addA = document.createElement("button");
+  addA.className = "small";
+  addA.textContent = "+ add action";
+  addA.onclick = () => {
+    const nm = prompt("action name:", "new");
+    if (!nm) return;
+    z.actions[nm] = { enabled: true, pos: [[0,0,0,0,0,0]], speed: [10] };
+    selectedAction = nm;
+    rebuild(); onChanged();
+  };
+  el.appendChild(addA);
+}
+
+function h3(text) {
+  const h = document.createElement("h3");
+  h.textContent = text;
+  return h;
+}
+
+function list6(arr) {
+  if (Array.isArray(arr) && arr.length === 6) return arr.slice();
+  return [0, 0, 0, 0, 0, 0];
+}
+
+function buildActionList(container, name, z, rebuild, onChanged) {
+  Object.keys(z.actions).forEach((an) => {
+    const a = z.actions[an];
+    const box = document.createElement("div");
+    box.className = "action";
+    // header: name + enabled + play + remove
+    const head = document.createElement("div");
+    head.className = "actionHead";
+    const nm = document.createElement("input");
+    nm.type = "text"; nm.value = an;
+    nm.onchange = () => {
+      const nn = nm.value.trim();
+      if (!nn || nn === an) { nm.value = an; return; }
+      z.actions[nn] = a; delete z.actions[an];
+      selectedAction = nn;
+      rebuild();
+    };
+    const en = document.createElement("label");
+    en.className = "inline";
+    en.innerHTML = `<input type="checkbox" ${a.enabled !== false ? "checked" : ""}> on`;
+    en.querySelector("input").onchange = (e) => { a.enabled = e.target.checked; };
+    const play = document.createElement("button");
+    play.className = "small"; play.textContent = "play";
+    play.onclick = () => send({ cmd: "play_action", action: an });
+    const edit = document.createElement("button");
+    edit.className = "small"; edit.textContent = "edit";
+    edit.onclick = (e) => { e.stopPropagation(); openActionEditor(name, an); };
+    head.appendChild(nm); head.appendChild(en); head.appendChild(play); head.appendChild(edit);
+    box.appendChild(head);
+
+    // pose rows
+    (a.pos || []).forEach((pose, pi) => {
+      const pr = document.createElement("div");
+      pr.className = "poseRow";
+      pose = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
+      for (let i = 0; i < 6; i++) {
+        const inp = document.createElement("input");
+        inp.type = "number"; inp.step = "0.1"; inp.value = pose[i];
+        inp.oninput = () => { a.pos[pi][i] = parseFloat(inp.value); if (an === selectedAction) onChanged(); };
+        pr.appendChild(inp);
+      }
+      const spd = document.createElement("input");
+      spd.type = "number"; spd.step = "1";
+      spd.value = (a.speed && a.speed[pi]) != null ? a.speed[pi] : 10;
+      spd.oninput = () => { a.speed = a.speed || []; a.speed[pi] = parseFloat(spd.value); };
+      pr.appendChild(spd);
+      const rx = document.createElement("button");
+      rx.className = "small"; rx.textContent = "×";
+      rx.onclick = () => {
+        a.pos.splice(pi, 1);
+        a.speed = a.speed || []; a.speed.splice(pi, 1);
+        if (ghostIndex >= a.pos.length) ghostIndex = 0;
+        rebuild(); onChanged();
+      };
+      pr.appendChild(rx);
+      box.appendChild(pr);
+    });
+
+    const addR = document.createElement("button");
+    addR.className = "small"; addR.textContent = "+ pose row";
+    addR.onclick = () => {
+      a.pos = a.pos || []; a.speed = a.speed || [];
+      a.pos.push([0,0,0,0,0,0]);
+      a.speed.push(10);
+      rebuild();
+    };
+    box.appendChild(addR);
+
+    container.appendChild(box);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Right: safezone bars + ghost stepping.
+// ---------------------------------------------------------------------------
+function buildBars() {
+  const el = $("bars");
+  el.innerHTML = "";
+  const z = TABLE.zones[selectedZone];
+  if (!z || !z.safezone) return;
+  const marks = [];
+  for (let i = 0; i < 6; i++) {
+    const ax = document.createElement("div");
+    ax.className = "axis";
+    const [lo, hi] = z.safezone[i];
+    ax.innerHTML = `<div class="row"><span>${AXES[i]} <span style="color:var(--dim)">[${fmt(lo)}, ${fmt(hi)}]</span></span></div>` +
+                   `<div class="bar"><div class="mark" id="bmark${i}"></div></div>`;
+    el.appendChild(ax);
+    marks.push(i);
+  }
+  updateGhost();
+}
+
+function currentGhostPose() {
+  const z = TABLE.zones[selectedZone];
+  if (!z || !z.actions || !selectedAction || !z.actions[selectedAction]) return null;
+  const pos = z.actions[selectedAction].pos;
+  if (!pos || !pos.length) return null;
+  return pos[ghostIndex % pos.length];
+}
+
+function updateGhost() {
+  const pose = currentGhostPose();
+  const z = TABLE.zones[selectedZone];
+  if (pose) Robot3D.setTarget(pose);
+  $("ghostInfo").textContent = pose
+    ? `${selectedAction} pose ${ghostIndex % (z.actions[selectedAction].pos.length)}`
+    : "no action selected";
+  // bars marker at the ghost pose
+  if (z && z.safezone) {
+    for (let i = 0; i < 6; i++) {
+      const mark = $("bmark" + i);
+      if (!mark) continue;
+      const [lo, hi] = z.safezone[i];
+      const v = pose ? pose[i] : (z.startpos ? z.startpos[i] : 0);
+      const pct = hi > lo ? ((v - lo) / (hi - lo)) * 100 : 50;
+      mark.style.left = Math.max(0, Math.min(100, pct)) + "%";
+    }
+  }
+}
+
+function stepGhost(dir) {
+  const z = TABLE.zones[selectedZone];
+  if (!z || !z.actions || !selectedAction || !z.actions[selectedAction]) return;
+  const n = z.actions[selectedAction].pos.length;
+  if (!n) return;
+  ghostIndex = (ghostIndex + dir + n) % n;
+  updateGhost();
+}
+
+// ---------------------------------------------------------------------------
+// Save (validate + POST the whole table).
+// ---------------------------------------------------------------------------
+function validate() {
+  const errs = [];
+  const names = Object.keys(TABLE.zones);
+  for (const name of names) {
+    const z = TABLE.zones[name];
+    if (!Array.isArray(z.startpos) || z.startpos.length !== 6) errs.push(`${name}: startpos needs 6 values`);
+    if (!Array.isArray(z.exitpos) || z.exitpos.length !== 6) errs.push(`${name}: exitpos needs 6 values`);
+    if (!Array.isArray(z.safezone) || z.safezone.length !== 6) errs.push(`${name}: safezone needs 6 pairs`);
+    for (const e of (z.exits || [])) if (!TABLE.zones[e]) errs.push(`${name}: exit "${e}" does not exist`);
+    if (z.mode !== undefined && !MODES.includes(z.mode)) errs.push(`${name}: mode "${z.mode}" not in ${MODES.join("/")}`);
+    if (z.exitposes !== undefined) {
+      if (typeof z.exitposes !== "object" || z.exitposes === null || Array.isArray(z.exitposes)) {
+        errs.push(`${name}: exitposes must be a map of zone -> 6 values`);
+      } else {
+        for (const to of Object.keys(z.exitposes)) {
+          if (!TABLE.zones[to]) errs.push(`${name}: exitpose for unknown zone "${to}"`);
+          const ep = z.exitposes[to];
+          if (!Array.isArray(ep) || ep.length !== 6) errs.push(`${name}: exitpose "${to}" needs 6 values`);
+        }
+      }
+    }
+    for (const an of Object.keys(z.actions || {})) {
+      const a = z.actions[an];
+      // kind / loop / target (action-editor schema; all optional)
+      if (a.kind !== undefined && !ACTION_KINDS.includes(a.kind)) errs.push(`${name}/${an}: kind "${a.kind}" not in ${ACTION_KINDS.join("/")}`);
+      if (a.loop !== undefined && typeof a.loop !== "boolean") errs.push(`${name}/${an}: loop must be a bool`);
+      if (a.target !== undefined) {
+        if (typeof a.target !== "object" || a.target === null || Array.isArray(a.target)) {
+          errs.push(`${name}/${an}: target must be an object`);
+        } else {
+          const t = a.target;
+          if (t.zone !== undefined && !TABLE.zones[t.zone]) errs.push(`${name}/${an}: target zone "${t.zone}" does not exist`);
+          if (t.action !== undefined && typeof t.action !== "string") errs.push(`${name}/${an}: target action must be a string`);
+          if (t.pose !== undefined && (!Array.isArray(t.pose) || t.pose.length !== 6 || !t.pose.every((x) => typeof x === "number"))) errs.push(`${name}/${an}: target pose needs 6 numbers`);
+        }
+      }
+      if (!Array.isArray(a.pos) || !a.pos.length) { errs.push(`${name}/${an}: needs at least 1 pose`); continue; }
+      a.pos.forEach((p, i) => { if (!Array.isArray(p) || p.length !== 6) errs.push(`${name}/${an}: pose ${i} needs 6 values`); });
+      if (Array.isArray(a.speed) && a.speed.length !== a.pos.length) errs.push(`${name}/${an}: speed count != pose count`);
+    }
+  }
+  return errs;
+}
+
+function save() {
+  if (patchView) { savePatches(); return; }
+  if (midiView) { saveMidiAll(); return; }
+  saveZones();
+}
+
+function saveZones() {
+  const errs = validate();
+  if (errs.length) {
+    $("saveMsg").textContent = errs.join("; ");
+    $("saveMsg").className = "err";
+    return;
+  }
+  // Non-blocking warnings: action poses outside the zone's safezone, action poses
+  // outside the hardware floor, and safezones wider than the hardware range. The core
+  // clamps to the intersection (safezone ∩ hardware), so these are flags, not blockers.
+  const warns = [];
+  for (const name of Object.keys(TABLE.zones)) {
+    const z = TABLE.zones[name];
+    for (let ax = 0; ax < 6; ax++) {
+      const [slo, shi] = z.safezone[ax];
+      const [hlo, hhi] = HW_LIMITS[ax];
+      if (slo < hlo || shi > hhi) warns.push(`${name}: safezone ${AXES[ax]} exceeds hardware [${hlo}, ${hhi}]`);
+    }
+    for (const an of Object.keys(z.actions || {})) {
+      (z.actions[an].pos || []).forEach((p, i) => {
+        for (let ax = 0; ax < 6; ax++) {
+          const [lo, hi] = z.safezone[ax];
+          if (p[ax] < lo || p[ax] > hi) warns.push(`${name}/${an} pose ${i} axis ${AXES[ax]} outside safezone`);
+          const [hlo, hhi] = HW_LIMITS[ax];
+          if (p[ax] < hlo || p[ax] > hhi) warns.push(`${name}/${an} pose ${i} axis ${AXES[ax]} outside hardware limits`);
+        }
+      });
+    }
+  }
+  fetch("/api/zones", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(TABLE),
+  }).then((r) => r.json().then((body) => ({ ok: r.ok, body }))).then(({ ok, body }) => {
+    if (ok) {
+      $("saveMsg").textContent = warns.length
+        ? "saved — warning: " + warns[0] + (warns.length > 1 ? ` (+${warns.length - 1} more)` : "")
+        : "saved";
+      $("saveMsg").className = "";
+    } else {
+      $("saveMsg").textContent = "save failed: " + (body.error || r.status);
+      $("saveMsg").className = "err";
+    }
+  }).catch((e) => { $("saveMsg").textContent = "save failed: " + e; $("saveMsg").className = "err"; });
+}
+
+// Save the action editor: reconcile the sound buffer, run all three validators, then
+// POST zones.json + sound.json + patches.json in parallel. Reports in #aeSaveStatus.
+function saveActionEditor() {
+  const zn = AE.zone, an = AE.action;
+  if (!zn || !an) return;
+  reconcileActionSound(zn, an);
+  const errs = [].concat(validate(), validateSound(), validatePatches());
+  if (errs.length) {
+    $("aeSaveStatus").textContent = errs.join("; ");
+    $("aeSaveStatus").className = "aeStatus err";
+    return;
+  }
+  Promise.all([
+    fetch("/api/zones", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(TABLE) }),
+    fetch("/api/sound", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(SOUND) }),
+    fetch("/api/patches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(PATCHES) }),
+  ]).then((rs) => {
+    if (rs.every((r) => r.ok)) {
+      $("aeSaveStatus").textContent = "saved";
+      $("aeSaveStatus").className = "aeStatus";
+    } else {
+      $("aeSaveStatus").textContent = "save failed";
+      $("aeSaveStatus").className = "aeStatus err";
+    }
+  }).catch((e) => {
+    $("aeSaveStatus").textContent = "save failed: " + e;
+    $("aeSaveStatus").className = "aeStatus err";
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Flow tab (SVG flowchart: nodes = zones, arrows = exits).
+//
+// Node positions are session-only (not persisted). The live zone (from the WS
+// state frame) is highlighted in place so an in-progress arrow-drag is not lost.
+// ---------------------------------------------------------------------------
+function svgEl(tag, attrs) {
+  const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  if (attrs) for (const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+}
+
+// Convert a pointer event to SVG user-space coordinates.
+function svgPoint(svg, ev) {
+  const pt = svg.createSVGPoint();
+  pt.x = ev.clientX; pt.y = ev.clientY;
+  const ctm = svg.getScreenCTM();
+  const p = pt.matrixTransform(ctm.inverse());
+  return { x: p.x, y: p.y };
+}
+
+// A smooth cubic between two anchor points (horizontal S-curve).
+function edgePath(x1, y1, x2, y2) {
+  const c = Math.max(30, Math.abs(x2 - x1) * 0.5);
+  return `M ${x1} ${y1} C ${x1 + c} ${y1}, ${x2 - c} ${y2}, ${x2} ${y2}`;
+}
+
+function flowBuildDefs() {
+  const defs = svgEl("defs");
+  const marker = svgEl("marker", { id: "flowArrow", viewBox: "0 0 10 10", refX: 9, refY: 5,
+                                    markerWidth: 7, markerHeight: 7, orient: "auto" });
+  marker.appendChild(svgEl("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "var(--accent)" }));
+  defs.appendChild(marker);
+  const targetMarker = svgEl("marker", { id: "flowArrowTarget", viewBox: "0 0 10 10", refX: 9, refY: 5,
+                                          markerWidth: 7, markerHeight: 7, orient: "auto" });
+  targetMarker.appendChild(svgEl("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "#e0a030" }));
+  defs.appendChild(targetMarker);
+  return defs;
+}
+
+// The small text under a node's name: the live mode/action when it is the live
+// zone, else the declared default mode + the action count.
+function flowSubLabel(name) {
+  const z = TABLE.zones[name];
+  if (FLOW.live && FLOW.live.zone === name) {
+    return `${FLOW.live.mode || "—"} / ${FLOW.live.action || "—"}`;
+  }
+  const mode = z.mode || "—";
+  const n = Object.keys(z.actions || {}).length;
+  return n ? `${mode} · ${n} act` : mode;
+}
+
+// Deterministic auto-layout: columns by BFS depth from `init` (else the first
+// zone), rows by insertion order within a column. Unreachable zones go last.
+// ``names`` (optional) limits the reposition to those zones, so a manually laid-out
+// flow survives: the other zones keep their positions, and each relayouted node is
+// stacked below whatever already occupies its natural column.
+function flowAutoLayout(names) {
+  const GX = 70, GY = 40;
+  const all = Object.keys(TABLE.zones);
+  const sel = names && names.length ? names.filter((n) => TABLE.zones[n]) : all;
+  const root = TABLE.zones["init"] ? "init" : all[0];
+  const depth = {};
+  if (root) {
+    depth[root] = 0;
+    const q = [root];
+    while (q.length) {
+      const n = q.shift();
+      (TABLE.zones[n].exits || []).forEach((e) => {
+        if (TABLE.zones[e] && depth[e] === undefined) { depth[e] = depth[n] + 1; q.push(e); }
+      });
+    }
+  }
+  const maxD = Math.max(0, ...Object.values(depth));
+  all.forEach((n) => { if (depth[n] === undefined) depth[n] = maxD + 1; });
+  if (sel.length === all.length) {
+    FLOW.pos = {};
+    const cols = {};
+    all.forEach((n) => { (cols[depth[n]] = cols[depth[n]] || []).push(n); });
+    Object.keys(cols).forEach((d) => {
+      cols[d].forEach((n, i) => {
+        FLOW.pos[n] = { x: 40 + d * (NODE_W + GX), y: 40 + i * (nodeH(n) + GY) };
+      });
+    });
+  } else {
+    // Column bases from the zones NOT being moved (their x encodes the column).
+    const baseBottom = {};
+    all.forEach((n) => {
+      if (sel.includes(n)) return;
+      const p = FLOW.pos[n];
+      if (!p) return;
+      const d = Math.round((p.x - 40) / (NODE_W + GX));
+      baseBottom[d] = Math.max(baseBottom[d] || 0, p.y + nodeH(n));
+    });
+    const rows = {};
+    sel.forEach((n) => {
+      const d = depth[n];
+      const i = (rows[d] = (rows[d] || 0) + 1) - 1;
+      FLOW.pos[n] = { x: 40 + d * (NODE_W + GX), y: Math.max(40, baseBottom[d] || 0) + i * (nodeH(n) + GY) };
+    });
+  }
+  FLOW.layoutKey = all.sort().join(",");
+}
+
+// Fit the viewBox to the content bounds and store it (entry / after auto-layout).
+function flowFitView() {
+  const names = Object.keys(TABLE.zones);
+  if (!names.length) { FLOW.view = { x: 0, y: 0, w: 400, h: 300 }; }
+  else {
+    let maxX = 0, maxY = 0;
+    names.forEach((n) => {
+      const p = FLOW.pos[n] || { x: 0, y: 0 };
+      maxX = Math.max(maxX, p.x + NODE_W);
+      maxY = Math.max(maxY, p.y + nodeH(n));
+    });
+    FLOW.view = { x: 0, y: 0, w: Math.max(400, maxX + 60), h: Math.max(300, maxY + 60) };
+  }
+  flowApplyView();
+}
+
+// Apply the current (possibly user-zoomed/panned) viewBox to the svg element.
+function flowApplyView() {
+  const svg = $("flowSvg");
+  if (!svg || !FLOW.view) return;
+  svg.setAttribute("viewBox", `${FLOW.view.x} ${FLOW.view.y} ${FLOW.view.w} ${FLOW.view.h}`);
+}
+
+// Wheel = zoom around the cursor; middle-drag = pan. Both only mutate FLOW.view.
+function flowZoomAt(e) {
+  const svg = $("flowSvg");
+  if (!FLOW.view) flowFitView();
+  const v = FLOW.view;
+  const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  if (v.w / f < 50 || v.w / f > 5000) return;  // clamp the zoom range
+  const pt = svgPoint(svg, e);
+  v.x = pt.x - (pt.x - v.x) / f;
+  v.y = pt.y - (pt.y - v.y) / f;
+  v.w /= f; v.h /= f;
+  flowApplyView();
+}
+
+function flowPanStart(e) {
+  const svg = $("flowSvg");
+  if (!FLOW.view) flowFitView();
+  const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+  const ctm = svg.getScreenCTM();
+  FLOW.pan = { ctm, startScreen: pt.matrixTransform(ctm), startView: { ...FLOW.view } };
+  const move = (ev) => {
+    const f = FLOW.pan;
+    if (!f) return;
+    const p = svg.createSVGPoint(); p.x = ev.clientX; p.y = ev.clientY;
+    const cur = p.matrixTransform(f.ctm);  // the frozen CTM keeps the start mapping stable
+    const scale = f.startView.w / svg.getBoundingClientRect().width;
+    FLOW.view.x = f.startView.x - (cur.x - f.startScreen.x) * scale;
+    FLOW.view.y = f.startView.y - (cur.y - f.startScreen.y) * scale;
+    flowApplyView();
+  };
+  const up = () => { FLOW.pan = null; window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+}
+
+function flowAddEdge(layer, from, to) {
+  const a = FLOW.pos[from], b = FLOW.pos[to];
+  if (!a || !b) return;
+  // Anchor right-center -> left-center (or the reverse when the target is left).
+  let x1, y1, x2, y2;
+  if (b.x >= a.x) { x1 = a.x + NODE_W; y1 = a.y + nodeH(from) / 2; x2 = b.x; y2 = b.y + nodeH(to) / 2; }
+  else { x1 = a.x; y1 = a.y + nodeH(from) / 2; x2 = b.x + NODE_W; y2 = b.y + nodeH(to) / 2; }
+  const d = edgePath(x1, y1, x2, y2);
+  const z = TABLE.zones[from];
+  const isCustom = !!(z.exitposes && z.exitposes[to]);
+  const isSel = !!(FLOW.sel && FLOW.sel.type === "edge" && FLOW.sel.from === from && FLOW.sel.to === to);
+  const hit = svgEl("path", { d, class: "fedgeHit" });
+  hit.addEventListener("click", (e) => { e.stopPropagation(); flowSelect({ type: "edge", from, to }); });
+  layer.appendChild(hit);
+  const cls = "fedge" + (isCustom ? " fedgeCustom" : "") + (isSel ? " fedgeSel" : "");
+  layer.appendChild(svgEl("path", { d, class: cls, "marker-end": "url(#flowArrow)" }));
+  const lbl = svgEl("text", { x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 8,
+                               class: "fedgeLabel" + (isCustom ? " fedgeLabelCustom" : ""), "text-anchor": "middle" });
+  lbl.textContent = isCustom ? "custom" : "shared";
+  layer.appendChild(lbl);
+}
+
+function flowRenderEdges() {
+  const layer = $("flowEdgeLayer");
+  if (!layer) return;
+  layer.innerHTML = "";
+  Object.keys(TABLE.zones).forEach((from) => {
+    (TABLE.zones[from].exits || []).forEach((to) => {
+      if (TABLE.zones[to]) flowAddEdge(layer, from, to);
+    });
+  });
+  flowRenderTargetEdges(layer);
+}
+
+// Target edges (Step 4): for each exit action whose target.zone names a different,
+// existing zone, draw an orange dashed arrow from the source row's right side to the
+// target's entry-action left edge (or the target zone center when no entry action is
+// named). Purely visual — pointer-events are disabled so they never block the normal
+// (interactive) zone edges beneath.
+function flowRenderTargetEdges(layer) {
+  Object.keys(TABLE.zones).forEach((name) => {
+    const z = TABLE.zones[name];
+    if (!z.actions) return;
+    Object.keys(z.actions).forEach((an) => {
+      const act = z.actions[an];
+      if (act.kind !== "exit") return;
+      const tgt = act.target;
+      if (!tgt || !tgt.zone || tgt.zone === name || !TABLE.zones[tgt.zone]) return;
+      const a = FLOW.pos[name], b = FLOW.pos[tgt.zone];
+      if (!a || !b) return;
+      const x1 = a.x + NODE_W, y1 = a.y + rowY(name, an);
+      const tz = TABLE.zones[tgt.zone];
+      // Target anchor: the named action, else the first entry action, else zone center.
+      let anchorAn = null;
+      if (tgt.action && tz.actions && tz.actions[tgt.action]) anchorAn = tgt.action;
+      else {
+        const entries = Object.keys(tz.actions || {}).filter((e) => tz.actions[e].kind === "entry");
+        if (entries.length) anchorAn = entries[0];
+      }
+      const x2 = b.x, y2 = anchorAn ? b.y + rowY(tgt.zone, anchorAn) : b.y + nodeH(tgt.zone) / 2;
+      layer.appendChild(svgEl("path", { d: edgePath(x1, y1, x2, y2), class: "fedge fedgeTarget",
+                                         "marker-end": "url(#flowArrowTarget)", style: "pointer-events: none" }));
+    });
+  });
+}
+
+function flowAddNode(layer, name) {
+  const z = TABLE.zones[name];
+  const p = FLOW.pos[name] || { x: 40, y: 40 };
+  const g = svgEl("g", { class: "fnode", "data-zone": name, transform: `translate(${p.x},${p.y})` });
+  g.appendChild(svgEl("rect", { width: NODE_W, height: nodeH(name), rx: 10, class: "fnodeBody" }));
+  const label = svgEl("text", { x: NODE_W / 2, y: 24, class: "fnodeLabel", "text-anchor": "middle" });
+  label.textContent = name;
+  g.appendChild(label);
+  const sub = svgEl("text", { x: NODE_W / 2, y: 42, class: "fnodeSub", "text-anchor": "middle" });
+  sub.textContent = flowSubLabel(name);
+  g.appendChild(sub);
+  // Action rows (Step 4): one row per action, read-only (editing is in the modal).
+  // entry = left dot + left-aligned label, exit = right dot + right-aligned label,
+  // internal = centered label, no dot. Looping actions append a ↻ marker.
+  if (z.actions) {
+    Object.keys(z.actions).forEach((an) => {
+      const act = z.actions[an];
+      const kind = act.kind || "internal";
+      const ry = rowY(name, an);
+      const hit = svgEl("rect", { x: 0, y: ry - FA_ROW / 2, width: NODE_W, height: FA_ROW, fill: "transparent" });
+      hit.addEventListener("mousedown", (e) => e.stopPropagation());  // don't start a node drag
+      hit.addEventListener("click", (e) => { e.stopPropagation(); openActionEditor(name, an); });
+      g.appendChild(hit);
+      if (kind === "entry" || kind === "exit") {
+        g.appendChild(svgEl("circle", { cx: kind === "entry" ? 4 : NODE_W - 4, cy: ry, r: 3, class: "faDot", style: "pointer-events: none" }));
+      }
+      const anchor = kind === "entry" ? "start" : kind === "exit" ? "end" : "middle";
+      const lx = kind === "entry" ? 12 : kind === "exit" ? NODE_W - 12 : NODE_W / 2;
+      const txt = svgEl("text", { x: lx, y: ry + 4, class: "faRow " + kind, "text-anchor": anchor, style: "pointer-events: none" });
+      const lbl = svgEl("tspan", { class: "faLabel" });
+      lbl.textContent = an;
+      txt.appendChild(lbl);
+      if (act.loop !== false) {
+        const lp = svgEl("tspan", { class: "faLoop", dx: 3 });
+        lp.textContent = "↻";
+        txt.appendChild(lp);
+      }
+      g.appendChild(txt);
+    });
+  }
+  g.addEventListener("mousedown", (e) => flowDragStart(e, name));
+  layer.appendChild(g);
+  FLOW.nodeEls[name] = g;
+  return g;
+}
+
+function flowRender() {
+  const svg = $("flowSvg");
+  if (!svg) return;
+  svg.innerHTML = "";
+  svg.appendChild(flowBuildDefs());
+  const edgeLayer = svgEl("g", { id: "flowEdgeLayer" });
+  const nodeLayer = svgEl("g", { id: "flowNodeLayer" });
+  svg.appendChild(edgeLayer);
+  svg.appendChild(nodeLayer);
+  svg.appendChild(svgEl("path", { id: "flowDragArrow", fill: "none", stroke: "var(--accent)",
+                                  "stroke-width": 2, "marker-end": "url(#flowArrow)", style: "display:none" }));
+  FLOW.nodeEls = {};
+  flowRenderEdges();
+  Object.keys(TABLE.zones).forEach((n) => flowAddNode(nodeLayer, n));
+  flowApplyView();
+  applyFlowHighlight();
+}
+
+// In-place live/selection refresh (no SVG rebuild — an arrow-drag must survive a
+// state frame). Updates node classes + sublabels and (re)marks the selected edge.
+function applyFlowHighlight() {
+  Object.keys(TABLE.zones).forEach((n) => {
+    const g = FLOW.nodeEls[n];
+    if (!g) return;
+    const isLive = !!(FLOW.live && FLOW.live.zone === n);
+    const isSel = !!(FLOW.sel && FLOW.sel.type === "node" && FLOW.sel.zone === n);
+    g.classList.toggle("flive", isLive);
+    g.classList.toggle("fsel", isSel);
+    g.classList.toggle("off", TABLE.zones[n].enabled === false);
+    const sub = g.querySelector(".fnodeSub");
+    if (sub) sub.textContent = flowSubLabel(n);
+  });
+}
+
+// Hit-test: the zone (other than ``exclude``) whose rect contains ``pt``, else null.
+function flowNodeAt(pt, exclude) {
+  for (const n of Object.keys(TABLE.zones)) {
+    if (n === exclude) continue;
+    const p = FLOW.pos[n];
+    if (p && pt.x >= p.x && pt.x <= p.x + NODE_W && pt.y >= p.y && pt.y <= p.y + nodeH(n)) return n;
+  }
+  return null;
+}
+
+function flowDragStart(e, name) {
+  e.preventDefault(); e.stopPropagation();
+  const svg = $("flowSvg");
+  FLOW.drag = { from: name, startPt: svgPoint(svg, e), startNode: FLOW.pos[name], moved: false };
+  const move = (ev) => flowDragMove(ev);
+  const up = (ev) => { flowDragEnd(ev); window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+}
+
+function flowDragMove(ev) {
+  const d = FLOW.drag;
+  if (!d) return;
+  const svg = $("flowSvg");
+  const pt = svgPoint(svg, ev);
+  const dx = pt.x - d.startPt.x, dy = pt.y - d.startPt.y;
+  if (!d.moved && Math.hypot(dx, dy) < 4) return;  // click threshold
+  d.moved = true;
+  const name = d.from;
+  FLOW.pos[name] = { x: d.startNode.x + dx, y: d.startNode.y + dy };
+  const g = FLOW.nodeEls[name];
+  if (g) g.setAttribute("transform", `translate(${FLOW.pos[name].x},${FLOW.pos[name].y})`);
+  flowRenderEdges();
+  // Temporary arrow: from the node's original position to the pointer.
+  const arrow = $("flowDragArrow");
+  if (arrow) {
+    const cx = d.startNode.x + NODE_W / 2, cy = d.startNode.y + nodeH(d.from) / 2;
+    arrow.setAttribute("d", edgePath(cx, cy, pt.x, pt.y));
+    arrow.style.display = "";
+  }
+}
+
+function flowDragEnd(ev) {
+  const d = FLOW.drag;
+  FLOW.drag = null;
+  const arrow = $("flowDragArrow");
+  if (arrow) arrow.style.display = "none";
+  if (!d) return;
+  const name = d.from;
+  if (!d.moved) { flowSelect({ type: "node", zone: name }); return; }
+  const svg = $("flowSvg");
+  const pt = svgPoint(svg, ev);
+  const target = flowNodeAt(pt, name);
+  if (target) {
+    // Draw an arrow: append the target to the source's exits (no duplicates).
+    // The node snaps back so arrow-drawing does not disturb the layout.
+    const z = TABLE.zones[name];
+    z.exits = z.exits || [];
+    if (!z.exits.includes(target)) z.exits.push(target);
+    FLOW.pos[name] = d.startNode;
+  }
+  // else: reposition — keep the new position (already set during the drag).
+  flowRender();
+}
+
+function flowSelect(sel) {
+  FLOW.sel = sel;
+  flowRender();
+  buildFlowDetail();
+}
+
+function buildFlowDetail() {
+  const el = $("flowDetail");
+  const title = $("flowDetailTitle");
+  el.innerHTML = "";
+  const sel = FLOW.sel;
+  if (!sel) {
+    title.textContent = "flow detail";
+    el.innerHTML = "<span style='color:var(--dim)'>click a node to edit its zone, or an arrow to edit its exit pose</span>";
+    return;
+  }
+  if (sel.type === "node") {
+    buildZoneForm(el, title, sel.zone, () => flowRender());
+    return;
+  }
+  // Edge: per-edge exitpose editor + remove link.
+  const { from, to } = sel;
+  const z = TABLE.zones[from];
+  if (!z) return;
+  title.textContent = `edge: ${from} → ${to}`;
+  el.appendChild(h3("exitpose (per-edge override)"));
+  const eff = (z.exitposes && z.exitposes[to]) ? z.exitposes[to].slice()
+              : (z.exitpos ? z.exitpos.slice() : [0, 0, 0, 0, 0, 0]);
+  el.appendChild(numGrid("edgeExitpose", eff, (v, i) => {
+    z.exitposes = z.exitposes || {};
+    if (!z.exitposes[to]) z.exitposes[to] = (z.exitpos ? z.exitpos.slice() : [0, 0, 0, 0, 0, 0]);
+    z.exitposes[to][i] = v;
+  }));
+  const row = document.createElement("div");
+  row.className = "row";
+  const useDef = document.createElement("button");
+  useDef.className = "small"; useDef.textContent = "use zone default";
+  useDef.onclick = () => {
+    if (z.exitposes) { delete z.exitposes[to]; if (!Object.keys(z.exitposes).length) delete z.exitposes; }
+    flowRender(); buildFlowDetail();
+  };
+  const rm = document.createElement("button");
+  rm.className = "small"; rm.textContent = "remove link";
+  rm.onclick = () => {
+    z.exits = (z.exits || []).filter((x) => x !== to);
+    if (z.exitposes) { delete z.exitposes[to]; if (!Object.keys(z.exitposes).length) delete z.exitposes; }
+    FLOW.sel = null;
+    flowRender(); buildFlowDetail();
+  };
+  row.appendChild(useDef); row.appendChild(rm);
+  el.appendChild(row);
+}
+
+// Enter the flow view: (re)layout when the zone set changed, then render.
+function flowEnter() {
+  const key = Object.keys(TABLE.zones).sort().join(",");
+  if (FLOW.layoutKey !== key) { flowAutoLayout(); flowFitView(); }
+  flowRender();
+  buildFlowDetail();
+}
+
+// ---------------------------------------------------------------------------
+// Init.
+// ---------------------------------------------------------------------------
+function addZone() {
+  const nm = prompt("new zone name:", "newzone");
+  if (!nm || TABLE.zones[nm]) return;
+  TABLE.zones[nm] = {
+    enabled: true,
+    startpos: [0,0,0,0,0,0], exitpos: [0,0,0,0,0,0],
+    safezone: [[-94,122],[-134,34],[-119,157],[-349,349],[-118,118],[-357,357]],
+    exits: [], speed: 20, actions: {},
+  };
+  if (flowView) {
+    // Place the new node below the current layout and select it.
+    let maxY = 0;
+    Object.keys(TABLE.zones).forEach((n) => { const p = FLOW.pos[n]; if (p) maxY = Math.max(maxY, p.y); });
+    FLOW.pos[nm] = { x: 40, y: maxY + nodeH(nm) + 40 };
+    FLOW.sel = { type: "node", zone: nm };
+    FLOW.layoutKey = Object.keys(TABLE.zones).sort().join(",");
+    flowFitView();
+    flowRender();
+    buildFlowDetail();
+    return;
+  }
+  selectZone(nm);
+}
+
+function delZone() {
+  const nm = flowView ? (FLOW.sel && FLOW.sel.type === "node" ? FLOW.sel.zone : null) : selectedZone;
+  if (!nm) { if (flowView) $("saveMsg").textContent = "select a node to remove"; return; }
+  if (Object.keys(TABLE.zones).length <= 1) { $("saveMsg").textContent = "cannot remove the last zone"; return; }
+  if (!confirm(`remove zone "${nm}"?`)) return;
+  delete TABLE.zones[nm];
+  // Clean dangling references from the other zones (exits + exitposes).
+  Object.keys(TABLE.zones).forEach((other) => {
+    const oz = TABLE.zones[other];
+    if (oz.exits) oz.exits = oz.exits.filter((e) => e !== nm);
+    if (oz.exitposes) { delete oz.exitposes[nm]; if (!Object.keys(oz.exitposes).length) delete oz.exitposes; }
+  });
+  // Re-point the shared zone editor to a live zone immediately (both views), so the
+  // deleted zone is never left selected. Then handle the flow-view specifics.
+  const names = Object.keys(TABLE.zones);
+  selectedZone = names[0];
+  buildZoneList();
+  selectZone(selectedZone);
+  if (flowView) {
+    delete FLOW.pos[nm];
+    if (FLOW.sel && FLOW.sel.zone === nm) FLOW.sel = null;
+    FLOW.layoutKey = Object.keys(TABLE.zones).sort().join(",");
+    flowRender();
+    buildFlowDetail();
+    return;
+  }
+}
+
+Robot3D.init($("robot3d"), { log: (m) => console.log(m), environment: true });
+// Toggle the green ghost (target) arm in the 3D preview.
+let ghostVisible = true;
+$("ghostToggle").onclick = () => {
+  ghostVisible = !ghostVisible;
+  Robot3D.setGhostVisible(ghostVisible);
+  $("ghostToggle").className = ghostVisible ? "active" : "";
+};
+// The live-preview textarea: commit + re-render (debounced) as the user types.
+$("patchCode").oninput = () => {
+  if (patchTimer) clearTimeout(patchTimer);
+  patchTimer = setTimeout(() => {
+    commitPatchEditor();
+    evalPatchPreview($("patchCode").value);
+  }, 300);
+};
+// Load the zone table first (the sound + patches editors seed their lists from the
+// zone table's action names), then the sound mapping, then the patches, then open
+// the WebSocket.
+loadTable().then(loadSound).then(loadPatches).then(loadMidi).then(loadLimits).then(connect);
+$("connect").onclick = () => { $("host").value = $("host").value.trim(); connect(); };
+$("save").onclick = save;
+$("addZone").onclick = addZone;
+$("delZone").onclick = delZone;
+$("tabZones").onclick = () => switchView("zones");
+$("tabPatches").onclick = () => switchView("patches");
+$("tabMidi").onclick = () => switchView("midi");
+$("tabFlow").onclick = () => switchView("flow");
+$("midiTabOut").onclick = () => switchMidiSubView("out");
+$("midiTabIn").onclick = () => switchMidiSubView("in");
+$("midiStopLearn").onclick = midiStopLearn;
+$("sndRefreshPorts").onclick = () => {
+  fetch("/api/sound/ports", { cache: "no-store" }).then((r) => r.json()).then((b) => {
+    sndPorts = Array.isArray(b.ports) ? b.ports : [];
+    buildMidiOutForm();
+  }).catch(() => { sndPorts = []; buildMidiOutForm(); });
+};
+$("flowAddZone").onclick = addZone;
+$("flowDelZone").onclick = delZone;
+// Auto layout: scoped to the selection (node, or an edge's both ends) so a
+// manually laid-out flow survives. No selection -> confirm before moving everything.
+$("flowAutoLayout").onclick = () => {
+  const sel = FLOW.sel;
+  if (sel && sel.type === "node") flowAutoLayout([sel.zone]);
+  else if (sel && sel.type === "edge") flowAutoLayout([sel.from, sel.to]);
+  else if (!confirm("no selection — layout ALL zones (moves every node)?")) return;
+  else flowAutoLayout();
+  flowFitView();
+  flowRender();
+};
+$("flowFit").onclick = () => { flowFitView(); flowRender(); };
+// View controls: wheel = zoom (around the cursor), middle-drag = pan.
+$("flowSvg").addEventListener("wheel", (e) => { e.preventDefault(); flowZoomAt(e); }, { passive: false });
+$("flowSvg").addEventListener("mousedown", (e) => { if (e.button === 1) { e.preventDefault(); flowPanStart(e); } });
+// Background click on the canvas (not on a node/arrow) clears the selection.
+$("flowSvg").addEventListener("click", (e) => {
+  if (e.button !== 0 || e.target !== $("flowSvg")) return;
+  FLOW.sel = null;
+  flowRender();
+  buildFlowDetail();
+});
+$("patchAdd").onclick = addPatchAction;
+$("patchRemove").onclick = removePatchSlot;
+// Action editor (Step 3) modal wiring.
+$("aeClose").onclick = closeActionEditor;
+$("actionEditor").addEventListener("click", (e) => { if (e.target === e.currentTarget) closeActionEditor(); });
+$("aePatchCode").oninput = (e) => {
+  if (AE.zone && AE.action) setPatchCode("actions." + AE.zone + "." + AE.action, e.target.value);
+  if (AE.timer) clearTimeout(AE.timer);
+  AE.timer = setTimeout(() => evalAePatchPreview(e.target.value), 300);
+};
+$("aeSave").onclick = saveActionEditor;
+$("ghostPrev").onclick = () => stepGhost(-1);
+$("ghostNext").onclick = () => stepGhost(1);
+</script>
+</body>
+</html>
