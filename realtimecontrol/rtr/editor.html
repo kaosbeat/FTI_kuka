@@ -1213,6 +1213,19 @@ async function loadPatches() {
   return PATCHES;
 }
 
+// hydra-synth 1.x always evals patch code via a GLOBAL eval (globalThis.eval), so its
+// functions (osc, out, ...) must be on the global scope to resolve. makeGlobal:true
+// attaches them, but a second instance would then clobber the first. We therefore keep
+// both instances makeGlobal:true and re-attach the TARGET instance's synth to the global
+// scope right before each eval, so each preview compiles onto its own synth and the two
+// live previews stay independent.
+function attachHydraGlobals(h) {
+  const s = h.synth;
+  for (const k of Object.keys(s)) {
+    try { window[k] = s[k]; } catch (e) {}
+  }
+}
+
 // The live-preview hydra (one instance, created lazily on first use).
 function ensurePatchHydra() {
   if (patchHydra) return patchHydra;
@@ -1234,6 +1247,7 @@ function evalPatchPreview(code) {
   const h = ensurePatchHydra();
   if (!h) return;
   try {
+    attachHydraGlobals(h);
     h.eval(code || PATCHES_FALLBACK.default);
     $("patchStatus").textContent = "preview: running";
   } catch (e) {
@@ -1360,8 +1374,11 @@ function savePatches() {
 // (A5) writes zones.json + sound.json + patches.json in parallel.
 // ---------------------------------------------------------------------------
 
-// Lazily create the modal's second hydra (makeGlobal:false so it does not clobber the
-// patches tab's global preview). Mirrors ensurePatchHydra, but into #aePreview.
+// Lazily create the modal's second hydra. Both hydras use makeGlobal:true — hydra-synth
+// requires it: its sandbox always evals via a global eval, so makeGlobal:false leaves
+// osc/out/... undefined and the preview renders black. Independence between the two
+// previews is preserved by attachHydraGlobals() in each eval function, which re-points
+// the global scope at the target synth before compiling.
 function ensureAeHydra() {
   if (AE.hydra) return AE.hydra;
   if (typeof Hydra === "undefined") {
@@ -1373,7 +1390,7 @@ function ensureAeHydra() {
   const res = typeof Robot3D !== "undefined" ? Robot3D.screenResolution() : [640, 360];
   canvas.width = res[0]; canvas.height = res[1];
   container.appendChild(canvas);
-  AE.hydra = new Hydra({ canvas, detectAudio: false, makeGlobal: false, autoLoop: true });
+  AE.hydra = new Hydra({ canvas, detectAudio: false, makeGlobal: true, autoLoop: true });
   return AE.hydra;
 }
 
@@ -1381,6 +1398,7 @@ function evalAePatchPreview(code) {
   const h = ensureAeHydra();
   if (!h) return;
   try {
+    attachHydraGlobals(h);
     h.eval(code || PATCHES_FALLBACK.default);
     $("aePatchStatus").textContent = "preview: running";
   } catch (e) {
@@ -1732,12 +1750,13 @@ function numGrid(id, values, oninput) {
 // No-args form (the zones tab) defaults to #zoneForm / #zoneTitle / selectedZone and
 // refreshes the zones-tab list/bars/ghost. The flow tab passes its own container + a
 // ``onChanged`` that re-renders the flow canvas (so the node label tracks edits).
-function buildZoneForm(containerEl, titleEl, name, onChanged) {
+function buildZoneForm(containerEl, titleEl, name, onChanged, showPoses) {
   if (containerEl === undefined) {
     containerEl = $("zoneForm"); titleEl = $("zoneTitle"); name = selectedZone;
     onChanged = () => { buildZoneList(); buildBars(); updateGhost(); };
   }
-  const rebuild = () => buildZoneForm(containerEl, titleEl, name, onChanged);
+  if (showPoses === undefined) showPoses = true;
+  const rebuild = () => buildZoneForm(containerEl, titleEl, name, onChanged, showPoses);
   const el = containerEl;
   el.innerHTML = "";
   if (!name || !TABLE.zones[name]) {
@@ -1829,7 +1848,7 @@ function buildZoneForm(containerEl, titleEl, name, onChanged) {
 
   // actions: this zone's own actions (each zone owns its actions independently)
   el.appendChild(h3("actions"));
-  buildActionList(el, name, z, rebuild, onChanged);
+  buildActionList(el, name, z, rebuild, onChanged, showPoses);
 
   const addA = document.createElement("button");
   addA.className = "small";
@@ -1855,7 +1874,7 @@ function list6(arr) {
   return [0, 0, 0, 0, 0, 0];
 }
 
-function buildActionList(container, name, z, rebuild, onChanged) {
+function buildActionList(container, name, z, rebuild, onChanged, showPoses) {
   Object.keys(z.actions).forEach((an) => {
     const a = z.actions[an];
     const box = document.createElement("div");
@@ -1885,8 +1904,8 @@ function buildActionList(container, name, z, rebuild, onChanged) {
     head.appendChild(nm); head.appendChild(en); head.appendChild(play); head.appendChild(edit);
     box.appendChild(head);
 
-    // pose rows
-    (a.pos || []).forEach((pose, pi) => {
+    // pose rows (hidden in the flow-detail overview; edited in the action-editor modal)
+    if (showPoses) (a.pos || []).forEach((pose, pi) => {
       const pr = document.createElement("div");
       pr.className = "poseRow";
       pose = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
@@ -1913,15 +1932,17 @@ function buildActionList(container, name, z, rebuild, onChanged) {
       box.appendChild(pr);
     });
 
-    const addR = document.createElement("button");
-    addR.className = "small"; addR.textContent = "+ pose row";
-    addR.onclick = () => {
-      a.pos = a.pos || []; a.speed = a.speed || [];
-      a.pos.push([0,0,0,0,0,0]);
-      a.speed.push(10);
-      rebuild();
-    };
-    box.appendChild(addR);
+    if (showPoses) {
+      const addR = document.createElement("button");
+      addR.className = "small"; addR.textContent = "+ pose row";
+      addR.onclick = () => {
+        a.pos = a.pos || []; a.speed = a.speed || [];
+        a.pos.push([0,0,0,0,0,0]);
+        a.speed.push(10);
+        rebuild();
+      };
+      box.appendChild(addR);
+    }
 
     container.appendChild(box);
   });
@@ -2504,7 +2525,7 @@ function buildFlowDetail() {
     return;
   }
   if (sel.type === "node") {
-    buildZoneForm(el, title, sel.zone, () => flowRender());
+    buildZoneForm(el, title, sel.zone, () => flowRender(), false);
     return;
   }
   // Edge: per-edge exitpose editor + remove link.
