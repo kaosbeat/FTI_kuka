@@ -303,17 +303,20 @@
 "use strict";
 
 const AXES = ["A1", "A2", "A3", "A4", "A5", "A6"];
-const MODES = ["wander", "random", "action", "track", "hold"];
+const BEHAVIORS = ["track", "focus", "scan", "look", "wander", "random", "hold"];
 const NAV_COMMANDS = ["next_action", "next_zone", "back", "retrigger"];
 const $ = (id) => document.getElementById(id);
 
 // Minimal fallback table (last resort when both /api/zones and /zones.json fail,
-// e.g. opened from file://). The real table comes from the core over HTTP.
+// e.g. opened from file://). The real table comes from the core over HTTP. Zone shape:
+// {enabled, safezone, speed, actions}; the navigation graph is the per-action `next`.
 const FALLBACK = {
   zones: {
     init: { safezone: [[-94,122],[-105,-65],[89,115],[-15,15],[-15,45],[-357,357]],
-            exits: ["rest"], actions: {}, startpos: [-60,-90,90,0,15,0],
-            exitpos: [-4,-131,155,3,-10,0], speed: 20, enabled: true},
+            speed: 20, enabled: true,
+            actions: {wake: {enabled: true, base_pose: [-60,-90,90,0,15,0], variable_axes: [],
+                             behavior: "hold", speed: 20, loop: true,
+                             next: {zone: "rest", action: "breathe"}}}},
   },
   poses: {}, lin_poses: {},
 };
@@ -399,7 +402,67 @@ function rowY(name, an) {
 }
 // Action editor (Step 3) modal state: the zone/action being edited + its hydra preview.
 const AE = { zone: null, action: null, hydra: null, timer: null };
-const ACTION_KINDS = ["internal", "entry", "exit"];
+
+// ---------------------------------------------------------------------------
+// Action helpers (the zone graph is derived from each action's `next` field —
+// there is no zone-level `exits`). Mirrors rtr/flow.py.
+// ---------------------------------------------------------------------------
+// The action's form: "var" (base_pose + variable_axes + behavior) or "pose"
+// (legacy fixed-pose pos + per-pose speed). An action has one, not both.
+function actionForm(a) {
+  if (a && a.base_pose) return "var";
+  if (a && a.pos) return "pose";
+  return "var";  // new actions default to the variable-axis form
+}
+// First enabled action name in a zone (table order), or null. Used for
+// trigger_action (zone rows) — mirrors flow._first_enabled_action.
+function firstEnabledAction(zn) {
+  const z = TABLE.zones[zn];
+  if (!z || !z.actions) return null;
+  for (const an of Object.keys(z.actions)) {
+    if (z.actions[an].enabled !== false) return an;
+  }
+  return null;
+}
+// Zones reachable from `zn` via its actions' `next` fields (first-seen order).
+function zoneForward(zn) {
+  const out = [], seen = new Set();
+  const z = TABLE.zones[zn];
+  if (z && z.actions) {
+    for (const an of Object.keys(z.actions)) {
+      const a = z.actions[an];
+      if (a && a.next && a.next.zone && TABLE.zones[a.next.zone] && !seen.has(a.next.zone)) {
+        seen.add(a.next.zone); out.push(a.next.zone);
+      }
+    }
+  }
+  return out;
+}
+// Zones whose actions' `next` point back to `zn` (table order).
+function zoneReverse(zn) {
+  const out = [];
+  for (const n of Object.keys(TABLE.zones)) {
+    const z = TABLE.zones[n];
+    if (z && z.actions) {
+      for (const an of Object.keys(z.actions)) {
+        const a = z.actions[an];
+        if (a && a.next && a.next.zone === zn) { if (!out.includes(n)) out.push(n); break; }
+      }
+    }
+  }
+  return out;
+}
+// The action in `zn` whose `next.zone` is `to` (the one that draws the edge),
+// or null. Used by the flow tab to label/remove an edge.
+function edgeSourceAction(zn, to) {
+  const z = TABLE.zones[zn];
+  if (!z || !z.actions) return null;
+  for (const an of Object.keys(z.actions)) {
+    const a = z.actions[an];
+    if (a && a.next && a.next.zone === to) return an;
+  }
+  return null;
+}
 
 // Last-resort patches table (mirrors rtr/patches/patches.py DEFAULT_HYDRA_CODE).
 // Used when both /api/patches and /patches.json fail (e.g. opened from file://).
@@ -762,13 +825,16 @@ function buildMidiOutForm() {
     rm.onclick = () => { delete acts[name]; rebuild(); };
     head.appendChild(nm); head.appendChild(rm);
     box.appendChild(head);
-    // read-only attributes (kind / loop / target / enabled) from the table
+    // read-only attributes (behavior / variable axes / loop / next / enabled) from the table
     const attrs = document.createElement("div");
     attrs.style.cssText = "font-size:11px;color:var(--dim)";
-    const kind = tinfo.kind || "internal";
-    let atxt = `kind ${kind}`;
+    const beh = tinfo.behavior || (tinfo.pos ? "pose" : "—");
+    let atxt = `behavior ${beh}`;
+    if (tinfo.base_pose && Array.isArray(tinfo.variable_axes) && tinfo.variable_axes.length) {
+      atxt += ` · axes ${tinfo.variable_axes.join(",")}`;
+    }
     if (tinfo.loop !== false) atxt += " · loop";
-    if (kind !== "internal" && tinfo.target) atxt += ` · target ${tinfo.target}`;
+    if (tinfo.next && tinfo.next.zone) atxt += ` · next ${tinfo.next.zone}${tinfo.next.action ? "/" + tinfo.next.action : ""}`;
     if (tinfo.enabled === false) atxt += " · disabled";
     attrs.textContent = atxt;
     box.appendChild(attrs);
@@ -1199,7 +1265,8 @@ async function loadPatches() {
   // complete, offline-editable table. Only fills names not already present.
   const def = PATCHES.default;
   Object.keys(TABLE.zones).forEach((n) => { if (PATCHES.zones[n] === undefined) PATCHES.zones[n] = def; });
-  MODES.forEach((m) => { if (PATCHES.modes[m] === undefined) PATCHES.modes[m] = def; });
+  // Behavior slots live under the `modes` scope key (legacy name; relabeled "behaviors").
+  BEHAVIORS.forEach((m) => { if (PATCHES.modes[m] === undefined) PATCHES.modes[m] = def; });
   // actions are zone-scoped: seed each zone's actions with the default code (only filling
   // missing entries), so the editor shows a complete, offline-editable table.
   Object.keys(TABLE.zones).forEach((zn) => {
@@ -1278,8 +1345,10 @@ function buildPatchesForm() {
   addSlot("default", "default");
   addGroup("zones");
   Object.keys(TABLE.zones).forEach((n) => addSlot("zones." + n, n));
-  addGroup("modes");
-  MODES.forEach((m) => addSlot("modes." + m, m));
+  // The data scope key stays "modes" (the core patch table retains it); the slots
+  // are the behavior policies.
+  addGroup("behaviors");
+  BEHAVIORS.forEach((m) => addSlot("modes." + m, m));
   addGroup("actions");
   Object.keys(TABLE.zones).forEach((zn) => {
     if (!PATCHES.actions[zn]) PATCHES.actions[zn] = {};
@@ -1289,7 +1358,7 @@ function buildPatchesForm() {
   const code = getPatchCode(selectedPatch);
   $("patchCode").value = code;
   $("patchTitle").textContent = "patch: " + selectedPatch;
-  $("patchInfo").textContent = "match precedence: action > mode > zone > default";
+  $("patchInfo").textContent = "match precedence: action > behavior > zone > default";
   evalPatchPreview(code);
 }
 
@@ -1426,7 +1495,8 @@ function aeSwapPoses(zn, an, i, j) {
 
 // Ensure SOUND.actions[zn][an] exists with a start message and a poses array whose
 // length matches the action's pose count (pad with a default note, truncate extras).
-// Keeps the sound buffer aligned with the poses edited in the modal.
+// Keeps the sound buffer aligned with the poses edited in the modal. A variable-axis
+// action has a single (base) pose; a legacy action has one per `pos` entry.
 function reconcileActionSound(zn, an) {
   if (!SOUND.actions[zn]) SOUND.actions[zn] = {};
   if (!SOUND.actions[zn][an]) SOUND.actions[zn][an] = { start: { note: 60, velocity: 60 }, poses: [] };
@@ -1434,15 +1504,34 @@ function reconcileActionSound(zn, an) {
   if (!s.start) s.start = { note: 60, velocity: 60 };
   if (!Array.isArray(s.poses)) s.poses = [];
   const a = TABLE.zones[zn].actions[an];
-  const n = (a.pos || []).length;
+  const n = actionForm(a) === "var" ? 1 : (a.pos || []).length;
   while (s.poses.length < n) s.poses.push({ note: 60, velocity: 60 });
   if (s.poses.length > n) s.poses.length = n;
   return s;
 }
 
-// Rebuild the modal body (#aeBody) for AE.zone / AE.action. A3: the **action** section
-// (kind / loop / enabled) and the **poses** section (one row per pose + add). A4 adds
-// the target + sound sections. The static patch section + #aeSaveStatus are siblings of
+// Convert an action dict between the two forms, preserving as much data as possible.
+// var<->pose: the base pose is the first pose (pose form) or base_pose (var form);
+// the speed is the first per-pose speed (pose) or the single speed (var).
+function convertActionForm(a, form) {
+  if (form === "var") {
+    a.base_pose = (a.pos && a.pos[0]) ? a.pos[0].slice() : [0,0,0,0,0,0];
+    a.variable_axes = Array.isArray(a.variable_axes) ? a.variable_axes : [];
+    a.behavior = (typeof a.behavior === "string" && BEHAVIORS.includes(a.behavior)) ? a.behavior : "hold";
+    a.speed = (Array.isArray(a.speed) && a.speed[0] != null) ? a.speed[0] : 20;
+    delete a.pos;
+  } else {
+    a.pos = (a.base_pose) ? [a.base_pose.slice()] : [[0,0,0,0,0,0]];
+    a.speed = (typeof a.speed === "number") ? [a.speed] : [20];
+    delete a.base_pose; delete a.variable_axes; delete a.behavior;
+  }
+}
+
+// Rebuild the modal body (#aeBody) for AE.zone / AE.action. Sections: the **action**
+// header (form switcher + enabled + loop), the form-specific section (base_pose +
+// variable_axes + behavior + speed for the variable-axis form, or the pose rows for
+// the legacy form), the **next** section (the action's successor in the zone graph),
+// and the **sound** section. The static patch section + #aeSaveStatus are siblings of
 // #aeBody, so they are never clobbered here.
 function buildActionEditor() {
   const zn = AE.zone, an = AE.action;
@@ -1452,23 +1541,24 @@ function buildActionEditor() {
   const z = TABLE.zones[zn];
   if (!z || !z.actions || !z.actions[an]) return;
   const a = z.actions[an];
-  if (!a.pos) a.pos = [];
-  if (!a.speed) a.speed = [];
+  const form = actionForm(a);
 
-  // --- action section: kind / loop / enabled ---
+  // --- action section: form switcher + loop + enabled ---
   const sec = document.createElement("div");
   sec.className = "aeSec";
   sec.appendChild(h3("action"));
   const arow = document.createElement("div");
   arow.className = "row";
-  const kl = document.createElement("label");
-  kl.className = "inline";
-  kl.innerHTML = "kind <select class='aeKind'></select>";
-  const ksel = kl.querySelector("select");
-  ACTION_KINDS.forEach((k) => { const o = document.createElement("option"); o.value = k; o.textContent = k; ksel.appendChild(o); });
-  ksel.value = a.kind || "internal";
-  ksel.onchange = () => { a.kind = ksel.value; buildActionEditor(); };
-  arow.appendChild(kl);
+  const fl = document.createElement("label");
+  fl.className = "inline";
+  fl.innerHTML = "form <select class='aeForm'></select>";
+  const fsel = fl.querySelector("select");
+  [["var", "variable-axis"], ["pose", "fixed sequence"]].forEach(([v, l]) => {
+    const o = document.createElement("option"); o.value = v; o.textContent = l; fsel.appendChild(o);
+  });
+  fsel.value = form;
+  fsel.onchange = () => { convertActionForm(a, fsel.value); buildActionEditor(); };
+  arow.appendChild(fl);
   const lp = document.createElement("label");
   lp.className = "inline";
   lp.innerHTML = `<input type="checkbox" ${a.loop !== false ? "checked" : ""}> loop`;
@@ -1482,140 +1572,191 @@ function buildActionEditor() {
   sec.appendChild(arow);
   el.appendChild(sec);
 
-  // --- poses section: one row per pose (6 values + speed + ▲ ▼ ×) + add ---
-  const psec = document.createElement("div");
-  psec.className = "aeSec";
-  psec.appendChild(h3("poses"));
-  a.pos.forEach((pose, pi) => {
-    const p = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
-    const pr = document.createElement("div");
-    pr.className = "aePoseRow";
-    for (let i = 0; i < 6; i++) {
+  if (form === "var") {
+    // --- variable-axis form: base_pose + variable_axes + behavior + speed ---
+    if (!Array.isArray(a.base_pose) || a.base_pose.length !== 6) a.base_pose = [0,0,0,0,0,0];
+    if (!Array.isArray(a.variable_axes)) a.variable_axes = [];
+    const vsec = document.createElement("div");
+    vsec.className = "aeSec";
+    vsec.appendChild(h3("base_pose"));
+    const bp = document.createElement("div");
+    bp.className = "grid6";
+    a.base_pose.forEach((v, i) => {
+      const l = document.createElement("label");
+      l.textContent = AXES[i];
       const inp = document.createElement("input");
       inp.type = "number"; inp.step = "0.1";
-      inp.value = p[i] != null ? p[i] : 0;
-      if (z.safezone) {
-        const [lo, hi] = z.safezone[i];
-        if (p[i] < lo || p[i] > hi) inp.className = "oob";
-      }
+      inp.value = v != null ? v : 0;
+      if (z.safezone && (a.base_pose[i] < z.safezone[i][0] || a.base_pose[i] > z.safezone[i][1])) inp.className = "oob";
       inp.oninput = () => {
-        a.pos[pi][i] = parseFloat(inp.value);
+        a.base_pose[i] = parseFloat(inp.value);
+        if (z.safezone) inp.className = (a.base_pose[i] < z.safezone[i][0] || a.base_pose[i] > z.safezone[i][1]) ? "oob" : "";
+      };
+      l.appendChild(inp);
+      bp.appendChild(l);
+    });
+    vsec.appendChild(bp);
+    // variable_axes (checkboxes over the six axes)
+    vsec.appendChild(h3("variable_axes"));
+    const va = document.createElement("div");
+    va.className = "row";
+    AXES.forEach((n, i) => {
+      const c = document.createElement("label");
+      c.className = "inline";
+      c.innerHTML = `<input type="checkbox" ${a.variable_axes.includes(i) ? "checked" : ""}> ${n}`;
+      c.querySelector("input").onchange = (e) => {
+        a.variable_axes = e.target.checked ? [...a.variable_axes, i] : a.variable_axes.filter((x) => x !== i);
+        a.variable_axes.sort((x, y) => x - y);
+      };
+      va.appendChild(c);
+    });
+    vsec.appendChild(va);
+    // behavior + speed
+    const row = document.createElement("div");
+    row.className = "row";
+    const bl = document.createElement("label");
+    bl.className = "inline";
+    bl.innerHTML = "behavior <select class='aeBehavior'></select>";
+    const bsel = bl.querySelector("select");
+    BEHAVIORS.forEach((b) => { const o = document.createElement("option"); o.value = b; o.textContent = b; bsel.appendChild(o); });
+    bsel.value = (a.behavior && BEHAVIORS.includes(a.behavior)) ? a.behavior : "hold";
+    bsel.onchange = () => { a.behavior = bsel.value; };
+    row.appendChild(bl);
+    const sp = document.createElement("label");
+    sp.className = "inline";
+    sp.innerHTML = "speed <input type='number' step='1' value='" + (typeof a.speed === "number" ? a.speed : 20) + "'>";
+    sp.querySelector("input").oninput = (e) => { a.speed = parseFloat(e.target.value); };
+    row.appendChild(sp);
+    vsec.appendChild(row);
+    el.appendChild(vsec);
+  } else {
+    // --- legacy fixed-pose form: one row per pose (6 values + speed + ▲ ▼ ×) + add ---
+    if (!Array.isArray(a.pos)) a.pos = [[0,0,0,0,0,0]];
+    if (!Array.isArray(a.speed)) a.speed = [10];
+    const psec = document.createElement("div");
+    psec.className = "aeSec";
+    psec.appendChild(h3("poses"));
+    a.pos.forEach((pose, pi) => {
+      const p = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
+      const pr = document.createElement("div");
+      pr.className = "aePoseRow";
+      for (let i = 0; i < 6; i++) {
+        const inp = document.createElement("input");
+        inp.type = "number"; inp.step = "0.1";
+        inp.value = p[i] != null ? p[i] : 0;
         if (z.safezone) {
           const [lo, hi] = z.safezone[i];
-          inp.className = (a.pos[pi][i] < lo || a.pos[pi][i] > hi) ? "oob" : "";
+          if (p[i] < lo || p[i] > hi) inp.className = "oob";
         }
+        inp.oninput = () => {
+          a.pos[pi][i] = parseFloat(inp.value);
+          if (z.safezone) {
+            const [lo, hi] = z.safezone[i];
+            inp.className = (a.pos[pi][i] < lo || a.pos[pi][i] > hi) ? "oob" : "";
+          }
+        };
+        pr.appendChild(inp);
+      }
+      const spd = document.createElement("input");
+      spd.type = "number"; spd.step = "1";
+      spd.value = a.speed[pi] != null ? a.speed[pi] : 10;
+      spd.oninput = () => { a.speed[pi] = parseFloat(spd.value); };
+      pr.appendChild(spd);
+      const ctl = document.createElement("div");
+      ctl.className = "aePoseCtl";
+      const up = document.createElement("button");
+      up.textContent = "▲";
+      up.onclick = () => { if (pi > 0) aeSwapPoses(zn, an, pi, pi - 1); };
+      const down = document.createElement("button");
+      down.textContent = "▼";
+      down.onclick = () => { if (pi < a.pos.length - 1) aeSwapPoses(zn, an, pi, pi + 1); };
+      const del = document.createElement("button");
+      del.textContent = "×";
+      del.onclick = () => {
+        a.pos.splice(pi, 1);
+        a.speed.splice(pi, 1);
+        const s = SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an];
+        if (s && Array.isArray(s.poses)) s.poses.splice(pi, 1);
+        buildActionEditor();
       };
-      pr.appendChild(inp);
-    }
-    const spd = document.createElement("input");
-    spd.type = "number"; spd.step = "1";
-    spd.value = a.speed[pi] != null ? a.speed[pi] : 10;
-    spd.oninput = () => { a.speed[pi] = parseFloat(spd.value); };
-    pr.appendChild(spd);
-    const ctl = document.createElement("div");
-    ctl.className = "aePoseCtl";
-    const up = document.createElement("button");
-    up.textContent = "▲";
-    up.onclick = () => { if (pi > 0) aeSwapPoses(zn, an, pi, pi - 1); };
-    const down = document.createElement("button");
-    down.textContent = "▼";
-    down.onclick = () => { if (pi < a.pos.length - 1) aeSwapPoses(zn, an, pi, pi + 1); };
-    const del = document.createElement("button");
-    del.textContent = "×";
-    del.onclick = () => {
-      a.pos.splice(pi, 1);
-      a.speed.splice(pi, 1);
+      ctl.appendChild(up); ctl.appendChild(down); ctl.appendChild(del);
+      pr.appendChild(ctl);
+      psec.appendChild(pr);
+    });
+    const addR = document.createElement("button");
+    addR.className = "small"; addR.textContent = "+ pose row";
+    addR.onclick = () => {
+      a.pos.push([0,0,0,0,0,0]);
+      a.speed.push(10);
       const s = SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an];
-      if (s && Array.isArray(s.poses)) s.poses.splice(pi, 1);
+      if (s) { s.poses = s.poses || []; s.poses.push({ note: 60, velocity: 60 }); }
       buildActionEditor();
     };
-    ctl.appendChild(up); ctl.appendChild(down); ctl.appendChild(del);
-    pr.appendChild(ctl);
-    psec.appendChild(pr);
+    psec.appendChild(addR);
+    el.appendChild(psec);
+  }
+
+  // --- next section: the action's successor {zone, action} in the zone graph ---
+  const nsec = document.createElement("div");
+  nsec.className = "aeSec";
+  nsec.appendChild(h3("next"));
+  if (!a.next) a.next = {};
+  const nrow = document.createElement("div");
+  nrow.className = "row";
+  const nzl = document.createElement("label");
+  nzl.className = "inline";
+  nzl.innerHTML = "zone <select class='aeNextZone'></select>";
+  const nsel = nzl.querySelector("select");
+  const nnone = document.createElement("option");
+  nnone.value = ""; nnone.textContent = "(none)";
+  nsel.appendChild(nnone);
+  Object.keys(TABLE.zones).forEach((on) => {
+    const o = document.createElement("option"); o.value = on; o.textContent = on; nsel.appendChild(o);
   });
-  const addR = document.createElement("button");
-  addR.className = "small"; addR.textContent = "+ pose row";
-  addR.onclick = () => {
-    a.pos.push([0,0,0,0,0,0]);
-    a.speed.push(10);
-    const s = SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an];
-    if (s) { s.poses = s.poses || []; s.poses.push({ note: 60, velocity: 60 }); }
+  nsel.value = a.next.zone || "";
+  nsel.onchange = () => {
+    if (nsel.value === "") { delete a.next.zone; if (!a.next.action) delete a.next.action; if (!Object.keys(a.next).length) delete a.next; }
+    else { a.next.zone = nsel.value; if (a.next.action && !(a.next.action in TABLE.zones[nsel.value].actions)) delete a.next.action; }
     buildActionEditor();
   };
-  psec.appendChild(addR);
-  el.appendChild(psec);
-
-  // --- target section (rendered only when kind is not "internal") ---
-  const kind = a.kind || "internal";
-  if (kind !== "internal") {
-    const t = a.target || {};
-    const isExit = (kind === "exit");
-    const tsec = document.createElement("div");
-    tsec.className = "aeSec";
-    tsec.appendChild(h3("target"));
-    // zone select: exit picks any zone (with a (none) placeholder); entry is fixed here
-    const zl = document.createElement("label");
-    zl.className = "inline";
-    zl.innerHTML = "zone <select class='aeTgtZone'></select>";
-    const zsel = zl.querySelector("select");
-    if (isExit) {
-      const none = document.createElement("option");
-      none.value = ""; none.textContent = "(none)";
-      zsel.appendChild(none);
-      Object.keys(TABLE.zones).forEach((on) => {
-        const o = document.createElement("option"); o.value = on; o.textContent = on; zsel.appendChild(o);
-      });
-    } else {
-      const o = document.createElement("option"); o.value = zn; o.textContent = zn; zsel.appendChild(o);
-    }
-    zsel.value = t.zone || (isExit ? "" : zn);
-    zsel.onchange = () => {
-      if (zsel.value === "") delete t.zone; else t.zone = zsel.value;
-      a.target = t;
-      buildActionEditor();
-    };
-    tsec.appendChild(zl);
-    // action select: populated from the target zone's actions
-    const targetZone = isExit ? (t.zone || null) : zn;
-    const al = document.createElement("label");
-    al.className = "inline";
-    al.innerHTML = "action <select class='aeTgtAction'></select>";
-    const asel = al.querySelector("select");
-    const noneA = document.createElement("option");
-    noneA.value = ""; noneA.textContent = "(none)";
-    asel.appendChild(noneA);
-    const tz = targetZone ? TABLE.zones[targetZone] : null;
-    if (tz && tz.actions) {
-      Object.keys(tz.actions).forEach((on) => {
-        const o = document.createElement("option"); o.value = on; o.textContent = on; asel.appendChild(o);
-      });
-    }
-    asel.value = t.action || "";
-    asel.onchange = () => {
-      if (asel.value === "") delete t.action; else t.action = asel.value;
-      a.target = t;
-      buildActionEditor();
-    };
-    tsec.appendChild(al);
-    // hand-off pose checkbox: unchecked clears t.pose, checked seeds it from exitpos/startpos
-    const hp = document.createElement("label");
-    hp.className = "inline";
-    hp.innerHTML = `<input type="checkbox" ${t.pose ? "checked" : ""}> hand-off pose`;
-    hp.querySelector("input").onchange = (e) => {
-      if (e.target.checked) {
-        const src = isExit ? z.exitpos : z.startpos;
-        t.pose = (src && src.length === 6) ? src.slice() : [0,0,0,0,0,0];
-      } else {
-        delete t.pose;
-      }
-      a.target = t;
-      buildActionEditor();
-    };
-    tsec.appendChild(hp);
-    el.appendChild(tsec);
-  } else {
-    delete a.target;  // internal actions have no target
+  nrow.appendChild(nzl);
+  const nal = document.createElement("label");
+  nal.className = "inline";
+  nal.innerHTML = "action <select class='aeNextAction'></select>";
+  const anel = nal.querySelector("select");
+  const anone = document.createElement("option");
+  anone.value = ""; anone.textContent = "(none)";
+  anel.appendChild(anone);
+  const targetZone = a.next.zone || null;
+  const tz = targetZone ? TABLE.zones[targetZone] : null;
+  if (tz && tz.actions) {
+    Object.keys(tz.actions).forEach((on) => {
+      const o = document.createElement("option"); o.value = on; o.textContent = on; anel.appendChild(o);
+    });
   }
+  anel.value = (a.next.zone && a.next.action) ? a.next.action : "";
+  anel.onchange = () => {
+    if (anel.value === "") delete a.next.action;
+    else { a.next.zone = nsel.value || a.next.zone; a.next.action = anel.value; }
+    buildActionEditor();
+  };
+  nrow.appendChild(nal);
+  nsec.appendChild(nrow);
+  // Pose-continuity hint: a var-form action's base_pose should match the successor's.
+  if (a.next && a.next.zone && a.next.action && TABLE.zones[a.next.zone] && TABLE.zones[a.next.zone].actions[a.next.action]) {
+    const tgt = TABLE.zones[a.next.zone].actions[a.next.action];
+    if (form === "var" && tgt.base_pose) {
+      const same = a.base_pose.every((v, i) => Math.abs(v - tgt.base_pose[i]) < 0.001);
+      const hint = document.createElement("div");
+      hint.className = "aeHint";
+      hint.style.cssText = "font-size:11px;color:" + (same ? "var(--dim)" : "#e0a030");
+      hint.textContent = same
+        ? "base_pose matches the successor"
+        : `base_pose differs from ${a.next.zone}/${a.next.action} (${tgt.base_pose.join(", ")})`;
+      nsec.appendChild(hint);
+    }
+  }
+  el.appendChild(nsec);
 
   // --- sound section: start message + one per pose (reconciled to the pose count) ---
   reconcileActionSound(zn, an);
@@ -1783,25 +1924,6 @@ function buildZoneForm(containerEl, titleEl, name, onChanged, showPoses) {
   row.appendChild(sp);
   el.appendChild(row);
 
-  // default mode (adopted on zone entry; "(keep current)" clears it)
-  const ml = document.createElement("label");
-  ml.className = "inline";
-  ml.innerHTML = "default mode <select class='msgType'></select>";
-  const msel = ml.querySelector("select");
-  const keepOpt = document.createElement("option");
-  keepOpt.value = ""; keepOpt.textContent = "(keep current)";
-  msel.appendChild(keepOpt);
-  MODES.forEach((m) => { const o = document.createElement("option"); o.value = m; o.textContent = m; msel.appendChild(o); });
-  msel.value = z.mode || "";
-  msel.onchange = () => { if (msel.value === "") delete z.mode; else z.mode = msel.value; onChanged(); };
-  el.appendChild(ml);
-
-  // startpos
-  el.appendChild(h3("startpos"));
-  el.appendChild(numGrid("startpos", z.startpos, (v, i) => { z.startpos = list6(z.startpos); z.startpos[i] = v; }));
-  // exitpos
-  el.appendChild(h3("exitpos"));
-  el.appendChild(numGrid("exitpos", z.exitpos, (v, i) => { z.exitpos = list6(z.exitpos); z.exitpos[i] = v; }));
   // safezone (lo / hi per axis)
   el.appendChild(h3("safezone (lo / hi)"));
   const sz = document.createElement("div");
@@ -1828,25 +1950,9 @@ function buildZoneForm(containerEl, titleEl, name, onChanged, showPoses) {
   }
   el.appendChild(sz);
 
-  // exits (checkboxes over other zones)
-  el.appendChild(h3("exits"));
-  const ex = document.createElement("div");
-  ex.className = "row";
-  Object.keys(TABLE.zones).forEach((on) => {
-    if (on === name) return;
-    const c = document.createElement("label");
-    c.className = "inline";
-    c.innerHTML = `<input type="checkbox" ${(z.exits || []).includes(on) ? "checked" : ""}> ${on}`;
-    c.querySelector("input").onchange = (e) => {
-      z.exits = z.exits || [];
-      z.exits = e.target.checked ? [...z.exits, on] : z.exits.filter((x) => x !== on);
-      onChanged();
-    };
-    ex.appendChild(c);
-  });
-  el.appendChild(ex);
-
-  // actions: this zone's own actions (each zone owns its actions independently)
+  // actions: this zone's own actions (each zone owns its actions independently).
+  // The zone graph is derived from each action's `next` field (edited in the action
+  // editor modal), so there are no zone-level exits here.
   el.appendChild(h3("actions"));
   buildActionList(el, name, z, rebuild, onChanged, showPoses);
 
@@ -1856,7 +1962,7 @@ function buildZoneForm(containerEl, titleEl, name, onChanged, showPoses) {
   addA.onclick = () => {
     const nm = prompt("action name:", "new");
     if (!nm) return;
-    z.actions[nm] = { enabled: true, pos: [[0,0,0,0,0,0]], speed: [10] };
+    z.actions[nm] = { enabled: true, base_pose: [0,0,0,0,0,0], variable_axes: [], behavior: "hold", speed: 20, loop: true };
     selectedAction = nm;
     rebuild(); onChanged();
   };
@@ -1904,44 +2010,78 @@ function buildActionList(container, name, z, rebuild, onChanged, showPoses) {
     head.appendChild(nm); head.appendChild(en); head.appendChild(play); head.appendChild(edit);
     box.appendChild(head);
 
-    // pose rows (hidden in the flow-detail overview; edited in the action-editor modal)
-    if (showPoses) (a.pos || []).forEach((pose, pi) => {
-      const pr = document.createElement("div");
-      pr.className = "poseRow";
-      pose = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
-      for (let i = 0; i < 6; i++) {
-        const inp = document.createElement("input");
-        inp.type = "number"; inp.step = "0.1"; inp.value = pose[i];
-        inp.oninput = () => { a.pos[pi][i] = parseFloat(inp.value); if (an === selectedAction) onChanged(); };
-        pr.appendChild(inp);
-      }
-      const spd = document.createElement("input");
-      spd.type = "number"; spd.step = "1";
-      spd.value = (a.speed && a.speed[pi]) != null ? a.speed[pi] : 10;
-      spd.oninput = () => { a.speed = a.speed || []; a.speed[pi] = parseFloat(spd.value); };
-      pr.appendChild(spd);
-      const rx = document.createElement("button");
-      rx.className = "small"; rx.textContent = "×";
-      rx.onclick = () => {
-        a.pos.splice(pi, 1);
-        a.speed = a.speed || []; a.speed.splice(pi, 1);
-        if (ghostIndex >= a.pos.length) ghostIndex = 0;
-        rebuild(); onChanged();
-      };
-      pr.appendChild(rx);
-      box.appendChild(pr);
-    });
-
+    // Overview rows (hidden in the flow-detail overview; full editing is in the modal).
     if (showPoses) {
-      const addR = document.createElement("button");
-      addR.className = "small"; addR.textContent = "+ pose row";
-      addR.onclick = () => {
-        a.pos = a.pos || []; a.speed = a.speed || [];
-        a.pos.push([0,0,0,0,0,0]);
-        a.speed.push(10);
-        rebuild();
-      };
-      box.appendChild(addR);
+      if (actionForm(a) === "var") {
+        // Variable-axis form: one base_pose row + behavior + speed (axes edited in modal).
+        if (!Array.isArray(a.base_pose) || a.base_pose.length !== 6) a.base_pose = [0,0,0,0,0,0];
+        const pr = document.createElement("div");
+        pr.className = "poseRow";
+        for (let i = 0; i < 6; i++) {
+          const inp = document.createElement("input");
+          inp.type = "number"; inp.step = "0.1"; inp.value = a.base_pose[i] != null ? a.base_pose[i] : 0;
+          inp.oninput = () => { a.base_pose[i] = parseFloat(inp.value); if (an === selectedAction) onChanged(); };
+          pr.appendChild(inp);
+        }
+        const beh = document.createElement("select");
+        beh.className = "aeBehavior";
+        BEHAVIORS.forEach((b) => { const o = document.createElement("option"); o.value = b; o.textContent = b; beh.appendChild(o); });
+        beh.value = (a.behavior && BEHAVIORS.includes(a.behavior)) ? a.behavior : "hold";
+        beh.onchange = () => { a.behavior = beh.value; };
+        pr.appendChild(beh);
+        const spd = document.createElement("input");
+        spd.type = "number"; spd.step = "1";
+        spd.value = typeof a.speed === "number" ? a.speed : 20;
+        spd.oninput = () => { a.speed = parseFloat(spd.value); };
+        pr.appendChild(spd);
+        box.appendChild(pr);
+        const axes = document.createElement("div");
+        axes.className = "poseRow";
+        axes.style.cssText = "font-size:11px;color:var(--dim)";
+        axes.textContent = (a.variable_axes && a.variable_axes.length)
+          ? "variable axes: " + a.variable_axes.map((i) => AXES[i]).join(", ")
+          : "fixed base_pose";
+        box.appendChild(axes);
+      } else {
+        // Legacy fixed-pose form: one row per pose (6 values + speed + ×).
+        if (!Array.isArray(a.pos)) a.pos = [[0,0,0,0,0,0]];
+        if (!Array.isArray(a.speed)) a.speed = [10];
+        a.pos.forEach((pose, pi) => {
+          const pr = document.createElement("div");
+          pr.className = "poseRow";
+          pose = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
+          for (let i = 0; i < 6; i++) {
+            const inp = document.createElement("input");
+            inp.type = "number"; inp.step = "0.1"; inp.value = pose[i];
+            inp.oninput = () => { a.pos[pi][i] = parseFloat(inp.value); if (an === selectedAction) onChanged(); };
+            pr.appendChild(inp);
+          }
+          const spd = document.createElement("input");
+          spd.type = "number"; spd.step = "1";
+          spd.value = (a.speed && a.speed[pi]) != null ? a.speed[pi] : 10;
+          spd.oninput = () => { a.speed = a.speed || []; a.speed[pi] = parseFloat(spd.value); };
+          pr.appendChild(spd);
+          const rx = document.createElement("button");
+          rx.className = "small"; rx.textContent = "×";
+          rx.onclick = () => {
+            a.pos.splice(pi, 1);
+            a.speed = a.speed || []; a.speed.splice(pi, 1);
+            if (ghostIndex >= a.pos.length) ghostIndex = 0;
+            rebuild(); onChanged();
+          };
+          pr.appendChild(rx);
+          box.appendChild(pr);
+        });
+        const addR = document.createElement("button");
+        addR.className = "small"; addR.textContent = "+ pose row";
+        addR.onclick = () => {
+          a.pos = a.pos || []; a.speed = a.speed || [];
+          a.pos.push([0,0,0,0,0,0]);
+          a.speed.push(10);
+          rebuild();
+        };
+        box.appendChild(addR);
+      }
     }
 
     container.appendChild(box);
@@ -1969,20 +2109,31 @@ function buildBars() {
   updateGhost();
 }
 
-function currentGhostPose() {
+// The steppable poses of an action: a variable-axis action has a single base_pose;
+// a legacy action steps through its `pos` sequence.
+function ghostPoses(an) {
   const z = TABLE.zones[selectedZone];
-  if (!z || !z.actions || !selectedAction || !z.actions[selectedAction]) return null;
-  const pos = z.actions[selectedAction].pos;
-  if (!pos || !pos.length) return null;
-  return pos[ghostIndex % pos.length];
+  if (!z || !z.actions || !z.actions[an]) return [];
+  const a = z.actions[an];
+  if (actionForm(a) === "var") {
+    return (Array.isArray(a.base_pose) && a.base_pose.length === 6) ? [a.base_pose] : [];
+  }
+  return Array.isArray(a.pos) ? a.pos : [];
+}
+
+function currentGhostPose() {
+  const ps = ghostPoses(selectedAction);
+  if (!ps.length) return null;
+  return ps[ghostIndex % ps.length];
 }
 
 function updateGhost() {
   const pose = currentGhostPose();
   const z = TABLE.zones[selectedZone];
   if (pose) Robot3D.setTarget(pose);
+  const ps = ghostPoses(selectedAction);
   $("ghostInfo").textContent = pose
-    ? `${selectedAction} pose ${ghostIndex % (z.actions[selectedAction].pos.length)}`
+    ? (ps.length > 1 ? `${selectedAction} pose ${ghostIndex % ps.length}` : `${selectedAction} (base)`)
     : "no action selected";
   // bars marker at the ghost pose
   if (z && z.safezone) {
@@ -1990,7 +2141,7 @@ function updateGhost() {
       const mark = $("bmark" + i);
       if (!mark) continue;
       const [lo, hi] = z.safezone[i];
-      const v = pose ? pose[i] : (z.startpos ? z.startpos[i] : 0);
+      const v = pose ? pose[i] : 0;
       const pct = hi > lo ? ((v - lo) / (hi - lo)) * 100 : 50;
       mark.style.left = Math.max(0, Math.min(100, pct)) + "%";
     }
@@ -1998,11 +2149,9 @@ function updateGhost() {
 }
 
 function stepGhost(dir) {
-  const z = TABLE.zones[selectedZone];
-  if (!z || !z.actions || !selectedAction || !z.actions[selectedAction]) return;
-  const n = z.actions[selectedAction].pos.length;
-  if (!n) return;
-  ghostIndex = (ghostIndex + dir + n) % n;
+  const ps = ghostPoses(selectedAction);
+  if (!ps.length) return;
+  ghostIndex = (ghostIndex + dir + ps.length) % ps.length;
   updateGhost();
 }
 
@@ -2011,43 +2160,52 @@ function stepGhost(dir) {
 // ---------------------------------------------------------------------------
 function validate() {
   const errs = [];
+  const isNum = (v) => typeof v === "number" && !isNaN(v);
   const names = Object.keys(TABLE.zones);
   for (const name of names) {
     const z = TABLE.zones[name];
-    if (!Array.isArray(z.startpos) || z.startpos.length !== 6) errs.push(`${name}: startpos needs 6 values`);
-    if (!Array.isArray(z.exitpos) || z.exitpos.length !== 6) errs.push(`${name}: exitpos needs 6 values`);
-    if (!Array.isArray(z.safezone) || z.safezone.length !== 6) errs.push(`${name}: safezone needs 6 pairs`);
-    for (const e of (z.exits || [])) if (!TABLE.zones[e]) errs.push(`${name}: exit "${e}" does not exist`);
-    if (z.mode !== undefined && !MODES.includes(z.mode)) errs.push(`${name}: mode "${z.mode}" not in ${MODES.join("/")}`);
-    if (z.exitposes !== undefined) {
-      if (typeof z.exitposes !== "object" || z.exitposes === null || Array.isArray(z.exitposes)) {
-        errs.push(`${name}: exitposes must be a map of zone -> 6 values`);
-      } else {
-        for (const to of Object.keys(z.exitposes)) {
-          if (!TABLE.zones[to]) errs.push(`${name}: exitpose for unknown zone "${to}"`);
-          const ep = z.exitposes[to];
-          if (!Array.isArray(ep) || ep.length !== 6) errs.push(`${name}: exitpose "${to}" needs 6 values`);
-        }
-      }
+    // Zone: safezone (6 [lo,hi] pairs, lo<hi) + speed (number) + actions (object).
+    if (!Array.isArray(z.safezone) || z.safezone.length !== 6) {
+      errs.push(`${name}: safezone needs 6 [lo,hi] pairs`);
+    } else {
+      z.safezone.forEach((p, i) => {
+        if (!Array.isArray(p) || p.length !== 2 || !isNum(p[0]) || !isNum(p[1]) || p[0] >= p[1])
+          errs.push(`${name}: safezone axis ${AXES[i]} must be [lo,hi] with lo<hi`);
+      });
     }
+    if (!isNum(z.speed)) errs.push(`${name}: speed must be a number`);
+    if (!z.actions || typeof z.actions !== "object" || Array.isArray(z.actions)) errs.push(`${name}: actions must be an object`);
     for (const an of Object.keys(z.actions || {})) {
       const a = z.actions[an];
-      // kind / loop / target (action-editor schema; all optional)
-      if (a.kind !== undefined && !ACTION_KINDS.includes(a.kind)) errs.push(`${name}/${an}: kind "${a.kind}" not in ${ACTION_KINDS.join("/")}`);
+      if (typeof a !== "object" || a === null || Array.isArray(a)) { errs.push(`${name}/${an}: must be an object`); continue; }
+      if (a.enabled !== undefined && typeof a.enabled !== "boolean") errs.push(`${name}/${an}: enabled must be a bool`);
       if (a.loop !== undefined && typeof a.loop !== "boolean") errs.push(`${name}/${an}: loop must be a bool`);
-      if (a.target !== undefined) {
-        if (typeof a.target !== "object" || a.target === null || Array.isArray(a.target)) {
-          errs.push(`${name}/${an}: target must be an object`);
-        } else {
-          const t = a.target;
-          if (t.zone !== undefined && !TABLE.zones[t.zone]) errs.push(`${name}/${an}: target zone "${t.zone}" does not exist`);
-          if (t.action !== undefined && typeof t.action !== "string") errs.push(`${name}/${an}: target action must be a string`);
-          if (t.pose !== undefined && (!Array.isArray(t.pose) || t.pose.length !== 6 || !t.pose.every((x) => typeof x === "number"))) errs.push(`${name}/${an}: target pose needs 6 numbers`);
+      // Form: an action has base_pose OR pos, not both.
+      const hasBase = a.base_pose !== undefined, hasPos = a.pos !== undefined;
+      if (hasBase && hasPos) { errs.push(`${name}/${an}: must have either base_pose or pos, not both`); continue; }
+      if (!hasBase && !hasPos) { errs.push(`${name}/${an}: needs base_pose (variable-axis) or pos (fixed sequence)`); continue; }
+      if (hasBase) {
+        if (!Array.isArray(a.base_pose) || a.base_pose.length !== 6 || !a.base_pose.every(isNum))
+          errs.push(`${name}/${an}: base_pose needs 6 numbers`);
+        if (a.variable_axes !== undefined && (!Array.isArray(a.variable_axes) || !a.variable_axes.every((x) => Number.isInteger(x) && x >= 0 && x <= 5)))
+          errs.push(`${name}/${an}: variable_axes must be axis indices 0-5`);
+        if (a.behavior !== undefined && !BEHAVIORS.includes(a.behavior))
+          errs.push(`${name}/${an}: behavior "${a.behavior}" not in ${BEHAVIORS.join("/")}`);
+        if (a.speed !== undefined && !isNum(a.speed)) errs.push(`${name}/${an}: speed must be a number (variable-axis form)`);
+      } else {
+        if (!Array.isArray(a.pos) || !a.pos.length) { errs.push(`${name}/${an}: pos needs at least 1 pose`); continue; }
+        a.pos.forEach((p, i) => { if (!Array.isArray(p) || p.length !== 6 || !p.every(isNum)) errs.push(`${name}/${an}: pose ${i} needs 6 numbers`); });
+        if (a.speed !== undefined && (Array.isArray(a.speed) ? a.speed.length !== a.pos.length || !a.speed.every(isNum) : !isNum(a.speed)))
+          errs.push(`${name}/${an}: speed needs one number per pose`);
+      }
+      // next: optional {zone, action} naming an existing zone.
+      if (a.next !== undefined) {
+        if (typeof a.next !== "object" || a.next === null || Array.isArray(a.next)) { errs.push(`${name}/${an}: next must be an object`); }
+        else {
+          if (a.next.zone !== undefined && !TABLE.zones[a.next.zone]) errs.push(`${name}/${an}: next.zone "${a.next.zone}" does not exist`);
+          if (a.next.action !== undefined && typeof a.next.action !== "string") errs.push(`${name}/${an}: next.action must be a string`);
         }
       }
-      if (!Array.isArray(a.pos) || !a.pos.length) { errs.push(`${name}/${an}: needs at least 1 pose`); continue; }
-      a.pos.forEach((p, i) => { if (!Array.isArray(p) || p.length !== 6) errs.push(`${name}/${an}: pose ${i} needs 6 values`); });
-      if (Array.isArray(a.speed) && a.speed.length !== a.pos.length) errs.push(`${name}/${an}: speed count != pose count`);
     }
   }
   return errs;
@@ -2066,9 +2224,10 @@ function saveZones() {
     $("saveMsg").className = "err";
     return;
   }
-  // Non-blocking warnings: action poses outside the zone's safezone, action poses
-  // outside the hardware floor, and safezones wider than the hardware range. The core
-  // clamps to the intersection (safezone ∩ hardware), so these are flags, not blockers.
+  // Non-blocking warnings: action poses outside the zone's safezone, outside the
+  // hardware floor, safezones wider than the hardware range, and next base_pose
+  // continuity (a variable-axis action's base_pose should match its successor's).
+  // The core clamps to the intersection (safezone ∩ hardware), so these are flags.
   const warns = [];
   for (const name of Object.keys(TABLE.zones)) {
     const z = TABLE.zones[name];
@@ -2078,14 +2237,24 @@ function saveZones() {
       if (slo < hlo || shi > hhi) warns.push(`${name}: safezone ${AXES[ax]} exceeds hardware [${hlo}, ${hhi}]`);
     }
     for (const an of Object.keys(z.actions || {})) {
-      (z.actions[an].pos || []).forEach((p, i) => {
+      const a = z.actions[an];
+      // The poses to check: base_pose (var form) or the pos sequence (legacy).
+      const poses = actionForm(a) === "var" ? (a.base_pose ? [a.base_pose] : []) : (a.pos || []);
+      poses.forEach((p, i) => {
         for (let ax = 0; ax < 6; ax++) {
           const [lo, hi] = z.safezone[ax];
-          if (p[ax] < lo || p[ax] > hi) warns.push(`${name}/${an} pose ${i} axis ${AXES[ax]} outside safezone`);
+          if (p[ax] < lo || p[ax] > hi) warns.push(`${name}/${an} ${actionForm(a) === "var" ? "base_pose" : `pose ${i}`} axis ${AXES[ax]} outside safezone`);
           const [hlo, hhi] = HW_LIMITS[ax];
-          if (p[ax] < hlo || p[ax] > hhi) warns.push(`${name}/${an} pose ${i} axis ${AXES[ax]} outside hardware limits`);
+          if (p[ax] < hlo || p[ax] > hhi) warns.push(`${name}/${an} ${actionForm(a) === "var" ? "base_pose" : `pose ${i}`} axis ${AXES[ax]} outside hardware limits`);
         }
       });
+      // Pose continuity: the action's base_pose should match the successor's.
+      if (a.next && a.next.zone && a.next.action && TABLE.zones[a.next.zone] && TABLE.zones[a.next.zone].actions[a.next.action]) {
+        const tgt = TABLE.zones[a.next.zone].actions[a.next.action];
+        if (a.base_pose && tgt.base_pose && !a.base_pose.every((v, i) => Math.abs(v - tgt.base_pose[i]) < 0.001)) {
+          warns.push(`${name}/${an}: base_pose differs from next ${a.next.zone}/${a.next.action}`);
+        }
+      }
     }
   }
   fetch("/api/zones", {
@@ -2175,16 +2344,15 @@ function flowBuildDefs() {
   return defs;
 }
 
-// The small text under a node's name: the live mode/action when it is the live
-// zone, else the declared default mode + the action count.
+// The small text under a node's name: the live behavior/action when it is the live
+// zone, else the action count.
 function flowSubLabel(name) {
   const z = TABLE.zones[name];
   if (FLOW.live && FLOW.live.zone === name) {
     return `${FLOW.live.mode || "—"} / ${FLOW.live.action || "—"}`;
   }
-  const mode = z.mode || "—";
   const n = Object.keys(z.actions || {}).length;
-  return n ? `${mode} · ${n} act` : mode;
+  return n ? `${n} act` : "—";
 }
 
 // Deterministic auto-layout: columns by BFS depth from `init` (else the first
@@ -2203,7 +2371,7 @@ function flowAutoLayout(names) {
     const q = [root];
     while (q.length) {
       const n = q.shift();
-      (TABLE.zones[n].exits || []).forEach((e) => {
+      zoneForward(n).forEach((e) => {
         if (TABLE.zones[e] && depth[e] === undefined) { depth[e] = depth[n] + 1; q.push(e); }
       });
     }
@@ -2305,17 +2473,17 @@ function flowAddEdge(layer, from, to) {
   if (b.x >= a.x) { x1 = a.x + NODE_W; y1 = a.y + nodeH(from) / 2; x2 = b.x; y2 = b.y + nodeH(to) / 2; }
   else { x1 = a.x; y1 = a.y + nodeH(from) / 2; x2 = b.x + NODE_W; y2 = b.y + nodeH(to) / 2; }
   const d = edgePath(x1, y1, x2, y2);
-  const z = TABLE.zones[from];
-  const isCustom = !!(z.exitposes && z.exitposes[to]);
   const isSel = !!(FLOW.sel && FLOW.sel.type === "edge" && FLOW.sel.from === from && FLOW.sel.to === to);
   const hit = svgEl("path", { d, class: "fedgeHit" });
   hit.addEventListener("click", (e) => { e.stopPropagation(); flowSelect({ type: "edge", from, to }); });
   layer.appendChild(hit);
-  const cls = "fedge" + (isCustom ? " fedgeCustom" : "") + (isSel ? " fedgeSel" : "");
+  const cls = "fedge" + (isSel ? " fedgeSel" : "");
   layer.appendChild(svgEl("path", { d, class: cls, "marker-end": "url(#flowArrow)" }));
+  // The edge is the action in `from` whose `next` points at `to`; label it with that.
+  const srcAn = edgeSourceAction(from, to);
   const lbl = svgEl("text", { x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 8,
-                               class: "fedgeLabel" + (isCustom ? " fedgeLabelCustom" : ""), "text-anchor": "middle" });
-  lbl.textContent = isCustom ? "custom" : "shared";
+                                class: "fedgeLabel", "text-anchor": "middle" });
+  lbl.textContent = srcAn ? srcAn : "next";
   layer.appendChild(lbl);
 }
 
@@ -2323,42 +2491,10 @@ function flowRenderEdges() {
   const layer = $("flowEdgeLayer");
   if (!layer) return;
   layer.innerHTML = "";
+  // The zone graph is derived from each action's `next` field (no zone-level exits).
   Object.keys(TABLE.zones).forEach((from) => {
-    (TABLE.zones[from].exits || []).forEach((to) => {
+    zoneForward(from).forEach((to) => {
       if (TABLE.zones[to]) flowAddEdge(layer, from, to);
-    });
-  });
-  flowRenderTargetEdges(layer);
-}
-
-// Target edges (Step 4): for each exit action whose target.zone names a different,
-// existing zone, draw an orange dashed arrow from the source row's right side to the
-// target's entry-action left edge (or the target zone center when no entry action is
-// named). Purely visual — pointer-events are disabled so they never block the normal
-// (interactive) zone edges beneath.
-function flowRenderTargetEdges(layer) {
-  Object.keys(TABLE.zones).forEach((name) => {
-    const z = TABLE.zones[name];
-    if (!z.actions) return;
-    Object.keys(z.actions).forEach((an) => {
-      const act = z.actions[an];
-      if (act.kind !== "exit") return;
-      const tgt = act.target;
-      if (!tgt || !tgt.zone || tgt.zone === name || !TABLE.zones[tgt.zone]) return;
-      const a = FLOW.pos[name], b = FLOW.pos[tgt.zone];
-      if (!a || !b) return;
-      const x1 = a.x + NODE_W, y1 = a.y + rowY(name, an);
-      const tz = TABLE.zones[tgt.zone];
-      // Target anchor: the named action, else the first entry action, else zone center.
-      let anchorAn = null;
-      if (tgt.action && tz.actions && tz.actions[tgt.action]) anchorAn = tgt.action;
-      else {
-        const entries = Object.keys(tz.actions || {}).filter((e) => tz.actions[e].kind === "entry");
-        if (entries.length) anchorAn = entries[0];
-      }
-      const x2 = b.x, y2 = anchorAn ? b.y + rowY(tgt.zone, anchorAn) : b.y + nodeH(tgt.zone) / 2;
-      layer.appendChild(svgEl("path", { d: edgePath(x1, y1, x2, y2), class: "fedge fedgeTarget",
-                                         "marker-end": "url(#flowArrowTarget)", style: "pointer-events: none" }));
     });
   });
 }
@@ -2374,27 +2510,29 @@ function flowAddNode(layer, name) {
   const sub = svgEl("text", { x: NODE_W / 2, y: 42, class: "fnodeSub", "text-anchor": "middle" });
   sub.textContent = flowSubLabel(name);
   g.appendChild(sub);
-  // Action rows (Step 4): one row per action, read-only (editing is in the modal).
-  // entry = left dot + left-aligned label, exit = right dot + right-aligned label,
-  // internal = centered label, no dot. Looping actions append a ↻ marker.
+  // Action rows: one row per action, read-only (editing is in the modal). The label
+  // is the action name + its behavior; looping actions append a ↻ marker; an action
+  // whose `next` points to another zone gets a right-side dot (the outgoing edge).
   if (z.actions) {
     Object.keys(z.actions).forEach((an) => {
       const act = z.actions[an];
-      const kind = act.kind || "internal";
       const ry = rowY(name, an);
       const hit = svgEl("rect", { x: 0, y: ry - FA_ROW / 2, width: NODE_W, height: FA_ROW, fill: "transparent" });
       hit.addEventListener("mousedown", (e) => e.stopPropagation());  // don't start a node drag
       hit.addEventListener("click", (e) => { e.stopPropagation(); openActionEditor(name, an); });
       g.appendChild(hit);
-      if (kind === "entry" || kind === "exit") {
-        g.appendChild(svgEl("circle", { cx: kind === "entry" ? 4 : NODE_W - 4, cy: ry, r: 3, class: "faDot", style: "pointer-events: none" }));
+      const hasNext = !!(act.next && act.next.zone && act.next.zone !== name);
+      if (hasNext) {
+        g.appendChild(svgEl("circle", { cx: NODE_W - 4, cy: ry, r: 3, class: "faDot", style: "pointer-events: none" }));
       }
-      const anchor = kind === "entry" ? "start" : kind === "exit" ? "end" : "middle";
-      const lx = kind === "entry" ? 12 : kind === "exit" ? NODE_W - 12 : NODE_W / 2;
-      const txt = svgEl("text", { x: lx, y: ry + 4, class: "faRow " + kind, "text-anchor": anchor, style: "pointer-events: none" });
+      const beh = actionForm(act) === "var" ? (act.behavior || "hold") : "pose";
+      const txt = svgEl("text", { x: 8, y: ry + 4, class: "faRow", "text-anchor": "start", style: "pointer-events: none" });
       const lbl = svgEl("tspan", { class: "faLabel" });
       lbl.textContent = an;
       txt.appendChild(lbl);
+      const bh = svgEl("tspan", { class: "faBehavior", dx: 4 });
+      bh.textContent = beh;
+      txt.appendChild(bh);
       if (act.loop !== false) {
         const lp = svgEl("tspan", { class: "faLoop", dx: 3 });
         lp.textContent = "↻";
@@ -2497,11 +2635,16 @@ function flowDragEnd(ev) {
   const pt = svgPoint(svg, ev);
   const target = flowNodeAt(pt, name);
   if (target) {
-    // Draw an arrow: append the target to the source's exits (no duplicates).
-    // The node snaps back so arrow-drawing does not disturb the layout.
+    // Draw an arrow: point the source zone's first enabled action's `next` at the
+    // target (the zone graph is the union of actions' `next` fields). The node snaps
+    // back so arrow-drawing does not disturb the layout.
     const z = TABLE.zones[name];
-    z.exits = z.exits || [];
-    if (!z.exits.includes(target)) z.exits.push(target);
+    const an = firstEnabledAction(name);
+    if (an) {
+      if (!z.actions[an].next) z.actions[an].next = {};
+      z.actions[an].next.zone = target;
+      z.actions[an].next.action = firstEnabledAction(target);
+    }
     FLOW.pos[name] = d.startNode;
   }
   // else: reposition — keep the new position (already set during the drag).
@@ -2528,36 +2671,42 @@ function buildFlowDetail() {
     buildZoneForm(el, title, sel.zone, () => flowRender(), false);
     return;
   }
-  // Edge: per-edge exitpose editor + remove link.
+  // Edge: the action in `from` whose `next` points at `to`. Edit which action in
+  // `to` it targets, and remove the link (clears that action's `next`).
   const { from, to } = sel;
   const z = TABLE.zones[from];
   if (!z) return;
   title.textContent = `edge: ${from} → ${to}`;
-  el.appendChild(h3("exitpose (per-edge override)"));
-  const eff = (z.exitposes && z.exitposes[to]) ? z.exitposes[to].slice()
-              : (z.exitpos ? z.exitpos.slice() : [0, 0, 0, 0, 0, 0]);
-  el.appendChild(numGrid("edgeExitpose", eff, (v, i) => {
-    z.exitposes = z.exitposes || {};
-    if (!z.exitposes[to]) z.exitposes[to] = (z.exitpos ? z.exitpos.slice() : [0, 0, 0, 0, 0, 0]);
-    z.exitposes[to][i] = v;
-  }));
+  const srcAn = edgeSourceAction(from, to);
+  if (!srcAn) return;
+  const act = z.actions[srcAn];
+  el.appendChild(h3(`source action: ${srcAn}`));
+  const tz = TABLE.zones[to];
   const row = document.createElement("div");
   row.className = "row";
-  const useDef = document.createElement("button");
-  useDef.className = "small"; useDef.textContent = "use zone default";
-  useDef.onclick = () => {
-    if (z.exitposes) { delete z.exitposes[to]; if (!Object.keys(z.exitposes).length) delete z.exitposes; }
+  const al = document.createElement("label");
+  al.className = "inline";
+  al.innerHTML = "target action <select class='aeNextAction'></select>";
+  const asel = al.querySelector("select");
+  const noneA = document.createElement("option"); noneA.value = ""; noneA.textContent = "(none)"; asel.appendChild(noneA);
+  if (tz && tz.actions) {
+    Object.keys(tz.actions).forEach((on) => { const o = document.createElement("option"); o.value = on; o.textContent = on; asel.appendChild(o); });
+  }
+  asel.value = (act.next && act.next.action) ? act.next.action : "";
+  asel.onchange = () => {
+    if (!act.next) act.next = {};
+    if (asel.value === "") delete act.next.action; else act.next.action = asel.value;
     flowRender(); buildFlowDetail();
   };
+  row.appendChild(al);
   const rm = document.createElement("button");
   rm.className = "small"; rm.textContent = "remove link";
   rm.onclick = () => {
-    z.exits = (z.exits || []).filter((x) => x !== to);
-    if (z.exitposes) { delete z.exitposes[to]; if (!Object.keys(z.exitposes).length) delete z.exitposes; }
+    delete act.next;
     FLOW.sel = null;
     flowRender(); buildFlowDetail();
   };
-  row.appendChild(useDef); row.appendChild(rm);
+  row.appendChild(rm);
   el.appendChild(row);
 }
 
@@ -2577,9 +2726,8 @@ function addZone() {
   if (!nm || TABLE.zones[nm]) return;
   TABLE.zones[nm] = {
     enabled: true,
-    startpos: [0,0,0,0,0,0], exitpos: [0,0,0,0,0,0],
     safezone: [[-94,122],[-134,34],[-119,157],[-349,349],[-118,118],[-357,357]],
-    exits: [], speed: 20, actions: {},
+    speed: 20, actions: {},
   };
   if (flowView) {
     // Place the new node below the current layout and select it.
@@ -2602,11 +2750,15 @@ function delZone() {
   if (Object.keys(TABLE.zones).length <= 1) { $("saveMsg").textContent = "cannot remove the last zone"; return; }
   if (!confirm(`remove zone "${nm}"?`)) return;
   delete TABLE.zones[nm];
-  // Clean dangling references from the other zones (exits + exitposes).
+  // Clean dangling references: any action whose `next` pointed at the removed zone
+  // (the zone graph is derived from actions' `next` fields).
   Object.keys(TABLE.zones).forEach((other) => {
     const oz = TABLE.zones[other];
-    if (oz.exits) oz.exits = oz.exits.filter((e) => e !== nm);
-    if (oz.exitposes) { delete oz.exitposes[nm]; if (!Object.keys(oz.exitposes).length) delete oz.exitposes; }
+    if (!oz.actions) return;
+    Object.keys(oz.actions).forEach((an) => {
+      const a = oz.actions[an];
+      if (a && a.next && a.next.zone === nm) delete a.next;
+    });
   });
   // Re-point the shared zone editor to a live zone immediately (both views), so the
   // deleted zone is never left selected. Then handle the flow-view specifics.

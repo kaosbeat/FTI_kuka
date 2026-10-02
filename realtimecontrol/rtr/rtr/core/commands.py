@@ -14,8 +14,7 @@ from typing import Any, Dict, List, Optional
 class Cmd(str, Enum):
     """Commands an adapter can send to the core."""
 
-    GOTO_ZONE = "goto_zone"
-    SET_MODE = "set_mode"
+    TRIGGER_ACTION = "trigger_action"
     PLAY_ACTION = "play_action"
     CLEAR_ACTION = "clear_action"
     SET_JOINT_POSE = "set_joint_pose"

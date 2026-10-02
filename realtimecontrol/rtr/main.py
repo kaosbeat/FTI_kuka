@@ -210,7 +210,7 @@ async def run(cfg: Config) -> None:
     print(f"[rtr] robot connected: {cfg.robot_kind}")
 
     print(f"[rtr] core up: robot={cfg.robot_kind} zone={machine.current_zone} "
-          f"mode={machine.mode} ws={cfg.ws_port} http={cfg.http_port if http.enabled else 'off'}")
+          f"behavior={machine.behavior} ws={cfg.ws_port} http={cfg.http_port if http.enabled else 'off'}")
 
     # --- run until interrupted ----------------------------------------
     engine_task = asyncio.create_task(engine.run())

@@ -431,10 +431,10 @@ class Sound:
                         if isinstance(poses, list) and poses:
                             self._send_msg(poses[0], snap.zone)
 
-        # 3. per-pose step: while in action mode, a target-pose change advances the
-        #    internal pose index. (Heuristic: the snapshot has no explicit pose index;
-        #    exact index tracking is a later extension.)
-        if (snap.mode == "action" and snap.action is not None
+        # 3. per-pose step: while an action is playing, a target-pose change advances
+        #    the internal pose index. (Heuristic: the snapshot has no explicit pose
+        #    index; exact index tracking is a later extension.)
+        if (snap.action is not None
                 and snap.target_pose != self._last_target):
             self._pose_idx += 1
             act = actions.get(snap.zone, {}).get(snap.action)

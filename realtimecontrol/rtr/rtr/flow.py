@@ -1,10 +1,14 @@
 """Pure navigation helpers shared by TUI and MIDI.
 
 This module (a sibling of ``core``/``state``/``io``/``remote``) contains the
-building blocks for virtual cursor navigation over zone actions and exits.
-Both :mod:`rtr.remote.tui` (urwid UI) and :mod:`rtr.io.midi` (MIDI input)
-import from here to avoid layering violations (the helpers are pure data,
-not I/O).
+building blocks for virtual cursor navigation over zone actions and the
+zone graph derived from actions' ``next`` fields. Both :mod:`rtr.remote.tui`
+(urwid UI) and :mod:`rtr.io.midi` (MIDI input) import from here to avoid
+layering violations (the helpers are pure data, not I/O).
+
+Zones are pure safe-boundaries; the navigation graph is derived from the
+``next`` fields on actions. Each action may declare ``next: {zone, action}``
+naming the zone and action to trigger when the action completes.
 """
 
 from typing import Dict, List, Optional
@@ -13,26 +17,58 @@ from typing import Dict, List, Optional
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-ACTION_KINDS = ("internal", "entry", "exit")
-_SECTION_ORDER = {"entry": 0, "internal": 1, "exit": 2, "zones": 3}
+_SECTION_ORDER = {"action": 0, "zones": 1}
 
 
 # ---------------------------------------------------------------------------
-# Zone exit helpers
+# Zone graph helpers (derived from action ``next`` fields).
 # ---------------------------------------------------------------------------
-def _zone_exits(z: dict) -> List[str]:
-    """The names of zones reachable from this zone (the exits graph)."""
-    e = z.get("exits", [])
-    return [x for x in e if isinstance(x, str)] if isinstance(e, list) else []
+def _first_enabled_action(zones: Dict[str, dict], zone: str) -> Optional[str]:
+    """The first enabled action name in ``zone`` (table order), or None.
+
+    Used to resolve the entry action when a zone row is activated via
+    ``trigger_action``.
+    """
+    z = zones.get(zone)
+    if not isinstance(z, dict):
+        return None
+    actions = z.get("actions", {})
+    if not isinstance(actions, dict):
+        return None
+    for name, a in actions.items():
+        if not (isinstance(a, dict) and a.get("enabled") is False):
+            return name
+    return None
 
 
-def reverse_exits(zones: Dict[str, dict], zone: Optional[str]) -> List[str]:
-    """The zones that can reach this one (incoming edges), in table order.
+def reachable_targets(zones: Dict[str, dict], zone: Optional[str]) -> List[str]:
+    """The zones reachable from ``zone`` via its actions' ``next`` fields.
 
-    ``reverse_exits(z, cur)`` is every zone ``n`` whose ``exits`` list names
-    ``cur`` — the zones the robot could have come from. In a symmetric table
-    this equals the zone's own exits; in an asymmetric one it is the "back"
-    option the UI offers alongside the forward exits.
+    Returns zone names in first-seen order (table order of the actions).
+    """
+    if not isinstance(zones, dict) or not isinstance(zone, str):
+        return []
+    z = zones.get(zone)
+    if not isinstance(z, dict):
+        return []
+    actions = z.get("actions", {})
+    seen = set()
+    out: List[str] = []
+    if isinstance(actions, dict):
+        for a in actions.values():
+            if isinstance(a, dict):
+                n = a.get("next")
+                if isinstance(n, dict) and isinstance(n.get("zone"), str):
+                    if n["zone"] not in seen:
+                        seen.add(n["zone"])
+                        out.append(n["zone"])
+    return out
+
+
+def reverse_targets(zones: Dict[str, dict], zone: Optional[str]) -> List[str]:
+    """The zones that can reach ``zone`` (incoming edges from ``next`` fields).
+
+    Returns zone names in table order (first-seen order in the table).
     """
     if not isinstance(zones, dict) or not isinstance(zone, str):
         return []
@@ -40,23 +76,23 @@ def reverse_exits(zones: Dict[str, dict], zone: Optional[str]) -> List[str]:
     for n, z in zones.items():
         if not isinstance(z, dict):
             continue
-        e = z.get("exits")
-        if isinstance(e, list) and zone in e:
-            out.append(n)
+        actions = z.get("actions", {})
+        if isinstance(actions, dict):
+            for a in actions.values():
+                if isinstance(a, dict):
+                    nxt = a.get("next")
+                    if isinstance(nxt, dict) and nxt.get("zone") == zone:
+                        if n not in out:
+                            out.append(n)
+                        break
     return out
 
 
 # ---------------------------------------------------------------------------
 # Action helpers
 # ---------------------------------------------------------------------------
-def action_kind(a: dict) -> str:
-    """The action's kind (internal/entry/exit); defaults to internal."""
-    k = a.get("kind") if isinstance(a, dict) else None
-    return k if isinstance(k, str) and k in ACTION_KINDS else "internal"
-
-
 def action_loops(a: dict) -> bool:
-    """Whether the action loops; defaults to True (today's behaviour)."""
+    """Whether the action loops; defaults to True."""
     if isinstance(a, dict):
         v = a.get("loop")
         if isinstance(v, bool):
@@ -64,12 +100,12 @@ def action_loops(a: dict) -> bool:
     return True
 
 
-def action_target(a: dict) -> Optional[dict]:
-    """The action's target hand-off dict, or None when it declares none."""
+def action_next(a: dict) -> Optional[dict]:
+    """The action's ``next`` field (``{zone, action}``), or None when absent."""
     if isinstance(a, dict):
-        t = a.get("target")
-        if isinstance(t, dict):
-            return t
+        n = a.get("next")
+        if isinstance(n, dict):
+            return n
     return None
 
 
@@ -85,67 +121,65 @@ def action_enabled(a: dict) -> bool:
 def activation_commands(item: dict) -> List[dict]:
     """The core command(s) to send when an item is activated.
 
-    An action (any kind) is played in ``action`` mode; the core's
-    ``_advance_after_action`` resolves an exit action's ``target`` hand-off on
-    completion. A zone (from the exits graph) is a direct ``goto_zone``.
+    An action row sends ``play_action``. A zone row (from the ``next`` graph)
+    sends ``trigger_action`` with the zone name and its first enabled action;
+    the core transitions to that zone and begins the action.
     """
-    if item.get("kind") == "exit":
-        return [{"cmd": "goto_zone", "zone": item["name"]}]
-    return [
-        {"cmd": "play_action", "action": item["name"]},
-        {"cmd": "set_mode", "mode": "action"},
-    ]
+    if item.get("kind") == "zone":
+        cmd = {"cmd": "trigger_action", "zone": item["name"]}
+        if item.get("target_action"):
+            cmd["action"] = item["target_action"]
+        return [cmd]
+    return [{"cmd": "play_action", "action": item["name"]}]
 
 
 # ---------------------------------------------------------------------------
 # Build items
 # ---------------------------------------------------------------------------
 def build_items(zones: Dict[str, dict], zone: Optional[str]) -> List[dict]:
-    """The selectable rows for a zone, grouped by action kind + the exits graph.
+    """The selectable rows for a zone: its actions + reachable zones.
 
-    Returns a list of item dicts: ``{"section", "kind", "name", "action", "back"}``
-    (the ``back`` flag is only meaningful on the "zones" rows). Actions are ordered
-    entry → internal → exit (then name); the "zones" section is the ordered union
-    of the zone's declared ``exits`` (declared order) and its ``reverse_exits``
-    (table order, skipping names already listed), so the operator is offered only
-    the possible next states. A "zones" row has ``back=True`` when its name is not
-    one of the zone's own exits (a reverse-only entry, marked ``←`` by
-    :func:`item_label`).
+    Returns a list of item dicts: ``{"section", "kind", "name", "action",
+    "target_action", "back"}``. Actions come from the current zone's action
+    table (in order); the "zones" section is the ordered union of
+    ``reachable_targets`` (from the zone's actions' ``next`` fields) and
+    ``reverse_targets`` (zones whose actions point back to this zone).
+    A "zones" row has ``back=True`` when it is a reverse-only target (not in
+    the zone's own reachable set), and ``target_action`` is the first
+    enabled action of the target zone (used by ``activation_commands``).
     """
     items: List[dict] = []
     z = zones.get(zone) if isinstance(zones, dict) and zone else None
     if not isinstance(z, dict):
         return items
     actions = z.get("actions", {})
-    action_items: List[dict] = []
     if isinstance(actions, dict):
         for name, a in actions.items():
-            action_items.append({
-                "section": action_kind(a),
+            items.append({
+                "section": "action",
                 "kind": "action",
                 "name": name,
                 "action": a if isinstance(a, dict) else None,
             })
-    elif isinstance(actions, list):
-        for name in actions:
-            if isinstance(name, str):
-                action_items.append({
-                    "section": "internal",
-                    "kind": "action",
-                    "name": name,
-                    "action": None,
-                })
-    action_items.sort(key=lambda it: (_SECTION_ORDER.get(it["section"], 1), it["name"]))
-    items.extend(action_items)
-    exits = _zone_exits(z)
-    exit_set = set(exits)
-    for name in exits:
+    fwd = reachable_targets(zones, zone)
+    fwd_set = set(fwd)
+    for name in fwd:
         items.append({
-            "section": "zones", "kind": "exit", "name": name, "action": None, "back": False,
+            "section": "zones",
+            "kind": "zone",
+            "name": name,
+            "action": None,
+            "target_action": _first_enabled_action(zones, name),
+            "back": False,
         })
-    for name in reverse_exits(zones, zone):
-        if name not in exit_set:
+    for name in reverse_targets(zones, zone):
+        if name not in fwd_set:
             items.append({
-                "section": "zones", "kind": "exit", "name": name, "action": None, "back": True,
+                "section": "zones",
+                "kind": "zone",
+                "name": name,
+                "action": None,
+                "target_action": _first_enabled_action(zones, name),
+                "back": True,
             })
     return items

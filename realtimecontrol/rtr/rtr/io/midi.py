@@ -9,13 +9,14 @@ Per-zone model (from ``midi.json``)
 -----------------------------------
 ``midi.json`` is ``{"enabled": bool, "zones": {z: {in_port, command, actions}}}``:
 each zone has its own MIDI-in device index (``in_port``, ``null`` → the default
-port), a ``command`` key that activates (gotos) the zone, and an ``actions`` map
-that sends a learned key to a zone action. One ``MidiIn`` is opened per distinct
-``in_port`` (rtmidi's callback does not report the source port, so multiple ports
-need separate handles). A message on port P is routed to the zones with
-``in_port == P``: a matching ``command`` → GOTO_ZONE, a matching ``actions`` key →
-PLAY_ACTION. Unmapped messages on the **default** port fall back to the legacy
-hardcoded protocol below, so existing controllers keep working.
+port), a ``command`` key that triggers the zone (its first enabled action), and
+an ``actions`` map that sends a learned key to a zone action. One ``MidiIn`` is
+opened per distinct ``in_port`` (rtmidi's callback does not report the source
+port, so multiple ports need separate handles). A message on port P is routed
+to the zones with ``in_port == P``: a matching ``command`` → TRIGGER_ACTION,
+a matching ``actions`` key → TRIGGER_ACTION (zone + action). Unmapped messages
+on the **default** port fall back to the legacy hardcoded protocol below, so
+existing controllers keep working.
 
 Learn capture is armed per-zone: ``start_learn(zone, action)`` captures the next
 mappable message on the zone's ``in_port`` and submits ``MIDI_LEARN {key, msg,
@@ -42,12 +43,10 @@ default port).
 
 Legacy hardcoded protocol (default port only)
 ---------------------------------------------
-- CC1 (value 1-6)      → goto_zone (path-routed through the zone exits graph)
-- CC2 (0/1)            → set_mode (wander / action)
+- CC1 (value 1-6)      → trigger_action (zone + first enabled action)
 - CC3 (value i)        → play the i-th action (1-based) in the current zone; 0 clears
 - CC13                 → set_flag("dynvel", value)
 - CC20 / 21 / 22       → adjust_limit (index 0/1/2)
-- CC30 (1/2)           → set_mode (random / wander)
 - Note ch1: 41/42/73/74 → set_flag (wandermode / randomwristmode / dynmode / reachmode)
 - Note ch1 / ch2: 61-64 → set_joint_pose (named ch1 poses)
 - Note ch3             → random_wrist
@@ -239,8 +238,9 @@ class MidiInput:
     keys. One ``MidiIn`` is opened per distinct ``in_port`` (rtmidi's callback does
     not report the source port, so multiple ports need separate handles). A message on
     port P routes to the zones with ``in_port == P``: a matching ``command`` →
-    GOTO_ZONE, a matching ``actions`` key → PLAY_ACTION. Unmapped messages on the
-    default port fall back to the legacy hardcoded protocol.
+    TRIGGER_ACTION (the zone + its first enabled action), a matching ``actions`` key
+    → TRIGGER_ACTION (the zone + that action). Unmapped messages on the default port
+    fall back to the legacy hardcoded protocol.
     """
 
     def __init__(self, bus: StateBus, in_port: Optional[int] = None, enabled: bool = True,
@@ -486,6 +486,24 @@ class MidiInput:
             return z
         return {}
 
+    def _first_enabled_action(self, zone: str) -> Optional[str]:
+        """The first enabled action name in ``zone`` (table order), or None.
+
+        Used to resolve the entry action when a zone is triggered via
+        ``trigger_action``.
+        """
+        table = self._zone_table()
+        zd = table.get(zone)
+        if not isinstance(zd, dict):
+            return None
+        actions = zd.get("actions", {})
+        if not isinstance(actions, dict):
+            return None
+        for name, a in actions.items():
+            if not (isinstance(a, dict) and a.get("enabled") is False):
+                return name
+        return None
+
     def _rebuild_nav(self) -> None:
         """Rebuild the nav rows for the current zone and reseed the cursor.
 
@@ -508,7 +526,7 @@ class MidiInput:
             self._rebuild_nav()
 
     def _nav_activate(self, item: dict) -> None:
-        """Send the activation commands for a nav row (play_action/goto_zone)."""
+        """Send the activation commands for a nav row (play_action / trigger_action)."""
         for entry in activation_commands(item):
             d = dict(entry)
             name = d.pop("cmd")
@@ -529,9 +547,9 @@ class MidiInput:
                 return
 
     def _nav_back(self) -> None:
-        """Activate the first reverse-exit row (the zone the robot could come from)."""
+        """Activate the first reverse-target row (the zone the robot could come from)."""
         for item in self._nav_items:
-            if item.get("kind") == "exit" and item.get("back"):
+            if item.get("kind") == "zone" and item.get("back"):
                 self._nav_activate(item)
                 return
 
@@ -549,7 +567,7 @@ class MidiInput:
         if name == "next_action":
             self._nav_next("action")
         elif name == "next_zone":
-            self._nav_next("exit")
+            self._nav_next("zone")
         elif name == "back":
             self._nav_back()
         elif name == "retrigger":
@@ -579,7 +597,7 @@ class MidiInput:
                                                        "nav": self._learn["nav"]}))
                     self._learn = None
             return
-        # Per-zone dispatch: a matching command → GOTO_ZONE, an actions key → PLAY_ACTION.
+        # Per-zone dispatch: a matching command or actions key → TRIGGER_ACTION.
         if self._dispatch_zone_key(port, message):
             return
         # Nav dispatch: the global navigation keys (any port).
@@ -609,11 +627,14 @@ class MidiInput:
         for zone in self._zones_by_port(port):
             zdata = self._data["zones"][zone]
             if zdata.get("command") == key:
-                self._submit(Cmd.GOTO_ZONE, {"zone": zone})
-                return True
+                action = self._first_enabled_action(zone)
+                if action:
+                    self._submit(Cmd.TRIGGER_ACTION, {"zone": zone, "action": action})
+                    return True
+                return False
             for action, akey in zdata.get("actions", {}).items():
                 if akey == key:
-                    self._submit(Cmd.PLAY_ACTION, {"action": action})
+                    self._submit(Cmd.TRIGGER_ACTION, {"zone": zone, "action": action})
                     return True
         return False
 
@@ -632,17 +653,16 @@ class MidiInput:
     def _handle_cc(self, cc: int, value: int) -> None:
         """Legacy CC protocol (channel 0)."""
         if cc == 1 and value in ZONE_BY_CC1:
-            self._submit(Cmd.GOTO_ZONE, {"zone": ZONE_BY_CC1[value]})
-        elif cc == 2:
-            self._submit(Cmd.SET_MODE, {"mode": "action" if value else "wander"})
+            zone = ZONE_BY_CC1[value]
+            action = self._first_enabled_action(zone)
+            if action:
+                self._submit(Cmd.TRIGGER_ACTION, {"zone": zone, "action": action})
         elif cc == 3:
             self._play_action_by_index(value)
         elif cc == 13:
             self._submit(Cmd.SET_FLAG, {"flag": "dynvel", "value": value})
         elif cc in (20, 21, 22):
             self._submit(Cmd.ADJUST_LIMIT, {"index": cc - 20, "value": value / 4})
-        elif cc == 30:
-            self._submit(Cmd.SET_MODE, {"mode": "random" if value == 1 else "wander"})
 
     def _play_action_by_index(self, index: int) -> None:
         """CC3: play the ``index``-th action (1-based) in the current zone.

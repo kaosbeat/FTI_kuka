@@ -35,16 +35,14 @@ async def demo() -> None:
     async def script() -> None:
         # A little scripted show: wake up, stretch, wander, then an action.
         await asyncio.sleep(1.0)
-        submit(Cmd.GOTO_ZONE, zone="wakeup")
+        submit(Cmd.TRIGGER_ACTION, zone="wakeup", action="breathe")
         await asyncio.sleep(3.0)
-        submit(Cmd.GOTO_ZONE, zone="stretch")
+        submit(Cmd.TRIGGER_ACTION, zone="stretch", action="look")
         await asyncio.sleep(3.0)
-        submit(Cmd.GOTO_ZONE, zone="wander")
+        submit(Cmd.TRIGGER_ACTION, zone="wander", action="breathe")
         await asyncio.sleep(3.0)
-        submit(Cmd.SET_MODE, mode="action")
         submit(Cmd.PLAY_ACTION, action="look")
         await asyncio.sleep(2.0)
-        submit(Cmd.SET_MODE, mode="random")
 
     engine_task = asyncio.create_task(engine.run())
     script_task = asyncio.create_task(script())

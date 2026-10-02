@@ -37,7 +37,7 @@ from ..flow import (
     activation_commands,
     action_enabled,
     action_loops,
-    action_target,
+    action_next,
     build_items,
 )
 
@@ -75,24 +75,22 @@ class Theme:
 
 # ---------------------------------------------------------------------------
 # Display shaping (no urwid) — the TUI renders these and the tests exercise
-# them directly. Each zone's actions carry the optional ``kind`` / ``loop`` /
-# ``target`` fields (see state/zones.py): the TUI groups the actions by kind,
-# marks the looping ones, and annotates a target hand-off. The shared pure
-# navigation helpers live in :mod:`rtr.flow`.
+# them directly. Each zone's actions carry the optional ``loop`` / ``next`` /
+# ``behavior`` fields (see state/zones.py): the TUI marks the looping ones
+# and annotates a next hand-off. The shared pure navigation helpers live in
+# :mod:`rtr.flow`.
 # ---------------------------------------------------------------------------
 SECTION_LABELS = {
-    "entry": "ENTRY",
-    "internal": "INTERNAL",
-    "exit": "EXIT",
+    "action": "ACTIONS",
     "zones": "GO TO",
 }
 
 
 def item_label(item: dict) -> str:
-    """The display string for an item (name + loop marker + target annotation).
+    """The display string for an item (name + loop marker + next annotation).
 
-    A "zones" row with ``back=True`` (a reverse-only exit) gets a ``←`` marker so
-    forward vs. back is visible in an asymmetric exits graph.
+    A "zones" row with ``back=True`` (a reverse-only target) gets a ``←`` marker
+    so forward vs. back is visible in an asymmetric next-field graph.
     """
     name = item.get("name", "")
     if item.get("kind") != "action":
@@ -101,15 +99,15 @@ def item_label(item: dict) -> str:
     s = name
     if action_loops(a):
         s += " ↻"
-    t = action_target(a)
-    if t:
-        tz = t.get("zone")
-        if isinstance(tz, str):
-            s += f" → {tz}"
+    n = action_next(a)
+    if n:
+        nz = n.get("zone")
+        if isinstance(nz, str):
+            s += f" → {nz}"
         else:
-            ta = t.get("action")
-            if isinstance(ta, str):
-                s += f" → {ta}"
+            na = n.get("action")
+            if isinstance(na, str):
+                s += f" → {na}"
     return s
 
 
@@ -365,7 +363,7 @@ class RemoteTUI:
             if item.get("kind") == "action":
                 self._status = f"→ play {item['name']}"
             else:
-                self._status = f"→ goto {item['name']}"
+                self._status = f"→ trigger {item['name']}"
             self._dirty = True
 
     def _on_unhandled(self, key):

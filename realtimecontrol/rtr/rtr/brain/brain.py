@@ -1,15 +1,20 @@
 """Brain: the command interpreter.
 
-The state machine is the single owner of the robot's state (zone, mode, action,
-target, speed, flags, cadence). The brain no longer holds any of that — it is a thin
-layer that maps incoming :class:`~rtr.core.commands.Command` objects onto the machine's
-operations. It is the seam where "programmed logic, a small LLM, or realtime control"
-can plug in: subclass :class:`Brain` and override :meth:`on_command` to change what a
-command does, without touching the state machine, the robot, or the adapters.
+The state machine is the single owner of the robot's state (zone, action, target,
+speed, flags, cadence, camera telemetry). The brain no longer holds any of that — it
+is a thin layer that maps incoming :class:`~rtr.core.commands.Command` objects onto
+the machine's operations. It is the seam where "programmed logic, a small LLM, or
+realtime control" can plug in: subclass :class:`Brain` and override :meth:`on_command`
+to change what a command does, without touching the state machine, the robot, or the
+adapters.
 
 The per-tick decision (which target to command the robot to) is made by the
 :meth:`~rtr.state.machine.StateMachine.step` driver, not here. The brain only folds
 commands into the machine; the engine calls ``machine.step`` every tick.
+
+Camera telemetry is stashed on ``machine.camera_state`` (see :meth:`_handle_cam_track`)
+and read by the variable-axis behaviours — the brain no longer nudges the target pose
+directly.
 """
 
 import time
@@ -19,18 +24,6 @@ from ..core.commands import Cmd, Command
 from ..state.behavior import clamp
 from ..state.machine import StateMachine
 from ..state.zones import MODES  # re-exported for `from rtr.brain import MODES`
-
-# Zones that allow full tracking motion (the robot can move to follow a person).
-TRACK_ZONES = ("wander", "wildwander")
-# Zones that allow reduced motion (a head-only or partial nudge).
-LOOK_ZONES = ("wakeup", "stretch")
-# Zones that are stationary (no tracking motion; head-only actions are handled
-# by the zone's own action table).
-STILL_ZONES = ("init", "rest")
-
-# Placeholder servoing gain (pixels → degrees). To be tuned per zone / camera
-# in a field test with the calibration tool.
-_CAM_GAIN = 0.05  # degrees per pixel of offset
 
 
 class Brain:
@@ -58,10 +51,8 @@ class Brain:
         """Fold one command into the state machine."""
         c = cmd.cmd
         p = cmd.payload
-        if c == Cmd.GOTO_ZONE:
-            self.machine.request_zone(p.get("zone"), curjpos)
-        elif c == Cmd.SET_MODE:
-            self.machine.set_mode(p.get("mode", "wander"))
+        if c == Cmd.TRIGGER_ACTION:
+            self.machine.trigger_action(p.get("zone"), p.get("action"))
         elif c == Cmd.PLAY_ACTION:
             self.machine.play_action(p.get("action"))
         elif c == Cmd.CLEAR_ACTION:
@@ -70,7 +61,7 @@ class Brain:
             # Joint poses are floored to the effective floor (safezone ∩ hardware);
             # linear poses are Cartesian and must not be floor-clamped.
             self.machine.set_target(clamp(self.machine, list(p["pose"])), "joint")
-            self.machine.set_mode("hold")
+            self.machine.clear_action()  # hold the target
         elif c == Cmd.SET_LINEAR_POSE:
             self.machine.set_target(list(p["pose"]), "linear")
         elif c == Cmd.ADJUST_LIMIT:
@@ -87,7 +78,7 @@ class Brain:
         elif c == Cmd.CAM_CANDIDATES:
             self._handle_cam_candidates(p)
         elif c == Cmd.CAM_TRACK:
-            self._handle_cam_track(p, curjpos)
+            self._handle_cam_track(p)
         elif c == Cmd.CAM_FACE:
             self._handle_cam_face(p)
 
@@ -135,40 +126,23 @@ class Brain:
             if self.camera is not None and lock_id is not None:
                 self.camera.set_intent(lock_id=lock_id)
 
-    def _handle_cam_track(self, p: dict, curjpos: List[float]) -> None:
-        """Store track data and issue a zone-gated nudge.
+    def _handle_cam_track(self, p: dict) -> None:
+        """Store the track telemetry on the machine; the behaviours read it.
 
-        The nudge is an incremental joint pose offset proportional to the pixel
-        offset (dx, dy). The gain and axis mapping are placeholders pending the
-        field-test calibration.
+        The brain no longer nudges the target pose directly. The camera offset
+        (dx/dy) is folded into the variable-axis behaviour of whatever action is
+        currently playing (track/focus/look read ``machine.camera_state`` each tick).
         """
         if self.camera is not None:
             self.camera.handle_telemetry(Cmd.CAM_TRACK, p)
         self._cam_log("track", f"track: id={p.get('id')} dx={p.get('dx', 0):.1f} dy={p.get('dy', 0):.1f}")
-
-        zone = self.machine.current_zone
-        if zone in STILL_ZONES:
-            return  # no tracking motion in stationary zones
-
-        dx = p.get("dx", 0)
-        dy = p.get("dy", 0)
-        if dx == 0 and dy == 0:
-            return
-
-        # Reduced gain in look zones, full gain in track zones.
-        gain = _CAM_GAIN if zone in TRACK_ZONES else _CAM_GAIN * 0.5
-
-        # Simple axis mapping: dx → A1 (pan), dy → A2 (tilt).
-        # The sign convention depends on the camera mount orientation; the
-        # RPI reports absolute pixel offsets so the core must know the mount.
-        nudge = [0.0] * 6
-        nudge[0] = dx * gain  # A1: horizontal
-        nudge[1] = dy * gain  # A2: vertical
-
-        # Apply the nudge to the current joint pose.
-        target = [curjpos[i] + nudge[i] for i in range(6)]
-        self.machine.set_target(clamp(self.machine, target), "joint")
-        self.machine.set_mode("hold")
+        self.machine.camera_state = {
+            "dx": p.get("dx", 0.0),
+            "dy": p.get("dy", 0.0),
+            "id": p.get("id"),
+            "locked": p.get("locked", False),
+            "ok": p.get("ok", True),
+        }
 
     def _handle_cam_face(self, p: dict) -> None:
         """Store face analysis telemetry.

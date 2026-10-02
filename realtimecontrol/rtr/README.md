@@ -859,6 +859,42 @@ python sim_demo.py
 python chatbot.py --api-key <key>
 ```
 
+### Camera remotes
+
+The camera runs as a **separate process** on the RPi (where the physical cameras are),
+connecting to the core over the same WebSocket. It sends `CAM_*` telemetry up and
+receives the `cam_control` intent down. Weights are resolved from `rtr/camera/models/`
+(drop the `.pt` files there; the dir is git-ignored).
+
+```bash
+# the real two-cam pipeline (wide + close), on the RPi:
+python -m rtr.camera.camera_remote \
+  --core-host 192.168.1.185 --core-port 8765 \
+  --wide-cam 0 --close-cam 1 --show
+
+# a mock camera for headless / --sim validation (no hardware):
+python -m rtr.camera.camera_mock \
+  --core-host 127.0.0.1 --core-port 8765 --candidates 3
+```
+
+`camera_remote` flags:
+
+| Flag | Default | Meaning |
+| ---- | ------- | ------- |
+| `--core-host` | `127.0.0.1` | Core WebSocket host (pass the core's IP). |
+| `--core-port` | `8765` | Core WebSocket port. |
+| `--http-port` | `8766` | Core HTTP port. |
+| `--wide-cam` / `--close-cam` | `0` / `1` | Physical camera device numbers. |
+| `--width` / `--height` | `640` / `480` | Frame size. |
+| `--fps` | `30` | Target frame rate. |
+| `--model` | `yolo26n.pt` | Person detector weight (resolved in `rtr/camera/models`). |
+| `--tracker` | `bytetrack.yaml` | ByteTrack config. |
+| `--show` | off | Open the OpenCV debug window (candidate boxes + lock + overlay). |
+| `--log-level` | `INFO` | Log verbosity. |
+
+`camera_mock` flags: `--core-host`, `--core-port`, `--http-port`, `--candidates`
+(simulated persons, default `3`), `--fps` (telemetry rate, default `30`), `--log-level`.
+
 With the core running, open the pages over the HTTP server (port 8766):
 
 - `http://localhost:8766/client.html` — the control page (3D view + environment + zones).

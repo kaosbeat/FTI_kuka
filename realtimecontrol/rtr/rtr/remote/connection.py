@@ -5,17 +5,19 @@ This is the client-side link to the core. It speaks the core's real protocol:
 - **WebSocket** (``ws://<host>:<ws_port>``): the core broadcasts state frames;
   we subscribe to them and send commands as JSON. Commands use the
   :class:`rtr.core.commands.Command` schema, e.g.
-  ``{"cmd": "goto_zone", "zone": "rest"}``.
+  ``{"cmd": "trigger_action", "zone": "rest", "action": "breathe"}``.
 - **HTTP** (``http://<host>:<http_port>``): ``GET /api/zones`` returns the zone
   data table (``{"zones": {...}}``). The table is what the TUI navigates: each
-  zone lists its ``actions`` and reachable ``exits``.
+  zone lists its ``actions`` and the navigation graph is derived from the
+  per-action ``next`` fields.
 
 Frames the core sends over the WebSocket (see :class:`rtr.display.display.Display`):
 
 - ``{"type": "state", "zone", "mode", "action", "patch", "joints", "cart",
   "target", "speed", "moving", "flags"}`` — a full state snapshot, every tick.
+  ``mode`` carries the current behavior (wander/track/focus/scan/look/wander/random/hold).
 - ``{"type": "zone", "zone": name}`` — a zone change event.
-- ``{"type": "mode", "mode": name}`` — a mode change event.
+- ``{"type": "mode", "mode": name}`` — a behavior change event.
 - ``{"type": "zones_changed", "zones": [names]}`` — the zone table changed.
 
 The :class:`Connection` keeps a WebSocket link (with automatic reconnect) and a
@@ -179,7 +181,7 @@ class Connection:
             logger.warning("send failed: %s", exc)
 
     def send_command(self, cmd: Dict[str, Any]) -> None:
-        """Send a command to the core (e.g. ``{"cmd": "goto_zone", "zone": "rest"}``).
+        """Send a command to the core (e.g. ``{"cmd": "trigger_action", "zone": "rest", "action": "breathe"}``).
 
         Synchronous; schedules the send on the running loop. Call it from the
         asyncio thread (the TUI marshals cross-thread calls via ``call_soon_threadsafe``).

@@ -60,7 +60,7 @@ class Engine:
         # Seed the state machine to the robot's real pose (this also seeds the target).
         curjpos = await asyncio.to_thread(self.robot.get_curjpos)
         self.machine.reset(curjpos)
-        self._prev_state = (self.machine.current_zone, self.machine.mode,
+        self._prev_state = (self.machine.current_zone, self.machine.behavior,
                             self.machine.current_action)
 
         interval = 1.0 / self.tick_hz
@@ -136,6 +136,10 @@ class Engine:
             m.current_zone = "init"
             m.current_action = None
             m.action_index = 0
+        elif m.current_action and m.current_action not in zones.get(m.current_zone).actions():
+            # The action was removed/renamed: stop it (hold the current pose).
+            m.current_action = None
+            m.action_index = 0
         m.zones = zones
         m.speed = zones.get(m.current_zone).speed
         self.bus.publish(Event.ZONES_CHANGED, zones.names())
@@ -146,7 +150,7 @@ class Engine:
                                  margin=0.5, count=5)
         snap = Snapshot(
             zone=self.machine.current_zone,
-            mode=self.machine.mode,
+            mode=self.machine.behavior,
             action=self.machine.current_action,
             joint_pose=list(curjpos),
             cart_pose=list(curpos),
@@ -165,7 +169,7 @@ class Engine:
         events real (the camera and display already subscribe to the zone/mode ones).
         """
         m = self.machine
-        cur = (m.current_zone, m.mode, m.current_action)
+        cur = (m.current_zone, m.behavior, m.current_action)
         if self._prev_state is None or cur == self._prev_state:
             self._prev_state = cur
             return
@@ -173,7 +177,7 @@ class Engine:
         if cur[0] != prev_zone:
             self.bus.publish(Event.ZONE_CHANGED, m.current_zone)
         if cur[1] != prev_mode:
-            self.bus.publish(Event.MODE_CHANGED, m.mode)
+            self.bus.publish(Event.MODE_CHANGED, m.behavior)
         if cur[2] != prev_action:
             self.bus.publish(Event.ACTION_CHANGED, m.current_action)
         self._prev_state = cur

@@ -1,21 +1,20 @@
 """Zone and pose data.
 
-This is the static description of where the robot may be and what it may do. It is
-lifted verbatim from ``kukart/robotstates.py`` so behaviour is unchanged, but now
-lives in one typed module instead of a global dict.
+A zone is a pure safe-boundary: ``safezone`` + ``speed`` + ``actions``. Zones are
+linked only via actions' ``next`` fields — there is no zone-level ``exits`` graph.
 
-A zone declares:
+Each action declares one of two forms:
 
-- ``safezone``  – per-axis ``(min, max)`` limits that are always safe in this zone,
-- ``startpos``  – the pose the robot moves to when entering the zone,
-- ``exitpos``   – the pose the robot moves to when leaving the zone,
-- ``exits``     – the names of zones reachable from this one,
-- ``actions``   – named motions (sequences of poses + speeds) available in the zone,
-- ``speed``     – default move speed while in the zone.
+- **Variable-axis form**: ``base_pose`` + ``variable_axes`` + ``behavior`` +
+  ``speed`` (+ optional ``loop`` and ``next``). The non-variable axes are held
+  at ``base_pose``; the variable axes are driven by the named behavior policy.
+- **Legacy fixed-pose form**: ``pos`` (list of poses) + ``speed`` (list of
+  speeds) + ``loop`` (+ optional ``next``). Steps through the pose sequence.
+
+An action has either ``base_pose`` or ``pos``, not both.
 """
 
 import json
-from collections import deque
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -32,156 +31,224 @@ LIMITS: List[Tuple[float, float]] = [
 # Per-axis *hardware* limits (degrees), from the ``kr60ha_macro.xacro`` joint
 # ``<limit>`` tags. These are the physical joint limits of the real KR60 and form a
 # hard safety floor: every commanded pose is clamped to the intersection of the
-# current zone's safezone and these limits. Note A6 (the rotary wrist) is now
-# limited too — it was previously treated as free.
+# current zone's safezone and these limits.
 HARDWARE_LIMITS: List[Tuple[float, float]] = [
     (-185, 185),   # A1
     (-135, 35),    # A2
-    (-120, 158),   # A3
-    (-350, 350),   # A4
-    (-119, 119),   # A5
-    (-350, 350),   # A6
+    (-120, 158),    # A3
+    (-350, 350),    # A4
+    (-119, 119),    # A5
+    (-350, 350),    # A6 (rotary wrist, now limited)
 ]
 
-# The behaviour modes the state machine can be in (see :mod:`rtr.state.behavior`).
-# Kept here (the data module) so ``zones.json`` validation can check a zone's
-# optional per-zone default ``mode`` without importing the behaviour layer.
-MODES = ("wander", "random", "action", "track", "hold")
+# Behavior names: the policies that drive variable axes.
+BEHAVIORS = ("track", "focus", "scan", "look", "wander", "random", "hold")
 
-# The action kinds (see the action-editor plan). Each action has exactly one:
-# - ``internal`` – "listen" (no external connectors); triggered on demand.
-# - ``entry``    – the way *in* to a zone; triggered on zone arrival.
-# - ``exit``     – the way *out* of a zone; its ``target`` names the next zone.
-ACTION_KINDS = ("internal", "entry", "exit")
+# Kept for backward compat (MIDI legacy dispatch, display patches); no longer
+# used by zones or the state machine.
+MODES = ("wander", "random", "action", "track", "hold")
 
 
 def effective_limits(zone_safezone: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
     """Per-axis intersection of a zone's safezone and the hardware limits.
 
-    The effective range for each axis is ``[max(sz_lo, hw_lo), min(sz_hi, hw_hi)]`` —
-    the safezone narrowed by the hardware floor. This is the hard safety limit every
-    commanded pose is clamped to. If a safezone is wider than the hardware range the
-    intersection safely shrinks to the hardware range; if it is entirely outside the
-    hardware range the result clamps to the hardware boundary (a safe failure).
+    The effective range for each axis is ``[max(sz_lo, hw_lo), min(sz_hi, hw_hi)]``.
     """
     return [
         (max(sz[0], hw[0]), min(sz[1], hw[1]))
         for sz, hw in zip(zone_safezone, HARDWARE_LIMITS)
     ]
 
+
+# ---------------------------------------------------------------------------
+# Built-in fallback zone table (used when zones.json is missing or corrupt).
+# Zones are pure safe-boundaries: safezone + speed + actions. The zone graph
+# is derived from actions' ``next`` fields.
+# ---------------------------------------------------------------------------
 ZONES: Dict[str, dict] = {
     "init": {
-        "startpos": [-60, -90, 90, 0, 15, 0],
+        "enabled": True,
         "safezone": [(-94, 122), (-105, -65), (89, 115), (-15, 15), (-15, 45), (-357, 357)],
-        "actions": [],
-        "exitpos": [-4, -131, 155, 3, -10, 0],  # exit to rest position
-        "exits": ["rest"],
         "speed": 20,
+        "actions": {
+            "wake": {
+                "base_pose": [-60, -90, 90, 0, 15, 0],
+                "variable_axes": [],
+                "behavior": "hold",
+                "speed": 20,
+                "loop": True,
+                "next": {"zone": "rest", "action": "breathe"},
+            }
+        },
     },
     "rest": {
-        "startpos": [-3, -133, 156, -2, 0, 0],
+        "enabled": True,
         "safezone": [(-5, 5), (-134, -130), (155, 157), (-3, 3), (-10, 10), (-357, 357)],
+        "speed": 20,
         "actions": {
             "breathe": {
-                "pos": [[-5, -130, 155, -2, 0, 0],
-                        [-3, -134, 157, -2, 0, 0],
-                        [5, -132, 155, -2, 0, 0]],
-                "speed": [10, 10, 10],
+                "base_pose": [-3, -133, 156, -2, 0, 0],
+                "variable_axes": [0, 1, 2],
+                "behavior": "wander",
+                "speed": 10,
+                "loop": True,
             },
             "look": {
-                "pos": [[-5, -130, 155, -2, 10, 0],
-                        [-3, -134, 157, -3, -10, 0],
-                        [5, -132, 155, 3, -10, 0]],
-                "speed": [100, 100, 100],
+                "base_pose": [-3, -133, 156, -2, 0, 0],
+                "variable_axes": [0, 4],
+                "behavior": "look",
+                "speed": 100,
+                "loop": True,
+                "next": {"zone": "wakeup", "action": "breathe"},
             },
         },
-        "exitpos": [-3, -134, 156, -2, 0, 0],  # exit to wakeup position
-        "exits": ["wakeup", "init"],
-        "speed": 20,
     },
     "wakeup": {
-        "startpos": [-3, -134, 156, -2, 0, 0],
+        "enabled": True,
         "safezone": [(-94, 122), (-134, -123), (136, 157), (-23, 23), (-25, 25), (-357, 357)],
+        "speed": 40,
         "actions": {
             "breathe": {
-                "pos": [[-85, -130, 137, -2, 0, 0],
-                        [-73, -134, 150, -2, 0, 0],
-                        [35, -132, 140, -2, 0, 0]],
-                "speed": [10, 10, 10],
+                "base_pose": [-3, -134, 156, -2, 0, 0],
+                "variable_axes": [0, 1, 2],
+                "behavior": "wander",
+                "speed": 10,
+                "loop": True,
+                "next": {"zone": "stretch", "action": "look"},
             },
             "look": {
-                "pos": [[-85, -130, 137, -2, 0, 0],
-                        [-73, -134, 150, -2, 0, 0],
-                        [35, -132, 140, -2, 0, 0]],
-                "speed": [100, 100, 100],
+                "base_pose": [-3, -134, 156, -2, 0, 0],
+                "variable_axes": [0, 4],
+                "behavior": "look",
+                "speed": 100,
+                "loop": True,
             },
         },
-        "exitpos": [-3, -97, 16, -2, 90, 0],  # exit to stretch position
-        "exits": ["stretch", "rest"],
-        "speed": 40,
     },
     "stretch": {
-        "startpos": [-3, -97, 16, -2, 0, 0],
+        "enabled": True,
         "safezone": [(-94, 122), (-98, -96), (13, 19), (-2, 2), (85, 95), (-357, 357)],
+        "speed": 100,
         "actions": {
-            "breathe": {
-                "pos": [[85, -97, 17, -2, 0, 0],
-                        [73, -97, 15, -2, 0, 0],
-                        [35, -97, 14, -2, 0, 0]],
-                "speed": [10, 10, 10],
-            },
             "look": {
-                "pos": [[85, -97, 17, -2, 0, 0],
-                        [73, -97, 15, -2, 0, 0],
-                        [35, -97, 14, -2, 0, 0]],
-                "speed": [100, 100, 100],
+                "base_pose": [-3, -97, 16, -2, 0, 0],
+                "variable_axes": [0, 4],
+                "behavior": "look",
+                "speed": 100,
+                "loop": True,
+                "next": {"zone": "wander", "action": "breathe"},
             },
         },
-        "exitpos": [-60, -65, 157, -2, 0, 0],  # exit to wander position
-        "exits": ["wander", "wakeup"],
-        "speed": 100,
     },
     "wander": {
-        "startpos": [60, -65, 60, 0, 45, 0],
+        "enabled": True,
         "safezone": [(-94, 122), (-70, -60), (29, 100), (-4, 4), (-118, 118), (-357, 357)],
+        "speed": 30,
         "actions": {
             "breathe": {
-                "pos": [[85, -65, 37, -2, 0, 0],
-                        [-85, -66, 59, -2, 0, 0],
-                        [35, -68, 40, -2, 0, 0]],
-                "speed": [10, 10, 10],
+                "base_pose": [60, -65, 60, 0, 45, 0],
+                "variable_axes": [0, 1, 2],
+                "behavior": "wander",
+                "speed": 10,
+                "loop": True,
+                "next": {"zone": "wildwander", "action": "breathe"},
             },
             "look": {
-                "pos": [[-85, -66, 70, -2, 0, 0],
-                        [-73, -69, 50, -2, 0, 0],
-                        [35, -61, 44, -2, 0, 0]],
-                "speed": [100, 100, 100],
+                "base_pose": [60, -65, 60, 0, 45, 0],
+                "variable_axes": [0, 4],
+                "behavior": "look",
+                "speed": 100,
+                "loop": True,
             },
         },
-        "exitpos": [-3, -97, 157, -2, 0, 0],
-        "exits": ["stretch", "wildwander"],
-        "speed": 30,
     },
     "wildwander": {
-        "startpos": [60, -22.5, -112.5, 0, 45, 0],
+        "enabled": True,
         "safezone": [(-94, 122), (-124, -60), (-19, 157), (-1, 1), (-118, 118), (-357, 357)],
+        "speed": 100,
         "actions": {
             "breathe": {
-                "pos": [[-85, -120, 137, 0, 0, 0],
-                        [-73, -114, 150, 0, 0, 0],
-                        [35, -112, 140, -2, 0, 0]],
-                "speed": [10, 10, 10],
+                "base_pose": [60, -22.5, -112.5, 0, 45, 0],
+                "variable_axes": [0, 1, 2],
+                "behavior": "wander",
+                "speed": 10,
+                "loop": True,
+                "next": {"zone": "wander", "action": "breathe"},
             },
             "look": {
-                "pos": [[-85, -120, 137, 0, 0, 0],
-                        [-73, -114, 150, 0, 0, 0],
-                        [35, -112, 140, -2, 0, 0]],
-                "speed": [100, 100, 100],
+                "base_pose": [60, -22.5, -112.5, 0, 45, 0],
+                "variable_axes": [0, 4],
+                "behavior": "look",
+                "speed": 100,
+                "loop": True,
             },
         },
-        "exitpos": [-3, -97, 157, -2, 0, 0],
-        "exits": ["wander"],
-        "speed": 100,
+    },
+    "watch": {
+        "enabled": True,
+        "safezone": [(-20, 20), (-134, -130), (155, 157), (-3, 3), (0, 60), (-357, 357)],
+        "speed": 20,
+        "actions": {
+            "track": {
+                "base_pose": [-3, -133, 156, -2, 45, 0],
+                "variable_axes": [0],
+                "behavior": "track",
+                "speed": 20,
+                "loop": True,
+                "next": {"zone": "perform", "action": "trick"},
+            },
+            "focus": {
+                "base_pose": [-3, -133, 156, -2, 45, 0],
+                "variable_axes": [4],
+                "behavior": "focus",
+                "speed": 20,
+                "loop": True,
+            },
+        },
+    },
+    "perform": {
+        "enabled": True,
+        "safezone": [(-30, 30), (-98, -96), (13, 19), (-2, 2), (-30, 60), (-357, 357)],
+        "speed": 40,
+        "actions": {
+            "trick": {
+                "base_pose": [-3, -97, 16, -2, 45, 0],
+                "variable_axes": [4],
+                "behavior": "scan",
+                "speed": 40,
+                "loop": True,
+                "next": {"zone": "watch", "action": "track"},
+            },
+            "bow": {
+                "base_pose": [-3, -97, 16, -2, 0, 0],
+                "variable_axes": [4],
+                "behavior": "scan",
+                "speed": 40,
+                "loop": True,
+            },
+        },
+    },
+    "fume": {
+        "enabled": True,
+        "safezone": [(-94, 122), (-134, -123), (136, 157), (-23, 23), (0, 118), (-357, 357)],
+        "speed": 40,
+        "actions": {
+            "roar": {
+                "base_pose": [-3, -134, 156, -2, 90, 0],
+                "variable_axes": [4],
+                "behavior": "scan",
+                "speed": 40,
+                "loop": True,
+                "next": {"zone": "watch", "action": "track"},
+            },
+            "snarl": {
+                "base_pose": [-3, -134, 156, -2, 90, 0],
+                "variable_axes": [4],
+                "behavior": "scan",
+                "speed": 40,
+                "loop": True,
+            },
+        },
     },
 }
 
@@ -210,10 +277,6 @@ LIN_POSES: Dict[str, List[List[float]]] = {
 
 # ---------------------------------------------------------------------------
 # Loading + validation of the on-disk data file (``zones.json``).
-#
-# The file is the editable source of truth (see the editor page). The dicts above
-# are kept as built-in fallback defaults so the core still runs if the file is
-# missing or corrupt.
 # ---------------------------------------------------------------------------
 
 def _is_num(v) -> bool:
@@ -221,15 +284,66 @@ def _is_num(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+def _validate_action(name: str, a: dict, all_zone_names: set) -> None:
+    """Validate a single action dict (new variable-axis or legacy fixed-pose form)."""
+    if not isinstance(a, dict):
+        raise ValueError(f"action {name!r}: must be an object")
+    if "enabled" in a and not isinstance(a["enabled"], bool):
+        raise ValueError(f"action {name!r}: 'enabled' must be a bool")
+
+    has_base = "base_pose" in a
+    has_pos = "pos" in a
+    if has_base and has_pos:
+        raise ValueError(f"action {name!r}: must have either 'base_pose' or 'pos', not both")
+    if not has_base and not has_pos:
+        raise ValueError(f"action {name!r}: must have either 'base_pose' or 'pos'")
+
+    if has_base:
+        bp = a["base_pose"]
+        if not (isinstance(bp, list) and len(bp) == 6 and all(_is_num(x) for x in bp)):
+            raise ValueError(f"action {name!r}: base_pose must be a list of 6 numbers")
+        va = a.get("variable_axes", [])
+        if not (isinstance(va, list) and all(
+                isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= 5
+                for x in va)):
+            raise ValueError(f"action {name!r}: variable_axes must be a list of axis indices (0-5)")
+        beh = a.get("behavior", "hold")
+        if not (isinstance(beh, str) and beh in BEHAVIORS):
+            raise ValueError(f"action {name!r}: behavior must be one of {BEHAVIORS}")
+        spd = a.get("speed")
+        if spd is not None and not _is_num(spd):
+            raise ValueError(f"action {name!r}: speed must be a number (variable-axis form)")
+    else:
+        pos = a["pos"]
+        if not (isinstance(pos, list) and pos and all(
+                isinstance(p, list) and len(p) == 6 and all(_is_num(x) for x in p)
+                for p in pos)):
+            raise ValueError(f"action {name!r}: pos must be a non-empty list of 6-number poses")
+        spd = a.get("speed")
+        if spd is not None and not (
+                isinstance(spd, list) and len(spd) == len(pos) and all(_is_num(x) for x in spd)):
+            raise ValueError(f"action {name!r}: speed must have one value per pose")
+
+    if "loop" in a and not isinstance(a["loop"], bool):
+        raise ValueError(f"action {name!r}: 'loop' must be a bool")
+
+    if "next" in a:
+        n = a["next"]
+        if not isinstance(n, dict):
+            raise ValueError(f"action {name!r}: 'next' must be an object")
+        if "zone" in n:
+            if not (isinstance(n["zone"], str) and n["zone"] in all_zone_names):
+                raise ValueError(f"action {name!r}: next.zone must name an existing zone")
+        if "action" in n and not isinstance(n["action"], str):
+            raise ValueError(f"action {name!r}: next.action must be a string")
+
+
 def _validate_zone(name: str, z: dict, all_names: set) -> None:
+    """Validate a single zone dict."""
     if not isinstance(z, dict):
         raise ValueError(f"zone {name!r}: must be an object")
     if "enabled" in z and not isinstance(z["enabled"], bool):
         raise ValueError(f"zone {name!r}: 'enabled' must be a bool")
-    for key in ("startpos", "exitpos"):
-        v = z.get(key)
-        if not (isinstance(v, list) and len(v) == 6 and all(_is_num(x) for x in v)):
-            raise ValueError(f"zone {name!r}: {key} must be a list of 6 numbers")
     sz = z.get("safezone")
     if not (isinstance(sz, list) and len(sz) == 6):
         raise ValueError(f"zone {name!r}: safezone must be a list of 6 [lo, hi] pairs")
@@ -237,64 +351,13 @@ def _validate_zone(name: str, z: dict, all_names: set) -> None:
         if not (isinstance(pair, list) and len(pair) == 2
                 and _is_num(pair[0]) and _is_num(pair[1]) and pair[0] < pair[1]):
             raise ValueError(f"zone {name!r}: safezone axis {i} must be [lo, hi] with lo < hi")
-    exits = z.get("exits", [])
-    if not (isinstance(exits, list) and all(isinstance(e, str) for e in exits)):
-        raise ValueError(f"zone {name!r}: exits must be a list of zone names")
-    for e in exits:
-        if e not in all_names:
-            raise ValueError(f"zone {name!r}: exit {e!r} does not name an existing zone")
-    # Optional per-zone default behaviour mode.
-    if "mode" in z:
-        if not (isinstance(z["mode"], str) and z["mode"] in MODES):
-            raise ValueError(f"zone {name!r}: 'mode' must be one of {MODES}")
-    # Optional per-edge exit poses: {target zone name: [6 numbers]}.
-    if "exitposes" in z:
-        ep = z["exitposes"]
-        if not isinstance(ep, dict):
-            raise ValueError(f"zone {name!r}: 'exitposes' must be an object")
-        for tgt, pose in ep.items():
-            if tgt not in all_names:
-                raise ValueError(f"zone {name!r}: exitposes key {tgt!r} does not name an existing zone")
-            if not (isinstance(pose, list) and len(pose) == 6 and all(_is_num(x) for x in pose)):
-                raise ValueError(f"zone {name!r}: exitposes[{tgt!r}] must be a list of 6 numbers")
     if not _is_num(z.get("speed")):
         raise ValueError(f"zone {name!r}: speed must be a number")
     acts = z.get("actions", {})
     if not isinstance(acts, dict):
         raise ValueError(f"zone {name!r}: actions must be an object")
     for an, a in acts.items():
-        if not isinstance(a, dict):
-            raise ValueError(f"zone {name!r} action {an!r}: must be an object")
-        if "enabled" in a and not isinstance(a["enabled"], bool):
-            raise ValueError(f"zone {name!r} action {an!r}: 'enabled' must be a bool")
-        pos = a.get("pos")
-        if not (isinstance(pos, list) and pos and all(
-                isinstance(p, list) and len(p) == 6 and all(_is_num(x) for x in p) for p in pos)):
-            raise ValueError(f"zone {name!r} action {an!r}: pos must be a list of 6-number poses")
-        spd = a.get("speed")
-        if not (isinstance(spd, list) and len(spd) == len(pos) and all(_is_num(x) for x in spd)):
-            raise ValueError(f"zone {name!r} action {an!r}: speed must have one value per pose")
-        # Optional per-action kind / loop / target (the action-editor schema). All
-        # three are optional; existing zones.json files are valid unchanged (every
-        # action defaults to kind="internal", loop=True, no target).
-        if "kind" in a:
-            if not (isinstance(a["kind"], str) and a["kind"] in ACTION_KINDS):
-                raise ValueError(f"zone {name!r} action {an!r}: 'kind' must be one of {ACTION_KINDS}")
-        if "loop" in a and not isinstance(a["loop"], bool):
-            raise ValueError(f"zone {name!r} action {an!r}: 'loop' must be a bool")
-        if "target" in a:
-            t = a["target"]
-            if not isinstance(t, dict):
-                raise ValueError(f"zone {name!r} action {an!r}: 'target' must be an object")
-            if "zone" in t:
-                if not (isinstance(t["zone"], str) and t["zone"] in all_names):
-                    raise ValueError(f"zone {name!r} action {an!r}: target 'zone' must name an existing zone")
-            if "action" in t and not isinstance(t["action"], str):
-                raise ValueError(f"zone {name!r} action {an!r}: target 'action' must be a string")
-            if "pose" in t:
-                tp = t["pose"]
-                if not (isinstance(tp, list) and len(tp) == 6 and all(_is_num(x) for x in tp)):
-                    raise ValueError(f"zone {name!r} action {an!r}: target 'pose' must be a list of 6 numbers")
+        _validate_action(an, a, all_names)
 
 
 def validate_state_data(data) -> dict:
@@ -326,6 +389,10 @@ def load_state_data(path) -> dict:
         return validate_state_data(json.load(f))
 
 
+# ---------------------------------------------------------------------------
+# Typed accessors.
+# ---------------------------------------------------------------------------
+
 @dataclass
 class Zone:
     """A single zone, with typed accessors over the raw dict."""
@@ -336,42 +403,6 @@ class Zone:
     @property
     def safezone(self) -> List[Tuple[float, float]]:
         return self.data["safezone"]
-
-    @property
-    def startpos(self) -> List[float]:
-        return list(self.data["startpos"])
-
-    @property
-    def exitpos(self) -> List[float]:
-        return list(self.data["exitpos"])
-
-    @property
-    def default_mode(self) -> Optional[str]:
-        """The zone's default behaviour mode, or None if the zone declares none.
-
-        On committing a transition into the zone the state machine adopts this mode
-        (if present); a zone without a ``mode`` field keeps the current mode.
-        """
-        m = self.data.get("mode")
-        return m if isinstance(m, str) else None
-
-    def exitpose_for(self, target: str) -> List[float]:
-        """The hand-off pose used when leaving this zone toward ``target``.
-
-        Prefers a per-edge override (``exitposes[target]``), falling back to the zone's
-        single ``exitpos``. Backward compatible: a zone with no ``exitposes`` map uses
-        its one ``exitpos`` for every edge, exactly as before.
-        """
-        poses = self.data.get("exitposes", {})
-        if isinstance(poses, dict):
-            v = poses.get(target)
-            if isinstance(v, list) and len(v) == 6:
-                return list(v)
-        return list(self.data["exitpos"])
-
-    @property
-    def exits(self) -> List[str]:
-        return list(self.data["exits"])
 
     @property
     def speed(self) -> float:
@@ -405,33 +436,74 @@ class Zone:
         act = a.get(name)
         return act if isinstance(act, dict) else {}
 
-    def action_kind(self, name: str) -> str:
-        """The action's kind: ``internal`` | ``entry`` | ``exit``.
-
-        Defaults to ``internal`` when the field is absent (backward compatible).
-        """
-        return self._action(name).get("kind", "internal")
-
     def action_loops(self, name: str) -> bool:
         """Whether the action loops (wraps around) or runs once.
 
-        Defaults to ``True`` when the field is absent (today's behaviour).
+        Defaults to ``True`` when the field is absent.
         """
         return bool(self._action(name).get("loop", True))
 
-    def action_target(self, name: str) -> Optional[dict]:
-        """The action's ``target`` (the next step), or None when it declares none.
+    def action_base_pose(self, name: str) -> Optional[List[float]]:
+        """The action's ``base_pose`` (variable-axis form), or None for legacy actions."""
+        a = self._action(name)
+        bp = a.get("base_pose")
+        if isinstance(bp, list) and len(bp) == 6:
+            return list(bp)
+        return None
 
-        A ``target`` is a dict with optional ``zone`` (next zone; defaults to the
-        current zone), ``action`` (the action to activate next), and ``pose``
-        (the hand-off pose).
+    def action_variable_axes(self, name: str) -> List[int]:
+        """The action's ``variable_axes`` (list of 0-5 indices), or [] for legacy."""
+        a = self._action(name)
+        va = a.get("variable_axes")
+        if isinstance(va, list):
+            return [x for x in va if isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= 5]
+        return []
+
+    def action_behavior(self, name: str) -> str:
+        """The action's behavior name, or ``"hold"`` for legacy/absent."""
+        a = self._action(name)
+        beh = a.get("behavior")
+        if isinstance(beh, str) and beh in BEHAVIORS:
+            return beh
+        return "hold"
+
+    def action_next(self, name: str) -> Optional[dict]:
+        """The action's ``next`` field (``{zone, action}``), or None."""
+        a = self._action(name)
+        n = a.get("next")
+        return n if isinstance(n, dict) else None
+
+    def action_speed(self, name: str) -> Optional[float]:
+        """The action's speed as a number (variable-axis form), or None.
+
+        Legacy actions use a per-pose speed list; this accessor returns None for
+        those (the machine falls back to the zone speed).
         """
-        t = self._action(name).get("target")
-        return t if isinstance(t, dict) else None
+        a = self._action(name)
+        s = a.get("speed")
+        if _is_num(s):
+            return s
+        return None
+
+    def action_entry_pose(self, name: str) -> Optional[List[float]]:
+        """The pose the robot moves to when transitioning into this action.
+
+        For variable-axis actions this is the ``base_pose``. For legacy actions
+        it is the first pose in the ``pos`` sequence. Returns None if the action
+        is unknown or malformed.
+        """
+        a = self._action(name)
+        bp = a.get("base_pose")
+        if isinstance(bp, list) and len(bp) == 6:
+            return list(bp)
+        pos = a.get("pos")
+        if isinstance(pos, list) and pos and isinstance(pos[0], list) and len(pos[0]) == 6:
+            return list(pos[0])
+        return None
 
 
 class Zones:
-    """Typed wrapper over the :data:`ZONES` table."""
+    """Typed wrapper over the zone table."""
 
     def __init__(self, zones: Dict[str, dict] = None):
         self._zones = zones if zones is not None else ZONES
@@ -446,33 +518,22 @@ class Zones:
     def get(self, name: str) -> Zone:
         return self._by_name[name]
 
-    def can_exit_to(self, current: str, target: str) -> bool:
-        """True if ``target`` is a declared exit of ``current``."""
-        return target in self._by_name[current].exits
+    def graph(self) -> Dict[str, List[str]]:
+        """The zone graph derived from all actions' ``next`` fields.
 
-    def find_path(self, from_name: str, to_name: str) -> Optional[List[str]]:
-        """Shortest path on the zone ``exits`` graph.
-
-        Returns ``[from_name, ..., to_name]`` or ``None`` if ``to_name`` is not
-        reachable from ``from_name`` (BFS over the ``exits`` edges).
+        Returns ``{zone_name: [reachable_zone_names]}`` where each reachable
+        zone is named by some action's ``next.zone`` in that zone. Used by the
+        display and editor to render the navigation graph.
         """
-        if not self.has(from_name) or not self.has(to_name):
-            return None
-        if from_name == to_name:
-            return [from_name]
-        queue = deque([(from_name, (from_name,))])
-        seen = {from_name}
-        while queue:
-            node, path = queue.popleft()
-            for nxt in self.get(node).exits:
-                if nxt in seen:
-                    continue
-                new_path = path + (nxt,)
-                if nxt == to_name:
-                    return list(new_path)
-                seen.add(nxt)
-                queue.append((nxt, new_path))
-        return None
+        g: Dict[str, List[str]] = {}
+        for name, z in self._by_name.items():
+            targets = set()
+            for an in z.actions():
+                n = z.action_next(an)
+                if n and isinstance(n.get("zone"), str):
+                    targets.add(n["zone"])
+            g[name] = sorted(targets)
+        return g
 
     def table(self) -> Dict[str, dict]:
         """A copy of the full zone table (for the HTTP ``GET /api/zones`` endpoint)."""
