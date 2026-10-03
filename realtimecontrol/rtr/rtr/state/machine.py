@@ -103,6 +103,16 @@ class StateMachine:
         if entry is None:
             print(f"[state] no entry pose for {zone}/{action}")
             return False
+        # Shared-position continuity: the connection moves the robot to the target's
+        # entry pose (the shared position where the handoff happens). If the current
+        # action's end pose does not match it, the robot must cross a gap — warn. The
+        # editor flags the same conflict on the connection (red "!" marker).
+        if self.current_action:
+            cz = self.zones.get(self.current_zone)
+            end = cz.action_end_pose(self.current_action)
+            if end is not None and any(abs(end[i] - entry[i]) > 0.5 for i in range(6)):
+                print(f"[state] no shared position: {self.current_zone}/{self.current_action} "
+                      f"ends at {end} but {zone}/{action} starts at {entry}")
         self._transition = {"zone": zone, "action": action, "pose": entry}
         # Move toward the entry pose at the target zone's speed.
         self.speed = z.speed

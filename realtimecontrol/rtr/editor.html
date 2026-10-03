@@ -121,14 +121,20 @@
   .aePreview canvas { display: block; width: 100%; height: 100%; }
   .aeStatus { font-size: 12px; color: var(--dim); margin-top: 4px; }
   #aeSaveStatus.err { color: #e05d5d; }
-  /* Flow action rows (Step 4). */
+  /* Flow action rows: discreet (the zone label is the primary mark; the action rows
+     are quiet sub-rows that become the connection points). */
   .fnode .fnodeBody { fill: #22262f; }
-  .faRow { font-size: 11px; }
-  .faRow.entry { fill: var(--accent); }
-  .faLabel { fill: var(--text); font-size: 11px; }
-  .faLoop { fill: #e0a030; font-size: 11px; }
-  .faDot { fill: var(--accent); stroke: #0d0f13; stroke-width: 1; }
-  .fedge.fedgeTarget { stroke: #e0a030; stroke-dasharray: 4 3; }
+  .faRow { font-size: 10px; }
+  .faLabel { fill: var(--dim); font-size: 10px; }
+  .faBehavior { fill: var(--dim); font-size: 9px; opacity: .7; }
+  .faLoop { fill: #e0a030; font-size: 10px; opacity: .6; }
+  .faDot { fill: var(--accent); stroke: #0d0f13; stroke-width: 1; pointer-events: none; }
+  .faDot.faDotConflict { fill: #e05d5d; }
+  /* Conflict: the edge turns red, and a clickable "!" marker sits at the midpoint. */
+  .fedge.fedgeConflict { stroke: #e05d5d; }
+  .fedgeWarn { cursor: pointer; }
+  .fedgeWarnBg { fill: #e05d5d; stroke: #0d0f13; stroke-width: 1; }
+  .fedgeWarnTxt { fill: #ffffff; font-size: 10px; font-weight: bold; pointer-events: none; }
   /* Midi-in editor tab. */
   #midiMain { display: grid; gap: 16px; grid-template-columns: 300px 1fr; align-items: start; }
   #midiPort { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
@@ -452,16 +458,87 @@ function zoneReverse(zn) {
   }
   return out;
 }
-// The action in `zn` whose `next.zone` is `to` (the one that draws the edge),
-// or null. Used by the flow tab to label/remove an edge.
-function edgeSourceAction(zn, to) {
-  const z = TABLE.zones[zn];
-  if (!z || !z.actions) return null;
-  for (const an of Object.keys(z.actions)) {
-    const a = z.actions[an];
-    if (a && a.next && a.next.zone === to) return an;
-  }
+// ---------------------------------------------------------------------------
+// Action-level connection model. The flow diagram connects ACTIONS (not zones):
+// each action's `next` field names a target action, and the connection between two
+// actions is the *shared position* — the pose the source action ends at that the
+// target action starts from. Connections are bidirectional (no arrows): A→B and B→A
+// are the same undirected link.
+// ---------------------------------------------------------------------------
+// The pose an action begins at and the pose it ends at. A variable-axis action rests
+// at base_pose (start == end); a legacy fixed-pose action steps through `pos`
+// (start = pos[0], end = pos[-1]).
+function actionStartPose(a) {
+  if (!a) return null;
+  if (a.base_pose) return a.base_pose;
+  if (a.pos && a.pos.length) return a.pos[0];
   return null;
+}
+function actionEndPose(a) {
+  if (!a) return null;
+  if (a.base_pose) return a.base_pose;
+  if (a.pos && a.pos.length) return a.pos[a.pos.length - 1];
+  return null;
+}
+// The deduplicated, undirected set of action-level edges derived from `next` fields.
+// Each edge is {from: {zone, action}, to: {zone, action}}; the link between A and B is
+// the same whether A.next=B or B.next=A. Dangling `next` refs (unknown zone/action)
+// are skipped so they never draw a broken edge.
+function actionEdgeList() {
+  const edges = [], seen = new Set();
+  for (const zn of Object.keys(TABLE.zones)) {
+    const z = TABLE.zones[zn];
+    if (!z.actions) continue;
+    for (const an of Object.keys(z.actions)) {
+      const a = z.actions[an];
+      if (!a || !a.next || !a.next.zone || !a.next.action) continue;
+      const toZn = a.next.zone, toAn = a.next.action;
+      const tz = TABLE.zones[toZn];
+      if (!tz || !tz.actions || !tz.actions[toAn]) continue;  // dangling reference
+      const from = { zone: zn, action: an };
+      const to = { zone: toZn, action: toAn };
+      const k = [zn + "/" + an, toZn + "/" + toAn].sort().join(" \u2194 ");
+      if (seen.has(k)) continue;
+      seen.add(k);
+      edges.push({ from, to });
+    }
+  }
+  return edges;
+}
+// The axes on which two zones' safezones do NOT overlap (the robot cannot reach a
+// pose inside both zones). Empty list = full overlap.
+function zoneOverlapGaps(z1, z2) {
+  if (!z1 || !z1.safezone || !z2 || !z2.safezone) return ["no safezone"];
+  const gaps = [];
+  for (let i = 0; i < 6; i++) {
+    const [alo, ahi] = z1.safezone[i], [blo, bhi] = z2.safezone[i];
+    if (Math.max(alo, blo) >= Math.min(ahi, bhi)) gaps.push(AXES[i]);
+  }
+  return gaps;
+}
+// The conflict info for an action edge: the two zones' safezone overlap and the
+// shared-position continuity (the source's end pose should equal the target's start
+// pose). Returns {any, issues: [strings]} for the red marker + click-to-show detail.
+function edgeConflict(e) {
+  const issues = [];
+  const zA = TABLE.zones[e.from.zone], zB = TABLE.zones[e.to.zone];
+  const gaps = zoneOverlapGaps(zA, zB);
+  if (gaps.length) issues.push(`safezones do not overlap on ${gaps.join(", ")}`);
+  const aA = zA.actions[e.from.action], aB = zB.actions[e.to.action];
+  const end = actionEndPose(aA), start = actionStartPose(aB);
+  if (end && start && !end.every((v, i) => Math.abs(v - start[i]) < 0.5)) {
+    issues.push(`no shared position: ${e.from.zone}/${e.from.action} ends [${end.join(", ")}] but ` +
+                `${e.to.zone}/${e.to.action} starts [${start.join(", ")}]`);
+  }
+  return { any: issues.length > 0, issues };
+}
+// True when the selected edge (FLOW.sel) is this undirected edge (either direction).
+function edgeMatchesSel(e) {
+  const s = FLOW.sel;
+  if (!s || s.type !== "edge") return false;
+  const s1 = s.from.zone + "/" + s.from.action, s2 = s.to.zone + "/" + s.to.action;
+  const e1 = e.from.zone + "/" + e.from.action, e2 = e.to.zone + "/" + e.to.action;
+  return (s1 === e1 && s2 === e2) || (s1 === e2 && s2 === e1);
 }
 
 // Last-resort patches table (mirrors rtr/patches/patches.py DEFAULT_HYDRA_CODE).
@@ -1783,6 +1860,21 @@ function buildActionEditor() {
   el.appendChild(ssec);
 }
 
+// Duplicate an action in its zone (same poses/behavior/loop, same `next`). The copy
+// gets a free name; the user then edits the copy's `next` to point elsewhere — this is
+// how one action links to multiple zones (each copy carries its own single `next`).
+function copyAction(zn, an) {
+  const z = TABLE.zones[zn];
+  if (!z || !z.actions || !z.actions[an]) return;
+  const a = z.actions[an];
+  const copy = JSON.parse(JSON.stringify(a));  // deep copy (nested arrays/objects)
+  let nn = an + "_copy", i = 1;
+  while (z.actions[nn]) { nn = an + "_copy" + (i++); }
+  z.actions[nn] = copy;
+  if (flowView) { flowRender(); buildFlowDetail(); }
+  else { selectedAction = nn; buildZoneForm(); buildZoneList(); }
+}
+
 function openActionEditor(zn, an) {
   if (!zn || !an) return;
   commitPatchEditor();  // commit the patches tab first (its textarea is the buffer)
@@ -2007,7 +2099,12 @@ function buildActionList(container, name, z, rebuild, onChanged, showPoses) {
     const edit = document.createElement("button");
     edit.className = "small"; edit.textContent = "edit";
     edit.onclick = (e) => { e.stopPropagation(); openActionEditor(name, an); };
-    head.appendChild(nm); head.appendChild(en); head.appendChild(play); head.appendChild(edit);
+    // Copy: duplicate this action (same poses/behavior) so you can give the copy a
+    // different `next` — the way to have one action link to multiple zones.
+    const copy = document.createElement("button");
+    copy.className = "small"; copy.textContent = "copy";
+    copy.onclick = (e) => { e.stopPropagation(); copyAction(name, an); };
+    head.appendChild(nm); head.appendChild(en); head.appendChild(play); head.appendChild(edit); head.appendChild(copy);
     box.appendChild(head);
 
     // Overview rows (hidden in the flow-detail overview; full editing is in the modal).
@@ -2465,38 +2562,50 @@ function flowPanStart(e) {
   window.addEventListener("mouseup", up);
 }
 
-function flowAddEdge(layer, from, to) {
-  const a = FLOW.pos[from], b = FLOW.pos[to];
+// Draw one undirected connection between two action blocks. The anchors sit on the
+// action ROWS (not the zone centers): the side is picked dynamically (the target zone
+// to the right -> source's right edge / target's left edge, else the reverse). No
+// arrow (bidirectional); a dot marks each end on the action block. A conflict
+// (safezone gap or no shared position) turns the line red and adds a clickable "!"
+// marker that shows the conflict detail.
+function flowAddEdge(layer, e) {
+  const a = FLOW.pos[e.from.zone], b = FLOW.pos[e.to.zone];
   if (!a || !b) return;
-  // Anchor right-center -> left-center (or the reverse when the target is left).
-  let x1, y1, x2, y2;
-  if (b.x >= a.x) { x1 = a.x + NODE_W; y1 = a.y + nodeH(from) / 2; x2 = b.x; y2 = b.y + nodeH(to) / 2; }
-  else { x1 = a.x; y1 = a.y + nodeH(from) / 2; x2 = b.x + NODE_W; y2 = b.y + nodeH(to) / 2; }
+  const ry1 = rowY(e.from.zone, e.from.action), ry2 = rowY(e.to.zone, e.to.action);
+  const bRight = b.x >= a.x;
+  const x1 = a.x + (bRight ? NODE_W : 0), y1 = a.y + ry1;
+  const x2 = b.x + (bRight ? 0 : NODE_W), y2 = b.y + ry2;
   const d = edgePath(x1, y1, x2, y2);
-  const isSel = !!(FLOW.sel && FLOW.sel.type === "edge" && FLOW.sel.from === from && FLOW.sel.to === to);
+  const conflict = edgeConflict(e);
+  const cls = "fedge" + (conflict.any ? " fedgeConflict" : "") + (edgeMatchesSel(e) ? " fedgeSel" : "");
   const hit = svgEl("path", { d, class: "fedgeHit" });
-  hit.addEventListener("click", (e) => { e.stopPropagation(); flowSelect({ type: "edge", from, to }); });
+  hit.addEventListener("click", (ev) => { ev.stopPropagation(); flowSelect({ type: "edge", from: e.from, to: e.to }); });
   layer.appendChild(hit);
-  const cls = "fedge" + (isSel ? " fedgeSel" : "");
-  layer.appendChild(svgEl("path", { d, class: cls, "marker-end": "url(#flowArrow)" }));
-  // The edge is the action in `from` whose `next` points at `to`; label it with that.
-  const srcAn = edgeSourceAction(from, to);
-  const lbl = svgEl("text", { x: (x1 + x2) / 2, y: (y1 + y2) / 2 - 8,
-                                class: "fedgeLabel", "text-anchor": "middle" });
-  lbl.textContent = srcAn ? srcAn : "next";
-  layer.appendChild(lbl);
+  layer.appendChild(svgEl("path", { d, class: cls }));
+  // Connection dots on the action blocks (both ends — the link is bidirectional).
+  const dotCls = "faDot" + (conflict.any ? " faDotConflict" : "");
+  layer.appendChild(svgEl("circle", { cx: x1, cy: y1, r: 3.5, class: dotCls }));
+  layer.appendChild(svgEl("circle", { cx: x2, cy: y2, r: 3.5, class: dotCls }));
+  // Warning marker: a red "!" at the midpoint; clicking it selects the edge and
+  // surfaces the conflict in the detail panel.
+  if (conflict.any) {
+    const wx = (x1 + x2) / 2, wy = (y1 + y2) / 2;
+    const warn = svgEl("g", { class: "fedgeWarn", transform: `translate(${wx},${wy})` });
+    warn.appendChild(svgEl("circle", { r: 7, class: "fedgeWarnBg" }));
+    const t = svgEl("text", { class: "fedgeWarnTxt", "text-anchor": "middle", y: 3 });
+    t.textContent = "!";
+    warn.appendChild(t);
+    warn.addEventListener("click", (ev) => { ev.stopPropagation(); flowSelect({ type: "edge", from: e.from, to: e.to }); });
+    layer.appendChild(warn);
+  }
 }
 
 function flowRenderEdges() {
   const layer = $("flowEdgeLayer");
   if (!layer) return;
   layer.innerHTML = "";
-  // The zone graph is derived from each action's `next` field (no zone-level exits).
-  Object.keys(TABLE.zones).forEach((from) => {
-    zoneForward(from).forEach((to) => {
-      if (TABLE.zones[to]) flowAddEdge(layer, from, to);
-    });
-  });
+  // The graph is the deduplicated set of action-level connections (bidirectional).
+  actionEdgeList().forEach((e) => flowAddEdge(layer, e));
 }
 
 function flowAddNode(layer, name) {
@@ -2510,23 +2619,20 @@ function flowAddNode(layer, name) {
   const sub = svgEl("text", { x: NODE_W / 2, y: 42, class: "fnodeSub", "text-anchor": "middle" });
   sub.textContent = flowSubLabel(name);
   g.appendChild(sub);
-  // Action rows: one row per action, read-only (editing is in the modal). The label
-  // is the action name + its behavior; looping actions append a ↻ marker; an action
-  // whose `next` points to another zone gets a right-side dot (the outgoing edge).
+  // Action rows: discreet, read-only (editing is in the modal). The label is the
+  // action name + its behavior; looping actions append a ↻ marker. Connection dots
+  // are drawn by the edges (at the row's side), so a row with no link shows none.
+  // A mousedown on a row starts an action-aware drag (source = this action); a click
+  // (no move) opens the action editor.
   if (z.actions) {
     Object.keys(z.actions).forEach((an) => {
       const act = z.actions[an];
       const ry = rowY(name, an);
       const hit = svgEl("rect", { x: 0, y: ry - FA_ROW / 2, width: NODE_W, height: FA_ROW, fill: "transparent" });
-      hit.addEventListener("mousedown", (e) => e.stopPropagation());  // don't start a node drag
-      hit.addEventListener("click", (e) => { e.stopPropagation(); openActionEditor(name, an); });
+      hit.addEventListener("mousedown", (e) => { e.stopPropagation(); flowDragStart(e, name, an); });
       g.appendChild(hit);
-      const hasNext = !!(act.next && act.next.zone && act.next.zone !== name);
-      if (hasNext) {
-        g.appendChild(svgEl("circle", { cx: NODE_W - 4, cy: ry, r: 3, class: "faDot", style: "pointer-events: none" }));
-      }
       const beh = actionForm(act) === "var" ? (act.behavior || "hold") : "pose";
-      const txt = svgEl("text", { x: 8, y: ry + 4, class: "faRow", "text-anchor": "start", style: "pointer-events: none" });
+      const txt = svgEl("text", { x: 8, y: ry + 4, class: "faRow", "text-anchor": "start" });
       const lbl = svgEl("tspan", { class: "faLabel" });
       lbl.textContent = an;
       txt.appendChild(lbl);
@@ -2556,8 +2662,9 @@ function flowRender() {
   const nodeLayer = svgEl("g", { id: "flowNodeLayer" });
   svg.appendChild(edgeLayer);
   svg.appendChild(nodeLayer);
+  // Temporary drag line (no arrow — connections are bidirectional).
   svg.appendChild(svgEl("path", { id: "flowDragArrow", fill: "none", stroke: "var(--accent)",
-                                  "stroke-width": 2, "marker-end": "url(#flowArrow)", style: "display:none" }));
+                                   "stroke-width": 2, "stroke-dasharray": "4 3", style: "display:none" }));
   FLOW.nodeEls = {};
   flowRenderEdges();
   Object.keys(TABLE.zones).forEach((n) => flowAddNode(nodeLayer, n));
@@ -2591,10 +2698,24 @@ function flowNodeAt(pt, exclude) {
   return null;
 }
 
-function flowDragStart(e, name) {
+// The action row in ``zoneName`` whose band contains ``pt`` (the drag source/target),
+// or null. Makes arrow-drawing action-aware (connect a specific action, not the zone).
+function flowActionAt(pt, zoneName) {
+  const z = TABLE.zones[zoneName];
+  if (!z || !z.actions) return null;
+  const p = FLOW.pos[zoneName];
+  if (!p) return null;
+  const ry = pt.y - p.y;
+  for (const an of Object.keys(z.actions)) {
+    if (Math.abs(ry - rowY(zoneName, an)) <= FA_ROW / 2) return an;
+  }
+  return null;
+}
+
+function flowDragStart(e, name, srcAction) {
   e.preventDefault(); e.stopPropagation();
   const svg = $("flowSvg");
-  FLOW.drag = { from: name, startPt: svgPoint(svg, e), startNode: FLOW.pos[name], moved: false };
+  FLOW.drag = { from: name, srcAction: srcAction || null, startPt: svgPoint(svg, e), startNode: FLOW.pos[name], moved: false };
   const move = (ev) => flowDragMove(ev);
   const up = (ev) => { flowDragEnd(ev); window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
   window.addEventListener("mousemove", move);
@@ -2614,7 +2735,8 @@ function flowDragMove(ev) {
   const g = FLOW.nodeEls[name];
   if (g) g.setAttribute("transform", `translate(${FLOW.pos[name].x},${FLOW.pos[name].y})`);
   flowRenderEdges();
-  // Temporary arrow: from the node's original position to the pointer.
+  // Temporary line: from the node's original position to the pointer (no arrow — the
+  // connection is bidirectional).
   const arrow = $("flowDragArrow");
   if (arrow) {
     const cx = d.startNode.x + NODE_W / 2, cy = d.startNode.y + nodeH(d.from) / 2;
@@ -2630,20 +2752,28 @@ function flowDragEnd(ev) {
   if (arrow) arrow.style.display = "none";
   if (!d) return;
   const name = d.from;
-  if (!d.moved) { flowSelect({ type: "node", zone: name }); return; }
   const svg = $("flowSvg");
   const pt = svgPoint(svg, ev);
+  if (!d.moved) {
+    // A click (no move): open the action editor if the drag started on a row, else
+    // select the zone node.
+    if (d.srcAction) openActionEditor(name, d.srcAction);
+    else flowSelect({ type: "node", zone: name });
+    return;
+  }
   const target = flowNodeAt(pt, name);
   if (target) {
-    // Draw an arrow: point the source zone's first enabled action's `next` at the
-    // target (the zone graph is the union of actions' `next` fields). The node snaps
+    // Draw a connection: the source action's `next` points at the target action. The
+    // source is the row dragged (or the first enabled action); the target is the row
+    // under the drop (or the first enabled action of the target zone). The node snaps
     // back so arrow-drawing does not disturb the layout.
-    const z = TABLE.zones[name];
-    const an = firstEnabledAction(name);
-    if (an) {
-      if (!z.actions[an].next) z.actions[an].next = {};
-      z.actions[an].next.zone = target;
-      z.actions[an].next.action = firstEnabledAction(target);
+    const srcAn = d.srcAction || firstEnabledAction(name);
+    const tgtAn = flowActionAt(pt, target) || firstEnabledAction(target);
+    if (srcAn && tgtAn) {
+      const z = TABLE.zones[name];
+      if (!z.actions[srcAn].next) z.actions[srcAn].next = {};
+      z.actions[srcAn].next.zone = target;
+      z.actions[srcAn].next.action = tgtAn;
     }
     FLOW.pos[name] = d.startNode;
   }
@@ -2664,38 +2794,53 @@ function buildFlowDetail() {
   const sel = FLOW.sel;
   if (!sel) {
     title.textContent = "flow detail";
-    el.innerHTML = "<span style='color:var(--dim)'>click a node to edit its zone, or an arrow to edit its exit pose</span>";
+    el.innerHTML = "<span style='color:var(--dim)'>click a node to edit its zone, or an action to open its editor · drag between actions to connect · a red “!” marks a conflict (click it for details)</span>";
     return;
   }
   if (sel.type === "node") {
     buildZoneForm(el, title, sel.zone, () => flowRender(), false);
     return;
   }
-  // Edge: the action in `from` whose `next` points at `to`. Edit which action in
-  // `to` it targets, and remove the link (clears that action's `next`).
+  // Edge: an undirected connection between two actions. Show the conflict detail
+  // (safezone gap / no shared position) and edit the target action (or remove the
+  // link, which clears the source action's `next`).
   const { from, to } = sel;
-  const z = TABLE.zones[from];
-  if (!z) return;
-  title.textContent = `edge: ${from} → ${to}`;
-  const srcAn = edgeSourceAction(from, to);
-  if (!srcAn) return;
-  const act = z.actions[srcAn];
-  el.appendChild(h3(`source action: ${srcAn}`));
-  const tz = TABLE.zones[to];
+  const zf = TABLE.zones[from.zone];
+  if (!zf || !zf.actions || !zf.actions[from.action]) return;
+  const act = zf.actions[from.action];
+  title.textContent = `link: ${from.zone}/${from.action} ↔ ${to.zone}/${to.action}`;
+  const conflict = edgeConflict({ from, to });
+  const cdiv = document.createElement("div");
+  cdiv.style.cssText = "font-size:12px;margin-bottom:8px";
+  if (conflict.any) {
+    cdiv.style.color = "#e05d5d";
+    conflict.issues.forEach((iss) => {
+      const li = document.createElement("div");
+      li.style.cssText = "padding-left:12px";
+      li.textContent = "• " + iss;
+      cdiv.appendChild(li);
+    });
+  } else {
+    cdiv.style.color = "var(--accent)";
+    cdiv.textContent = "ok — safezones overlap, shared position matches";
+  }
+  el.appendChild(cdiv);
   const row = document.createElement("div");
   row.className = "row";
   const al = document.createElement("label");
   al.className = "inline";
-  al.innerHTML = "target action <select class='aeNextAction'></select>";
+  al.innerHTML = "target action <select class='aeEdgeAction'></select>";
   const asel = al.querySelector("select");
   const noneA = document.createElement("option"); noneA.value = ""; noneA.textContent = "(none)"; asel.appendChild(noneA);
+  const tz = TABLE.zones[to.zone];
   if (tz && tz.actions) {
     Object.keys(tz.actions).forEach((on) => { const o = document.createElement("option"); o.value = on; o.textContent = on; asel.appendChild(o); });
   }
-  asel.value = (act.next && act.next.action) ? act.next.action : "";
+  asel.value = to.action;
   asel.onchange = () => {
-    if (!act.next) act.next = {};
-    if (asel.value === "") delete act.next.action; else act.next.action = asel.value;
+    if (asel.value === "") delete act.next;
+    else { if (!act.next) act.next = {}; act.next.zone = to.zone; act.next.action = asel.value; }
+    FLOW.sel = null;
     flowRender(); buildFlowDetail();
   };
   row.appendChild(al);

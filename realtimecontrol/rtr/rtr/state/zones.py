@@ -501,6 +501,24 @@ class Zone:
             return list(pos[0])
         return None
 
+    def action_end_pose(self, name: str) -> Optional[List[float]]:
+        """The pose the action ends at (its last pose).
+
+        For variable-axis actions this is the ``base_pose`` (the resting pose — the
+        action does not step through a sequence). For legacy actions it is the last
+        pose in the ``pos`` sequence. Returns None if the action is unknown or
+        malformed. Used for the shared-position continuity check between connected
+        actions (the source's end pose should match the target's start pose).
+        """
+        a = self._action(name)
+        bp = a.get("base_pose")
+        if isinstance(bp, list) and len(bp) == 6:
+            return list(bp)
+        pos = a.get("pos")
+        if isinstance(pos, list) and pos and isinstance(pos[-1], list) and len(pos[-1]) == 6:
+            return list(pos[-1])
+        return None
+
 
 class Zones:
     """Typed wrapper over the zone table."""
