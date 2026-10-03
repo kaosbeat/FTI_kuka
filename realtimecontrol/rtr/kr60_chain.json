@@ -1,0 +1,16 @@
+{
+  "name": "kuka_kr60_ha",
+  "source": "kr60/models/kuka_experimental/kuka_kr60_support/urdf/kr60ha_macro.xacro",
+  "base": "ROBROOT",
+  "ee": "FLANGE",
+  "note": "Chain derived from the KR60 URDF. Joints are the KUKA A1..A6 (degrees), mapped 1:1 to the URDF joint angles. base = $ROBROOT (URDF base_link, Z-up); tool = $FLANGE (URDF tool0 = link6 rotated +90 deg about Y).",
+  "joints": [
+    { "name": "A1", "xyz": [0.0, 0.0, 0.0], "rpy": [0.0, 0.0, 0.0], "axis": [0.0, 0.0, -1.0] },
+    { "name": "A2", "xyz": [0.35, 0.0, 0.815], "rpy": [0.0, 0.0, 0.0], "axis": [0.0, 1.0, 0.0] },
+    { "name": "A3", "xyz": [0.85, 0.0, 0.0], "rpy": [0.0, 0.0, 0.0], "axis": [0.0, 1.0, 0.0] },
+    { "name": "A4", "xyz": [0.465, 0.0, 0.145], "rpy": [0.0, 0.0, 0.0], "axis": [-1.0, 0.0, 0.0] },
+    { "name": "A5", "xyz": [0.355, 0.0, 0.0], "rpy": [0.0, 0.0, 0.0], "axis": [0.0, 1.0, 0.0] },
+    { "name": "A6", "xyz": [0.17, 0.0, 0.0], "rpy": [0.0, 0.0, 0.0], "axis": [-1.0, 0.0, 0.0] }
+  ],
+  "tool": { "name": "tool0", "xyz": [0.0, 0.0, 0.0], "rpy": [0.0, 1.5707963267948966, 0.0] }
+}
