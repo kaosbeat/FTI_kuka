@@ -139,6 +139,8 @@ class Brain:
         self.machine.camera_state = {
             "dx": p.get("dx", 0.0),
             "dy": p.get("dy", 0.0),
+            "w": p.get("w", 0.0),
+            "h": p.get("h", 0.0),
             "id": p.get("id"),
             "locked": p.get("locked", False),
             "ok": p.get("ok", True),

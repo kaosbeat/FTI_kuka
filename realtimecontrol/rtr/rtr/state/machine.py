@@ -47,6 +47,12 @@ class StateMachine:
         # Camera telemetry (the brain stashes the latest CAM_TRACK payload here; the
         # behaviour policies read it). Empty dict until the first frame arrives.
         self.camera_state: dict = {}
+        # Kinematics + camera geometry for the orientation-aware servo (wired in
+        # main.py). ``chain`` is the KR60 FK/Jacobian; ``camera_geometry`` is the
+        # tool->camera mount. Both None when not wired (the camera behaviours fall
+        # back to the legacy fixed-axis gain).
+        self.chain = None
+        self.camera_geometry = None
 
         # Per-axis wander nudge, in degrees per *trigger* (legacy meaning). Scaled by
         # 1/tick_hz so the overall drift rate is independent of the tick rate.

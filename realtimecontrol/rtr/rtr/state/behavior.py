@@ -16,11 +16,20 @@ import random
 from typing import List
 
 from ..robot.helpers import fitlimits
+from ..robot.kinematics import pinv3
 from .zones import HARDWARE_LIMITS, effective_limits
 
 # Default gain for camera-driven behaviours (degrees of joint travel per pixel of
 # offset). An action may override this with its own ``gain`` field.
 _DEFAULT_GAIN = 0.05
+
+# Default servo scale for the orientation-aware path (metres of base-frame
+# displacement per pixel of image offset). The image offset (dx, dy) is rotated into
+# the base frame by the camera pose and scaled by this before the Jacobian maps it to
+# joint deltas. Calibrated per zone/action in P4.
+_DEFAULT_SERVO_GAIN = 0.001
+
+_DEG_PER_RAD = 180.0 / math.pi
 
 # ``look`` is a reduced-motion behaviour: it moves less than ``track`` for the same
 # offset. Applied on top of the (per-action or default) gain.
@@ -88,16 +97,16 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
         return
 
     limits = effective(machine)
-    gain = _DEFAULT_GAIN
+    # Servo gain: the base-frame displacement scale (metres per pixel) for the
+    # orientation-aware path. An action may override it with its own ``gain`` field.
+    servo_gain = _DEFAULT_SERVO_GAIN
     if isinstance(action, dict):
         g = action.get("gain")
         if isinstance(g, (int, float)) and not isinstance(g, bool) and g:
-            gain = g
+            servo_gain = g
 
-    if behavior in ("track", "look"):
-        _apply_camera(machine, pose, var_axes, "dx", behavior, gain)
-    elif behavior == "focus":
-        _apply_camera(machine, pose, var_axes, "dy", "focus", gain)
+    if behavior in ("track", "look", "focus"):
+        _apply_camera(machine, pose, var_axes, behavior, curjpos, servo_gain)
     elif behavior == "scan":
         _apply_scan(machine, pose, var_axes, limits)
     elif behavior == "wander":
@@ -106,23 +115,52 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
         _apply_random(pose, var_axes, limits)
 
 
-def _apply_camera(machine, pose, var_axes, cam_key, behavior, gain) -> None:
-    """Drive variable axes from camera telemetry (track/focus/look).
+def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain) -> None:
+    """Drive variable axes from the camera offset (orientation-aware).
 
-    The camera offset (``dx`` or ``dy``, pixels) is scaled by the gain and added to
-    the base_pose value of each variable axis. A zero offset means no motion (the
-    axis rests at base_pose). ``look`` uses a reduced gain (see :data:`_LOOK_FACTOR`).
+    The image offset (``dx``, ``dy``, pixels) is rotated into the base frame by the
+    camera's *current* pose (the orientation term — see :mod:`rtr.camera.geometry`),
+    scaled to a base-frame displacement, and mapped to joint deltas with the reduced
+    kinematic Jacobian over the variable axes. This is correct in *any* arm
+    configuration, because the camera pose (and hence the direction the offset
+    points) is computed from the current joint angles. A zero offset means no motion
+    (the axes rest at base_pose). ``look`` uses a reduced offset
+    (see :data:`_LOOK_FACTOR`).
+
+    Falls back to the legacy fixed-axis gain when the kinematics are not wired
+    (``machine.camera_geometry`` is ``None``), e.g. a bare sim.
     """
     state = machine.camera_state or {}
-    offset = state.get(cam_key, 0.0)
-    if not isinstance(offset, (int, float)) or isinstance(offset, bool):
-        offset = 0.0
+    dx = state.get("dx", 0.0)
+    dy = state.get("dy", 0.0)
+    if not isinstance(dx, (int, float)) or isinstance(dx, bool):
+        dx = 0.0
+    if not isinstance(dy, (int, float)) or isinstance(dy, bool):
+        dy = 0.0
     if behavior == "look":
-        offset *= _LOOK_FACTOR
-    if offset == 0.0:
+        dx *= _LOOK_FACTOR
+        dy *= _LOOK_FACTOR
+    if dx == 0.0 and dy == 0.0:
         return
-    for axis in var_axes:
-        pose[axis] = pose[axis] + offset * gain
+    geo = getattr(machine, "camera_geometry", None)
+    if geo is None:
+        # Legacy fallback: fixed axis-aligned gain (degrees per pixel).
+        for axis in var_axes:
+            pose[axis] = pose[axis] + dx * _DEFAULT_GAIN
+        return
+    chain = geo.chain
+    # Orientation term: rotate the in-plane image offset into the base frame.
+    d_base = geo.offset_to_base_direction(dx, dy, 0.0, curjpos)
+    delta_base = [gain * x for x in d_base]
+    # Reduced Jacobian over the variable axes: map the base-frame displacement to
+    # joint deltas (minimum-norm, damped).
+    Jv = chain.linear_jacobian(curjpos)
+    Jv_var = [[Jv[r][ax] for ax in var_axes] for r in range(3)]
+    P = pinv3(Jv_var)
+    n = len(var_axes)
+    dq_rad = [sum(P[i][c] * delta_base[c] for c in range(3)) for i in range(n)]
+    for k, ax in enumerate(var_axes):
+        pose[ax] = pose[ax] + dq_rad[k] * _DEG_PER_RAD
 
 
 def _apply_scan(machine, pose, var_axes, limits) -> None:

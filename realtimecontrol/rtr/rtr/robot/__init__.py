@@ -10,6 +10,7 @@ from .helpers import (
     fitlimits,
     posSafe,
 )
+from .kinematics import Chain, load_chain
 from .kuka import KukaRobot
 from .sim import SimRobot
 
@@ -25,6 +26,8 @@ __all__ = [
     "clamp_pose",
     "JOINT_COUNT",
     "LIMITED_JOINTS",
+    "Chain",
+    "load_chain",
 ]
 
 

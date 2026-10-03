@@ -19,7 +19,8 @@ import sys
 from rtr.config import Config
 from rtr.core.bus import StateBus
 from rtr.core.engine import Engine
-from rtr.robot import make_robot
+from rtr.robot import make_robot, load_chain
+from rtr.camera.geometry import load_camera_geometry
 from rtr.state import StateMachine, Zones
 from rtr.state.zones import LIN_POSES, POSES, ZONES, load_state_data
 from rtr.brain import Brain
@@ -153,6 +154,12 @@ async def run(cfg: Config) -> None:
     # --- core -----------------------------------------------------------
     robot = make_robot(cfg.robot_kind, port=cfg.robot_port, tick_hz=cfg.tick_hz)
     machine = StateMachine(zones, tick_hz=cfg.tick_hz)
+    # Kinematics + camera geometry (the orientation-aware servo). The chain is the
+    # KR60 FK/Jacobian (pure stdlib, works in sim and on the real robot); the
+    # geometry is the tool->camera mount. Wired onto the machine so the camera
+    # behaviours can read the camera's base-frame pose and map the offset to joints.
+    machine.chain = load_chain()
+    machine.camera_geometry = load_camera_geometry()
     camera = make_camera(bus, enabled=cfg.enable_camera)
     brain = Brain(machine, camera=camera)
     # Sound is created before the engine so the engine can hold its reload hook.
