@@ -56,3 +56,32 @@ Edit `robotstates.py`:
 
 The MIDI → command mapping is in the `MidiInputHandler` class in each script
 (hardcoded, unlike `../rtr/`'s learned `midi.json`).
+
+
+
+
+
+
+####
+# kuka robot
+The robot  has a state, this state can be modified using commands. In a specific state, the robot has specific abilities, like a possible position for each motor and a range, a speed, what the camera should be looking for, what should be on the display, out of the speakers ...
+
+
+## control
+The robot is controlled using MIDI
+
+## visuals
+
+The visuals are activated as part of the state, on top of that, some realtime effects are triggered using the sound
+## DMX
+
+
+
+## central server, listens for midi commands
+state machine that waits for updates
+### vision 
+- close / far (two cameras)
+- tracking mode (follows a person), sends control commands (can be fast)
+- analysis mode ( tries to decode emotions), sends control commands (slow)
+### control
+- action mode (preprogrammed moves), can lose tracking
