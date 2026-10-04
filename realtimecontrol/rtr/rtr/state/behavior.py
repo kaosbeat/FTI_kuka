@@ -16,18 +16,19 @@ import random
 from typing import List
 
 from ..robot.helpers import fitlimits
-from ..robot.kinematics import pinv3
+from ..robot.kinematics import pinv2
 from .zones import HARDWARE_LIMITS, effective_limits
 
-# Default gain for camera-driven behaviours (degrees of joint travel per pixel of
-# offset). An action may override this with its own ``gain`` field.
+# Legacy fallback gain (degrees of joint travel per pixel of offset), used only when
+# the kinematics are not wired (``machine.camera_geometry`` is None, e.g. a bare sim).
 _DEFAULT_GAIN = 0.05
 
-# Default servo scale for the orientation-aware path (metres of base-frame
-# displacement per pixel of image offset). The image offset (dx, dy) is rotated into
-# the base frame by the camera pose and scaled by this before the Jacobian maps it to
-# joint deltas. Calibrated per zone/action in P4.
-_DEFAULT_SERVO_GAIN = 0.001
+# Default visual-servoing gain: the FRACTION of the image error (dx, dy) corrected
+# per tick (dimensionless, 0 < gain < 1 for stability). The image Jacobian maps the
+# offset to the exact joint deltas that shrink it, so the target's offset decays to
+# zero. An action may override it with its own ``gain`` field. Calibrated per
+# zone/action in P4.
+_DEFAULT_IMAGE_GAIN = 0.3
 
 _DEG_PER_RAD = 180.0 / math.pi
 
@@ -97,16 +98,16 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
         return
 
     limits = effective(machine)
-    # Servo gain: the base-frame displacement scale (metres per pixel) for the
-    # orientation-aware path. An action may override it with its own ``gain`` field.
-    servo_gain = _DEFAULT_SERVO_GAIN
+    # Visual-servoing gain: the fraction of the image error corrected per tick
+    # (dimensionless). An action may override it with its own ``gain`` field.
+    image_gain = _DEFAULT_IMAGE_GAIN
     if isinstance(action, dict):
         g = action.get("gain")
         if isinstance(g, (int, float)) and not isinstance(g, bool) and g:
-            servo_gain = g
+            image_gain = g
 
     if behavior in ("track", "look", "focus"):
-        _apply_camera(machine, pose, var_axes, behavior, curjpos, servo_gain)
+        _apply_camera(machine, pose, var_axes, behavior, curjpos, image_gain, action)
     elif behavior == "scan":
         _apply_scan(machine, pose, var_axes, limits)
     elif behavior == "wander":
@@ -115,17 +116,22 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
         _apply_random(pose, var_axes, limits)
 
 
-def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain) -> None:
-    """Drive variable axes from the camera offset (orientation-aware).
+def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain, action) -> None:
+    """Drive variable axes from the camera offset (visual servoing).
 
-    The image offset (``dx``, ``dy``, pixels) is rotated into the base frame by the
-    camera's *current* pose (the orientation term — see :mod:`rtr.camera.geometry`),
-    scaled to a base-frame displacement, and mapped to joint deltas with the reduced
-    kinematic Jacobian over the variable axes. This is correct in *any* arm
-    configuration, because the camera pose (and hence the direction the offset
-    points) is computed from the current joint angles. A zero offset means no motion
-    (the axes rest at base_pose). ``look`` uses a reduced offset
-    (see :data:`_LOOK_FACTOR`).
+    The image offset (``dx``, ``dy``, pixels) is the error to be driven to zero. The
+    tracked target's world position is estimated from the offset + a working depth
+    (see :meth:`CameraGeometry.estimate_target`), the **image Jacobian**
+    ``d(dx, dy)/d(joints)`` is computed from the camera's *current* pose, and the
+    offset is mapped to joint deltas over the variable axes:
+
+        dq = -gain · pinv2(J_img_var) · (dx, dy)
+
+    ``gain`` is the fraction of the image error corrected per tick (dimensionless),
+    so the offset decays to zero (convergent). This is correct in *any* arm
+    configuration, because the image Jacobian is derived from the exact camera pose
+    (position *and* orientation). A zero offset means no motion (the axes rest at
+    base_pose). ``look`` uses a reduced offset (see :data:`_LOOK_FACTOR`).
 
     Falls back to the legacy fixed-axis gain when the kinematics are not wired
     (``machine.camera_geometry`` is ``None``), e.g. a bare sim.
@@ -148,17 +154,21 @@ def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain) -> None:
         for axis in var_axes:
             pose[axis] = pose[axis] + dx * _DEFAULT_GAIN
         return
-    chain = geo.chain
-    # Orientation term: rotate the in-plane image offset into the base frame.
-    d_base = geo.offset_to_base_direction(dx, dy, 0.0, curjpos)
-    delta_base = [gain * x for x in d_base]
-    # Reduced Jacobian over the variable axes: map the base-frame displacement to
-    # joint deltas (minimum-norm, damped).
-    Jv = chain.linear_jacobian(curjpos)
-    Jv_var = [[Jv[r][ax] for ax in var_axes] for r in range(3)]
-    P = pinv3(Jv_var)
+    # Working depth for the target estimate: an action may override it with a
+    # ``target_depth`` field (metres); otherwise the geometry default is used.
+    depth = geo.target_depth
+    if isinstance(action, dict):
+        td = action.get("target_depth")
+        if isinstance(td, (int, float)) and not isinstance(td, bool) and td > 0:
+            depth = td
+    # Estimate the tracked target's world position, then the image Jacobian.
+    target = geo.estimate_target(curjpos, dx, dy, depth)
+    J = geo.image_jacobian(curjpos, target)
+    # Reduce the image Jacobian to the variable axes and invert it.
+    J_var = [[J[r][ax] for ax in var_axes] for r in range(2)]
+    P = pinv2(J_var)
     n = len(var_axes)
-    dq_rad = [sum(P[i][c] * delta_base[c] for c in range(3)) for i in range(n)]
+    dq_rad = [-gain * sum(P[i][c] * [dx, dy][c] for c in range(2)) for i in range(n)]
     for k, ax in enumerate(var_axes):
         pose[ax] = pose[ax] + dq_rad[k] * _DEG_PER_RAD
 

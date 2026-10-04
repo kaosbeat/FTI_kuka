@@ -110,6 +110,35 @@ def rot_axis(axis: Vec3, theta: float) -> Mat3:
     ]
 
 
+def inv2(m: Mat3) -> Optional[Mat3]:
+    """Inverse of a 2x2 matrix (None when singular)."""
+    a, b = m[0]
+    c, d = m[1]
+    det = a * d - b * c
+    if abs(det) < 1e-12:
+        return None
+    inv_det = 1.0 / det
+    return [[d * inv_det, -b * inv_det], [-c * inv_det, a * inv_det]]
+
+
+def pinv2(m: List[List[float]], lam: float = 0.1) -> List[List[float]]:
+    """Damped minimum-norm pseudo-inverse of a 2 x n matrix.
+
+    Returns an n x 2 matrix ``P`` such that ``dq = P @ e`` maps a 2D image-plane
+    error ``e = (dx, dy)`` to joint deltas (minimum-norm, damped). Used for visual
+    servoing: ``dq = pinv2(J_img) @ (dx, dy)`` (see :mod:`rtr.camera.geometry`).
+    """
+    n = len(m[0])
+    # MMt = m @ m^T (2x2), damped.
+    MMt = [[sum(m[a][k] * m[b][k] for k in range(n)) for b in range(2)] for a in range(2)]
+    MMt = [[MMt[a][b] + (lam * lam if a == b else 0.0) for b in range(2)] for a in range(2)]
+    MMt_inv = inv2(MMt)
+    if MMt_inv is None:
+        return [[0.0] * 2 for _ in range(n)]
+    # m^+ = m^T @ MMt_inv  (n x 2).
+    return [[sum(m[r][i] * MMt_inv[r][c] for r in range(2)) for c in range(2)] for i in range(n)]
+
+
 def pinv3(m: List[List[float]], lam: float = 0.1) -> List[List[float]]:
     """Damped minimum-norm pseudo-inverse of a 3 x n matrix.
 

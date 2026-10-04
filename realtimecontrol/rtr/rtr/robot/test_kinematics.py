@@ -17,7 +17,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from rtr.robot.kinematics import Chain, load_chain, pinv3
+from rtr.robot.kinematics import Chain, load_chain, pinv2, pinv3
 
 
 def fk_pos(chain: Chain, j):
@@ -159,18 +159,50 @@ def main() -> int:
     machine.current_zone = "watch"
     machine.current_action = "track"  # var_axes=[0], behavior="track"
     base = zones.get("watch").action_base_pose("track")
+    # The A1 response is pose-dependent because the camera's base-frame orientation
+    # changes with the arm. Vary A2 (a NON-base axis): the A1 needed to center the
+    # target depends on the arm's configuration. (Varying A1 itself would NOT change
+    # the A1 response — the base axis can't see its own rotation — so the test must
+    # move a non-base axis to demonstrate the orientation term.)
     a1_deltas = {}
-    for a1 in [0.0, 60.0, 120.0]:
-        curjpos = [a1, base[1], base[2], base[3], base[4], base[5]]
+    for a2 in [base[1], base[1] + 30.0, base[1] + 60.0]:
+        curjpos = [base[0], a2, base[2], base[3], base[4], base[5]]
         pose = build_target(machine, curjpos)
         d1 = pose[0] - base[0]
-        a1_deltas[a1] = d1
-        print(f"  A1={a1:4.0f}  ->  A1 delta={d1:+.4f} deg")
-    # The orientation term makes the A1 response pose-dependent: at least two of the
-    # three deltas must differ (a fixed gain would give the same delta at every pose).
+        a1_deltas[a2] = d1
+        print(f"  A2={a2:7.1f}  ->  A1 delta={d1:+.4f} deg")
     distinct = len(set(round(v, 4) for v in a1_deltas.values()))
-    print(f"  distinct A1 deltas across poses: {distinct}/3  [{'ok' if distinct >= 2 else 'FAIL'}]")
+    print(f"  distinct A1 deltas across A2 poses: {distinct}/3  [{'ok' if distinct >= 2 else 'FAIL'}]")
     if distinct < 2:
+        ok = False
+
+    # --- 6. Closed-loop convergence (the servo drives a fixed world target to center)
+    print("\n== Closed-loop: image-Jacobian servo drives a fixed world target to center ==")
+    from rtr.robot.kinematics import mat3_vec
+    deg = 180.0 / math.pi
+    # A fixed target ~1.5 m in front of the camera at the watch/track base pose,
+    # offset a little so the servo has an error to correct. Full DOF (all 6 axes
+    # variable) isolates the control law: a reachable target must converge to ~0.
+    C0, R0 = geo.camera_pose(base)
+    P = [C0[k] + mat3_vec(R0, [0.2, -0.15, 1.5])[k] for k in range(3)]
+    j = list(base)
+    dx, dy = geo.image_offset(j, P)
+    e0 = math.hypot(dx, dy)
+    gain = 0.3
+    for tick in range(60):
+        P_est = geo.estimate_target(j, dx, dy)
+        J = geo.image_jacobian(j, P_est)
+        Pinv = pinv2(J)
+        dq = [-gain * sum(Pinv[i][c] * [dx, dy][c] for c in range(2)) for i in range(6)]
+        for i in range(6):
+            j[i] += dq[i] * deg
+        dx, dy = geo.image_offset(j, P)
+        if tick % 15 == 0 or tick == 59:
+            print(f"  tick {tick:2d}: dx={dx:7.2f} dy={dy:7.2f} |e|={math.hypot(dx, dy):7.2f}")
+    eend = math.hypot(dx, dy)
+    ok6 = eend < max(2.0, 0.1 * e0)
+    print(f"  start |e|={e0:.2f}  end |e|={eend:.2f}  [{'ok' if ok6 else 'FAIL'}]")
+    if not ok6:
         ok = False
 
     print(f"\n{'PASS' if ok else 'FAIL'}")

@@ -1,6 +1,9 @@
 {
-  "note": "Tool->camera mount (PLACEHOLDER — calibrate in P4). The camera is mounted on the toolhead (the two lenses in assets/tool.glb). Camera frame: x->right, y->down, z->forward (optical axis). tool_cam is the fixed transform from the KUKA $FLANGE (tool) frame to the camera frame. z_cam_default is the focal length in pixels (the optical-axis term for offset_to_base_direction).",
+  "note": "Tool->camera mount + camera intrinsics (PLACEHOLDER — calibrate in P4). The camera is mounted on the toolhead (the two lenses in assets/tool.glb). Camera frame: x->right, y->down, z->forward (optical axis). tool_cam is the fixed transform from the KUKA $FLANGE (tool) frame to the camera frame. fx/fy are the focal lengths in pixels; target_depth is the nominal working distance (metres) used to estimate the tracked target's world position for the visual-servoing image Jacobian. z_cam_default is the legacy optical-axis term for offset_to_base_direction.",
   "camera_frame": { "x": "right", "y": "down", "z": "forward" },
   "tool_cam": { "xyz": [0.0, 0.0, 0.07], "rpy": [0.0, 0.0, 0.0] },
-  "z_cam_default": 500.0
+  "fx": 500.0,
+  "fy": 500.0,
+  "z_cam_default": 500.0,
+  "target_depth": 2.0
 }
