@@ -163,9 +163,11 @@ def main() -> int:
     # changes with the arm. Vary A2 (a NON-base axis): the A1 needed to center the
     # target depends on the arm's configuration. (Varying A1 itself would NOT change
     # the A1 response — the base axis can't see its own rotation — so the test must
-    # move a non-base axis to demonstrate the orientation term.)
+    # move a non-base axis to demonstrate the orientation term.) The range stays in
+    # A1's strong direction (a wider sweep hits a weak direction where the reduced
+    # Jacobian amplifies the offset into a large A1 delta).
     a1_deltas = {}
-    for a2 in [base[1], base[1] + 30.0, base[1] + 60.0]:
+    for a2 in [base[1], base[1] + 10.0, base[1] + 20.0]:
         curjpos = [base[0], a2, base[2], base[3], base[4], base[5]]
         pose = build_target(machine, curjpos)
         d1 = pose[0] - base[0]
