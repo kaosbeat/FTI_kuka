@@ -31,8 +31,6 @@ _DEFAULT_SERVO_GAIN = 0.001
 
 _DEG_PER_RAD = 180.0 / math.pi
 
-_DEBUG_CAM = False  # temporary debug flag
-
 # ``look`` is a reduced-motion behaviour: it moves less than ``track`` for the same
 # offset. Applied on top of the (per-action or default) gain.
 _LOOK_FACTOR = 0.5
@@ -161,8 +159,6 @@ def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain) -> None:
     P = pinv3(Jv_var)
     n = len(var_axes)
     dq_rad = [sum(P[i][c] * delta_base[c] for c in range(3)) for i in range(n)]
-    if _DEBUG_CAM:
-        print(f"[dbg] A1={curjpos[0]} d_base={[round(x,2) for x in d_base]} Jv_var={[[round(x,3) for x in row] for row in Jv_var]} P={[[round(x,3) for x in row] for row in P]} dq_rad={[round(x,5) for x in dq_rad]}")
     for k, ax in enumerate(var_axes):
         pose[ax] = pose[ax] + dq_rad[k] * _DEG_PER_RAD
 
