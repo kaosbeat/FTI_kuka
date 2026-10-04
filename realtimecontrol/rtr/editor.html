@@ -2787,6 +2787,82 @@ function flowSelect(sel) {
   buildFlowDetail();
 }
 
+// ---------------------------------------------------------------------------
+// Bridge zone: an intermediate zone that resolves a conflicting edge. Its
+// safezone is the per-axis UNION of the two endpoint zones (the smallest box
+// containing both, so it overlaps every axis of each), and its single action is
+// pose-form [A_end, B_start] (loop=false) so each handoff shares a position.
+// ---------------------------------------------------------------------------
+// Compute the bridge plan for the undirected edge {from, to}: returns
+// {name, zone, actionName, action}, or null if either end lacks a concrete pose.
+function bridgePlan(from, to) {
+  const zA = TABLE.zones[from.zone], zB = TABLE.zones[to.zone];
+  if (!zA || !zA.safezone || !zB || !zB.safezone) return null;
+  const aA = zA.actions && zA.actions[from.action];
+  const aB = zB.actions && zB.actions[to.action];
+  const aEnd = actionEndPose(aA), bStart = actionStartPose(aB);
+  if (!aEnd || !bStart) return null;  // need a concrete pose at each handoff
+  const safezone = [];
+  for (let i = 0; i < 6; i++) {
+    const [alo, ahi] = zA.safezone[i], [blo, bhi] = zB.safezone[i];
+    safezone.push([Math.min(alo, blo), Math.max(ahi, bhi)]);
+  }
+  let name = from.zone + "_" + to.zone + "_bridge", n = 1;
+  while (TABLE.zones[name]) { n += 1; name = from.zone + "_" + to.zone + "_bridge" + n; }
+  const actionName = "bridge";
+  const speed = Math.max(zA.speed || 20, zB.speed || 20);
+  const zone = {
+    enabled: true,
+    safezone: safezone,
+    speed: speed,
+    actions: {
+      [actionName]: {
+        enabled: true,
+        loop: false,
+        pos: [aEnd.slice(), bStart.slice()],
+        speed: [speed, speed],
+        next: { zone: to.zone, action: to.action },
+      },
+    },
+  };
+  return { name: name, zone: zone, actionName: actionName, action: zone.actions[actionName] };
+}
+
+// Insert the bridge zone for the selected edge: create the zone, rewire
+// from_action.next -> bridge (bridge_action.next -> to is set in the plan), place
+// the node at the midpoint of the two endpoints, select it, and re-render. Only
+// the `from` side's `next` is rewired; a reverse link (to_action.next -> from) is
+// left for the user to bridge separately.
+function flowBridge(from, to) {
+  const plan = bridgePlan(from, to);
+  if (!plan) {
+    $("saveMsg").textContent = "bridge: needs a concrete pose at both ends";
+    $("saveMsg").className = "err";
+    return;
+  }
+  TABLE.zones[plan.name] = plan.zone;
+  const zFrom = TABLE.zones[from.zone];
+  const aFrom = zFrom.actions[from.action];
+  if (!aFrom.next) aFrom.next = {};
+  aFrom.next.zone = plan.name;
+  aFrom.next.action = plan.actionName;
+  const pa = FLOW.pos[from.zone], pb = FLOW.pos[to.zone];
+  let x, y;
+  if (pa && pb) {
+    x = (pa.x + pb.x + NODE_W) / 2;
+    y = (pa.y + pb.y) / 2;
+  } else {
+    let maxY = 0;
+    Object.keys(TABLE.zones).forEach((n2) => { const p = FLOW.pos[n2]; if (p) maxY = Math.max(maxY, p.y); });
+    x = 40; y = maxY + nodeH(plan.name) + 40;
+  }
+  FLOW.pos[plan.name] = { x: x, y: y };
+  FLOW.sel = { type: "node", zone: plan.name };
+  FLOW.layoutKey = Object.keys(TABLE.zones).sort().join(",");
+  flowRender();
+  buildFlowDetail();
+}
+
 function buildFlowDetail() {
   const el = $("flowDetail");
   const title = $("flowDetailTitle");
@@ -2794,7 +2870,7 @@ function buildFlowDetail() {
   const sel = FLOW.sel;
   if (!sel) {
     title.textContent = "flow detail";
-    el.innerHTML = "<span style='color:var(--dim)'>click a node to edit its zone, or an action to open its editor · drag between actions to connect · a red “!” marks a conflict (click it for details)</span>";
+    el.innerHTML = "<span style='color:var(--dim)'>click a node to edit its zone, or an action to open its editor · drag between actions to connect · a red “!” marks a conflict (click it, then “insert bridge zone” to resolve it)</span>";
     return;
   }
   if (sel.type === "node") {
@@ -2852,6 +2928,11 @@ function buildFlowDetail() {
     flowRender(); buildFlowDetail();
   };
   row.appendChild(rm);
+  const br = document.createElement("button");
+  br.className = "small"; br.textContent = "insert bridge zone";
+  if (conflict.any) { br.style.background = "#e05d5d"; br.style.color = "#fff"; br.style.borderColor = "#e05d5d"; }
+  br.onclick = () => flowBridge(from, to);
+  row.appendChild(br);
   el.appendChild(row);
 }
 
