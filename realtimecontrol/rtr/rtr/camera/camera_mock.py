@@ -40,7 +40,8 @@ class CameraMock:
                  video: Optional[str] = None,
                  width: int = 640, height: int = 480,
                  model_path: str = "yolo26n.pt",
-                 tracker_cfg: str = "bytetrack.yaml"):
+                 tracker_cfg: str = "bytetrack.yaml",
+                 show: bool = False):
         self.core_host = core_host
         self.core_port = core_port
         self.http_port = http_port
@@ -54,6 +55,7 @@ class CameraMock:
         self._frame_count = 0
         self._last_face_sent = 0.0
         self._known_ids = set()
+        self._show = show
 
         if video:
             # Real pipeline on a video file (same algorithm as the RPI).
@@ -158,6 +160,8 @@ class CameraMock:
         Mirrors CameraRemote._pipeline_loop: the blocking YOLO inference runs in a
         thread so the asyncio loop (and the WebSocket link) stay responsive.
         """
+        import cv2
+        from .pipeline import annotate
         interval = 1.0 / self._video_fps
         loop = asyncio.get_running_loop()
         while self._running:
@@ -167,6 +171,9 @@ class CameraMock:
                 payloads = self.pipeline.to_telemetry(result)
                 self._send_telemetry(payloads)
                 self._log_targets(result)
+                if self._show and result.frame is not None:
+                    cv2.imshow("camera debug", annotate(result.frame, result))
+                    cv2.waitKey(1)
             except Exception as exc:
                 logger.error("pipeline error: %s", exc)
             now = time.time()
@@ -320,6 +327,9 @@ class CameraMock:
             await self._conn.stop()
             if self.video:
                 self.pipeline.stop()
+                if self._show:
+                    import cv2
+                    cv2.destroyAllWindows()
             logger.info("mock camera stopped")
 
 
@@ -336,6 +346,7 @@ def parse_args(argv=None):
     parser.add_argument("--height", type=int, default=480, help="frame height (video mode)")
     parser.add_argument("--model", default="yolo26n.pt", help="YOLO model path (video mode)")
     parser.add_argument("--tracker", default="bytetrack.yaml", help="tracker config (video mode)")
+    parser.add_argument("--show", action="store_true", help="open the debug display window (video mode)")
     parser.add_argument("--log-level", default="INFO", help="log level")
     return parser.parse_args(argv)
 
@@ -355,6 +366,7 @@ def main(argv=None) -> int:
         height=args.height,
         model_path=args.model,
         tracker_cfg=args.tracker,
+        show=args.show,
     )
 
     try:
