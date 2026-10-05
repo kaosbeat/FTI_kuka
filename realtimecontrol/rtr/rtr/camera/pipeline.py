@@ -82,9 +82,11 @@ class Camera:
                  width: int = 640, height: int = 480,
                  frame_rate: int = 30,
                  model_path: str = "yolo26n.pt",
-                 tracker_cfg: str = "bytetrack.yaml"):
+                 tracker_cfg: str = "bytetrack.yaml",
+                 video_source: Optional[str] = None):
         self.name = name
         self.camera_num = camera_num
+        self.video_source = video_source
         self.W = width
         self.H = height
         self.model_path = model_path
@@ -115,7 +117,18 @@ class Camera:
             self._open_camera()
 
     def _open_camera(self):
-        """Open the physical camera (RPI-specific; degrades gracefully)."""
+        """Open the frame source: a video file (debug) or the physical camera (RPI)."""
+        if self.video_source is not None:
+            try:
+                self._cam = cv2.VideoCapture(self.video_source)
+                if not self._cam.isOpened():
+                    print(f"[camera:{self.name}] could not open video: {self.video_source}")
+                    self._cam = None
+            except Exception as exc:
+                print(f"[camera:{self.name}] could not open video: {exc}")
+                self._cam = None
+            return
+        # Physical camera (RPI-specific; degrades gracefully).
         try:
             from picamera2 import Picamera2
             from libcamera import Transform
@@ -132,10 +145,22 @@ class Camera:
             self._cam = None
 
     def grab_frame(self) -> Optional[np.ndarray]:
-        """Grab a single BGR frame from the camera."""
+        """Grab a single BGR frame from the video source or the camera."""
         self._ensure_cam()
         if self._cam is None:
             return None
+        if self.video_source is not None:
+            ok, frame = self._cam.read()
+            if not ok:
+                # Video exhausted: loop back to the start for continuous debugging.
+                try:
+                    self._cam.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    ok, frame = self._cam.read()
+                except Exception:
+                    return None
+                if not ok:
+                    return None
+            return frame
         try:
             arr = self._cam.capture_array()
             return arr
@@ -248,7 +273,10 @@ class Camera:
     def stop(self):
         if self._cam is not None:
             try:
-                self._cam.stop()
+                if self.video_source is not None:
+                    self._cam.release()
+                else:
+                    self._cam.stop()
             except Exception:
                 pass
             self._cam = None
@@ -297,13 +325,17 @@ class Pipeline:
                  height: int = 480,
                  frame_rate: int = 30,
                  model_path: str = "yolo26n.pt",
-                 tracker_cfg: str = "bytetrack.yaml"):
+                 tracker_cfg: str = "bytetrack.yaml",
+                 wide_video: Optional[str] = None,
+                 close_video: Optional[str] = None):
         self.wide = Camera(CAMERA_WIDE, camera_num=wide_cam_num,
                             width=width, height=height, frame_rate=frame_rate,
-                            model_path=model_path, tracker_cfg=tracker_cfg)
+                            model_path=model_path, tracker_cfg=tracker_cfg,
+                            video_source=wide_video)
         self.close = Camera(CAMERA_CLOSE, camera_num=close_cam_num,
                              width=width, height=height, frame_rate=frame_rate,
-                             model_path=model_path, tracker_cfg=tracker_cfg)
+                             model_path=model_path, tracker_cfg=tracker_cfg,
+                             video_source=close_video)
         self.face = FaceDetector(model_path=model_path)
         # Current intent (set by the brain via cam_control).
         self.active: str = CAMERA_WIDE

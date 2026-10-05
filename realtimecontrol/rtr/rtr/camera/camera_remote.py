@@ -110,13 +110,21 @@ class CameraRemote:
         self._known_ids = ids
 
     async def _pipeline_loop(self) -> None:
-        """Run the pipeline at the target frame rate; send telemetry each frame."""
+        """Run the pipeline at the target frame rate; send telemetry each frame.
+
+        ``process()`` is a blocking YOLO inference; run it in a thread so it never
+        stalls the asyncio loop. If it ran synchronously here, the WebSocket
+        client (same loop) couldn't answer the core's keepalive pings or flush
+        queued sends, so the core would kill the link (keepalive ping timeout) and
+        the remote would sit in a reconnect loop, sending no telemetry.
+        """
         interval = 1.0 / self.pipeline.wide.frame_rate
+        loop = asyncio.get_running_loop()
         while self._running:
             start = time.time()
             result = None
             try:
-                result = self.pipeline.process()
+                result = await loop.run_in_executor(None, self.pipeline.process)
                 payloads = self.pipeline.to_telemetry(result)
                 self._send_telemetry(payloads)
                 self._log_targets(result)
