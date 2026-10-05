@@ -73,8 +73,23 @@ class WebSocketServer:
     def _label(self, connection) -> str:
         return self._ids.get(connection, "?")
 
+    def _handle_hello(self, connection, data) -> None:
+        """Explicit client identification: ``{"cmd": "hello", "client": "camera"}``.
+
+        Every client should send this as its first frame. The label is used in all
+        subsequent logs, so the log reads "camera <- cam_status" instead of
+        "client6 <- cam_status".
+        """
+        client = data.get("client")
+        if not isinstance(client, str) or not client.strip():
+            print(f"[ws] hello without client name from "
+                  f"{self._addrs.get(connection)}; keeping {self._label(connection)}")
+            return
+        self._ids[connection] = client.strip()
+        print(f"[ws] hello: {client.strip()} from {self._addrs.get(connection)}")
+
     def _identify(self, connection, cmd) -> None:
-        """Label a client by its first command: camera remote vs browser page.
+        """Fallback label for clients that never send ``hello``.
 
         The RPI camera remote only ever sends ``cam_*`` telemetry; the browser
         control pages send operator commands. This is what lets the log say
@@ -83,7 +98,7 @@ class WebSocketServer:
         name = str(cmd)
         cur = self._ids.get(connection, "")
         if not cur.startswith("client"):
-            return  # already identified
+            return  # already identified (by hello or an earlier command)
         if name.startswith("cam_"):
             self._ids[connection] = "camera"
         elif name in _BROWSER_CMDS:
@@ -129,6 +144,9 @@ class WebSocketServer:
                           f"{str(message)[:300]}")
                 try:
                     data = json.loads(message)
+                    if isinstance(data, dict) and data.get("cmd") == "hello":
+                        self._handle_hello(connection, data)
+                        continue  # hello is transport-level; never reaches the bus
                     if isinstance(data, dict) and data.get("cmd") is not None:
                         self._identify(connection, data.get("cmd"))
                         self._log_cmd(connection, data.get("cmd"))

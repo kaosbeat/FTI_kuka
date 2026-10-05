@@ -555,7 +555,7 @@ function connect() {
   const url = $("host").value.trim();
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   ws = new WebSocket(url);
-  ws.onopen = () => { $("dot").className = "dot on"; $("status").textContent = "connected"; };
+  ws.onopen = () => { $("dot").className = "dot on"; $("status").textContent = "connected"; ws.send(JSON.stringify({ cmd: "hello", client: "editor" })); };
   ws.onclose = () => {
     $("dot").className = "dot"; $("status").textContent = "disconnected";
     setTimeout(connect, 2000);

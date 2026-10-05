@@ -75,11 +75,12 @@ class Connection:
     """
 
     def __init__(self, ws_host: str, ws_port: int, http_host: Optional[str] = None,
-                 http_port: int = 8766, http_poll: int = 30,
-                 on_state: Optional[Callable[[Dict[str, Any]], None]] = None,
-                 on_zones: Optional[Callable[[Dict[str, dict]], None]] = None,
-                 on_error: Optional[Callable[[str], None]] = None,
-                 on_event: Optional[Callable[[Dict[str, Any]], None]] = None):
+                  http_port: int = 8766, http_poll: int = 30,
+                  identity: Optional[str] = None,
+                  on_state: Optional[Callable[[Dict[str, Any]], None]] = None,
+                  on_zones: Optional[Callable[[Dict[str, dict]], None]] = None,
+                  on_error: Optional[Callable[[str], None]] = None,
+                  on_event: Optional[Callable[[Dict[str, Any]], None]] = None):
         self.ws_host = ws_host
         self.ws_port = ws_port
         self.http_host = http_host or ws_host
@@ -96,6 +97,7 @@ class Connection:
         self._stopped = asyncio.Event()
         self._reconnects = 0       # successful (re)connects since start
         self._sent_since_connect = 0  # commands actually written to the current link
+        self._identity = identity  # sent as the hello handshake on every (re)connect
 
     # ------------------------------------------------------------------
     # Zone table (HTTP).
@@ -168,6 +170,9 @@ class Connection:
                     self._reconnects += 1
                     logger.info("WS connected to ws://%s:%d (reconnect #%d)",
                                 self.ws_host, self.ws_port, self._reconnects)
+                    # Identify ourselves so the core's log names us, not "clientN".
+                    if self._identity:
+                        await ws.send(json.dumps({"cmd": "hello", "client": self._identity}))
                     async for message in ws:
                         self._on_message(message)
             except Exception as exc:  # noqa: BLE001 - connect/read failure retries

@@ -121,7 +121,7 @@ function connect() {
   const url = $("host").value.trim();
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   ws = new WebSocket(url);
-  ws.onopen = () => { setConn(true); };
+  ws.onopen = () => { setConn(true); ws.send(JSON.stringify({ cmd: "hello", client: "camdebug" })); };
   ws.onclose = () => {
     setConn(false);
     setTimeout(connect, 2000);

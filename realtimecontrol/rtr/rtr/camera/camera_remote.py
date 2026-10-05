@@ -144,6 +144,7 @@ class CameraRemote:
             ws_host=self.core_host,
             ws_port=self.core_port,
             http_port=self.http_port,
+            identity="camera",
             on_state=self._on_state,
             on_event=self._on_event,
             on_error=lambda e: logger.warning("connection error: %s", e),

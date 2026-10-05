@@ -142,6 +142,7 @@ class RemoteTUI:
             http_host=getattr(self.config, "http_host", None),
             http_port=getattr(self.config, "http_port", 8766),
             http_poll=self.config.http_poll,
+            identity="tuiremote",
             on_state=self._on_state,
             on_zones=self._on_zones,
             on_error=self._on_error,
