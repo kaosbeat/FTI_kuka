@@ -13,11 +13,22 @@ engine) and schedules the actual send on the running event loop.
 """
 
 import asyncio
+import inspect
 import json
+import time
 from typing import Dict, Set
 
 from ..core.bus import StateBus
 from ..core.commands import Command
+
+
+# Commands the browser control pages send (used to tell a browser client apart
+# from the RPI camera remote, which only ever sends ``cam_*`` telemetry).
+_BROWSER_CMDS = {
+    "trigger_action", "play_action", "clear_action",
+    "set_joint_pose", "set_linear_pose", "adjust_limit",
+    "random_wrist", "set_flag", "set_screen_patch",
+}
 
 
 class WebSocketServer:
@@ -31,6 +42,11 @@ class WebSocketServer:
         self.enabled = enabled
         self._clients: Set = set()
         self._server = None
+        # Per-connection identity (connection log: who is who, from which IP).
+        self._ids: Dict = {}
+        self._addrs: Dict = {}
+        self._cmd_ts: Dict = {}
+        self._seq = 1
 
     async def start(self) -> None:
         if not self.enabled:
@@ -46,21 +62,73 @@ class WebSocketServer:
 
     async def stop(self) -> None:
         if self._server is not None:
-            await self._server.close()
+            # websockets' close() is sync in some versions (returns None) and an
+            # async coroutine in others; handle both so shutdown never crashes.
+            result = self._server.close()
+            if inspect.isawaitable(result):
+                await result
             self._server = None
+
+    def _label(self, connection) -> str:
+        return self._ids.get(connection, "?")
+
+    def _identify(self, connection, cmd) -> None:
+        """Label a client by its first command: camera remote vs browser page.
+
+        The RPI camera remote only ever sends ``cam_*`` telemetry; the browser
+        control pages send operator commands. This is what lets the log say
+        "camera connected from <ip>" vs "screen connected from <ip>".
+        """
+        name = str(cmd)
+        cur = self._ids.get(connection, "")
+        if not cur.startswith("client"):
+            return  # already identified
+        if name.startswith("cam_"):
+            self._ids[connection] = "camera"
+        elif name in _BROWSER_CMDS:
+            self._ids[connection] = "screen"
+        else:
+            self._ids[connection] = "client"
+        print(f"[ws] identified {self._label(connection)} as "
+              f"{self._ids[connection]} (from {self._addrs.get(connection)})")
+
+    def _log_cmd(self, connection, cmd) -> None:
+        """Log incoming commands (throttled) so telemetry flow is visible."""
+        name = str(cmd)
+        now = time.time()
+        # Camera telemetry is the interesting stream: log ~1/s. Other commands
+        # are noisier: log less often.
+        interval = 1.0 if name.startswith("cam_") else 3.0
+        if now - self._cmd_ts.get(name, 0.0) >= interval:
+            self._cmd_ts[name] = now
+            print(f"[ws] {self._label(connection)} <- {name}")
 
     async def _handler(self, connection, *args) -> None:
         self._clients.add(connection)
-        print(f"[ws] client connected ({len(self._clients)} total)")
+        try:
+            addr = tuple(connection.remote_address)
+        except Exception:
+            addr = None
+        self._ids[connection] = f"client{self._seq}"
+        self._seq += 1
+        self._addrs[connection] = addr
+        print(f"[ws] {self._label(connection)} connected from {addr} "
+              f"({len(self._clients)} total)")
         try:
             async for message in connection:
                 try:
                     data = json.loads(message)
+                    if isinstance(data, dict) and data.get("cmd") is not None:
+                        self._identify(connection, data.get("cmd"))
+                        self._log_cmd(connection, data.get("cmd"))
                     self.bus.submit(Command.from_dict(dict(data)))
                 except Exception as exc:  # noqa: BLE001 - bad client msg must not kill server
                     print(f"[ws] bad command: {exc}")
         finally:
             self._clients.discard(connection)
+            lbl = self._ids.pop(connection, None)
+            self._addrs.pop(connection, None)
+            print(f"[ws] {lbl or 'client'} disconnected ({len(self._clients)} total)")
 
     def broadcast(self, payload: Dict) -> None:
         """Send a JSON payload to every connected client (fire-and-forget)."""
