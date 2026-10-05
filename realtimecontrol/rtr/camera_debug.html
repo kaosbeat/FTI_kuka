@@ -45,6 +45,8 @@
   #cand-list { font-size: 13px; }
   .cand { padding: 3px 0; border-bottom: 1px solid #20242d; word-break: break-all; }
   .cand.locked { color: var(--accent); }
+  #wire { font-size: 11px; color: var(--dim); white-space: pre-wrap; word-break: break-all;
+          max-width: 640px; margin-top: 6px; min-height: 14px; }
 </style>
 </head>
 <body>
@@ -66,6 +68,7 @@
       &nbsp;<span class="sw" style="background:#4fc08d"></span>locked / track offset
       &nbsp;<span class="sw" style="background:#d7dbe2"></span>image center
     </div>
+    <div id="wire"></div>
   </section>
 
   <section>
@@ -324,6 +327,15 @@ function renderFace(t) {
   el.innerHTML = h;
 }
 
+function renderWire() {
+  const el = $("wire");
+  if (!lastTelem) { el.textContent = "cam_telem: (none in state frame)"; return; }
+  const t = lastTelem;
+  const nCand = (t.candidates && t.candidates.candidates) ? t.candidates.candidates.length : 0;
+  const keys = Object.keys(t).map((k) => k + "=" + (t[k] ? (k === "candidates" ? nCand : "ok") : "null")).join("  ");
+  el.textContent = "cam_telem: " + keys;
+}
+
 function render() {
   const t = lastTelem;
   renderStatus(t);
@@ -331,6 +343,7 @@ function render() {
   renderTrack(t);
   renderCandidates(t);
   renderFace(t);
+  renderWire();
   drawFrame();
 }
 
