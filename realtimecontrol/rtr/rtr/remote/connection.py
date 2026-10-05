@@ -29,6 +29,7 @@ import asyncio
 import http.client
 import json
 import logging
+import time
 from typing import Any, Callable, Dict, Optional
 
 try:
@@ -222,3 +223,18 @@ class Connection:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks = []
         self.connected = False
+
+    async def wait_connected(self, timeout: float = 5.0) -> bool:
+        """Wait until the WebSocket handshake completes (or the timeout expires).
+
+        :meth:`start` only spawns the connect task and returns before the
+        handshake, so callers that must know the link is actually up should
+        await this. Returns ``True`` if the link is up, ``False`` otherwise.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            if self.connected and self._ws is not None:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(0.2)

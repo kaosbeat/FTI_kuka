@@ -210,7 +210,10 @@ class CameraMock:
             on_error=lambda e: logger.warning("connection error: %s", e),
         )
         await self._conn.start()
-        logger.info("mock camera connected to %s:%d", self.core_host, self.core_port)
+        if await self._conn.wait_connected(5.0):
+            logger.info("mock camera connected to %s:%d", self.core_host, self.core_port)
+        else:
+            logger.warning("mock camera: WS link not up after 5s; telemetry will be dropped until it connects")
 
         mock_task = asyncio.create_task(self._mock_loop())
         try:

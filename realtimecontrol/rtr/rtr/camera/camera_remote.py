@@ -149,7 +149,12 @@ class CameraRemote:
             on_error=lambda e: logger.warning("connection error: %s", e),
         )
         await self._conn.start()
-        logger.info("camera remote connected to %s:%d", self.core_host, self.core_port)
+        # ``start()`` only spawns the connect task; wait for the actual handshake so
+        # the "connected" log is honest (telemetry is dropped until the link is up).
+        if await self._conn.wait_connected(5.0):
+            logger.info("camera remote connected to %s:%d", self.core_host, self.core_port)
+        else:
+            logger.warning("camera remote: WS link not up after 5s; telemetry will be dropped until it connects")
 
         # Apply the current intent from the state frame (the Connection's
         # on_state callback will fire when the first state frame arrives).
