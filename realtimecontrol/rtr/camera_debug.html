@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RTR camera debug</title>
+<style>
+  :root {
+    --bg: #111318; --panel: #181c24; --border: #2a2f3a;
+    --text: #d7dbe2; --dim: #7c8494; --accent: #4fc08d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font: 14px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #e05d5d; }
+  .dot.on { background: var(--accent); }
+  #status { color: var(--dim); }
+  #stale { color: #e0a55d; font-size: 12px; display: none; }
+  #host { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
+          padding: 6px 8px; width: 240px; font: inherit; }
+  button {
+    background: #22262f; color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 5px 10px; cursor: pointer; font: inherit;
+  }
+  button:hover { border-color: var(--accent); }
+  main { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+       color: var(--dim); margin: 0 0 10px; }
+  #frame-section { grid-column: 1 / -1; }
+  #frame { width: 100%; max-width: 640px; border: 1px solid var(--border);
+           border-radius: 6px; background: #0d0f13; display: block; }
+  #frame.dim { opacity: .5; }
+  .legend { font-size: 11px; color: var(--dim); margin-top: 6px; max-width: 640px; }
+  .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+                margin: 0 4px 0 0; vertical-align: middle; }
+  .kv { display: flex; justify-content: space-between; padding: 3px 0;
+        border-bottom: 1px solid #20242d; }
+  .kv > span:first-child { color: var(--dim); }
+  .empty { color: var(--dim); font-size: 13px; }
+  #cand-list { font-size: 13px; }
+  .cand { padding: 3px 0; border-bottom: 1px solid #20242d; word-break: break-all; }
+  .cand.locked { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>RTR camera debug</h1>
+  <span class="dot" id="dot"></span><span id="status">disconnected</span>
+  <span id="stale">stale (no state &gt; 5s)</span>
+  <input id="host" spellcheck="false">
+  <button id="connect">connect</button>
+</header>
+
+<main>
+  <section id="frame-section">
+    <h2>frame (active camera)</h2>
+    <canvas id="frame" width="640" height="480"></canvas>
+    <div class="legend">
+      <span class="sw" style="background:#ff9f40"></span>candidate
+      &nbsp;<span class="sw" style="background:#4fc08d"></span>locked / track offset
+      &nbsp;<span class="sw" style="background:#d7dbe2"></span>image center
+    </div>
+  </section>
+
+  <section>
+    <h2>camera status</h2>
+    <div id="status-panel"></div>
+  </section>
+
+  <section>
+    <h2>intent (core &rarr; rpi)</h2>
+    <div id="intent-panel"></div>
+  </section>
+
+  <section>
+    <h2>track (locked offset)</h2>
+    <div id="track-panel"></div>
+  </section>
+
+  <section>
+    <h2>candidates</h2>
+    <div id="cand-list"></div>
+  </section>
+
+  <section>
+    <h2>face</h2>
+    <div id="face-panel"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+const FRAME_W = 640, FRAME_H = 480;
+const $ = (id) => document.getElementById(id);
+
+const defaultHost = "ws://" + (location.hostname || "localhost") + ":8765";
+$("host").value = defaultHost;
+
+let ws = null;
+let lastStateTime = 0;
+let lastTelem = null;   // cam_telem payload
+let lastIntent = null;  // camera intent payload
+let stale = false;
+
+function setConn(on) {
+  $("dot").className = "dot" + (on ? " on" : "");
+  $("status").textContent = on ? "connected" : "disconnected";
+}
+
+function connect() {
+  const url = $("host").value.trim();
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  ws = new WebSocket(url);
+  ws.onopen = () => { setConn(true); };
+  ws.onclose = () => {
+    setConn(false);
+    setTimeout(connect, 2000);
+  };
+  ws.onmessage = (e) => {
+    let m;
+    try { m = JSON.parse(e.data); } catch (err) { return; }
+    if (m.type === "state") {
+      lastStateTime = Date.now();
+      lastTelem = m.cam_telem || null;
+      lastIntent = m.camera || null;
+      render();
+    }
+  };
+}
+
+// ------------------------------------------------------------------
+// Coordinate helpers. The RPI pipeline sends pixel coords (640x480 frame);
+// the mock sends normalized 0..1 for candidates. Detect per coordinate set:
+// if the largest value is <= 2 it is normalized, otherwise pixels.
+// ------------------------------------------------------------------
+function isNum(v) { return typeof v === "number" && !isNaN(v); }
+
+function detectScale(coords) {
+  const c = $("frame");
+  const cw = c.width, ch = c.height;
+  const m = Math.max(...coords);
+  if (m <= 2) return [cw, ch];              // normalized 0..1 -> canvas size
+  return [cw / FRAME_W, ch / FRAME_H];      // pixels -> canvas/frame
+}
+
+// ------------------------------------------------------------------
+// Canvas drawing.
+// ------------------------------------------------------------------
+function drawArrowHead(ctx, x0, y0, x1, y1, color) {
+  const ang = Math.atan2(y1 - y0, x1 - x0);
+  const size = 8;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x1 - size * Math.cos(ang - 0.4), y1 - size * Math.sin(ang - 0.4));
+  ctx.lineTo(x1 - size * Math.cos(ang + 0.4), y1 - size * Math.sin(ang + 0.4));
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawFrame() {
+  const c = $("frame");
+  const ctx = c.getContext("2d");
+  const W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#0d0f13";
+  ctx.fillRect(0, 0, W, H);
+
+  // grid every 64px
+  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  ctx.lineWidth = 1;
+  for (let x = 0; x <= W; x += 64) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = 0; y <= H; y += 64) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+
+  // image-center cross at (320, 240)
+  const cx = W / 2, cy = H / 2;
+  ctx.strokeStyle = "rgba(215,219,226,0.5)";
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(cx - 12, cy); ctx.lineTo(cx + 12, cy); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx, cy - 12); ctx.lineTo(cx, cy + 12); ctx.stroke();
+
+  const t = lastTelem;
+  if (!t) {
+    ctx.fillStyle = "#7c8494";
+    ctx.font = "14px monospace";
+    ctx.fillText("no camera telemetry", 16, H / 2 - 8);
+    return;
+  }
+
+  const cands = (t.candidates && t.candidates.candidates) || [];
+  const lockedId = t.track ? t.track.id : null;
+
+  // candidate boxes
+  for (const cd of cands) {
+    if (!isNum(cd.x1) || !isNum(cd.y1) || !isNum(cd.x2) || !isNum(cd.y2)) continue;
+    const [sx, sy] = detectScale([cd.x1, cd.y1, cd.x2, cd.y2]);
+    const x1 = cd.x1 * sx, y1 = cd.y1 * sy, x2 = cd.x2 * sx, y2 = cd.y2 * sy;
+    const locked = lockedId != null && cd.id === lockedId;
+    ctx.strokeStyle = locked ? "#4fc08d" : "#ff9f40";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    const conf = isNum(cd.conf) ? cd.conf.toFixed(2) : "";
+    const label = "#" + cd.id + " " + conf + (locked ? " LOCK" : "");
+    ctx.fillStyle = locked ? "#4fc08d" : "#ff9f40";
+    ctx.font = "12px monospace";
+    ctx.fillText(label, x1, Math.max(0, y1 - 4));
+  }
+
+  // track: arrow from image center to the tracked point + cross marker
+  if (t.track) {
+    const tr = t.track;
+    if (isNum(tr.cx) && isNum(tr.cy)) {
+      const [sx, sy] = detectScale([tr.cx, tr.cy]);
+      const px = tr.cx * sx, py = tr.cy * sy;
+      ctx.strokeStyle = "#4fc08d";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(px, py); ctx.stroke();
+      drawArrowHead(ctx, cx, cy, px, py, "#4fc08d");
+      ctx.beginPath(); ctx.moveTo(px - 8, py); ctx.lineTo(px + 8, py); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(px, py - 8); ctx.lineTo(px, py + 8); ctx.stroke();
+      ctx.fillStyle = "#4fc08d";
+      ctx.font = "12px monospace";
+      const txt = "dx=" + (isNum(tr.dx) ? tr.dx.toFixed(1) : "-") +
+                  " dy=" + (isNum(tr.dy) ? tr.dy.toFixed(1) : "-");
+      ctx.fillText(txt, px + 12, py + 4);
+    }
+  }
+
+  // status overlay top-left
+  const st = t.status || {};
+  const n = cands.length;
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.fillRect(0, 0, 340, 22);
+  ctx.fillStyle = "#4fc08d";
+  ctx.font = "13px monospace";
+  const cam = st.camera || "-", mode = st.mode || "-";
+  const fps = isNum(st.fps) ? st.fps.toFixed(0) : "-";
+  ctx.fillText(cam + " | " + mode + " | " + fps + " fps | " + n + " cand", 8, 15);
+}
+
+// ------------------------------------------------------------------
+// Side panels.
+// ------------------------------------------------------------------
+function kvRow(k, v) {
+  return '<div class="kv"><span>' + k + '</span><span>' + v + '</span></div>';
+}
+
+function renderStatus(t) {
+  const el = $("status-panel");
+  const st = (t && t.status) || null;
+  if (!st) { el.innerHTML = kvRow("status", "\u2014"); return; }
+  let h = "";
+  h += kvRow("camera", st.camera || "\u2014");
+  h += kvRow("mode", st.mode || "\u2014");
+  h += kvRow("active", st.active ? "yes" : "no");
+  h += kvRow("fps", isNum(st.fps) ? st.fps.toFixed(1) : "\u2014");
+  h += kvRow("ok", st.ok ? "yes" : "no");
+  el.innerHTML = h;
+}
+
+function renderIntent() {
+  const el = $("intent-panel");
+  const i = lastIntent;
+  if (!i) { el.innerHTML = kvRow("intent", "\u2014"); return; }
+  let h = "";
+  h += kvRow("active", i.active || "\u2014");
+  h += kvRow("mode", i.mode || "\u2014");
+  h += kvRow("lock_id", i.lock_id != null ? i.lock_id : "\u2014");
+  el.innerHTML = h;
+}
+
+function renderTrack(t) {
+  const el = $("track-panel");
+  const tr = (t && t.track) || null;
+  if (!tr) { el.innerHTML = kvRow("track", "\u2014"); return; }
+  const f = (v) => isNum(v) ? v.toFixed(1) : "\u2014";
+  let h = "";
+  h += kvRow("camera", tr.camera || "\u2014");
+  h += kvRow("id", tr.id != null ? tr.id : "\u2014");
+  h += kvRow("cx, cy", f(tr.cx) + ", " + f(tr.cy));
+  h += kvRow("dx, dy", f(tr.dx) + ", " + f(tr.dy));
+  h += kvRow("w, h", f(tr.w) + ", " + f(tr.h));
+  el.innerHTML = h;
+}
+
+function renderCandidates(t) {
+  const el = $("cand-list");
+  const cands = (t && t.candidates && t.candidates.candidates) || [];
+  if (!cands.length) { el.innerHTML = '<div class="empty">no candidates</div>'; return; }
+  const lockedId = (t && t.track) ? t.track.id : null;
+  let h = "";
+  for (const c of cands) {
+    const locked = lockedId != null && c.id === lockedId;
+    const conf = isNum(c.conf) ? c.conf.toFixed(2) : "\u2014";
+    const box = [c.x1, c.y1, c.x2, c.y2].map((v) => isNum(v) ? v.toFixed(2) : "?").join(", ");
+    h += '<div class="cand' + (locked ? " locked" : "") + '">#' + c.id +
+         '  conf=' + conf + '  [' + box + ']' +
+         (locked ? ' <span>LOCK</span>' : '') + '</div>';
+  }
+  el.innerHTML = h;
+}
+
+function renderFace(t) {
+  const el = $("face-panel");
+  const f = (t && t.face) || null;
+  if (!f) { el.innerHTML = kvRow("face", "\u2014"); return; }
+  let h = "";
+  h += kvRow("id", f.id != null ? f.id : "\u2014");
+  const bbox = Array.isArray(f.bbox) ? f.bbox.map((v) => isNum(v) ? v.toFixed(1) : "?").join(", ") : "\u2014";
+  h += kvRow("bbox", bbox);
+  const feats = f.features && typeof f.features === "object" ? JSON.stringify(f.features) : "\u2014";
+  h += kvRow("features", feats);
+  el.innerHTML = h;
+}
+
+function render() {
+  const t = lastTelem;
+  renderStatus(t);
+  renderIntent();
+  renderTrack(t);
+  renderCandidates(t);
+  renderFace(t);
+  drawFrame();
+}
+
+// Stale indicator: no state frame for > 5s.
+setInterval(() => {
+  const isStale = lastStateTime > 0 && (Date.now() - lastStateTime) > 5000;
+  if (isStale !== stale) {
+    stale = isStale;
+    $("stale").style.display = stale ? "inline" : "none";
+    $("frame").className = stale ? "dim" : "";
+  }
+}, 500);
+
+$("connect").onclick = () => { const u = $("host").value.trim(); $("host").value = u; connect(); };
+connect();
+</script>
+</body>
+</html>

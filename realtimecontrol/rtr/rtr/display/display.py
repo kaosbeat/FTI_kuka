@@ -83,6 +83,22 @@ class Display:
             return None
         return self._camera.intent.to_dict()
 
+    def _camera_telem(self) -> Optional[dict]:
+        """The latest RPI telemetry for the state frame (for the debug page).
+
+        The brain stashes every ``CAM_*`` payload on the controller; echoing it in
+        the state frame lets the browser debug view (camera_debug.html) render the
+        candidates / lock / offset without a second transport.
+        """
+        if self._camera is None:
+            return None
+        return {
+            "status": self._camera.status,
+            "candidates": self._camera.candidates,
+            "track": self._camera.track,
+            "face": self._camera.face,
+        }
+
     def _frame(self, snap: Snapshot) -> dict:
         """A P5live-friendly frame for the current state (includes the resolved patch)."""
         frame = {
@@ -101,6 +117,9 @@ class Display:
         cam = self._camera_field()
         if cam is not None:
             frame["camera"] = cam
+        telem = self._camera_telem()
+        if telem is not None:
+            frame["cam_telem"] = telem
         return frame
 
 
