@@ -46,6 +46,7 @@ class WebSocketServer:
         self._ids: Dict = {}
         self._addrs: Dict = {}
         self._cmd_ts: Dict = {}
+        self._msg_count: Dict = {}  # connection -> messages received (liveness proof)
         self._seq = 1
 
     async def start(self) -> None:
@@ -112,10 +113,20 @@ class WebSocketServer:
         self._ids[connection] = f"client{self._seq}"
         self._seq += 1
         self._addrs[connection] = addr
+        self._msg_count[connection] = 0
         print(f"[ws] {self._label(connection)} connected from {addr} "
               f"({len(self._clients)} total)")
         try:
             async for message in connection:
+                n = self._msg_count.get(connection, 0) + 1
+                self._msg_count[connection] = n
+                # First two messages: log the raw payload unthrottled so we can
+                # see with zero ambiguity whether a client is actually
+                # transmitting, and exactly what it sends. The throttled cmd log
+                # alone cannot prove a client is alive (it only fires on flow).
+                if n <= 2:
+                    print(f"[ws] {self._label(connection)} msg#{n} raw: "
+                          f"{str(message)[:300]}")
                 try:
                     data = json.loads(message)
                     if isinstance(data, dict) and data.get("cmd") is not None:
@@ -128,7 +139,9 @@ class WebSocketServer:
             self._clients.discard(connection)
             lbl = self._ids.pop(connection, None)
             self._addrs.pop(connection, None)
-            print(f"[ws] {lbl or 'client'} disconnected ({len(self._clients)} total)")
+            total = self._msg_count.pop(connection, 0)
+            print(f"[ws] {lbl or 'client'} disconnected "
+                  f"({len(self._clients)} total, {total} msgs recv)")
 
     def broadcast(self, payload: Dict) -> None:
         """Send a JSON payload to every connected client (fire-and-forget)."""

@@ -94,6 +94,8 @@ class Connection:
         self._ws: Optional[Any] = None
         self._tasks = []
         self._stopped = asyncio.Event()
+        self._reconnects = 0       # successful (re)connects since start
+        self._sent_since_connect = 0  # commands actually written to the current link
 
     # ------------------------------------------------------------------
     # Zone table (HTTP).
@@ -160,10 +162,12 @@ class Connection:
             try:
                 async with websockets.connect(
                         f"ws://{self.ws_host}:{self.ws_port}",
-                        ping_interval=30, ping_timeout=10) as ws:
+                        ping_interval=5, ping_timeout=2) as ws:
                     self._ws = ws
                     self.connected = True
-                    logger.info("WS connected to ws://%s:%d", self.ws_host, self.ws_port)
+                    self._reconnects += 1
+                    logger.info("WS connected to ws://%s:%d (reconnect #%d)",
+                                self.ws_host, self.ws_port, self._reconnects)
                     async for message in ws:
                         self._on_message(message)
             except Exception as exc:  # noqa: BLE001 - connect/read failure retries
@@ -171,6 +175,7 @@ class Connection:
             finally:
                 self._ws = None
                 self.connected = False
+                self._sent_since_connect = 0
             await asyncio.sleep(_WS_RETRY_S)
 
     async def _send(self, cmd: Dict[str, Any]) -> None:
@@ -178,6 +183,12 @@ class Connection:
             return
         try:
             await self._ws.send(json.dumps(cmd))
+            self._sent_since_connect += 1
+            # First few sends per link: prove the RPI is actually writing to this
+            # connection. Pairs with the core's raw recv log to show delivery.
+            if self._sent_since_connect <= 3:
+                logger.info("WS sent #%d: %s",
+                            self._sent_since_connect, json.dumps(cmd)[:200])
         except Exception as exc:  # noqa: BLE001
             logger.warning("send failed: %s", exc)
 
