@@ -24,10 +24,12 @@ class Display:
     def __init__(self, bus: StateBus, send: Callable[[dict], None],
                  enabled: bool = True,
                  patch_code: Callable[[str, str, str], str] = None,
-                 camera: Optional[CameraController] = None):
+                 camera: Optional[CameraController] = None,
+                 machine=None):
         self.bus = bus
         self._send = send
         self.enabled = enabled
+        self._machine = machine
         # Resolves the hydra patch for a state (action > mode > zone > default). The
         # core is the single source of truth: it pushes the resolved code in every
         # state frame so all display clients (client.html, render.html, the 3D tool
@@ -120,10 +122,14 @@ class Display:
         telem = self._camera_telem()
         if telem is not None:
             frame["cam_telem"] = telem
+        if self._machine is not None and self._machine.hunt_state:
+            frame["hunt"] = dict(self._machine.hunt_state)
         return frame
 
 
 def make_display(bus: StateBus, send: Callable[[dict], None], enabled: bool,
                  patch_code: Callable[[str, str, str], str] = None,
-                 camera: Optional[CameraController] = None) -> Display:
-    return Display(bus, send, enabled=enabled, patch_code=patch_code, camera=camera)
+                 camera: Optional[CameraController] = None,
+                 machine=None) -> Display:
+    return Display(bus, send, enabled=enabled, patch_code=patch_code,
+                   camera=camera, machine=machine)

@@ -215,7 +215,8 @@ async def run(cfg: Config) -> None:
     # the single source of truth), so the pages and the 3D tool screen stay in sync
     # no matter what triggered the change (MIDI, WebSocket, HTTP).
     display = make_display(bus, ws.broadcast, enabled=cfg.enable_display,
-                           patch_code=patches.code_for, camera=camera)
+                            patch_code=patches.code_for, camera=camera,
+                            machine=machine)
 
     # The WebSocket + HTTP bridges come up first, so the control interface is
     # always reachable (and keeps running) while we wait for the robot.

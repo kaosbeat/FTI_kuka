@@ -49,6 +49,10 @@ class Brain:
         self._hunt_state = "idle"  # "idle" | "tracking" | "facefocus" | "scanning"
         self._hunt_lock_id = None
         self._hunt_last_track_ts = 0.0
+        # Feral detection: the robot is "feral" when it has lost a locked person
+        # 3+ times within a 30 s window (rapid hunt-loop cycling).
+        self._feral_lost_ts: list = []
+        self._feral: bool = False
         # Facefocus (the "check out that human" sub-state of tracking): while a face is
         # visible the robot stretches into the exterior pose and cycles the face actions
         # (wink / inspect / call), nudging toward the face location.
@@ -85,6 +89,37 @@ class Brain:
     def _facefocus_cfg(self) -> dict:
         """The facefocus decision config (the "check out that human" parameters)."""
         return self._config.get("facefocus", {})
+
+    def _update_hunt_state(self) -> None:
+        """Write the current hunt state to the machine (the display reads it)."""
+        self.machine.hunt_state = {
+            "state": self._hunt_state,
+            "lock_id": self._hunt_lock_id,
+            "feral": self._feral,
+        }
+
+    def _record_lost(self) -> None:
+        """Record a person-lost event and update the feral flag.
+
+        Feral = 3+ lost events within a 30 s sliding window (the hunt loop is
+        cycling rapidly: detect → track → lost → rescan → detect → …).
+        """
+        now = time.time()
+        self._feral_lost_ts.append(now)
+        # Prune events older than the window.
+        cutoff = now - 30.0
+        self._feral_lost_ts = [t for t in self._feral_lost_ts if t >= cutoff]
+        self._feral = len(self._feral_lost_ts) >= 3
+
+    def _clear_feral_if_stale(self) -> None:
+        """Clear the feral flag when all lost events fall outside the 30 s window."""
+        if not self._feral:
+            return
+        now = time.time()
+        cutoff = now - 30.0
+        self._feral_lost_ts = [t for t in self._feral_lost_ts if t >= cutoff]
+        if len(self._feral_lost_ts) < 3:
+            self._feral = False
 
     def _cam_log(self, key: str, msg: str, force: bool = False) -> None:
         """Log camera telemetry at most once per second (force overrides)."""
@@ -201,6 +236,7 @@ class Brain:
                 # Facefocus keeps the facefocus state; otherwise the lock means tracking.
                 if self._hunt_state != "facefocus":
                     self._hunt_state = "tracking"
+                self._update_hunt_state()
 
     def _handle_cam_track(self, p: dict) -> None:
         """Store the track telemetry on the machine; the behaviours read it.
@@ -261,6 +297,7 @@ class Brain:
             self._hunt_state = "facefocus"
             self._facefocus_action_index = 0
             self._facefocus_last_action_ts = time.time()
+            self._update_hunt_state()
         else:
             # Cycle the face actions on the timer (in-zone, no transition).
             if (actions and not self.machine.transitioning
@@ -286,6 +323,8 @@ class Brain:
           the detect action). The person is still locked, so the face can reappear.
         """
         if self._hunt_state not in ("tracking", "facefocus"):
+            self._clear_feral_if_stale()
+            self._update_hunt_state()
             return
         hunt = self._config.get("hunt", {})
         lost_s = hunt.get("lost_s", 2.0)
@@ -298,7 +337,10 @@ class Brain:
             scan = hunt.get("scan", {})
             self.machine.trigger_action(scan.get("zone"), scan.get("action"))
             self._hunt_state = "scanning"
+            self._record_lost()
+            self._update_hunt_state()
             return
+        self._clear_feral_if_stale()
         if self._hunt_state == "facefocus":
             ff = self._facefocus_cfg()
             face_lost_s = ff.get("face_lost_s", 2.5)
@@ -313,3 +355,4 @@ class Brain:
                 detect = hunt.get("detect", {})
                 self.machine.trigger_action(detect.get("zone"), detect.get("action"))
                 self._hunt_state = "tracking"
+                self._update_hunt_state()

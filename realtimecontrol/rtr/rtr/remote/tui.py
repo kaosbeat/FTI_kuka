@@ -85,6 +85,8 @@ SECTION_LABELS = {
     "zones": "GO TO",
 }
 
+PAGES = ("NAV", "CAMERA", "BRAIN", "HUNT")
+
 
 def item_label(item: dict) -> str:
     """The display string for an item (name + loop marker + next annotation).
@@ -129,6 +131,9 @@ class RemoteTUI:
         self._thread = None
         self._top = None
         self._mainloop = None
+        self._page = 0
+        self._hunt: Dict[str, Any] = {}
+        self._cam_telem: Dict[str, Any] = {}
 
     # ------------------------------------------------------------------
     # Connection (asyncio worker thread).
@@ -202,8 +207,12 @@ class RemoteTUI:
             self._mainloop.set_alarm_in(0.1, self._poll)
 
     def _apply_state(self, data) -> None:
+        self._hunt = data.get("hunt", {})
+        self._cam_telem = data.get("cam_telem", {})
         key = (data.get("zone"), data.get("mode"), data.get("action"),
-               data.get("moving"), data.get("speed"))
+               data.get("moving"), data.get("speed"),
+               data.get("hunt", {}).get("state"),
+               data.get("hunt", {}).get("feral"))
         if key != self._state_key:
             self._state = {
                 "zone": data.get("zone"),
@@ -295,7 +304,27 @@ class RemoteTUI:
             rows.append(self._line(f"CONNECTED   {ep}", Theme.GREEN))
         else:
             rows.append(self._line(f"DISCONNECTED  {ep}", Theme.RED))
+        # Page indicator.
+        page_names = " | ".join(PAGES)
+        cur = PAGES[self._page]
+        rows.append(self._line(f"  [{cur}]  {page_names}", Theme.YELLOW_DIM))
         rows.append(self._divider())
+        if self._page == 0:
+            rows.extend(self._nav_content())
+        elif self._page == 1:
+            rows.extend(self._camera_content())
+        elif self._page == 2:
+            rows.extend(self._brain_content())
+        elif self._page == 3:
+            rows.extend(self._hunt_content())
+        rows.append(self._divider())
+        rows.append(self._line(self._status, Theme.YELLOW_DIM))
+        rows.append(self._line("←→ pages · ↑↓ move · enter select · q quit", Theme.DIM))
+        return rows
+
+    def _nav_content(self):
+        """Page 0: zone/action navigation (the original TUI content)."""
+        rows = []
         zone = self._state.get("zone", "—")
         mode = self._state.get("mode", "—")
         action = self._state.get("action", "—")
@@ -318,9 +347,95 @@ class RemoteTUI:
                     rows.append(self._label(SECTION_LABELS.get(sec, sec.upper())))
                     current_section = sec
                 rows.append(self._item_row(i, item))
+        return rows
+
+    def _camera_content(self):
+        """Page 1: camera overview (person count, status, track, face)."""
+        rows = []
+        rows.append(self._label("CAMERA"))
         rows.append(self._divider())
-        rows.append(self._line(self._status, Theme.YELLOW_DIM))
-        rows.append(self._line("↑↓ move · enter select · q quit", Theme.DIM))
+        status = self._cam_telem.get("status", {})
+        if status:
+            cam = status.get("camera", "—")
+            fps = status.get("fps", 0)
+            ok = status.get("ok")
+            ok_s = "—" if ok is None else ("yes" if ok else "no")
+            rows.append(self._state_row([("CAM", cam), ("FPS", f"{fps:.1f}"), ("OK", ok_s)]))
+        cands = self._cam_telem.get("candidates", {})
+        cand_list = cands.get("candidates", [])
+        n = len(cand_list)
+        rows.append(self._state_row([("PERSONS", n)]))
+        for c in cand_list[:5]:
+            cid = c.get("id", "?")
+            conf = c.get("conf", 0)
+            rows.append(self._line(f"  #{cid}  conf={conf:.2f}", Theme.TEXT))
+        track = self._cam_telem.get("track", {})
+        if track:
+            tid = track.get("id", "?")
+            dx = track.get("dx", 0)
+            dy = track.get("dy", 0)
+            w = track.get("w", 0)
+            h = track.get("h", 0)
+            rows.append(self._state_row([("TRACK", f"#{tid} dx={dx:.1f} dy={dy:.1f} w={w:.0f} h={h:.0f}")]))
+        face = self._cam_telem.get("face", {})
+        if face:
+            fid = face.get("id", "?")
+            fdx = face.get("dx", 0)
+            fdy = face.get("dy", 0)
+            rows.append(self._state_row([("FACE", f"#{fid} dx={fdx:.1f} dy={fdy:.1f}")]))
+        rows.append(self._divider())
+        rows.append(self._label("CAMERA ACTIONS"))
+        rows.append(self._item_row(0, {"kind": "action", "name": "detect", "action": None}))
+        rows.append(self._item_row(1, {"kind": "action", "name": "stop_hunt", "action": None}))
+        return rows
+
+    def _brain_content(self):
+        """Page 2: robot state map (zone, mode, action, heading)."""
+        rows = []
+        rows.append(self._label("BRAIN"))
+        rows.append(self._divider())
+        zone = self._state.get("zone", "—")
+        mode = self._state.get("mode", "—")
+        action = self._state.get("action", "—")
+        rows.append(self._state_row([("ZONE", zone), ("MODE", mode), ("ACTION", action)]))
+        moving = self._state.get("moving")
+        speed = self._state.get("speed", "—")
+        mv = "—" if moving is None else ("yes" if moving else "no")
+        rows.append(self._state_row([("MOVING", mv), ("SPEED", speed)]))
+        # Heading: A1 (base rotation) from the joint pose.
+        joints = self._state.get("joints")
+        if joints and len(joints) >= 6:
+            a1 = joints[0]
+            rows.append(self._state_row([("HEADING", f"A1={a1:.1f}°")]))
+        else:
+            rows.append(self._state_row([("HEADING", "—")]))
+        rows.append(self._divider())
+        rows.append(self._label("STATE"))
+        rows.append(self._line(f"  zone: {zone}", Theme.TEXT))
+        rows.append(self._line(f"  mode: {mode}", Theme.TEXT))
+        rows.append(self._line(f"  action: {action}", Theme.TEXT))
+        return rows
+
+    def _hunt_content(self):
+        """Page 3: hunt state with feral RED warning."""
+        rows = []
+        rows.append(self._label("HUNT"))
+        rows.append(self._divider())
+        hunt_state = self._hunt.get("state", "idle")
+        lock_id = self._hunt.get("lock_id")
+        feral = self._hunt.get("feral", False)
+        lock_s = f"#{lock_id}" if lock_id is not None else "—"
+        rows.append(self._state_row([("STATE", hunt_state), ("LOCK", lock_s)]))
+        if feral:
+            rows.append(self._line("  ⚠ FERAL — rapid hunt-loop cycling", Theme.RED, Theme.BG, "bold"))
+        else:
+            rows.append(self._line("  feral: no", Theme.GREEN))
+        face = self._cam_telem.get("face", {})
+        face_vis = bool(face.get("id") is not None)
+        rows.append(self._state_row([("FACE", "visible" if face_vis else "not visible")]))
+        rows.append(self._divider())
+        rows.append(self._label("HUNT ACTIONS"))
+        rows.append(self._item_row(0, {"kind": "action", "name": "stop_hunt", "action": None}))
         return rows
 
     def _build_top(self):
@@ -385,8 +500,16 @@ class RemoteTUI:
         if key == "enter":
             self._activate()
             return True
+        if key == "left":
+            self._page = max(0, self._page - 1)
+            self._dirty = True
+            return True
+        if key == "right":
+            self._page = min(len(PAGES) - 1, self._page + 1)
+            self._dirty = True
+            return True
         if key in ("h", "?"):
-            self._status = "↑↓ move · enter select · q quit"
+            self._status = "←→ pages · ↑↓ move · enter select · q quit"
             return True
         return None
 
