@@ -176,6 +176,7 @@
     let env = null;    // {meshes:[{name,tris,triAABB,aabb}], grid:Map, aabb:[6], cellSize}
     let gen = 0;
     const skipPairs = new Set(); // "nameA|nameB" pairs excluded from self-collision (joint housing)
+    const skipEnv = new Set();   // body names excluded from env checks (e.g. the base pedestal, seated on the floor)
 
     function worldTris(b, m) {
       // Transform the body's local triangles to world (cached for the current check).
@@ -228,6 +229,7 @@
       // --- environment collision (body vs static env meshes) ---
       if (env) {
         for (const b of bodies) {
+          if (skipEnv.has(b.name)) continue;
           if (!aabbOverlap(b._wAABB, env.aabb)) continue;
           const cands = queryEnv(b._wAABB);
           const wb = worldTris(b, getMat(b.name));
@@ -327,6 +329,12 @@
           skipPairs.add(pairs[i][0] + "|" + pairs[i][1]);
           skipPairs.add(pairs[i][1] + "|" + pairs[i][0]);
         }
+      },
+
+      // Exclude bodies from env checks (e.g. the base pedestal, permanently seated on the floor).
+      setSkipEnv: function (names) {
+        skipEnv.clear();
+        for (let i = 0; i < names.length; i++) skipEnv.add(names[i]);
       },
 
       bodyNames: function () { return bodies.map(function (b) { return b.name; }); },

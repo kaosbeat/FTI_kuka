@@ -277,6 +277,9 @@ const Robot3D = (() => {
       }
     }
     collWorld.setSkipPairs(COLLISION_SKIP);
+    // The base is the pedestal, permanently seated on the floor — exclude it from env
+    // checks so its (tiny) floor contact never fires a STOP. Only moving links + tool test env.
+    collWorld.setSkipEnv(["base"]);
     // Red wireframe highlights (children of each rotor so they move with the link).
     const hlMat = new THREE.MeshBasicMaterial({ color: 0xff2020, wireframe: true, transparent: true, opacity: 0.45 });
     MESH_NAMES.forEach((name) => {
