@@ -628,7 +628,7 @@ const _renderDom = renderState;
 renderState = (s) => { lastSnap = s; Robot3D.update(s); try { _renderDom(s); } catch (e) { log("render failed: " + e); } };
 
 buildUI();
-Robot3D.init($("robot3d"), { toolEl: $("toolPos"), log: log, environment: true });
+Robot3D.init($("robot3d"), { toolEl: $("toolPos"), log: log, environment: true, onCollision: () => send({cmd: "stop"}) });
 // Toggle the green ghost (target) arm in the 3D view.
 let ghostVisible = true;
 $("ghostToggle").onclick = () => {

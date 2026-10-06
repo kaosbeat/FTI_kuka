@@ -40,6 +40,7 @@ const Robot3D = (() => {
   const COLLISION_SKIP = [
     ["base", "link_1"], ["link_1", "link_2"], ["link_2", "link_3"],
     ["link_3", "link_4"], ["link_4", "link_5"], ["link_5", "link_6"],
+    ["link_6", "tool"],
   ];
   // The Blender-editable tool GLB (authored Y-up like environment.glb). Replaces the
   // old white placeholder box at the $FLANGE; see assets/make_tool.py for the starter.
@@ -73,6 +74,11 @@ const Robot3D = (() => {
   let collWorld = null, collFrame = 0, pendingEnvScene = null;
   const COLLISION_INTERVAL = 8;
   let collHighlightMeshes = {}; // name -> THREE.Mesh (red wireframe, child of rotor)
+  // Tool collision (the tool GLB may load after the collision world is built).
+  let toolTris = null, toolBodyAdded = false;
+  // Collision STOP: debounced, fires once per collision event (rising edge).
+  let onCollision = null, collStreak = 0, stopSent = false, lastTarget = null;
+  const COLLISION_STOP_THRESHOLD = 3;
 
   function rotFromRpy(r) {
     const Rx = new THREE.Matrix4().makeRotationX(r[0]);
@@ -147,6 +153,7 @@ const Robot3D = (() => {
     const t = toolObj.clone();
     if (isGhost) t.traverse((o) => { if (o.isMesh) o.material = matFor("tool"); });
     node.add(t);
+    return t;
   }
 
   function setJoints(rot, jointsDeg) {
@@ -272,6 +279,8 @@ const Robot3D = (() => {
       setCollisionEnv(pendingEnvScene);
       pendingEnvScene = null;
     }
+    // Register the tool body if it loaded before the collision world was ready.
+    ensureToolBody();
   }
 
   // Throttled collision check; called from the render loop.
@@ -284,6 +293,47 @@ const Robot3D = (() => {
     for (const name in collHighlightMeshes) {
       collHighlightMeshes[name].visible = res.bodies.has(name);
     }
+    // Collision STOP: combine current-pose + target-pose (ghost) hits.
+    // Fire on rising edge (debounced by COLLISION_STOP_THRESHOLD consecutive frames).
+    const curHit = res.bodies.size > 0;
+    let tgtHit = false;
+    if (lastTarget) {
+      const tRes = checkPoseCollision(lastTarget);
+      if (tRes && tRes.bodies.length > 0) tgtHit = true;
+    }
+    const anyHit = curHit || tgtHit;
+    if (anyHit) {
+      collStreak++;
+      if (collStreak >= COLLISION_STOP_THRESHOLD && !stopSent) {
+        stopSent = true;
+        if (onCollision) onCollision(res.collisions);
+      }
+    } else {
+      collStreak = 0;
+      stopSent = false;
+    }
+  }
+
+  // Read a three.js BufferGeometry into a flat triangle array (9 floats/triangle),
+  // baking in the object's world transform. Handles both indexed (GLB) and non-indexed
+  // (STL) geometries.
+  function geoToTris(geo, matrix) {
+    const pos = geo.attributes.position;
+    const idx = geo.index;
+    const triCount = idx ? idx.count / 3 : pos.count / 3;
+    const tris = new Float32Array(triCount * 9);
+    const v = new THREE.Vector3();
+    for (let i = 0; i < triCount; i++) {
+      for (let k = 0; k < 3; k++) {
+        const vi = idx ? idx.getX(i * 3 + k) : i * 3 + k;
+        v.set(pos.getX(vi), pos.getY(vi), pos.getZ(vi));
+        if (matrix) v.applyMatrix4(matrix);
+        tris[i * 9 + k * 3 + 0] = v.x;
+        tris[i * 9 + k * 3 + 1] = v.y;
+        tris[i * 9 + k * 3 + 2] = v.z;
+      }
+    }
+    return tris;
   }
 
   // Set the env collision from a loaded GLB scene (world-space meshes after rotation).
@@ -292,18 +342,8 @@ const Robot3D = (() => {
     const meshes = [];
     envScene.traverse((o) => {
       if (o.isMesh && o.geometry && o.geometry.attributes.position) {
-        // Bake the world transform into the positions (the env is static).
         o.updateMatrixWorld();
-        const geo = o.geometry;
-        const pos = geo.attributes.position;
-        const n = pos.count;
-        const tris = new Float32Array(n * 3);
-        const v = new THREE.Vector3();
-        for (let i = 0; i < n; i++) {
-          v.setFromBufferAttribute ? v.fromBufferAttribute(pos, i) : v.set(pos.getX(i), pos.getY(i), pos.getZ(i));
-          v.applyMatrix4(o.matrixWorld);
-          tris[i * 3 + 0] = v.x; tris[i * 3 + 1] = v.y; tris[i * 3 + 2] = v.z;
-        }
+        const tris = geoToTris(o.geometry, o.matrixWorld);
         meshes.push({ name: o.name || "env", tris: tris });
       }
     });
@@ -311,6 +351,29 @@ const Robot3D = (() => {
       collWorld.setEnv(meshes);
       logFn("collision env: " + meshes.length + " meshes");
     }
+  }
+
+  // Extract triangles from the tool GLB in the tool-node's local frame.
+  // toolClone is the GLB scene root (child of the tool node).
+  function extractToolTris(toolClone) {
+    const parentInv = new THREE.Matrix4().copy(toolClone.parent.matrixWorld).invert();
+    const out = [];
+    toolClone.traverse((o) => {
+      if (o.isMesh && o.geometry && o.geometry.attributes.position) {
+        const localMat = new THREE.Matrix4().multiplyMatrices(parentInv, o.matrixWorld);
+        const t = geoToTris(o.geometry, localMat);
+        for (let i = 0; i < t.length; i++) out.push(t[i]);
+      }
+    });
+    return new Float32Array(out);
+  }
+
+  // Register the tool as a collision body (once the GLB has loaded and the
+  // collision world is ready). Handles the load-order race.
+  function ensureToolBody() {
+    if (toolBodyAdded || !collWorld || !toolTris || !toolNode) return;
+    collWorld.addBody("tool", toolTris, () => toolNode.matrixWorld.elements);
+    toolBodyAdded = true;
   }
 
   // ------------------------------------------------------------------
@@ -413,6 +476,7 @@ const Robot3D = (() => {
   function init(containerEl, opts) {
     opts = opts || {};
     logFn = opts.log || console.log;
+    onCollision = opts.onCollision || null;
     if (typeof THREE === "undefined") { logFn("three.js failed to load; 3d view disabled"); return; }
     container = containerEl;
     toolEl = opts.toolEl || null;
@@ -510,8 +574,12 @@ const Robot3D = (() => {
       const attach = (toolObj) => {
         try {
           if (toolObj) {
-            attachTool(cur.tool, toolObj, curMat, false);
+            const curClone = attachTool(cur.tool, toolObj, curMat, false);
             attachTool(tgt.tool, toolObj, ghostMat, true);
+            // Extract collision triangles from the current arm's tool clone.
+            cur.tool.updateMatrixWorld(true);
+            toolTris = extractToolTris(curClone);
+            ensureToolBody();
           }
           setupToolScreen(cur.tool);  // render the hydra screen onto the tool's red mesh
         } catch (e) {
@@ -529,7 +597,7 @@ const Robot3D = (() => {
   function update(s) {
     if (!running) return;
     if (s.joints) setJoints(rotors, s.joints);
-    if (s.target) setJoints(rotorsT, s.target);
+    if (s.target) { setJoints(rotorsT, s.target); lastTarget = s.target; }
     // Push the core's resolved hydra patch onto the tool screen (the robot's screen
     // follows the live state); only re-eval when the code actually changes.
     if (screenHydra && typeof s.patch === "string" && s.patch && s.patch !== screenPatchCode) {

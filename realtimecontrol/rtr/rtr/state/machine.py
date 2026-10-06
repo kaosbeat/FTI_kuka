@@ -327,3 +327,15 @@ class StateMachine:
         self.speed = self.zones.get(self.current_zone).speed
         self.target = list(curjpos)
         self.target_kind = "joint"
+
+    def halt(self, curjpos: List[float]) -> None:
+        """Stop all motion: clear the transition and action, hold the current pose.
+
+        Unlike :meth:`reset`, this preserves the current zone (no zone change).
+        The robot holds its current joint position.
+        """
+        self._transition = None
+        self.current_action = None
+        self.action_index = 0
+        self.target = list(curjpos)
+        self.target_kind = "joint"

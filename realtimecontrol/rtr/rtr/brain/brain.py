@@ -75,6 +75,8 @@ class Brain:
             self.machine.limitadjust[i] = float(p.get("value", self.machine.limitadjust[i]))
         elif c == Cmd.RANDOM_WRIST:
             self.machine.random_wrist()
+        elif c == Cmd.STOP:
+            self.machine.halt(curjpos)
         elif c == Cmd.SET_FLAG:
             name = p.get("flag")
             if name in self.machine.flags:
