@@ -72,6 +72,7 @@ const Robot3D = (() => {
   let screenPatchCode = null;
   // Collision state
   let collWorld = null, collFrame = 0, envScene = null;
+  let collisionOn = true; // runtime gate; flipped by setCollisionEnabled()
   // The low-res collision proxy (authored Y-up like environment.glb). Loaded and used
   // for env collision only; never rendered. pendingCollisionEnvScene handles the
   // load-order race (GLB arrives before the collision world is built).
@@ -307,7 +308,7 @@ const Robot3D = (() => {
   // Throttled collision check; called from the render loop.
   let collDiagEnvLogged = false, collDiagPrevKey = null;
   function runCollisionCheck() {
-    if (!collWorld) return;
+    if (!collWorld || !collisionOn) return;
     collFrame++;
     if (collFrame % COLLISION_INTERVAL !== 0) return;
     try {
@@ -563,11 +564,18 @@ const Robot3D = (() => {
     ghostRoot.visible = ghostVisible;
     scene.add(ghostRoot);
 
+    // Collision is opt-out: pass { collision: false } to disable it entirely. When
+    // disabled, the collision world is never built (collWorld stays null), so
+    // runCollisionCheck() no-ops and no STOP is ever sent from collision.
+    const collisionEnabled = opts.collision !== false;
+    collisionOn = collisionEnabled;
     if (opts.environment !== false && typeof THREE.GLTFLoader !== "undefined") {
       loadEnvironment(opts.environmentUrl || "assets/environment.glb");
       // Low-res collision proxy (authored separately, Y-up). Loaded invisibly for
       // env collision; falls back to self-only collision if the file is missing.
-      loadCollisionEnv(opts.collisionEnvUrl || "assets/environment_collision.glb");
+      if (collisionEnabled) {
+        loadCollisionEnv(opts.collisionEnvUrl || "assets/environment_collision.glb");
+      }
     }
 
     // The render loop starts immediately (it renders the scene as it builds up).
@@ -618,7 +626,7 @@ const Robot3D = (() => {
       setJoints(rotors, HOME);
       setJoints(rotorsT, HOME);
       running = true;
-      setupCollision();
+      if (collisionEnabled) setupCollision();
       const attach = (toolObj) => {
         try {
           if (toolObj) {
@@ -799,5 +807,14 @@ const Robot3D = (() => {
     }
   }
 
-  return { init, update, setTarget, screenResolution, setGhostVisible, collisions, checkPoseCollision, reloadEnv, diagCollision, diagEnv };
+  // Runtime toggle for collision checking. Flipping it off makes runCollisionCheck()
+  // a no-op (and stops the STOP signal); the collision world stays built so you can
+  // flip it back on without a reload. (The startup opt-out { collision: false } skips
+  // building the world entirely, which also saves the STL loads.)
+  function setCollisionEnabled(enabled) {
+    collisionOn = !!enabled;
+    console.log("[collision] " + (collisionOn ? "enabled" : "disabled") + " (runtime)");
+  }
+
+  return { init, update, setTarget, screenResolution, setGhostVisible, collisions, checkPoseCollision, reloadEnv, diagCollision, diagEnv, setCollisionEnabled };
 })();
