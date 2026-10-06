@@ -36,6 +36,12 @@ class Brain:
         # Receive-side visibility: log CAM_* telemetry (throttled).
         self._last_cand_ids = None
         self._cam_log_ts: dict = {}
+        # Hunt loop: scan -> detect -> lock -> track -> lost -> rescan.
+        # The brain owns this (it is the decision-maker); the machine owns (zone, action).
+        self._hunt_state = "idle"  # "idle" | "tracking" | "scanning"
+        self._hunt_lock_id = None
+        self._hunt_last_track_ts = 0.0
+        self._hunt_lost_s = 2.0
 
     def _cam_log(self, key: str, msg: str, force: bool = False) -> None:
         """Log camera telemetry at most once per second (force overrides)."""
@@ -124,7 +130,18 @@ class Brain:
         if best is not None:
             lock_id = best.get("id")
             if self.camera is not None and lock_id is not None:
-                self.camera.set_intent(lock_id=lock_id)
+                self.camera.set_intent(lock_id=lock_id, mode="track")
+                if lock_id != self._hunt_lock_id:
+                    # New lock: the new target's CAM_TRACK lags ~1 frame, so seed the
+                    # lost timer now (a stale timestamp would cause a false "lost").
+                    self._hunt_last_track_ts = time.time()
+                    self._hunt_lock_id = lock_id
+                # Attention grab: pull the robot into the hunt unless it is already
+                # tracking/looking or a zone transition is in progress.
+                if (self.machine.behavior not in ("track", "focus", "look")
+                        and not self.machine.transitioning):
+                    self.machine.trigger_action("wakeup", "look")
+                self._hunt_state = "tracking"
 
     def _handle_cam_track(self, p: dict) -> None:
         """Store the track telemetry on the machine; the behaviours read it.
@@ -136,6 +153,10 @@ class Brain:
         if self.camera is not None:
             self.camera.handle_telemetry(Cmd.CAM_TRACK, p)
         self._cam_log("track", f"track: id={p.get('id')} dx={p.get('dx', 0):.1f} dy={p.get('dy', 0):.1f}")
+        # Refresh the hunt lost-timer only for the locked id (a stale track for a
+        # different id — e.g. a lingering lock while scanning — must not count).
+        if p.get("id") == self._hunt_lock_id:
+            self._hunt_last_track_ts = time.time()
         self.machine.camera_state = {
             "dx": p.get("dx", 0.0),
             "dy": p.get("dy", 0.0),
@@ -159,3 +180,24 @@ class Brain:
             if p.get("bbox") is not None:
                 self.camera.set_intent(active="close", mode="analyze")
                 self._cam_log("face", f"face: id={p.get('id')} bbox={p.get('bbox')}")
+
+    # ------------------------------------------------------------------
+    # Per-tick hunt bookkeeping.
+    # ------------------------------------------------------------------
+    def tick(self, curjpos: List[float]) -> None:
+        """Detect a lost lock and rescan (the hunt's time-driven step).
+
+        Called by the engine after the command drain and before ``machine.step``, so a
+        triggered transition is driven the same tick. Only the ``tracking`` state arms
+        the lost check; ``scanning`` waits for the next ``CAM_CANDIDATES`` re-detect.
+        """
+        if self._hunt_state != "tracking":
+            return
+        if time.time() - self._hunt_last_track_ts <= self._hunt_lost_s:
+            return
+        # Lost: clear the lock and rescan.
+        if self.camera is not None:
+            self.camera.set_intent(lock_id=None, mode="idle")
+        self._hunt_lock_id = None
+        self.machine.trigger_action("wakeup", "scan")
+        self._hunt_state = "scanning"

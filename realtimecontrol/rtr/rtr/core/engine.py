@@ -93,6 +93,10 @@ class Engine:
                 else:
                     self.brain.on_command(cmd, curjpos)
 
+            # Hunt bookkeeping (lost detection / rescan) before the step, so a
+            # triggered transition is driven the same tick.
+            self.brain.tick(curjpos)
+
             target = self.machine.step(curjpos)
 
             if target is not None:

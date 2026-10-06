@@ -76,6 +76,11 @@ class CameraMock:
             self._active = "wide"
             self._mode = "idle"
             self._lock_id: Optional[int] = None
+            # Visibility cycle: the whole scene is hidden periodically so the locked
+            # target is lost (no candidates, no track) and the hunt loop
+            # (detect -> track -> lost -> scan -> re-detect) is observable.
+            self._visible_s = 6.0
+            self._hidden_s = 4.0
             # Simulated person positions (random walk).
             self._people = []
             for i in range(num_candidates):
@@ -205,6 +210,15 @@ class CameraMock:
             # Slightly fluctuate confidence.
             p["conf"] = max(0.3, min(0.99, p["conf"] + random.uniform(-0.01, 0.01)))
 
+    def _scene_visible(self) -> bool:
+        """Whether the simulated scene is currently visible (random-walk mode).
+
+        Visible for ``_visible_s`` then hidden for ``_hidden_s``, repeating. While
+        hidden there are no candidates and no track — the locked target is lost.
+        """
+        period = self._visible_s + self._hidden_s
+        return (time.time() % period) < self._visible_s
+
     def _send_mock_telemetry(self) -> None:
         """Send one frame of simulated CAM_* telemetry to the core (random-walk mode)."""
         if self._conn is None or not self._conn.connected:
@@ -213,19 +227,22 @@ class CameraMock:
         self._step_people()
         self._frame_count += 1
 
-        # Build candidates (all simulated persons).
+        visible = self._scene_visible()
+
+        # Build candidates (all simulated persons, or none when the scene is hidden).
         candidates = []
-        for p in self._people:
-            w = random.uniform(0.08, 0.15)
-            h = random.uniform(0.12, 0.25)
-            candidates.append({
-                "id": p["id"],
-                "x1": max(0, p["x"] - w / 2),
-                "y1": max(0, p["y"] - h / 2),
-                "x2": min(1.0, p["x"] + w / 2),
-                "y2": min(1.0, p["y"] + h / 2),
-                "conf": p["conf"],
-            })
+        if visible:
+            for p in self._people:
+                w = random.uniform(0.08, 0.15)
+                h = random.uniform(0.12, 0.25)
+                candidates.append({
+                    "id": p["id"],
+                    "x1": max(0, p["x"] - w / 2),
+                    "y1": max(0, p["y"] - h / 2),
+                    "x2": min(1.0, p["x"] + w / 2),
+                    "y2": min(1.0, p["y"] + h / 2),
+                    "conf": p["conf"],
+                })
 
         # Send status (every frame for simplicity; could be throttled).
         self._conn.send_command({
@@ -244,8 +261,8 @@ class CameraMock:
             "candidates": candidates,
         })
 
-        # Send track (if we have a lock and the locked person is visible).
-        if self._lock_id is not None:
+        # Send track (if the scene is visible, we have a lock, and the locked person exists).
+        if visible and self._lock_id is not None:
             locked = next((p for p in self._people if p["id"] == self._lock_id), None)
             if locked is not None:
                 W, H = 640, 480

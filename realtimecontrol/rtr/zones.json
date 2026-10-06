@@ -264,6 +264,24 @@
           ],
           "behavior": "look"
         },
+        "scan": {
+          "enabled": true,
+          "speed": 20,
+          "loop": true,
+          "next": {},
+          "base_pose": [
+            -85,
+            -130,
+            137,
+            -2,
+            0,
+            0
+          ],
+          "variable_axes": [
+            0
+          ],
+          "behavior": "scan"
+        },
         "roar": {
           "enabled": true,
           "pos": [
