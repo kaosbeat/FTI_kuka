@@ -187,12 +187,14 @@
       const wt = new Float32Array(n * 9);
       const wtri = new Float32Array(n * 6);
       const p = [0, 0, 0];
+      const t = [0, 0, 0, 0, 0, 0];
       for (let i = 0; i < n; i++) {
         for (let k = 0; k < 9; k += 3) {
           xformPoint(m, b.tris[i * 9 + k], b.tris[i * 9 + k + 1], b.tris[i * 9 + k + 2], p);
           wt[i * 9 + k] = p[0]; wt[i * 9 + k + 1] = p[1]; wt[i * 9 + k + 2] = p[2];
         }
-        triAABB(wt, i, wtri);
+        triAABB(wt, i, t);
+        for (let k = 0; k < 6; k++) wtri[i * 6 + k] = t[k];
       }
       b._wt = wt; b._wtriAABB = wtri; b._wtGen = gen;
       return wt;
@@ -232,7 +234,8 @@
           for (const mi of cands) {
             const em = env.meshes[mi];
             if (!aabbOverlap(b._wAABB, em.aabb)) continue;
-            if (collideTriArrays(wb, b._wtriAABB, em.tris, em.triAABB) >= 0) {
+            const _pair = collideTriArrays(wb, b._wtriAABB, em.tris, em.triAABB);
+            if (_pair >= 0) {
               collisions.push({ a: b.name, b: "env:" + em.name, type: "env" });
               hot.add(b.name);
               break; // one env hit is enough to flag this body
@@ -281,10 +284,13 @@
             if (t[1] < ma[1]) ma[1] = t[1]; if (t[4] > ma[4]) ma[4] = t[4];
             if (t[2] < ma[2]) ma[2] = t[2]; if (t[5] > ma[5]) ma[5] = t[5];
           }
-          for (let k = 0; k < 6; k++) {
-            if (ma[k] < aabb[k]) aabb[k] = ma[k];
-            if (ma[k] > aabb[k + 3]) aabb[k + 3] = ma[k];
-          }
+          // Fold this mesh's AABB into the overall env AABB (first 3 = mins, last 3 = maxs).
+          if (ma[0] < aabb[0]) aabb[0] = ma[0];
+          if (ma[1] < aabb[1]) aabb[1] = ma[1];
+          if (ma[2] < aabb[2]) aabb[2] = ma[2];
+          if (ma[3] > aabb[3]) aabb[3] = ma[3];
+          if (ma[4] > aabb[4]) aabb[4] = ma[4];
+          if (ma[5] > aabb[5]) aabb[5] = ma[5];
           // bin the mesh's AABB into the grid
           const ix0 = Math.floor(ma[0] / cellSize), ix1 = Math.floor(ma[3] / cellSize);
           const iy0 = Math.floor(ma[1] / cellSize), iy1 = Math.floor(ma[4] / cellSize);

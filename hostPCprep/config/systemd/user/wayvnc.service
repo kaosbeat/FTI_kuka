@@ -1,0 +1,17 @@
+[Unit]
+Description=VNC Server
+After=graphical.target
+ConditionPathExists=/home/kaos/.config/wayvnc/config
+
+[Service]
+ExecStart=wayvnc
+Type=notify
+NotifyAccess=all
+Restart=on-failure
+RestartSec=3
+#User=kaos
+Environment="WAYLAND_DISPLAY=wayland-0"
+Environment="XDG_RUNTIME_DIR=/run/user/1000"
+
+[Install]
+WantedBy=default.target
