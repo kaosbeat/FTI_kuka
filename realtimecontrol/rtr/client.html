@@ -93,6 +93,7 @@
       &nbsp;<span class="sw" style="background:#4fc08d"></span>target</div>
     <div class="btnrow" style="margin-top:6px"><button id="ghostToggle" class="active">ghost arm</button><button id="fillToggle">fill window</button><button id="fsToggle">fullscreen</button></div>
     <div class="kv" style="margin-top:8px"><span>tool (x, y, z)</span><span id="toolPos">&#8211;</span></div>
+    <div class="kv"><span>collision</span><span id="collStatus">&#8211;</span></div>
   </section>
 
   <section>
@@ -150,6 +151,7 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/hydra-synth/dist/hydra-synth.js"></script>
+<script src="collide.js"></script>
 <script src="rtr3d.js"></script>
 <script>
 "use strict";
@@ -658,6 +660,20 @@ document.addEventListener("fullscreenchange", () => {
   $("fsToggle").className = document.fullscreenElement ? "active" : "";
   window.dispatchEvent(new Event("resize"));
 });
+// Collision status readout (polled from the 3D view's collision engine).
+setInterval(() => {
+  if (typeof Robot3D === "undefined") return;
+  const res = Robot3D.collisions();
+  if (!res) { $("collStatus").textContent = "—"; return; }
+  if (res.bodies.length === 0) {
+    $("collStatus").textContent = "clear";
+    $("collStatus").style.color = "";
+  } else {
+    $("collStatus").textContent = res.collisions.map((c) => c.a + "~" + c.b).join(", ");
+    $("collStatus").style.color = "#e05d5d";
+  }
+}, 500);
+
 connect();
 </script>
 </body>

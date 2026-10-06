@@ -36,6 +36,11 @@ const Robot3D = (() => {
   const TOOL0 = { xyz: [0, 0, 0], rpy: [0, 1.5708, 0] };
   const MESH_NAMES = ["base_link", "link_1", "link_2", "link_3", "link_4", "link_5", "link_6"];
   const ASSET_DIR = "assets/kr60ha/visual/";
+  const COLLISION_ASSET_DIR = "assets/kr60ha/collision/";
+  const COLLISION_SKIP = [
+    ["base", "link_1"], ["link_1", "link_2"], ["link_2", "link_3"],
+    ["link_3", "link_4"], ["link_4", "link_5"], ["link_5", "link_6"],
+  ];
   // The Blender-editable tool GLB (authored Y-up like environment.glb). Replaces the
   // old white placeholder box at the $FLANGE; see assets/make_tool.py for the starter.
   const TOOL_ASSET_URL = "assets/tool.glb";
@@ -64,6 +69,10 @@ const Robot3D = (() => {
   // the standalone previews and the fullscreen render page).
   let screenHydra = null;
   let screenPatchCode = null;
+  // Collision state
+  let collWorld = null, collFrame = 0, pendingEnvScene = null;
+  const COLLISION_INTERVAL = 8;
+  let collHighlightMeshes = {}; // name -> THREE.Mesh (red wireframe, child of rotor)
 
   function rotFromRpy(r) {
     const Rx = new THREE.Matrix4().makeRotationX(r[0]);
@@ -176,6 +185,14 @@ const Robot3D = (() => {
       const env = gltf.scene;
       env.rotation.x = Math.PI / 2;
       scene.add(env);
+      // Set up env collision (the scene is now in world space after rotation).
+      if (collWorld) {
+        env.updateMatrixWorld(true);
+        setCollisionEnv(env);
+      } else {
+        // Collision world not ready yet; store the env scene for later.
+        pendingEnvScene = env;
+      }
     }, undefined, (err) => {
       logFn("environment not loaded: " + (err && err.message ? err.message : err));
     });
@@ -194,6 +211,106 @@ const Robot3D = (() => {
       logFn("tool asset not loaded: " + (err && err.message ? err.message : err));
       onDone(null);
     });
+  }
+
+  // ------------------------------------------------------------------
+  // Collision detection (self + env). Uses the standalone Collide engine
+  // (collide.js) with the ROS collision STLs. The check is throttled in the
+  // render loop; colliding bodies get a red wireframe highlight.
+  // ------------------------------------------------------------------
+  const IDENT_MAT = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
+  function setupCollision() {
+    if (typeof Collide === "undefined") { logFn("Collide engine not loaded; collision disabled"); return; }
+    let pending = MESH_NAMES.length;
+    const collGeos = {};
+    const finish = () => { if (--pending === 0) buildCollisionWorld(collGeos); };
+    MESH_NAMES.forEach((name) => {
+      new THREE.STLLoader().load(
+        COLLISION_ASSET_DIR + name + ".stl",
+        (geo) => { collGeos[name] = geo; finish(); },
+        undefined,
+        () => { finish(); }
+      );
+    });
+  }
+
+  function buildCollisionWorld(collGeos) {
+    collWorld = Collide.createWorld();
+    // Base is static (identity world matrix).
+    if (collGeos.base_link) {
+      collWorld.addBody("base", Collide.geometryToTris(collGeos.base_link), () => IDENT_MAT);
+    }
+    // Links: world matrix = the current arm's rotor matrixWorld.
+    for (let j = 0; j < 6; j++) {
+      const name = "link_" + (j + 1);
+      if (collGeos[name] && rotors[j]) {
+        collWorld.addBody(name, Collide.geometryToTris(collGeos[name]),
+          () => rotors[j].matrixWorld.elements);
+      }
+    }
+    collWorld.setSkipPairs(COLLISION_SKIP);
+    // Red wireframe highlights (children of each rotor so they move with the link).
+    const hlMat = new THREE.MeshBasicMaterial({ color: 0xff2020, wireframe: true, transparent: true, opacity: 0.45 });
+    MESH_NAMES.forEach((name) => {
+      if (collGeos[name]) {
+        const bodyName = name === "base_link" ? "base" : name;
+        const hl = new THREE.Mesh(collGeos[name], hlMat);
+        hl.visible = false;
+        if (name === "base_link") { scene.add(hl); }
+        else {
+          const j = parseInt(name.split("_")[1]) - 1;
+          if (rotors[j]) rotors[j].add(hl);
+        }
+        collHighlightMeshes[bodyName] = hl;
+      }
+    });
+    logFn("collision ready: " + collWorld.bodyNames().length + " bodies");
+    // If the env GLB loaded before the collision world was ready, set it up now.
+    if (pendingEnvScene) {
+      pendingEnvScene.updateMatrixWorld(true);
+      setCollisionEnv(pendingEnvScene);
+      pendingEnvScene = null;
+    }
+  }
+
+  // Throttled collision check; called from the render loop.
+  function runCollisionCheck() {
+    if (!collWorld) return;
+    collFrame++;
+    if (collFrame % COLLISION_INTERVAL !== 0) return;
+    const res = collWorld.check();
+    // Update red wireframe highlights.
+    for (const name in collHighlightMeshes) {
+      collHighlightMeshes[name].visible = res.bodies.has(name);
+    }
+  }
+
+  // Set the env collision from a loaded GLB scene (world-space meshes after rotation).
+  function setCollisionEnv(envScene) {
+    if (!collWorld || !envScene) return;
+    const meshes = [];
+    envScene.traverse((o) => {
+      if (o.isMesh && o.geometry && o.geometry.attributes.position) {
+        // Bake the world transform into the positions (the env is static).
+        o.updateMatrixWorld();
+        const geo = o.geometry;
+        const pos = geo.attributes.position;
+        const n = pos.count;
+        const tris = new Float32Array(n * 3);
+        const v = new THREE.Vector3();
+        for (let i = 0; i < n; i++) {
+          v.setFromBufferAttribute ? v.fromBufferAttribute(pos, i) : v.set(pos.getX(i), pos.getY(i), pos.getZ(i));
+          v.applyMatrix4(o.matrixWorld);
+          tris[i * 3 + 0] = v.x; tris[i * 3 + 1] = v.y; tris[i * 3 + 2] = v.z;
+        }
+        meshes.push({ name: o.name || "env", tris: tris });
+      }
+    });
+    if (meshes.length) {
+      collWorld.setEnv(meshes);
+      logFn("collision env: " + meshes.length + " meshes");
+    }
   }
 
   // ------------------------------------------------------------------
@@ -353,6 +470,7 @@ const Robot3D = (() => {
       requestAnimationFrame(loop);
       controls.update();
       if (screenTex) screenTex.needsUpdate = true;  // re-upload the hydra canvas
+      runCollisionCheck();
       renderer.render(scene, camera);
       if (toolNode && toolEl) {
         const p = toolNode.getWorldPosition(new THREE.Vector3());
@@ -388,6 +506,7 @@ const Robot3D = (() => {
       setJoints(rotors, HOME);
       setJoints(rotorsT, HOME);
       running = true;
+      setupCollision();
       const attach = (toolObj) => {
         try {
           if (toolObj) {
@@ -439,5 +558,66 @@ const Robot3D = (() => {
     if (ghostRoot) ghostRoot.visible = ghostVisible;
   }
 
-  return { init, update, setTarget, screenResolution, setGhostVisible };
+  function collisions() {
+    if (!collWorld) return null;
+    const res = collWorld.check();
+    return { collisions: res.collisions, bodies: Array.from(res.bodies) };
+  }
+
+  // Check a scratch pose for collision (zone-path warnings). Returns the same
+  // shape as collisions() but under the given joint angles, not the live arm.
+  function checkPoseCollision(poseDeg) {
+    if (!collWorld || !poseDeg) return null;
+    const rad = poseDeg.map((d) => d * Math.PI / 180);
+    const mats = [IDENT_MAT.slice()];
+    for (let j = 0; j < 6; j++) {
+      const jt = JOINTS[j];
+      // Build the FK matrix: parent * T(xyz) * R(axis, angle)
+      const parent = j === 0 ? IDENT_MAT : mats[j - 1];
+      const tx = jt.xyz[0], ty = jt.xyz[1], tz = jt.xyz[2];
+      const Tm = parent.slice();
+      Tm[12] = parent[0]*tx + parent[4]*ty + parent[8]*tz + parent[12];
+      Tm[13] = parent[1]*tx + parent[5]*ty + parent[9]*tz + parent[13];
+      Tm[14] = parent[2]*tx + parent[6]*ty + parent[10]*tz + parent[14];
+      const ax = jt.axis[0], ay = jt.axis[1], az = jt.axis[2];
+      const c = Math.cos(rad[j]), s = Math.sin(rad[j]), t = 1 - c;
+      const Rm = [
+        c + ax*ax*t, ay*ax*t + az*s, az*ax*t - ay*s, 0,
+        ax*ay*t - az*s, c + ay*ay*t, ay*az*t + ax*s, 0,
+        ax*az*t + ay*s, ay*az*t - ax*s, c + az*az*t, 0,
+        0, 0, 0, 1
+      ];
+      // result = Tm * Rm
+      const res = new Array(16);
+      for (let col = 0; col < 4; col++)
+        for (let row = 0; row < 4; row++) {
+          let sum = 0;
+          for (let k = 0; k < 4; k++) sum += Tm[k * 4 + row] * Rm[col * 4 + k];
+          res[col * 4 + row] = sum;
+        }
+      mats[j] = res;
+    }
+    const matMap = {};
+    matMap["base"] = IDENT_MAT;
+    for (let j = 0; j < 6; j++) matMap["link_" + (j + 1)] = mats[j];
+    const result = collWorld.checkWithMatrices(matMap);
+    return { collisions: result.collisions, bodies: Array.from(result.bodies) };
+  }
+
+  // Reload the environment GLB and update the collision env.
+  function reloadEnv(url) {
+    const u = url || "assets/environment.glb";
+    new THREE.GLTFLoader().load(u, (gltf) => {
+      const env = gltf.scene;
+      env.rotation.x = Math.PI / 2;
+      scene.add(env);
+      env.updateMatrixWorld(true);
+      if (collWorld) setCollisionEnv(env);
+      logFn("environment reloaded: " + u);
+    }, undefined, (err) => {
+      logFn("environment reload failed: " + (err && err.message ? err.message : err));
+    });
+  }
+
+  return { init, update, setTarget, screenResolution, setGhostVisible, collisions, checkPoseCollision, reloadEnv };
 })();
