@@ -179,6 +179,12 @@ const FLAGS = ["wandermode","randomwristmode","dynmode","reachmode"];
 
 const $ = (id) => document.getElementById(id);
 
+// Derive the WebSocket host from the page's own hostname so the page works when
+// opened from another PC on the LAN (location.hostname is the server, not the
+// viewer). The input stays editable for manual override.
+const defaultHost = "ws://" + (location.hostname || "localhost") + ":8765";
+$("host").value = defaultHost;
+
 // Fetch the live zone table from the core's HTTP API (same origin). Falls back to
 // FALLBACK_ZONES when the request fails (file:// usage or the core is down).
 async function fetchZones() {

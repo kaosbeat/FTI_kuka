@@ -324,6 +324,12 @@ const BEHAVIORS = ["track", "focus", "scan", "look", "wander", "random", "face",
 const NAV_COMMANDS = ["next_action", "next_zone", "back", "retrigger"];
 const $ = (id) => document.getElementById(id);
 
+// Derive the WebSocket host from the page's own hostname so the page works when
+// opened from another PC on the LAN (location.hostname is the server, not the
+// viewer). The input stays editable for manual override.
+const defaultHost = "ws://" + (location.hostname || "localhost") + ":8765";
+$("host").value = defaultHost;
+
 // Minimal fallback table (last resort when both /api/zones and /zones.json fail,
 // e.g. opened from file://). The real table comes from the core over HTTP. Zone shape:
 // {enabled, safezone, speed, actions}; the navigation graph is the per-action `next`.

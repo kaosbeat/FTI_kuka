@@ -215,6 +215,16 @@ def _make_handler(server: HttpServer):
             else:
                 self._send_text(404, "not found")
 
+        def do_OPTIONS(self):
+            # CORS preflight: the control pages may be opened from a different
+            # origin (file://, or served elsewhere on the LAN) and POST JSON to
+            # the API; the browser requires this handshake before the real call.
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.end_headers()
+
         # ------------------------------------------------------------------
         # Zone API.
         # ------------------------------------------------------------------
@@ -490,6 +500,7 @@ def _make_handler(server: HttpServer):
                 data = f.read()
             self.send_response(200)
             self.send_header("Content-Type", ctype)
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -501,6 +512,7 @@ def _make_handler(server: HttpServer):
             body = json.dumps(obj).encode("utf-8")
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -509,6 +521,7 @@ def _make_handler(server: HttpServer):
             body = text.encode("utf-8")
             self.send_response(code)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
