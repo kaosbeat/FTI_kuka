@@ -71,7 +71,11 @@ const Robot3D = (() => {
   let screenHydra = null;
   let screenPatchCode = null;
   // Collision state
-  let collWorld = null, collFrame = 0, pendingEnvScene = null;
+  let collWorld = null, collFrame = 0, envScene = null;
+  // The low-res collision proxy (authored Y-up like environment.glb). Loaded and used
+  // for env collision only; never rendered. pendingCollisionEnvScene handles the
+  // load-order race (GLB arrives before the collision world is built).
+  let collisionEnvScene = null, pendingCollisionEnvScene = null;
   const COLLISION_INTERVAL = 8;
   let collHighlightMeshes = {}; // name -> THREE.Mesh (red wireframe, child of rotor)
   // Tool collision (the tool GLB may load after the collision world is built).
@@ -191,17 +195,32 @@ const Robot3D = (() => {
     new THREE.GLTFLoader().load(url, (gltf) => {
       const env = gltf.scene;
       env.rotation.x = Math.PI / 2;
+      envScene = env;
       scene.add(env);
-      // Set up env collision (the scene is now in world space after rotation).
+    }, undefined, (err) => {
+      logFn("environment not loaded: " + (err && err.message ? err.message : err));
+    });
+  }
+
+  // Load the low-res collision proxy (a GLB authored Y-up like environment.glb, with the
+  // floor at Y=0 and obstacles extending +Y). It is rotated +90deg about X (same as the
+  // render env) so it sits in the same world position, then used for env collision only.
+  // It is kept invisible in the scene so it costs no draw calls.
+  function loadCollisionEnv(url) {
+    new THREE.GLTFLoader().load(url, (gltf) => {
+      const env = gltf.scene;
+      env.rotation.x = Math.PI / 2;
+      env.visible = false;
+      collisionEnvScene = env;
+      scene.add(env);
       if (collWorld) {
         env.updateMatrixWorld(true);
         setCollisionEnv(env);
       } else {
-        // Collision world not ready yet; store the env scene for later.
-        pendingEnvScene = env;
+        pendingCollisionEnvScene = env;
       }
     }, undefined, (err) => {
-      logFn("environment not loaded: " + (err && err.message ? err.message : err));
+      logFn("collision env not loaded: " + (err && err.message ? err.message : err));
     });
   }
 
@@ -275,11 +294,11 @@ const Robot3D = (() => {
     const _collReadyMsg = "collision ready: " + collWorld.bodyNames().length + " bodies";
     logFn(_collReadyMsg);
     console.log("[collision] " + _collReadyMsg);
-    // If the env GLB loaded before the collision world was ready, set it up now.
-    if (pendingEnvScene) {
-      pendingEnvScene.updateMatrixWorld(true);
-      setCollisionEnv(pendingEnvScene);
-      pendingEnvScene = null;
+    // If the low-res collision GLB loaded before the collision world was ready, set it up now.
+    if (pendingCollisionEnvScene) {
+      pendingCollisionEnvScene.updateMatrixWorld(true);
+      setCollisionEnv(pendingCollisionEnvScene);
+      pendingCollisionEnvScene = null;
     }
     // Register the tool body if it loaded before the collision world was ready.
     ensureToolBody();
@@ -546,6 +565,9 @@ const Robot3D = (() => {
 
     if (opts.environment !== false && typeof THREE.GLTFLoader !== "undefined") {
       loadEnvironment(opts.environmentUrl || "assets/environment.glb");
+      // Low-res collision proxy (authored separately, Y-up). Loaded invisibly for
+      // env collision; falls back to self-only collision if the file is missing.
+      loadCollisionEnv(opts.collisionEnvUrl || "assets/environment_collision.glb");
     }
 
     // The render loop starts immediately (it renders the scene as it builds up).
@@ -711,15 +733,15 @@ const Robot3D = (() => {
     return { collisions: result.collisions, bodies: Array.from(result.bodies) };
   }
 
-  // Reload the environment GLB and update the collision env.
+  // Reload the render environment GLB (visuals only). The collision env is loaded
+  // separately from the low-res proxy and is unaffected by a render-env reload.
   function reloadEnv(url) {
     const u = url || "assets/environment.glb";
     new THREE.GLTFLoader().load(u, (gltf) => {
       const env = gltf.scene;
       env.rotation.x = Math.PI / 2;
+      envScene = env;
       scene.add(env);
-      env.updateMatrixWorld(true);
-      if (collWorld) setCollisionEnv(env);
       logFn("environment reloaded: " + u);
     }, undefined, (err) => {
       logFn("environment reload failed: " + (err && err.message ? err.message : err));
@@ -743,5 +765,39 @@ const Robot3D = (() => {
     }
   }
 
-  return { init, update, setTarget, screenResolution, setGhostVisible, collisions, checkPoseCollision, reloadEnv, diagCollision };
+  // Diagnostic: report where the collision env's meshes actually land in world space.
+  // The collision env is the low-res proxy (collisionEnvScene); envScene is the render
+  // env. Confirms the low-res model's world AABB so env collisions can be validated.
+  function diagEnv() {
+    const env = collisionEnvScene || envScene;
+    if (!env) { console.log("[env] no env scene"); return; }
+    env.updateMatrixWorld(true);
+    const overall = new THREE.Box3().setFromObject(env);
+    console.log("[env] (" + (collisionEnvScene ? "collision" : "render") + ") overall world AABB:", [overall.min.x, overall.min.y, overall.min.z, overall.max.x, overall.max.y, overall.max.z].map((v) => v.toFixed(2)));
+    console.log("[env] scene rot.x:", env.rotation.x.toFixed(3), "pos:", [env.position.x, env.position.y, env.position.z].map((v) => v.toFixed(2)));
+    const tmp = new THREE.Box3();
+    const meshes = [];
+    env.traverse((o) => {
+      if (o.isMesh && o.geometry && o.geometry.attributes.position) {
+        tmp.setFromObject(o);
+        meshes.push({ name: o.name || "env", aabb: tmp.clone() });
+      }
+    });
+    console.log("[env] mesh count:", meshes.length);
+    const hist = {};
+    for (const m of meshes) {
+      const zc = (m.aabb.min.z + m.aabb.max.z) / 2;
+      const b = Math.floor(zc / 0.5);
+      hist[b] = (hist[b] || 0) + 1;
+    }
+    console.log("[env] Z-center histogram (bucket*0.5):", JSON.stringify(hist));
+    meshes.sort((a, b) => b.aabb.max.z - a.aabb.max.z);
+    console.log("[env] top meshes by maxZ:");
+    for (let i = 0; i < 8 && i < meshes.length; i++) {
+      const m = meshes[i];
+      console.log("  " + m.name + " minZ=" + m.aabb.min.z.toFixed(2) + " maxZ=" + m.aabb.max.z.toFixed(2) + " minY=" + m.aabb.min.y.toFixed(2) + " maxY=" + m.aabb.max.y.toFixed(2));
+    }
+  }
+
+  return { init, update, setTarget, screenResolution, setGhostVisible, collisions, checkPoseCollision, reloadEnv, diagCollision, diagEnv };
 })();
