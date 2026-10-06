@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RTR hydra render</title>
+<style>
+  :root { --bg: #000; --text: #d7dbe2; --dim: #7c8494; --accent: #4fc08d; --border: #2a2f3a; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: var(--bg); overflow: hidden; }
+  #stage { position: fixed; inset: 0; width: 100%; height: 100%; }
+  #stage canvas { display: block; width: 100%; height: 100%; }
+  #hud {
+    position: fixed; top: 12px; left: 12px; z-index: 10;
+    background: rgba(13,15,19,.72); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 12px; color: var(--text); font: 12px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    pointer-events: none;
+  }
+  #hud .row { display: flex; gap: 8px; }
+  #hud .k { color: var(--dim); }
+  #hud .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #e05d5d; vertical-align: middle; }
+  #hud .dot.on { background: var(--accent); }
+</style>
+</head>
+<body>
+
+<div id="stage"></div>
+<div id="hud">
+  <div class="row"><span class="dot" id="dot"></span><span id="status">disconnected</span></div>
+  <div class="row"><span class="k">zone</span><span id="zone">—</span></div>
+  <div class="row"><span class="k">mode</span><span id="mode">—</span></div>
+  <div class="row"><span class="k">action</span><span id="action">—</span></div>
+  <div class="row"><span class="k">patch</span><span id="patchSlot">—</span></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/hydra-synth/dist/hydra-synth.js"></script>
+<script>
+"use strict";
+
+// The built-in hydra patch used when /api/patches is unreachable (mirrors
+// rtr/patches/patches.py DEFAULT_HYDRA_CODE).
+const DEFAULT_CODE = "osc(4, 0.1, 1.2).out()";
+
+let PATCHES = { default: DEFAULT_CODE, zones: {}, modes: {}, actions: {} };
+let hydra = null;
+let lastCode = null;        // the code currently running in the preview
+let ws = null;
+
+const $ = (id) => document.getElementById(id);
+
+// ---------------------------------------------------------------------------
+// Hydra: one fullscreen instance; the matched patch is re-eval'd only when the
+// resolved code changes (so the render follows state without re-eval per tick).
+// ---------------------------------------------------------------------------
+function makeHydra() {
+  if (hydra) return hydra;
+  if (typeof Hydra === "undefined") { $("status").textContent = "hydra not loaded"; return null; }
+  const canvas = document.createElement("canvas");
+  canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+  $("stage").appendChild(canvas);
+  hydra = new Hydra({ canvas, detectAudio: false, makeGlobal: true, autoLoop: true });
+  return hydra;
+}
+
+function renderCode(code) {
+  if (code === lastCode) return;
+  const h = makeHydra();
+  if (!h) return;
+  try {
+    h.eval(code || DEFAULT_CODE);
+    lastCode = code || DEFAULT_CODE;
+    $("patchSlot").textContent = slotLabel();
+  } catch (e) {
+    console.log("hydra eval failed:", e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Patch matching: action > mode > zone > default (mirrors the core's match_patch).
+// ---------------------------------------------------------------------------
+function matchPatch(zone, mode, action) {
+  // The actions table is two-level (zone -> action -> code), so the action lookup
+  // is scoped to the zone (mirrors the core's match_patch).
+  if (zone && action) {
+    const code = (PATCHES.actions || {})[zone] && (PATCHES.actions || {})[zone][action];
+    if (typeof code === "string" && code) return code;
+  }
+  if (mode) {
+    const code = (PATCHES.modes || {})[mode];
+    if (typeof code === "string" && code) return code;
+  }
+  if (zone) {
+    const code = (PATCHES.zones || {})[zone];
+    if (typeof code === "string" && code) return code;
+  }
+  const d = PATCHES.default;
+  return (typeof d === "string" && d) ? d : DEFAULT_CODE;
+}
+
+function slotLabel() {
+  const z = $("zone").textContent, m = $("mode").textContent, a = $("action").textContent;
+  if (z !== "—" && a !== "—" && (PATCHES.actions || {})[z] && (PATCHES.actions || {})[z][a]) return "action:" + a;
+  if (m !== "—" && (PATCHES.modes || {})[m]) return "mode:" + m;
+  if (z !== "—" && (PATCHES.zones || {})[z]) return "zone:" + z;
+  return "default";
+}
+
+async function loadPatches() {
+  let data = null;
+  try {
+    const r = await fetch("/api/patches", { cache: "no-store" });
+    if (r.ok) data = await r.json();
+  } catch (e) {}
+  if (!data) {
+    try {
+      const r = await fetch("/patches.json", { cache: "no-store" });
+      if (r.ok) data = await r.json();
+    } catch (e) {}
+  }
+  if (!data) data = { default: DEFAULT_CODE, zones: {}, modes: {}, actions: {} };
+  PATCHES = data;
+  if (typeof PATCHES.default !== "string") PATCHES.default = DEFAULT_CODE;
+  if (!PATCHES.zones) PATCHES.zones = {};
+  if (!PATCHES.modes) PATCHES.modes = {};
+  if (!PATCHES.actions) PATCHES.actions = {};
+  // Re-resolve the current patch with the fresh table.
+  renderCode(matchPatch($("zone").textContent, $("mode").textContent, $("action").textContent));
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket (reuses client.html's transport pattern). State frames drive the
+// patch; patches_changed re-fetches the table.
+// ---------------------------------------------------------------------------
+function connect() {
+  const url = "ws://" + location.hostname + ":8765";
+  ws = new WebSocket(url);
+  ws.onopen = () => { $("dot").className = "dot on"; $("status").textContent = "connected"; loadPatches(); };
+  ws.onclose = () => {
+    $("dot").className = "dot"; $("status").textContent = "disconnected; retrying";
+    setTimeout(connect, 2000);
+  };
+  ws.onmessage = (e) => {
+    let m;
+    try { m = JSON.parse(e.data); } catch (err) { return; }
+    if (m.type === "state") {
+      $("zone").textContent = m.zone;
+      $("mode").textContent = m.mode;
+      $("action").textContent = m.action === null ? "—" : (m.action || "—");
+      // The core pushes the resolved patch in the state frame (single source of truth);
+      // prefer it. Fall back to local matching when it is absent (file:// or an older
+      // core that does not push the patch).
+      renderCode((typeof m.patch === "string" && m.patch) ? m.patch : matchPatch(m.zone, m.mode, m.action));
+    } else if (m.type === "patches_changed") {
+      loadPatches();
+    }
+  };
+}
+
+// Keep the canvas sized to the window (hydra renders at the canvas resolution).
+window.addEventListener("resize", () => {
+  if (!hydra) return;
+  const c = $("stage").querySelector("canvas");
+  if (c) { c.width = window.innerWidth; c.height = window.innerHeight; }
+});
+
+connect();
+</script>
+</body>
+</html>
