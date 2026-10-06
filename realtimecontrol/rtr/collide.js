@@ -177,10 +177,12 @@
     let gen = 0;
     const skipPairs = new Set(); // "nameA|nameB" pairs excluded from self-collision (joint housing)
 
-    function worldTris(b) {
+    function worldTris(b, m) {
       // Transform the body's local triangles to world (cached for the current check).
+      // `m` is the body's world matrix for THIS check (resolved by runCheck's getMat),
+      // so live and scratch checks both transform triangles with the same matrix they
+      // use for the AABB test — scratch checks must not fall back to the live getter.
       if (b._wtGen === gen) return b._wt;
-      const m = b.getMatrix();
       const n = b.tris.length / 9;
       const wt = new Float32Array(n * 9);
       const wtri = new Float32Array(n * 6);
@@ -213,7 +215,7 @@
           const a = bodies[i], c = bodies[j];
           if (skipPairs.has(a.name + "|" + c.name) || skipPairs.has(c.name + "|" + a.name)) continue;
           if (!aabbOverlap(a._wAABB, c._wAABB)) continue;
-          const wa = worldTris(a), wc = worldTris(c);
+          const wa = worldTris(a, getMat(a.name)), wc = worldTris(c, getMat(c.name));
           if (collideTriArrays(wa, a._wtriAABB, wc, c._wtriAABB) >= 0) {
             collisions.push({ a: a.name, b: c.name, type: "self" });
             hot.add(a.name); hot.add(c.name);
@@ -226,7 +228,7 @@
         for (const b of bodies) {
           if (!aabbOverlap(b._wAABB, env.aabb)) continue;
           const cands = queryEnv(b._wAABB);
-          const wb = worldTris(b);
+          const wb = worldTris(b, getMat(b.name));
           for (const mi of cands) {
             const em = env.meshes[mi];
             if (!aabbOverlap(b._wAABB, em.aabb)) continue;

@@ -288,29 +288,34 @@ const Robot3D = (() => {
     if (!collWorld) return;
     collFrame++;
     if (collFrame % COLLISION_INTERVAL !== 0) return;
-    const res = collWorld.check();
-    // Update red wireframe highlights.
-    for (const name in collHighlightMeshes) {
-      collHighlightMeshes[name].visible = res.bodies.has(name);
-    }
-    // Collision STOP: combine current-pose + target-pose (ghost) hits.
-    // Fire on rising edge (debounced by COLLISION_STOP_THRESHOLD consecutive frames).
-    const curHit = res.bodies.size > 0;
-    let tgtHit = false;
-    if (lastTarget) {
-      const tRes = checkPoseCollision(lastTarget);
-      if (tRes && tRes.bodies.length > 0) tgtHit = true;
-    }
-    const anyHit = curHit || tgtHit;
-    if (anyHit) {
-      collStreak++;
-      if (collStreak >= COLLISION_STOP_THRESHOLD && !stopSent) {
-        stopSent = true;
-        if (onCollision) onCollision(res.collisions);
+    try {
+      const res = collWorld.check();
+      // Update red wireframe highlights.
+      for (const name in collHighlightMeshes) {
+        collHighlightMeshes[name].visible = res.bodies.has(name);
       }
-    } else {
-      collStreak = 0;
-      stopSent = false;
+      // Collision STOP: combine current-pose + target-pose (ghost) hits.
+      // Fire on rising edge (debounced by COLLISION_STOP_THRESHOLD consecutive frames).
+      const curHit = res.bodies.size > 0;
+      let tgtHit = false;
+      if (lastTarget) {
+        const tRes = checkPoseCollision(lastTarget);
+        if (tRes && tRes.bodies.length > 0) tgtHit = true;
+      }
+      const anyHit = curHit || tgtHit;
+      if (anyHit) {
+        collStreak++;
+        if (collStreak >= COLLISION_STOP_THRESHOLD && !stopSent) {
+          stopSent = true;
+          if (onCollision) onCollision(res.collisions);
+        }
+      } else {
+        collStreak = 0;
+        stopSent = false;
+      }
+    } catch (e) {
+      // A collision error must never kill the render loop (it is self-recursive).
+      logFn("collision check error: " + (e && e.message ? e.message : e));
     }
   }
 
@@ -668,6 +673,19 @@ const Robot3D = (() => {
     const matMap = {};
     matMap["base"] = IDENT_MAT;
     for (let j = 0; j < 6; j++) matMap["link_" + (j + 1)] = mats[j];
+    // Tool body: scratch link_6 matrix x the tool node's local transform.
+    if (toolTris && toolNode) {
+      const lm = toolNode.matrix.elements;
+      const tm = mats[5];
+      const tMat = new Array(16);
+      for (let col = 0; col < 4; col++)
+        for (let row = 0; row < 4; row++) {
+          let sum = 0;
+          for (let k = 0; k < 4; k++) sum += tm[k * 4 + row] * lm[col * 4 + k];
+          tMat[col * 4 + row] = sum;
+        }
+      matMap["tool"] = tMat;
+    }
     const result = collWorld.checkWithMatrices(matMap);
     return { collisions: result.collisions, bodies: Array.from(result.bodies) };
   }

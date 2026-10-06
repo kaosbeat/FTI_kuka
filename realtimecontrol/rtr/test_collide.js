@@ -151,6 +151,9 @@ if (process.argv.includes("--explore")) {
     const res = w.check();
     console.log("  pose", JSON.stringify(p), "->", res.bodies.size ? "COLLIDES: " + res.collisions.map((c) => c.a + "~" + c.b).join(", ") : "clear");
   }
+  process.exit(failures ? 1 : 0);
+}
+
 // ------------------------------------------------------------------
 // 4. geoToTris: indexed vs non-indexed geometry (simulates three.js BufferGeometry).
 //    Verifies the fix for the env GLB indexed-geometry bug.
@@ -209,9 +212,6 @@ if (process.argv.includes("--explore")) {
   check("geoToTris: fixed code produces correct size (18 floats for 2 tris)", idxTris.length === 18);
 }
 
-process.exit(failures ? 1 : 0);
-}
-
 // Hard-coded assertion: a cranked pose that reliably self-collides (non-adjacent links).
 const CRANKED = [0, 170, -170, 0, 0, 0];
 {
@@ -224,4 +224,32 @@ const CRANKED = [0, 170, -170, 0, 0, 0];
   check("FK: cranked pose self-collides", res.bodies.size >= 3);
   if (res.bodies.size < 3) console.log("  cranked collisions:", JSON.stringify(res.collisions));
 }
+
+// ------------------------------------------------------------------
+// 5. Scratch check with a 7th body (tool) — the matMap must include every
+//     registered body or runCheck crashes on a missing matrix.
+// ------------------------------------------------------------------
+{
+  const toolTris = new Float32Array([0, 0, 0, 0.1, 0, 0, 0, 0.1, 0]); // tiny tri at tool origin
+  const mats = fkMatrices(HOME);
+  const w = Collide.createWorld();
+  w.addBody("base", tris.base_link, () => ident());
+  for (let j = 0; j < 6; j++) w.addBody("link_" + (j + 1), tris["link_" + (j + 1)], () => null);
+  w.addBody("tool", toolTris, () => null);
+  w.setSkipPairs(SKIP_PAIRS.concat([["link_6", "tool"]]));
+  // Complete matMap: base + 6 links + tool. The tool is placed 10 m away (clear).
+  const matMap = { base: ident() };
+  for (let j = 0; j < 6; j++) matMap["link_" + (j + 1)] = mats[j];
+  matMap["tool"] = T(10, 0, 0);
+  let scratchOk = true;
+  try {
+    const res = w.checkWithMatrices(matMap);
+    // Tool is 10 m away and HOME is otherwise clear — expect no collisions.
+    scratchOk = res.bodies.size === 0;
+  } catch (e) {
+    scratchOk = false; // a missing matrix in the matMap throws here
+  }
+  check("Scratch: checkWithMatrices with a tool body (complete matMap) does not throw and is clear", scratchOk);
+}
+
 process.exit(failures ? 1 : 0);
