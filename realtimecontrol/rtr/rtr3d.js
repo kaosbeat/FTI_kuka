@@ -284,12 +284,25 @@ const Robot3D = (() => {
   }
 
   // Throttled collision check; called from the render loop.
+  let collDiagEnvLogged = false, collDiagPrevKey = null;
   function runCollisionCheck() {
     if (!collWorld) return;
     collFrame++;
     if (collFrame % COLLISION_INTERVAL !== 0) return;
     try {
       const res = collWorld.check();
+      // One-time registration diagnostic: confirm env + bodies are actually in the world.
+      const envCount = collWorld.envMeshCount();
+      if (envCount > 0 && !collDiagEnvLogged) {
+        collDiagEnvLogged = true;
+        logFn("collision reg: env=" + envCount + " bodies=" + collWorld.bodyNames().join(","));
+      }
+      // Log the result only when the collision set changes (avoids per-tick spam).
+      const key = res.bodies.size ? Array.from(res.bodies).sort().join("|") : "clear";
+      if (key !== collDiagPrevKey) {
+        logFn("collision: " + (res.bodies.size ? res.collisions.map((c) => c.a + "~" + c.b).join(", ") : "clear") + " [env=" + envCount + "]");
+        collDiagPrevKey = key;
+      }
       // Update red wireframe highlights.
       for (const name in collHighlightMeshes) {
         collHighlightMeshes[name].visible = res.bodies.has(name);
