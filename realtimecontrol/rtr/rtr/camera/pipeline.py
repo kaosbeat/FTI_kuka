@@ -408,12 +408,23 @@ class Pipeline:
         # Send track (locked person offset).
         if result.track is not None:
             out["track"] = result.track
-        # Send face (close camera analysis).
+        # Send face (close camera analysis). The face offset (dx, dy) is the face bbox
+        # centroid minus the image center, in pixels — the error the `face` behaviour
+        # servos to zero. Both cameras share W/H, so the wide camera's dims are used.
         if result.face is not None:
+            bbox = result.face.get("bbox")
+            dx = None
+            dy = None
+            if bbox and len(bbox) >= 4:
+                x1, y1, x2, y2 = bbox[0], bbox[1], bbox[2], bbox[3]
+                dx = (x1 + x2) / 2.0 - self.wide.W / 2.0
+                dy = (y1 + y2) / 2.0 - self.wide.H / 2.0
             out["face"] = {
                 "camera": result.camera,
                 "id": result.track["id"] if result.track else None,
-                "bbox": result.face.get("bbox"),
+                "bbox": bbox,
+                "dx": dx,
+                "dy": dy,
                 "features": result.face.get("features", {}),
             }
         return out

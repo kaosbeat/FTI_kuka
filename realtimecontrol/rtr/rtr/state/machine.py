@@ -47,6 +47,9 @@ class StateMachine:
         # Camera telemetry (the brain stashes the latest CAM_TRACK payload here; the
         # behaviour policies read it). Empty dict until the first frame arrives.
         self.camera_state: dict = {}
+        # Face telemetry (the brain stashes the latest CAM_FACE payload here; the
+        # ``face`` behaviour reads it). Empty dict until the first face frame arrives.
+        self.face_state: dict = {}
         # Kinematics + camera geometry for the orientation-aware servo (wired in
         # main.py). ``chain`` is the KR60 FK/Jacobian; ``camera_geometry`` is the
         # tool->camera mount. Both None when not wired (the camera behaviours fall

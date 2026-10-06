@@ -369,6 +369,60 @@
             "zone": "wander",
             "action": "breathe"
           }
+        },
+        "wink": {
+          "enabled": true,
+          "base_pose": [
+            85,
+            -97,
+            17,
+            -2,
+            0.3,
+            0
+          ],
+          "variable_axes": [
+            0
+          ],
+          "behavior": "face",
+          "speed": 100,
+          "loop": true,
+          "next": {}
+        },
+        "inspect": {
+          "enabled": true,
+          "base_pose": [
+            85,
+            -97,
+            17,
+            -2,
+            0.3,
+            0
+          ],
+          "variable_axes": [
+            0
+          ],
+          "behavior": "face",
+          "speed": 100,
+          "loop": true,
+          "next": {}
+        },
+        "call": {
+          "enabled": true,
+          "base_pose": [
+            85,
+            -97,
+            17,
+            -2,
+            0.3,
+            0
+          ],
+          "variable_axes": [
+            0
+          ],
+          "behavior": "face",
+          "speed": 100,
+          "loop": true,
+          "next": {}
         }
       }
     },

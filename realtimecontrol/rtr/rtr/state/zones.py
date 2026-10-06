@@ -42,7 +42,7 @@ HARDWARE_LIMITS: List[Tuple[float, float]] = [
 ]
 
 # Behavior names: the policies that drive variable axes.
-BEHAVIORS = ("track", "focus", "scan", "look", "wander", "random", "hold")
+BEHAVIORS = ("track", "focus", "scan", "look", "wander", "random", "face", "hold")
 
 # Kept for backward compat (MIDI legacy dispatch, display patches); no longer
 # used by zones or the state machine.

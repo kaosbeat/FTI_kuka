@@ -11,9 +11,16 @@ Shape::
     {
       "hunt": {
         "lost_s": 2.0,
-        "attention_guard": ["track", "focus", "look"],
+        "attention_guard": ["track", "focus", "look", "face"],
         "detect": { "zone": "wakeup", "action": "look" },
         "scan":   { "zone": "wakeup", "action": "scan" }
+      },
+      "facefocus": {
+        "enabled": true,
+        "zone": "stretch",
+        "actions": ["wink", "inspect", "call"],
+        "action_s": 3.0,
+        "face_lost_s": 2.5
       }
     }
 
@@ -23,6 +30,18 @@ Shape::
   is already hunting when the behavior is one of these).
 - ``detect`` — the (zone, action) the brain triggers when it locks a target.
 - ``scan`` — the (zone, action) the brain triggers when the lock is lost.
+
+Facefocus (the "check out that human" decision): when a locked person's face is
+detected by the close camera, the robot stretches into the exterior pose and runs
+subtle face-focused actions (``wink`` / ``inspect`` / ``call``), nudging toward the
+face location.
+
+- ``enabled`` — toggle the facefocus decision on/off.
+- ``zone`` — the zone the robot stretches into for the face actions.
+- ``actions`` — the face actions cycled while the face is visible.
+- ``action_s`` — seconds each face action runs before cycling to the next.
+- ``face_lost_s`` — seconds the face may go stale before exiting facefocus (back to
+  tracking; the person is still locked).
 """
 
 import copy
@@ -35,10 +54,17 @@ from typing import Any, Dict
 DEFAULT_BRAIN_CONFIG: Dict[str, Any] = {
     "hunt": {
         "lost_s": 2.0,
-        "attention_guard": ["track", "focus", "look"],
+        "attention_guard": ["track", "focus", "look", "face"],
         "detect": {"zone": "wakeup", "action": "look"},
         "scan": {"zone": "wakeup", "action": "scan"},
-    }
+    },
+    "facefocus": {
+        "enabled": True,
+        "zone": "stretch",
+        "actions": ["wink", "inspect", "call"],
+        "action_s": 3.0,
+        "face_lost_s": 2.5,
+    },
 }
 
 
@@ -76,6 +102,14 @@ def _str_list(value: Any, where: str, default: list) -> list:
     return list(value)
 
 
+def _bool(value: Any, where: str, default: bool) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ValueError(f"'{where}' must be a boolean")
+    return value
+
+
 def _zone_action(value: Any, where: str, default: dict) -> dict:
     if value is None:
         return dict(default)
@@ -99,14 +133,27 @@ def validate_brain_config(data: Any) -> dict:
         raise ValueError("'hunt' must be an object")
     hunt = hunt or {}
     d = DEFAULT_BRAIN_CONFIG["hunt"]
+    facefocus = data.get("facefocus")
+    if facefocus is not None and not isinstance(facefocus, dict):
+        raise ValueError("'facefocus' must be an object")
+    facefocus = facefocus or {}
+    f = DEFAULT_BRAIN_CONFIG["facefocus"]
     return {
         "hunt": {
             "lost_s": _num(hunt.get("lost_s"), "hunt.lost_s", d["lost_s"]),
             "attention_guard": _str_list(hunt.get("attention_guard"),
-                                         "hunt.attention_guard", d["attention_guard"]),
+                                          "hunt.attention_guard", d["attention_guard"]),
             "detect": _zone_action(hunt.get("detect"), "hunt.detect", d["detect"]),
             "scan": _zone_action(hunt.get("scan"), "hunt.scan", d["scan"]),
-        }
+        },
+        "facefocus": {
+            "enabled": _bool(facefocus.get("enabled"), "facefocus.enabled", f["enabled"]),
+            "zone": _str(facefocus.get("zone"), "facefocus.zone", f["zone"]),
+            "actions": _str_list(facefocus.get("actions"), "facefocus.actions", f["actions"]),
+            "action_s": _num(facefocus.get("action_s"), "facefocus.action_s", f["action_s"]),
+            "face_lost_s": _num(facefocus.get("face_lost_s"), "facefocus.face_lost_s",
+                                 f["face_lost_s"]),
+        },
     }
 
 

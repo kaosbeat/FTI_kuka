@@ -284,7 +284,8 @@ class CameraMock:
                     "h": h,
                 })
 
-                # Send face (when in analyze mode, with some probability).
+                # Send face (when in analyze mode, with some probability). The face
+                # offset (dx, dy) is the face centroid minus the image center (pixels).
                 if self._mode == "analyze" and time.time() - self._last_face_sent > 0.5:
                     self._last_face_sent = time.time()
                     self._conn.send_command({
@@ -292,6 +293,8 @@ class CameraMock:
                         "camera": self._active,
                         "id": self._lock_id,
                         "bbox": [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2],
+                        "dx": cx - W / 2.0,
+                        "dy": cy - H / 2.0,
                         "features": {"detected": True, "emotion": "neutral"},
                     })
 

@@ -46,9 +46,15 @@ class Brain:
             self.reload()
         # Hunt loop: scan -> detect -> lock -> track -> lost -> rescan.
         # The brain owns this (it is the decision-maker); the machine owns (zone, action).
-        self._hunt_state = "idle"  # "idle" | "tracking" | "scanning"
+        self._hunt_state = "idle"  # "idle" | "tracking" | "facefocus" | "scanning"
         self._hunt_lock_id = None
         self._hunt_last_track_ts = 0.0
+        # Facefocus (the "check out that human" sub-state of tracking): while a face is
+        # visible the robot stretches into the exterior pose and cycles the face actions
+        # (wink / inspect / call), nudging toward the face location.
+        self._facefocus_action_index = 0
+        self._facefocus_last_action_ts = 0.0
+        self._facefocus_last_face_ts = 0.0
 
     def config(self) -> dict:
         """The currently-loaded brain decision config."""
@@ -71,6 +77,14 @@ class Brain:
         print(f"[brain] config reloaded: hunt.lost_s={hunt.get('lost_s')} "
               f"detect={hunt.get('detect', {}).get('zone')}/{hunt.get('detect', {}).get('action')} "
               f"scan={hunt.get('scan', {}).get('zone')}/{hunt.get('scan', {}).get('action')}")
+        ff = cfg.get("facefocus", {})
+        print(f"[brain] facefocus: enabled={ff.get('enabled')} zone={ff.get('zone')} "
+              f"actions={ff.get('actions')} action_s={ff.get('action_s')} "
+              f"face_lost_s={ff.get('face_lost_s')}")
+
+    def _facefocus_cfg(self) -> dict:
+        """The facefocus decision config (the "check out that human" parameters)."""
+        return self._config.get("facefocus", {})
 
     def _cam_log(self, key: str, msg: str, force: bool = False) -> None:
         """Log camera telemetry at most once per second (force overrides)."""
@@ -160,22 +174,33 @@ class Brain:
                 best = c
         if best is not None:
             lock_id = best.get("id")
+            ff = self._facefocus_cfg()
+            ff_enabled = bool(ff.get("enabled", False))
             if self.camera is not None and lock_id is not None:
-                self.camera.set_intent(lock_id=lock_id, mode="track")
+                if ff_enabled:
+                    # Facefocus: the close camera does the face analysis (it also sends
+                    # track for the locked person, so the hunt lost-check still works).
+                    self.camera.set_intent(active="close", mode="analyze", lock_id=lock_id)
+                else:
+                    self.camera.set_intent(lock_id=lock_id, mode="track")
                 if lock_id != self._hunt_lock_id:
                     # New lock: the new target's CAM_TRACK lags ~1 frame, so seed the
                     # lost timer now (a stale timestamp would cause a false "lost").
                     self._hunt_last_track_ts = time.time()
                     self._hunt_lock_id = lock_id
                 # Attention grab: pull the robot into the hunt unless it is already
-                # tracking/looking or a zone transition is in progress.
+                # tracking/looking, already facefocusing, or a zone transition is in
+                # progress.
                 hunt = self._config.get("hunt", {})
                 guard = tuple(hunt.get("attention_guard", []))
                 detect = hunt.get("detect", {})
-                if (self.machine.behavior not in guard
+                if (self._hunt_state != "facefocus"
+                        and self.machine.behavior not in guard
                         and not self.machine.transitioning):
                     self.machine.trigger_action(detect.get("zone"), detect.get("action"))
-                self._hunt_state = "tracking"
+                # Facefocus keeps the facefocus state; otherwise the lock means tracking.
+                if self._hunt_state != "facefocus":
+                    self._hunt_state = "tracking"
 
     def _handle_cam_track(self, p: dict) -> None:
         """Store the track telemetry on the machine; the behaviours read it.
@@ -202,39 +227,89 @@ class Brain:
         }
 
     def _handle_cam_face(self, p: dict) -> None:
-        """Store face analysis telemetry.
+        """Store face analysis telemetry and drive the facefocus decision.
 
-        Face-driven camera switching (close+analyze) is a follow-up; for now
-        we just store the data and switch to close+analyze when a face is
-        detected.
+        The face offset (the face bbox centroid minus the image center, in pixels) is
+        stashed on ``machine.face_state``; the ``face`` behaviour reads it each tick.
+        When a face bbox is present and facefocus is enabled, the robot stretches into
+        the exterior pose and cycles the face actions (wink / inspect / call).
         """
         if self.camera is not None:
             self.camera.handle_telemetry(Cmd.CAM_FACE, p)
-            # Simple heuristic: face detected → close camera + analyze mode.
-            if p.get("bbox") is not None:
-                self.camera.set_intent(active="close", mode="analyze")
-                self._cam_log("face", f"face: id={p.get('id')} bbox={p.get('bbox')}")
+        bbox = p.get("bbox")
+        if bbox is None:
+            return
+        # Store the face offset on the machine (the `face` behaviour reads it).
+        self.machine.face_state = {
+            "dx": p.get("dx", 0.0),
+            "dy": p.get("dy", 0.0),
+            "id": p.get("id"),
+            "ok": True,
+        }
+        self._facefocus_last_face_ts = time.time()
+        self._cam_log("face", f"face: id={p.get('id')} bbox={bbox}")
+        ff = self._facefocus_cfg()
+        if not bool(ff.get("enabled", False)):
+            return
+        actions = ff.get("actions", [])
+        zone = ff.get("zone")
+        if self._hunt_state != "facefocus":
+            # Enter facefocus: stretch and run the first face action.
+            first = actions[0] if actions else None
+            if zone and first:
+                self.machine.trigger_action(zone, first)
+            self._hunt_state = "facefocus"
+            self._facefocus_action_index = 0
+            self._facefocus_last_action_ts = time.time()
+        else:
+            # Cycle the face actions on the timer (in-zone, no transition).
+            if (actions and not self.machine.transitioning
+                    and time.time() - self._facefocus_last_action_ts >= ff.get("action_s", 3.0)):
+                self._facefocus_action_index = (self._facefocus_action_index + 1) % len(actions)
+                self.machine.play_action(actions[self._facefocus_action_index])
+                self._facefocus_last_action_ts = time.time()
 
     # ------------------------------------------------------------------
     # Per-tick hunt bookkeeping.
     # ------------------------------------------------------------------
     def tick(self, curjpos: List[float]) -> None:
-        """Detect a lost lock and rescan (the hunt's time-driven step).
+        """Detect a lost lock / lost face and rescan (the hunt's time-driven step).
 
         Called by the engine after the command drain and before ``machine.step``, so a
-        triggered transition is driven the same tick. Only the ``tracking`` state arms
-        the lost check; ``scanning`` waits for the next ``CAM_CANDIDATES`` re-detect.
+        triggered transition is driven the same tick. The ``tracking`` and ``facefocus``
+        states arm the lost checks; ``scanning`` waits for the next
+        ``CAM_CANDIDATES`` re-detect.
+
+        - Person lost (the locked person's ``CAM_TRACK`` is stale): clear the lock and
+          rescan (wide/idle, the scan action).
+        - Face lost (facefocus only; the face is stale): back to tracking (wide/track,
+          the detect action). The person is still locked, so the face can reappear.
         """
-        if self._hunt_state != "tracking":
+        if self._hunt_state not in ("tracking", "facefocus"):
             return
         hunt = self._config.get("hunt", {})
         lost_s = hunt.get("lost_s", 2.0)
-        if time.time() - self._hunt_last_track_ts <= lost_s:
+        if time.time() - self._hunt_last_track_ts > lost_s:
+            # Person lost: clear the lock and rescan.
+            if self.camera is not None:
+                self.camera.set_intent(active="wide", mode="idle", lock_id=None)
+            self._hunt_lock_id = None
+            self.machine.face_state = {}
+            scan = hunt.get("scan", {})
+            self.machine.trigger_action(scan.get("zone"), scan.get("action"))
+            self._hunt_state = "scanning"
             return
-        # Lost: clear the lock and rescan.
-        if self.camera is not None:
-            self.camera.set_intent(lock_id=None, mode="idle")
-        self._hunt_lock_id = None
-        scan = hunt.get("scan", {})
-        self.machine.trigger_action(scan.get("zone"), scan.get("action"))
-        self._hunt_state = "scanning"
+        if self._hunt_state == "facefocus":
+            ff = self._facefocus_cfg()
+            face_lost_s = ff.get("face_lost_s", 2.5)
+            if time.time() - self._facefocus_last_face_ts > face_lost_s:
+                # Face lost: clear the face state, back to tracking (the person is
+                # still locked; the detect action and the wide camera wait for the
+                # face to reappear).
+                self.machine.face_state = {}
+                if self.camera is not None:
+                    self.camera.set_intent(active="wide", mode="track",
+                                           lock_id=self._hunt_lock_id)
+                detect = hunt.get("detect", {})
+                self.machine.trigger_action(detect.get("zone"), detect.get("action"))
+                self._hunt_state = "tracking"

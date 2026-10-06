@@ -1,8 +1,15 @@
 {
   "hunt": {
     "lost_s": 2.0,
-    "attention_guard": ["track", "focus", "look"],
+    "attention_guard": ["track", "focus", "look", "face"],
     "detect": { "zone": "wakeup", "action": "look" },
     "scan": { "zone": "wakeup", "action": "scan" }
+  },
+  "facefocus": {
+    "enabled": true,
+    "zone": "stretch",
+    "actions": ["wink", "inspect", "call"],
+    "action_s": 3.0,
+    "face_lost_s": 2.5
   }
 }

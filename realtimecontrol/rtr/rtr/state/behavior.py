@@ -36,6 +36,11 @@ _DEG_PER_RAD = 180.0 / math.pi
 # offset. Applied on top of the (per-action or default) gain.
 _LOOK_FACTOR = 0.5
 
+# ``face`` is a reduced-motion behaviour driven by the close camera's face offset:
+# it nudges the variable axes toward the face (kept subtle) so the robot holds its
+# exterior pose and only gestures toward the face location.
+_FACE_FACTOR = 0.5
+
 
 def safezone(machine) -> List:
     """The current zone's safezone (the per-axis soft limits)."""
@@ -108,6 +113,8 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
 
     if behavior in ("track", "look", "focus"):
         _apply_camera(machine, pose, var_axes, behavior, curjpos, image_gain, action)
+    elif behavior == "face":
+        _apply_face(machine, pose, var_axes, curjpos, image_gain, action)
     elif behavior == "scan":
         _apply_scan(machine, pose, var_axes, limits)
     elif behavior == "wander":
@@ -146,6 +153,44 @@ def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain, action) -> N
     if behavior == "look":
         dx *= _LOOK_FACTOR
         dy *= _LOOK_FACTOR
+    _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action)
+
+
+def _apply_face(machine, pose, var_axes, curjpos, gain, action) -> None:
+    """Drive variable axes from the close camera's face offset (subtle).
+
+    Reads the face offset the brain stashes on ``machine.face_state`` each tick
+    (the face bbox centroid minus the image center, in pixels). The offset is
+    reduced by :data:`_FACE_FACTOR` so the robot only gestures toward the face,
+    holding its exterior pose.
+    """
+    state = machine.face_state or {}
+    dx = state.get("dx", 0.0)
+    dy = state.get("dy", 0.0)
+    if not isinstance(dx, (int, float)) or isinstance(dx, bool):
+        dx = 0.0
+    if not isinstance(dy, (int, float)) or isinstance(dy, bool):
+        dy = 0.0
+    dx *= _FACE_FACTOR
+    dy *= _FACE_FACTOR
+    _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action)
+
+
+def _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action) -> None:
+    """Map the image offset to joint deltas via the image Jacobian.
+
+    Shared by the camera behaviours (``track`` / ``focus`` / ``look``) and the face
+    behaviour:
+
+        dq = -gain · pinv2(J_img_var) · (dx, dy)
+
+    ``gain`` is the fraction of the image error corrected per tick (dimensionless),
+    so the offset decays to zero (convergent). A zero offset means no motion (the
+    axes rest at base_pose).
+
+    Falls back to the legacy fixed-axis gain when the kinematics are not wired
+    (``machine.camera_geometry`` is ``None``), e.g. a bare sim.
+    """
     if dx == 0.0 and dy == 0.0:
         return
     geo = getattr(machine, "camera_geometry", None)
