@@ -272,7 +272,9 @@ const Robot3D = (() => {
         collHighlightMeshes[bodyName] = hl;
       }
     });
-    logFn("collision ready: " + collWorld.bodyNames().length + " bodies");
+    const _collReadyMsg = "collision ready: " + collWorld.bodyNames().length + " bodies";
+    logFn(_collReadyMsg);
+    console.log("[collision] " + _collReadyMsg);
     // If the env GLB loaded before the collision world was ready, set it up now.
     if (pendingEnvScene) {
       pendingEnvScene.updateMatrixWorld(true);
@@ -295,12 +297,16 @@ const Robot3D = (() => {
       const envCount = collWorld.envMeshCount();
       if (envCount > 0 && !collDiagEnvLogged) {
         collDiagEnvLogged = true;
-        logFn("collision reg: env=" + envCount + " bodies=" + collWorld.bodyNames().join(","));
+        const _regMsg = "collision reg: env=" + envCount + " bodies=" + collWorld.bodyNames().join(",");
+        logFn(_regMsg);
+        console.log("[collision] " + _regMsg);
       }
       // Log the result only when the collision set changes (avoids per-tick spam).
       const key = res.bodies.size ? Array.from(res.bodies).sort().join("|") : "clear";
       if (key !== collDiagPrevKey) {
-        logFn("collision: " + (res.bodies.size ? res.collisions.map((c) => c.a + "~" + c.b).join(", ") : "clear") + " [env=" + envCount + "]");
+        const _collMsg = "collision: " + (res.bodies.size ? res.collisions.map((c) => c.a + "~" + c.b).join(", ") : "clear") + " [env=" + envCount + "]";
+        logFn(_collMsg);
+        console.log("[collision] " + _collMsg);
         collDiagPrevKey = key;
       }
       // Update red wireframe highlights.
@@ -367,7 +373,9 @@ const Robot3D = (() => {
     });
     if (meshes.length) {
       collWorld.setEnv(meshes);
-      logFn("collision env: " + meshes.length + " meshes");
+      const _envMsg = "collision env: " + meshes.length + " meshes";
+      logFn(_envMsg);
+      console.log("[collision] " + _envMsg);
     }
   }
 
