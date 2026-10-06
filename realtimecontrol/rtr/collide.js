@@ -269,7 +269,7 @@
         cellSize = cellSize || 0.25;
         const grid = new Map();
         const aabb = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
-        const envMeshes = meshes.map(function (m) {
+        const envMeshes = meshes.map(function (m, mi) {
           const n = m.tris.length / 9;
           const perTriAABB = new Float32Array(n * 6);
           const ma = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
@@ -289,7 +289,6 @@
           const ix0 = Math.floor(ma[0] / cellSize), ix1 = Math.floor(ma[3] / cellSize);
           const iy0 = Math.floor(ma[1] / cellSize), iy1 = Math.floor(ma[4] / cellSize);
           const iz0 = Math.floor(ma[2] / cellSize), iz1 = Math.floor(ma[5] / cellSize);
-          const mi = envMeshes.length;
           for (let ix = ix0; ix <= ix1; ix++)
             for (let iy = iy0; iy <= iy1; iy++)
               for (let iz = iz0; iz <= iz1; iz++) {
