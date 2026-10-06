@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "zones": {},
+  "nav": {
+    "next_action": null,
+    "next_zone": null,
+    "back": null,
+    "retrigger": null
+  }
+}

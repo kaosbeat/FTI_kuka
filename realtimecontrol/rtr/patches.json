@@ -1,0 +1,66 @@
+{
+  "default": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n",
+  "zones": {
+    "init": "osc(2, 0.23, 1.2)\n.posterize(3)\n.out()",
+    "rest": "setResolution(512,512)\ns0.initVideo(\"http:/127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3).pixelate(500,500).out()\n",
+    "wakeup": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n",
+    "stretch": "osc(60, 0.2, 1.2)\n.kaleid(3).scale(40)\n.posterize(60)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
+    "wander": "osc(4, 0.3, 1.2).out()",
+    "wildwander": "osc(8, 0.5, 1.2).out()",
+    "watch": "osc(4, 0.1, 1.2).out()",
+    "perform": "osc(4, 0.1, 1.2).out()",
+    "fume": "osc(4, 0.1, 1.2).out()",
+    "init_rest_bridge": "osc(4, 0.1, 1.2).out()"
+  },
+  "modes": {
+    "wander": "osc(4, 0.1, 1.2).out()",
+    "random": "setResolution(100,100)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(4).out()",
+    "action": "osc(4, 0.1, 1.2).out()",
+    "track": "setResolution(100,100)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).out()\n",
+    "hold": "osc(4, 0.1, 1.2).out()",
+    "focus": "osc(4, 0.1, 1.2).out()",
+    "scan": "osc(4, 0.1, 1.2).out()",
+    "look": "osc(4, 0.1, 1.2).out()"
+  },
+  "actions": {
+    "init": {
+      "wake": "osc(4, 0.1, 1.2).out()"
+    },
+    "rest": {
+      "breathe": "osc(4, 0.1, 1.2).out()",
+      "look": "osc(4, 0.1, 1.2).out()",
+      "yawn": "osc(4, 0.1, 1.2).out()"
+    },
+    "wakeup": {
+      "breathe": "osc(4, 0.1, 1.2).out()",
+      "look": "osc(4, 0.1, 1.2).out()",
+      "roar": "osc(4, 0.1, 1.2).out()"
+    },
+    "stretch": {
+      "look": "osc(4, 0.1, 1.2).out()"
+    },
+    "wander": {
+      "breathe": "osc(4, 0.1, 1.2).out()",
+      "look": "osc(4, 0.1, 1.2).out()"
+    },
+    "wildwander": {
+      "breathe": "osc(4, 0.1, 1.2).out()",
+      "look": "osc(4, 0.1, 1.2).out()"
+    },
+    "watch": {
+      "track": "osc(4, 0.1, 1.2).out()",
+      "focus": "osc(4, 0.1, 1.2).out()"
+    },
+    "perform": {
+      "trick": "osc(4, 0.1, 1.2).out()",
+      "bow": "osc(4, 0.1, 1.2).out()"
+    },
+    "fume": {
+      "roar": "osc(4, 0.1, 1.2).out()",
+      "snarl": "osc(4, 0.1, 1.2).out()"
+    },
+    "init_rest_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
+    }
+  }
+}

@@ -1,0 +1,360 @@
+{
+  "channel": 0,
+  "zones": {
+    "init": {
+      "out_port": null,
+      "command": {
+        "note": 48,
+        "velocity": 60
+      }
+    },
+    "rest": {
+      "out_port": null,
+      "command": {
+        "note": 36,
+        "velocity": 50
+      }
+    },
+    "wakeup": {
+      "out_port": null,
+      "command": {
+        "note": 52,
+        "velocity": 70
+      }
+    },
+    "stretch": {
+      "out_port": null,
+      "command": {
+        "note": 55,
+        "velocity": 75
+      }
+    },
+    "wander": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 80
+      }
+    },
+    "wildwander": {
+      "out_port": null,
+      "command": {
+        "note": 64,
+        "velocity": 90
+      }
+    },
+    "dangerzone": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "watch": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "perform": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "fume": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "init_rest_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    }
+  },
+  "actions": {
+    "init": {
+      "wake": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "rest": {
+      "wander": {
+        "start": {
+          "cc": 70,
+          "value": 32
+        },
+        "poses": []
+      },
+      "random": {
+        "start": {
+          "cc": 70,
+          "value": 64
+        },
+        "poses": []
+      },
+      "action": {
+        "start": {
+          "cc": 70,
+          "value": 96
+        },
+        "poses": []
+      },
+      "track": {
+        "start": {
+          "cc": 70,
+          "value": 127
+        },
+        "poses": []
+      },
+      "hold": {
+        "start": {
+          "cc": 70,
+          "value": 0
+        },
+        "poses": []
+      },
+      "breathe": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      },
+      "look": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      },
+      "yawn": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      }
+    },
+    "wakeup": {
+      "breathe": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      },
+      "look": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      },
+      "roar": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "stretch": {
+      "look": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      }
+    },
+    "wander": {
+      "breathe": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      },
+      "look": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "wildwander": {
+      "breathe": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      },
+      "look": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "watch": {
+      "track": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      },
+      "focus": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "perform": {
+      "trick": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      },
+      "bow": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "fume": {
+      "roar": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      },
+      "snarl": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "init_rest_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    }
+  }
+}
