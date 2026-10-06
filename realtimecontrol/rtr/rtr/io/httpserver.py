@@ -36,6 +36,12 @@ It serves two kinds of requests:
 - **The screen API**:
   - ``GET /api/screen`` → the hydra patch (JS) rendered on the tool's screen, i.e. the
     ``default`` entry of the patches table.
+- **The brain API** (decision config: hunt-loop parameters):
+  - ``GET /api/brain`` → the current brain decision config (read fresh from ``brain.json``,
+    falling back to the running config / built-in default if the file is bad).
+  - ``POST /api/brain`` → validate the config; on success write it atomically to
+    ``brain.json`` and submit a ``RELOAD_BRAIN`` command so the running core hot-reloads.
+    On validation failure the file is untouched and a 400 is returned.
 - **The MIDI-in API** (learned MIDI-in mapping):
   - ``GET /api/midi`` → the current MIDI-in mapping (read fresh from ``midi.json``,
     falling back to the running table if the file is bad).
@@ -58,6 +64,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ..core.bus import StateBus
 from ..core.commands import Cmd, Command
+from ..brain import (
+    builtin_brain_config,
+    load_brain_config,
+    validate_brain_config,
+)
 from ..patches import (
     DEFAULT_HYDRA_CODE,
     load_patches_data,
@@ -94,11 +105,11 @@ class HttpServer:
 
     def __init__(self, bus: StateBus, zones_provider, sound_provider,
                  zones_path: str, sound_path: str, root: str,
-                 host: str = "0.0.0.0", port: int = 8766,
-                 enabled: bool = True, screen_code: str = None,
-                 patches_provider=None, patches_path: str = None,
-                 midi_provider=None, midi_path: str = None, midi=None,
-                 sound=None):
+                  host: str = "0.0.0.0", port: int = 8766,
+                  enabled: bool = True, screen_code: str = None,
+                  patches_provider=None, patches_path: str = None,
+                  midi_provider=None, midi_path: str = None, midi=None,
+                  sound=None, brain_provider=None, brain_path: str = None):
         self.bus = bus
         self.zones_provider = zones_provider
         self.sound_provider = sound_provider
@@ -112,6 +123,9 @@ class HttpServer:
         self.midi = midi
         # The running Sound (for the list-out-ports action); may be None.
         self.sound = sound
+        # The brain decision config (data-driven hunt-loop parameters).
+        self.brain_provider = brain_provider
+        self.brain_path = os.path.abspath(brain_path) if brain_path else None
         self.root = os.path.abspath(root)
         self.host = host
         self.port = port
@@ -177,6 +191,8 @@ def _make_handler(server: HttpServer):
                 self._get_midi()
             elif path == "/api/midi/ports":
                 self._get_midi_ports()
+            elif path == "/api/brain":
+                self._get_brain()
             elif self._is_static(path):
                 self._serve_static(path)
             else:
@@ -194,6 +210,8 @@ def _make_handler(server: HttpServer):
                 self._post_midi()
             elif path == "/api/midi/learn":
                 self._post_midi_learn()
+            elif path == "/api/brain":
+                self._post_brain()
             else:
                 self._send_text(404, "not found")
 
@@ -318,6 +336,45 @@ def _make_handler(server: HttpServer):
                 return
             # Ask the running core to hot-reload the new table.
             server.bus.submit(Command(cmd=Cmd.RELOAD_PATCHES, payload={}))
+            self._send_json(200, {"ok": True})
+
+        # ------------------------------------------------------------------
+        # Brain API (decision config: hunt-loop parameters).
+        # ------------------------------------------------------------------
+        def _get_brain(self):
+            if server.brain_path:
+                try:
+                    return self._send_json(200, load_brain_config(server.brain_path))
+                except (OSError, ValueError):
+                    pass
+            if server.brain_provider is not None:
+                self._send_json(200, server.brain_provider())
+                return
+            self._send_json(200, builtin_brain_config())
+
+        def _post_brain(self):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                length = 0
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                data = json.loads(body)
+                validate_brain_config(data)
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._send_json(400, {"error": str(exc)})
+                return
+            # Atomic write: dump to a temp file, then replace.
+            tmp = server.brain_path + ".tmp"
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(tmp, server.brain_path)
+            except OSError as exc:
+                self._send_json(500, {"error": f"could not write brain: {exc}"})
+                return
+            # Ask the running core to hot-reload the new config.
+            server.bus.submit(Command(cmd=Cmd.RELOAD_BRAIN, payload={}))
             self._send_json(200, {"ok": True})
 
         # ------------------------------------------------------------------

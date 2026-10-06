@@ -1,0 +1,8 @@
+{
+  "hunt": {
+    "lost_s": 2.0,
+    "attention_guard": ["track", "focus", "look"],
+    "detect": { "zone": "wakeup", "action": "look" },
+    "scan": { "zone": "wakeup", "action": "scan" }
+  }
+}

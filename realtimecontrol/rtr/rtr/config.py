@@ -59,6 +59,11 @@ class Config:
     # (legacy protocol fallback) is used when the file is missing or corrupt.
     midi_path: str = "midi.json"
 
+    # --- brain data (decision config: hunt-loop parameters) --------------
+    # On-disk brain decision config (brain.json). The built-in DEFAULT_BRAIN_CONFIG
+    # is the fallback when the file is missing or corrupt.
+    brain_path: str = "brain.json"
+
     # --- display / camera / sound ---------------------------------------
     # Only enabled when the corresponding hardware is present.
     enable_display: bool = True

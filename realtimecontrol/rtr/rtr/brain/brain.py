@@ -24,24 +24,53 @@ from ..core.commands import Cmd, Command
 from ..state.behavior import clamp
 from ..state.machine import StateMachine
 from ..state.zones import MODES  # re-exported for `from rtr.brain import MODES`
+from .config import builtin_brain_config
 
 
 class Brain:
     """Maps commands onto the state machine. Holds no robot state of its own."""
 
     def __init__(self, machine: StateMachine,
-                 camera=None):
+                 camera=None, config_loader=None):
         self.machine = machine
         self.camera = camera
         # Receive-side visibility: log CAM_* telemetry (throttled).
         self._last_cand_ids = None
         self._cam_log_ts: dict = {}
+        # Decision config (brain.json): the hunt-loop parameters. Loaded via a callable
+        # ``config_loader`` (returns a validated config, raising on a bad file); falls
+        # back to the built-in defaults when no loader is given or the file is bad.
+        self._config_loader = config_loader
+        self._config = builtin_brain_config()
+        if config_loader is not None:
+            self.reload()
         # Hunt loop: scan -> detect -> lock -> track -> lost -> rescan.
         # The brain owns this (it is the decision-maker); the machine owns (zone, action).
         self._hunt_state = "idle"  # "idle" | "tracking" | "scanning"
         self._hunt_lock_id = None
         self._hunt_last_track_ts = 0.0
-        self._hunt_lost_s = 2.0
+
+    def config(self) -> dict:
+        """The currently-loaded brain decision config."""
+        return self._config
+
+    def reload(self) -> None:
+        """Re-read the brain config (hunt-loop parameters) from disk.
+
+        On failure keep the current config (logged) so a bad edit never kills the core.
+        """
+        if self._config_loader is None:
+            return
+        try:
+            cfg = self._config_loader()
+        except (OSError, ValueError) as exc:
+            print(f"[brain] config reload failed ({exc}); keeping current config")
+            return
+        self._config = cfg
+        hunt = cfg.get("hunt", {})
+        print(f"[brain] config reloaded: hunt.lost_s={hunt.get('lost_s')} "
+              f"detect={hunt.get('detect', {}).get('zone')}/{hunt.get('detect', {}).get('action')} "
+              f"scan={hunt.get('scan', {}).get('zone')}/{hunt.get('scan', {}).get('action')}")
 
     def _cam_log(self, key: str, msg: str, force: bool = False) -> None:
         """Log camera telemetry at most once per second (force overrides)."""
@@ -140,9 +169,12 @@ class Brain:
                     self._hunt_lock_id = lock_id
                 # Attention grab: pull the robot into the hunt unless it is already
                 # tracking/looking or a zone transition is in progress.
-                if (self.machine.behavior not in ("track", "focus", "look")
+                hunt = self._config.get("hunt", {})
+                guard = tuple(hunt.get("attention_guard", []))
+                detect = hunt.get("detect", {})
+                if (self.machine.behavior not in guard
                         and not self.machine.transitioning):
-                    self.machine.trigger_action("wakeup", "look")
+                    self.machine.trigger_action(detect.get("zone"), detect.get("action"))
                 self._hunt_state = "tracking"
 
     def _handle_cam_track(self, p: dict) -> None:
@@ -195,11 +227,14 @@ class Brain:
         """
         if self._hunt_state != "tracking":
             return
-        if time.time() - self._hunt_last_track_ts <= self._hunt_lost_s:
+        hunt = self._config.get("hunt", {})
+        lost_s = hunt.get("lost_s", 2.0)
+        if time.time() - self._hunt_last_track_ts <= lost_s:
             return
         # Lost: clear the lock and rescan.
         if self.camera is not None:
             self.camera.set_intent(lock_id=None, mode="idle")
         self._hunt_lock_id = None
-        self.machine.trigger_action("wakeup", "scan")
+        scan = hunt.get("scan", {})
+        self.machine.trigger_action(scan.get("zone"), scan.get("action"))
         self._hunt_state = "scanning"

@@ -1,0 +1,21 @@
+tracker_type: botsort
+
+track_high_thresh: 0.4
+track_low_thresh: 0.1
+new_track_thresh: 0.5
+track_buffer: 60
+match_thresh: 0.8
+
+gmc_method: sparseOptFlow  # try othe modes, 
+
+with_reid: True
+model: auto
+proximity_thresh: 0.5
+appearance_thresh: 0.7
+
+
+# gmc_method: sparseOptFlow: Keep this enabled for the moving arm. It is the normal first choice for camera-motion compensation. sparseOptFlow is the best initial choice; ecc may be more accurate for difficult motion but is slower
+# with_reid: True: Useful if several people look similar, cross paths, or become briefly occluded. It adds computation but helps preserve identities.
+# track_buffer: 60: Lets a person’s track survive roughly two seconds at 30 FPS when detections are temporarily lost. Increase it if the robot arm frequently occludes people; decrease it if stale “ghost” tracks are a problem.
+# match_thresh: If the arm moves quickly and bounding boxes shift substantially, try lowering this slightly, such as 0.6–0.75.
+# track_high_thresh and new_track_thresh: Lower them if people are often missed because of blur, distance, or partial occlusion—but expect more false tracks.

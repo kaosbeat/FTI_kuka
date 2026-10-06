@@ -159,6 +159,7 @@
   <button id="tabPatches">patches</button>
   <button id="tabMidi">midi</button>
   <button id="tabFlow">flow</button>
+  <button id="tabBrain">brain</button>
   <button id="save">save</button>
   <span id="saveMsg"></span>
 </header>
@@ -282,6 +283,14 @@
   </div>
 </main>
 
+<main id="brainMain" style="display:none">
+  <section>
+    <h2>brain — hunt loop</h2>
+    <div id="brainForm"></div>
+    <div id="brainInfo" style="font-size:12px;color:var(--dim);margin-top:8px"></div>
+  </section>
+</main>
+
 <div id="actionEditor">
   <div id="aePanel">
     <div class="aeHead">
@@ -366,6 +375,7 @@ let TABLE = null;
 let SOUND = null;
 let PATCHES = null;
 let MIDI = null;
+let BRAIN = null;
 let sndZoneSel = null;  // the zone shown in the MIDI-out view (session only)
 let sndPorts = [];  // available MIDI-out ports (GET /api/sound/ports)
 let patchView = false;
@@ -380,6 +390,7 @@ let patchTimer = null;      // debounce timer for the live preview
 let ghostIndex = 0;
 let ws = null;
 let flowView = false;
+let brainView = false;
 // Flow-tab state (session only — node positions are not persisted to zones.json).
 const FLOW = {
   pos: {},        // zone -> {x, y}
@@ -548,6 +559,17 @@ function edgeMatchesSel(e) {
 const PATCHES_FALLBACK = {
   default: "osc(4, 0.1, 1.2).out()",
   zones: {}, modes: {}, actions: {},
+};
+
+// Last-resort brain decision config (mirrors rtr/brain/config.py DEFAULT_BRAIN_CONFIG).
+// Used when both /api/brain and /brain.json fail (e.g. opened from file://).
+const BRAIN_FALLBACK = {
+  hunt: {
+    lost_s: 2.0,
+    attention_guard: ["track", "focus", "look"],
+    detect: { zone: "wakeup", action: "look" },
+    scan: { zone: "wakeup", action: "scan" },
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -1359,6 +1381,110 @@ async function loadPatches() {
   return PATCHES;
 }
 
+// ---------------------------------------------------------------------------
+// Brain decision config (hunt-loop parameters). Same data-file/reload pattern as
+// the other tabs: GET /api/brain (falling back to /brain.json, then the built-in
+// defaults), POST /api/brain to save + hot-reload the running core.
+// ---------------------------------------------------------------------------
+async function loadBrain() {
+  let data = null;
+  try {
+    const r = await fetch("/api/brain", { cache: "no-store" });
+    if (r.ok) data = await r.json();
+  } catch (e) {}
+  if (!data) {
+    try {
+      const r = await fetch("/brain.json", { cache: "no-store" });
+      if (r.ok) data = await r.json();
+    } catch (e) {}
+  }
+  if (!data) data = JSON.parse(JSON.stringify(BRAIN_FALLBACK));
+  // Normalise to the full shape so the form always has every field.
+  const h = (data && data.hunt) || {};
+  BRAIN = { hunt: {
+    lost_s: h.lost_s !== undefined ? h.lost_s : BRAIN_FALLBACK.hunt.lost_s,
+    attention_guard: h.attention_guard || BRAIN_FALLBACK.hunt.attention_guard.slice(),
+    detect: Object.assign({}, BRAIN_FALLBACK.hunt.detect, h.detect || {}),
+    scan: Object.assign({}, BRAIN_FALLBACK.hunt.scan, h.scan || {}),
+  }};
+  if (brainView) buildBrainForm();
+  return BRAIN;
+}
+
+function buildBrainForm() {
+  const el = $("brainForm");
+  el.innerHTML = "";
+  const h = BRAIN.hunt;
+  const addRow = (label, input) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.alignItems = "center";
+    row.style.marginBottom = "6px";
+    const lab = document.createElement("label");
+    lab.textContent = label;
+    row.appendChild(lab);
+    row.appendChild(input);
+    el.appendChild(row);
+  };
+  // lost_s (seconds a locked target's CAM_TRACK may go stale before "lost").
+  const lostS = document.createElement("input");
+  lostS.type = "number"; lostS.step = "0.1"; lostS.min = "0";
+  lostS.value = h.lost_s; lostS.id = "brainLostS";
+  addRow("hunt.lost_s (s)", lostS);
+  // attention_guard (behaviors that suppress the detect attention-grab).
+  const guard = document.createElement("input");
+  guard.type = "text"; guard.spellcheck = false; guard.id = "brainGuard";
+  guard.value = h.attention_guard.join(", ");
+  addRow("hunt.attention_guard", guard);
+  // detect zone/action.
+  const detZone = document.createElement("input");
+  detZone.type = "text"; detZone.spellcheck = false; detZone.id = "brainDetZone";
+  detZone.value = h.detect.zone;
+  addRow("hunt.detect.zone", detZone);
+  const detAct = document.createElement("input");
+  detAct.type = "text"; detAct.spellcheck = false; detAct.id = "brainDetAct";
+  detAct.value = h.detect.action;
+  addRow("hunt.detect.action", detAct);
+  // scan zone/action.
+  const scanZone = document.createElement("input");
+  scanZone.type = "text"; scanZone.spellcheck = false; scanZone.id = "brainScanZone";
+  scanZone.value = h.scan.zone;
+  addRow("hunt.scan.zone", scanZone);
+  const scanAct = document.createElement("input");
+  scanAct.type = "text"; scanAct.spellcheck = false; scanAct.id = "brainScanAct";
+  scanAct.value = h.scan.action;
+  addRow("hunt.scan.action", scanAct);
+  $("brainInfo").textContent = "detect = the action the brain triggers when it locks a target; "
+    + "scan = the action it triggers when the lock is lost; attention_guard = behaviors that "
+    + "suppress the detect attention-grab (comma-separated).";
+}
+
+function saveBrain() {
+  const lostS = parseFloat($("brainLostS").value);
+  const guard = $("brainGuard").value.split(",").map((s) => s.trim()).filter((s) => s.length);
+  const payload = {
+    hunt: {
+      lost_s: isNaN(lostS) ? BRAIN.hunt.lost_s : lostS,
+      attention_guard: guard,
+      detect: { zone: $("brainDetZone").value.trim(), action: $("brainDetAct").value.trim() },
+      scan: { zone: $("brainScanZone").value.trim(), action: $("brainScanAct").value.trim() },
+    },
+  };
+  fetch("/api/brain", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => r.json().then((body) => ({ ok: r.ok, body }))).then(({ ok, body }) => {
+    if (ok) {
+      $("saveMsg").textContent = "saved";
+      $("saveMsg").className = "";
+    } else {
+      $("saveMsg").textContent = "save failed: " + (body.error || r.status);
+      $("saveMsg").className = "err";
+    }
+  }).catch((e) => { $("saveMsg").textContent = "save failed: " + e; $("saveMsg").className = "err"; });
+}
+
 // hydra-synth 1.x always evals patch code via a GLOBAL eval (globalThis.eval), so its
 // functions (osc, out, ...) must be on the global scope to resolve. makeGlobal:true
 // attaches them, but a second instance would then clobber the first. We therefore keep
@@ -1905,16 +2031,19 @@ function switchView(v) {
   patchView = v === "patches";
   midiView = v === "midi";
   flowView = v === "flow";
+  brainView = v === "brain";
   if (wasPatch && !patchView) commitPatchEditor();  // leaving the patches view: commit
-  const other = patchView || midiView || flowView;
+  const other = patchView || midiView || flowView || brainView;
   $("zoneMain").style.display = other ? "none" : "";
   $("patchesMain").style.display = patchView ? "" : "none";
   $("midiMain").style.display = midiView ? "" : "none";
   $("flowMain").style.display = flowView ? "" : "none";
+  $("brainMain").style.display = brainView ? "" : "none";
   $("tabZones").className = other ? "" : "active";
   $("tabPatches").className = patchView ? "active" : "";
   $("tabMidi").className = midiView ? "active" : "";
   $("tabFlow").className = flowView ? "active" : "";
+  $("tabBrain").className = brainView ? "active" : "";
   if (midiView) {
     // Show/hide the In/Out sub-views based on midiSubView.
     $("midiOutView").style.display = midiSubView === "out" ? "" : "none";
@@ -1926,6 +2055,11 @@ function switchView(v) {
   }
   if (patchView) buildPatchesForm();
   if (flowView) flowEnter();
+  if (brainView) {
+    // Load the brain config on first switch (async); build the form when it's ready.
+    if (BRAIN) buildBrainForm();
+    else loadBrain();
+  }
 }
 
 function switchMidiSubView(v) {
@@ -2313,6 +2447,7 @@ function validate() {
 function save() {
   if (patchView) { savePatches(); return; }
   if (midiView) { saveMidiAll(); return; }
+  if (brainView) { saveBrain(); return; }
   saveZones();
 }
 
@@ -3028,10 +3163,11 @@ $("connect").onclick = () => { $("host").value = $("host").value.trim(); connect
 $("save").onclick = save;
 $("addZone").onclick = addZone;
 $("delZone").onclick = delZone;
-$("tabZones").onclick = () => switchView("zones");
-$("tabPatches").onclick = () => switchView("patches");
-$("tabMidi").onclick = () => switchView("midi");
-$("tabFlow").onclick = () => switchView("flow");
+  $("tabZones").onclick = () => switchView("zones");
+  $("tabPatches").onclick = () => switchView("patches");
+  $("tabMidi").onclick = () => switchView("midi");
+  $("tabFlow").onclick = () => switchView("flow");
+  $("tabBrain").onclick = () => switchView("brain");
 $("midiTabOut").onclick = () => switchMidiSubView("out");
 $("midiTabIn").onclick = () => switchMidiSubView("in");
 $("midiStopLearn").onclick = midiStopLearn;

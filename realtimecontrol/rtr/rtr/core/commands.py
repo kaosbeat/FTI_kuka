@@ -26,6 +26,7 @@ class Cmd(str, Enum):
     RELOAD_SOUND = "reload_sound"
     RELOAD_MIDI = "reload_midi"
     RELOAD_PATCHES = "reload_patches"
+    RELOAD_BRAIN = "reload_brain"
     MIDI_LEARN = "midi_learn"
     SET_SCREEN_PATCH = "set_screen_patch"
     STOP = "stop"

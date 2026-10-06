@@ -33,11 +33,12 @@ class Engine:
 
     def __init__(self, bus: StateBus, robot: RobotBase, brain: Brain,
                  machine: StateMachine, tick_hz: float = 20.0,
-                 zone_loader: Callable[[], dict] = None,
-                 sound_reload: Callable[[], None] = None,
-                 patch_reload: Callable[[], None] = None,
-                 midi_reload: Callable[[], None] = None,
-                 screen_patch_override: "Callable[[str | None], None]" = None):
+                  zone_loader: Callable[[], dict] = None,
+                  sound_reload: Callable[[], None] = None,
+                  patch_reload: Callable[[], None] = None,
+                  midi_reload: Callable[[], None] = None,
+                  brain_reload: Callable[[], None] = None,
+                  screen_patch_override: "Callable[[str | None], None]" = None):
         self.bus = bus
         self.robot = robot
         self.brain = brain
@@ -47,6 +48,7 @@ class Engine:
         self._sound_reload = sound_reload
         self._patch_reload = patch_reload
         self._midi_reload = midi_reload
+        self._brain_reload = brain_reload
         # Sets (or clears) the manual hydra screen override; the core then pushes it in
         # every state frame so the 3D tool screen and the render page follow it.
         self._screen_patch_override = screen_patch_override
@@ -82,6 +84,9 @@ class Engine:
                 elif cmd.cmd == Cmd.RELOAD_MIDI:
                     if self._midi_reload is not None:
                         self._midi_reload()
+                elif cmd.cmd == Cmd.RELOAD_BRAIN:
+                    if self._brain_reload is not None:
+                        self._brain_reload()
                 elif cmd.cmd == Cmd.MIDI_LEARN:
                     # A learned MIDI key captured by MidiInput (rtmidi thread). Publish
                     # it here, inside the loop, so the display adapter can forward it to

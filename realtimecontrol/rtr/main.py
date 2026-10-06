@@ -23,7 +23,7 @@ from rtr.robot import make_robot, load_chain
 from rtr.camera.geometry import load_camera_geometry
 from rtr.state import StateMachine, Zones
 from rtr.state.zones import LIN_POSES, POSES, ZONES, load_state_data
-from rtr.brain import Brain
+from rtr.brain import Brain, builtin_brain_config, load_brain_config
 from rtr.display import make_display
 from rtr.sound import make_sound, load_sound_data, builtin_sound_data
 from rtr.patches import (
@@ -76,6 +76,8 @@ def parse_args(argv):
     parser.add_argument("--no-sound", action="store_true", help="disable sound (MIDI out)")
     parser.add_argument("--patches", default="patches.json",
                         help="patches data file (default: patches.json next to main.py)")
+    parser.add_argument("--brain", default="brain.json",
+                        help="brain decision config file (default: brain.json next to main.py)")
     parser.add_argument("--no-display", action="store_true", help="disable display (P5live)")
     parser.add_argument("--camera", action="store_true", help="enable the camera adapter")
     return parser.parse_args(argv)
@@ -93,6 +95,7 @@ def build_config(args) -> Config:
     cfg.zones_path = _resolve(args.zones)
     cfg.sound_path = _resolve(args.sound)
     cfg.patches_path = _resolve(args.patches)
+    cfg.brain_path = _resolve(args.brain)
     cfg.midi_in_port = None if args.no_midi else args.midi
     cfg.midi_path = _resolve(args.midi_json)
     cfg.enable_sound = not args.no_sound
@@ -133,6 +136,15 @@ def load_patches_data_fallback(path: str) -> dict:
         return builtin_patches_data()
 
 
+def load_brain_config_fallback(path: str) -> dict:
+    """Load the brain decision config, falling back to the built-in defaults with a warning."""
+    try:
+        return load_brain_config(path)
+    except (OSError, ValueError) as exc:
+        print(f"[rtr] brain file {path!r} unavailable ({exc}); using built-in brain config")
+        return builtin_brain_config()
+
+
 def load_midi_data_fallback(path: str) -> dict:
     """Load the MIDI-in mapping file, falling back to the built-in table with a warning."""
     try:
@@ -161,7 +173,8 @@ async def run(cfg: Config) -> None:
     machine.chain = load_chain()
     machine.camera_geometry = load_camera_geometry()
     camera = make_camera(bus, enabled=cfg.enable_camera)
-    brain = Brain(machine, camera=camera)
+    brain = Brain(machine, camera=camera,
+                 config_loader=lambda: load_brain_config_fallback(cfg.brain_path))
     # Sound is created before the engine so the engine can hold its reload hook.
     sound = make_sound(bus, sound_loader=lambda: load_sound_data_fallback(cfg.sound_path),
                        enabled=cfg.enable_sound,
@@ -181,6 +194,7 @@ async def run(cfg: Config) -> None:
                     sound_reload=sound.reload,
                     patch_reload=patches.reload,
                     midi_reload=midi.reload,
+                    brain_reload=brain.reload,
                     screen_patch_override=patches.set_screen_override)
 
     # --- adapters -------------------------------------------------------
@@ -190,8 +204,10 @@ async def run(cfg: Config) -> None:
                       sound_provider=sound.current_data,
                       patches_provider=patches.current_data,
                       midi_provider=midi.current_data,
+                      brain_provider=brain.config,
                       zones_path=cfg.zones_path, sound_path=cfg.sound_path,
                       patches_path=cfg.patches_path, midi_path=cfg.midi_path,
+                      brain_path=cfg.brain_path,
                       midi=midi, sound=sound, root=ROOT,
                       host=cfg.http_host, port=cfg.http_port,
                       enabled=cfg.enable_http)
