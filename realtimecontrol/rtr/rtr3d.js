@@ -726,5 +726,22 @@ const Robot3D = (() => {
     });
   }
 
-  return { init, update, setTarget, screenResolution, setGhostVisible, collisions, checkPoseCollision, reloadEnv };
+  // Diagnostic: print body world positions + env/body AABBs to console.
+  function diagCollision() {
+    if (!collWorld) { console.log("[collision] no world"); return; }
+    const d = collWorld.diag();
+    console.log("[collision] env AABB:", d.envAABB ? d.envAABB.map((v) => v.toFixed(2)) : "none");
+    for (const name in d.bodyAABBs) {
+      const a = d.bodyAABBs[name];
+      console.log("[collision] " + name + " local AABB:", a.map((v) => v.toFixed(2)));
+    }
+    if (rotors) {
+      for (let j = 0; j < 6; j++) {
+        const p = rotors[j].matrixWorld.elements;
+        console.log("[collision] link_" + (j+1) + " world pos: [" + p[12].toFixed(2) + ", " + p[13].toFixed(2) + ", " + p[14].toFixed(2) + "]");
+      }
+    }
+  }
+
+  return { init, update, setTarget, screenResolution, setGhostVisible, collisions, checkPoseCollision, reloadEnv, diagCollision };
 })();

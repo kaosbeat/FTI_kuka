@@ -325,6 +325,12 @@
 
       bodyNames: function () { return bodies.map(function (b) { return b.name; }); },
       envMeshCount: function () { return env ? env.meshes.length : 0; },
+      // Diagnostic: return env AABB + body local AABBs for debugging.
+      diag: function () {
+        const bodyAABBs = {};
+        for (const b of bodies) bodyAABBs[b.name] = b.aabb.slice();
+        return { envAABB: env ? env.aabb.slice() : null, bodyAABBs: bodyAABBs };
+      },
     };
 
     // Query the env spatial grid for the meshes whose cells overlap `aabb`.
