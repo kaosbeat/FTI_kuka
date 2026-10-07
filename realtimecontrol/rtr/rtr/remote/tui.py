@@ -85,7 +85,32 @@ SECTION_LABELS = {
     "zones": "GO TO",
 }
 
-PAGES = ("NAV", "CAMERA", "BRAIN", "HUNT")
+PAGES = ("NAV", "CAMERA", "BRAIN", "HUNT", "CADENCE")
+
+# Joystick button codes (Linux EV_KEY) for page navigation. L1 = previous page,
+# R1 = next page (mirrors the keyboard left/right). The device is configured via
+# --device (default /dev/input/event3; the handheld is typically event2).
+JOY_L1 = 310
+JOY_R1 = 311
+
+# Selectable rows for the CADENCE page. Each sends a command to the core.
+# The fixed-rhythm interval is offered in seconds (a few sensible steps); the
+# core converts it to ticks. "arrival" advances as soon as the robot reaches
+# its target; the fixed options advance every N seconds.
+CADENCE_ITEMS = [
+    {"kind": "engine", "name": "move: block",
+     "cmd": {"cmd": "set_engine_mode", "mode": "block"}},
+    {"kind": "engine", "name": "move: stream",
+     "cmd": {"cmd": "set_engine_mode", "mode": "stream"}},
+    {"kind": "engine", "name": "cadence: arrival",
+     "cmd": {"cmd": "set_cadence", "mode": "arrival"}},
+    {"kind": "engine", "name": "cadence: fixed 0.5 s",
+     "cmd": {"cmd": "set_cadence", "mode": "fixed", "every": 0.5}},
+    {"kind": "engine", "name": "cadence: fixed 1.0 s",
+     "cmd": {"cmd": "set_cadence", "mode": "fixed", "every": 1.0}},
+    {"kind": "engine", "name": "cadence: fixed 2.0 s",
+     "cmd": {"cmd": "set_cadence", "mode": "fixed", "every": 2.0}},
+]
 
 
 def item_label(item: dict) -> str:
@@ -134,6 +159,11 @@ class RemoteTUI:
         self._page = 0
         self._hunt: Dict[str, Any] = {}
         self._cam_telem: Dict[str, Any] = {}
+        # Engine cadence state (from the snapshot): move_mode, cadence, cadence_every.
+        self._engine: Dict[str, Any] = {}
+        # Joystick (page navigation via L1/R1).
+        self._joy = None
+        self._joy_thread = None
 
     # ------------------------------------------------------------------
     # Connection (asyncio worker thread).
@@ -157,6 +187,7 @@ class RemoteTUI:
         self._thread.start()
 
     def _shutdown(self) -> None:
+        self._stop_joy()
         if self._loop is None:
             return
 
@@ -173,6 +204,41 @@ class RemoteTUI:
             self._loop.call_soon_threadsafe(_do)
         except RuntimeError:
             pass
+
+    # ------------------------------------------------------------------
+    # Joystick (page navigation via L1/R1). Read on a daemon thread because the
+    # device read blocks; events are pushed into the queue for the main thread.
+    # ------------------------------------------------------------------
+    def _start_joy(self) -> None:
+        from .events import Joystick
+        dev = getattr(self.config, "device", None)
+        if not dev:
+            return
+        self._joy = Joystick(dev)
+
+        def _reader() -> None:
+            try:
+                self._joy.open()
+            except OSError as exc:
+                logger.warning("joystick %s unavailable: %s", dev, exc)
+                return
+            while True:
+                ev = self._joy.read()
+                if ev is None:
+                    break  # EOF or device error; stop the reader
+                self._q.put(("joy", ev))
+
+        self._joy_thread = threading.Thread(target=_reader, daemon=True)
+        self._joy_thread.start()
+
+    def _stop_joy(self) -> None:
+        # Closing the fd makes the blocking read raise, ending the reader thread.
+        if self._joy is not None:
+            try:
+                self._joy.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._joy = None
 
     def _on_state(self, data) -> None:
         self._q.put(("state", data))
@@ -198,6 +264,8 @@ class RemoteTUI:
                 elif kind == "error":
                     self._status = str(payload)
                     self._dirty = True
+                elif kind == "joy":
+                    self._on_joystick(payload)
         except queue.Empty:
             pass
         if self._dirty:
@@ -209,10 +277,17 @@ class RemoteTUI:
     def _apply_state(self, data) -> None:
         self._hunt = data.get("hunt", {})
         self._cam_telem = data.get("cam_telem", {})
+        self._engine = {
+            "move_mode": data.get("move_mode"),
+            "cadence": data.get("cadence"),
+            "cadence_every": data.get("cadence_every"),
+        }
         key = (data.get("zone"), data.get("mode"), data.get("action"),
                data.get("moving"), data.get("speed"),
                data.get("hunt", {}).get("state"),
-               data.get("hunt", {}).get("feral"))
+               data.get("hunt", {}).get("feral"),
+               data.get("move_mode"), data.get("cadence"),
+               data.get("cadence_every"))
         if key != self._state_key:
             self._state = {
                 "zone": data.get("zone"),
@@ -230,6 +305,16 @@ class RemoteTUI:
             self._zones = table
             self._rebuild_items()
             self._dirty = True
+
+    def _on_joystick(self, ev) -> None:
+        """Map joystick L1/R1 presses to page navigation (on press only)."""
+        event_type, code, value = ev
+        if event_type != 1 or value != 1:  # KEY event, press edge only
+            return
+        if code == JOY_L1:
+            self._set_page(self._page - 1)
+        elif code == JOY_R1:
+            self._set_page(self._page + 1)
 
     def _rebuild_items(self) -> None:
         zone = self._state.get("zone")
@@ -283,7 +368,7 @@ class RemoteTUI:
         return urwid.AttrMap(urwid.Text(parts), {})
 
     def _item_row(self, i: int, item: dict):
-        if i == self._cursor and i < len(self._items):
+        if i == self._cursor and i < len(self._current_items()):
             s = f"  ▸ {item_label(item)}"
             return urwid.AttrWrap(urwid.Text(s[:self._width()]),
                                    Theme.attr("black", Theme.YELLOW, "bold"))
@@ -317,6 +402,8 @@ class RemoteTUI:
             rows.extend(self._brain_content())
         elif self._page == 3:
             rows.extend(self._hunt_content())
+        elif self._page == 4:
+            rows.extend(self._cadence_content())
         rows.append(self._divider())
         rows.append(self._line(self._status, Theme.YELLOW_DIM))
         rows.append(self._line("←→ pages · ↑↓ move · enter select · q quit", Theme.DIM))
@@ -438,6 +525,23 @@ class RemoteTUI:
         rows.append(self._item_row(0, {"kind": "action", "name": "stop_hunt", "action": None}))
         return rows
 
+    def _cadence_content(self):
+        """Page 4: engine move mode + cadence (current state + set options)."""
+        rows = []
+        rows.append(self._label("CADENCE"))
+        rows.append(self._divider())
+        eng = self._engine
+        mm = eng.get("move_mode") or "—"
+        cad = eng.get("cadence") or "—"
+        every = eng.get("cadence_every")
+        every_s = f"{every} ticks" if every is not None else "—"
+        rows.append(self._state_row([("MOVE", mm), ("CADENCE", cad), ("EVERY", every_s)]))
+        rows.append(self._divider())
+        rows.append(self._label("SET"))
+        for i, item in enumerate(CADENCE_ITEMS):
+            rows.append(self._item_row(i, item))
+        return rows
+
     def _build_top(self):
         """A fresh top-level ``Pile`` for the current state (box widget).
 
@@ -465,15 +569,35 @@ class RemoteTUI:
             raise _Quit
         return keys
 
+    def _current_items(self) -> List[dict]:
+        """The selectable rows for the current page (NAV items vs. CADENCE options)."""
+        return CADENCE_ITEMS if self._page == 4 else self._items
+
+    def _page_item_count(self) -> int:
+        return len(self._current_items())
+
+    def _set_page(self, p: int) -> None:
+        self._page = max(0, min(len(PAGES) - 1, p))
+        n = self._page_item_count()
+        self._cursor = max(0, min(n - 1, self._cursor)) if n else 0
+        self._dirty = True
+
     def _move_cursor(self, d: int) -> None:
-        if not self._items:
+        n = self._page_item_count()
+        if not n:
             return
-        self._cursor = max(0, min(len(self._items) - 1, self._cursor + d))
+        self._cursor = max(0, min(n - 1, self._cursor + d))
         self._dirty = True
 
     def _activate(self) -> None:
-        if 0 <= self._cursor < len(self._items):
-            item = self._items[self._cursor]
+        items = self._current_items()
+        if 0 <= self._cursor < len(items):
+            item = items[self._cursor]
+            if item.get("kind") == "engine":
+                self._send(item["cmd"])
+                self._status = f"→ {item['name']}"
+                self._dirty = True
+                return
             for cmd in activation_commands(item):
                 self._send(cmd)
             if item.get("kind") == "action":
@@ -501,12 +625,10 @@ class RemoteTUI:
             self._activate()
             return True
         if key == "left":
-            self._page = max(0, self._page - 1)
-            self._dirty = True
+            self._set_page(self._page - 1)
             return True
         if key == "right":
-            self._page = min(len(PAGES) - 1, self._page + 1)
-            self._dirty = True
+            self._set_page(self._page + 1)
             return True
         if key in ("h", "?"):
             self._status = "←→ pages · ↑↓ move · enter select · q quit"
@@ -528,6 +650,7 @@ class RemoteTUI:
             raise RuntimeError("urwid not installed; run `pip install urwid`")
         self._top = self._build_top()
         self._start_conn()
+        self._start_joy()
         self._mainloop = urwid.MainLoop(self._top,
                                          input_filter=self._input_filter,
                                          unhandled_input=self._on_unhandled)

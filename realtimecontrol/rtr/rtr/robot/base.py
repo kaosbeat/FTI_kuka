@@ -33,9 +33,17 @@ class RobotBase(ABC):
         """Current cartesian pose (X,Y,Z, A,B,C), in mm / degrees."""
 
     @abstractmethod
-    def move_joint(self, pose: List[float], speed: float) -> None:
-        """Move to a joint pose (A1..A6). Non-blocking: the controller interpolates."""
+    def move_joint(self, pose: List[float], speed: float, blocking: bool = True) -> None:
+        """Move to a joint pose (A1..A6).
+
+        ``blocking`` controls whether the call waits for the move to arrive:
+        ``True`` (legacy "block" engine mode) waits; ``False`` ("stream") sets the
+        target and returns immediately so the loop can keep retargeting.
+        """
 
     @abstractmethod
-    def move_linear(self, pose: List[float], speed: float) -> None:
-        """Move to a cartesian pose along a straight line (TCP linear)."""
+    def move_linear(self, pose: List[float], speed: float, blocking: bool = True) -> None:
+        """Move to a cartesian pose along a straight line (TCP linear).
+
+        ``blocking`` follows the same contract as :meth:`move_joint`.
+        """

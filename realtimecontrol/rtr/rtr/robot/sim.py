@@ -54,10 +54,14 @@ class SimRobot(RobotBase):
         # Not a real FK; just a stand-in so the display has a moving value.
         return [self._cur[0], self._cur[1], self._cur[2], 0.0, 0.0, 0.0]
 
-    def move_joint(self, pose: List[float], speed: float) -> None:
+    def move_joint(self, pose: List[float], speed: float, blocking: bool = True) -> None:
+        # The sim is inherently non-blocking: it only sets the target and walks
+        # toward it on the next ``get_curjpos``. ``blocking`` is accepted for
+        # interface parity with the real robot (where blocking waits for arrival)
+        # but has no effect here — the sim always streams.
         self._target = list(pose)
         self._speed = max(0.0, float(speed))
 
-    def move_linear(self, pose: List[float], speed: float) -> None:
+    def move_linear(self, pose: List[float], speed: float, blocking: bool = True) -> None:
         # Linear cartesian moves are not simulated; hold the current pose.
         pass

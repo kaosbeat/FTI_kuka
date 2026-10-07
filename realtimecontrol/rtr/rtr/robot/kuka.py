@@ -45,8 +45,40 @@ class KukaRobot(RobotBase):
     def get_curpos(self) -> List[float]:
         return list(self._robot.get_curpos())
 
-    def move_joint(self, pose: List[float], speed: float) -> None:
-        self._robot.move("joint", list(pose), speed)
+    def move_joint(self, pose: List[float], speed: float, blocking: bool = True) -> None:
+        self._move(pose, speed, blocking, linear=False)
 
-    def move_linear(self, pose: List[float], speed: float) -> None:
-        self._robot.move("pose", list(pose), speed, linear=True)
+    def move_linear(self, pose: List[float], speed: float, blocking: bool = True) -> None:
+        self._move(pose, speed, blocking, linear=True)
+
+    def _move(self, pose: List[float], speed: float,
+              blocking: bool, linear: bool) -> None:
+        """Issue a move to the controller.
+
+        ``blocking=True`` (the legacy behaviour): the classic kukapy ``move`` polls
+        until the robot arrives, so the caller blocks for the whole move.
+
+        ``blocking=False`` (stream): run the same blocking kukapy ``move`` on a
+        daemon thread and return immediately, so the 20 Hz engine loop keeps
+        streaming a fresh target each tick and the robot retargets mid-move,
+        like the sim. Each tick's move call re-targets the in-flight move.
+
+        NOTE: this relies on kukapy's EKI socket being safe to poll for the
+        current pose (``get_curjpos``) while a background ``move`` is also
+        polling it. That is not exercised in the sim and must be verified on
+        the robot before relying on stream mode.
+        """
+        def _do() -> None:
+            # Preserve the exact legacy call forms: the joint move is issued
+            # without a ``linear`` kwarg; the cartesian move with ``linear=True``.
+            if linear:
+                self._robot.move("pose", list(pose), speed, linear=True)
+            else:
+                self._robot.move("joint", list(pose), speed)
+
+        if blocking:
+            _do()
+            return
+        import threading
+        t = threading.Thread(target=_do, daemon=True)
+        t.start()

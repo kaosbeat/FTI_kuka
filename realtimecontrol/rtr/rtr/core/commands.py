@@ -30,6 +30,8 @@ class Cmd(str, Enum):
     MIDI_LEARN = "midi_learn"
     SET_SCREEN_PATCH = "set_screen_patch"
     STOP = "stop"
+    SET_ENGINE_MODE = "set_engine_mode"
+    SET_CADENCE = "set_cadence"
     CAM_STATUS = "cam_status"
     CAM_CANDIDATES = "cam_candidates"
     CAM_TRACK = "cam_track"
@@ -93,6 +95,9 @@ class Snapshot:
     # Additive optional fields (absent from older snapshots; clients ignore unknowns).
     hunt: Optional[dict] = None  # brain hunt state: {"state", "lock_id", "feral"}
     servo: Optional[dict] = None  # last servo vector: {"behavior","dx","dy","dq_deg","axes"}
+    move_mode: Optional[str] = None  # engine move mode: "block" | "stream"
+    cadence: Optional[str] = None  # cadence mode: "fixed" | "arrival"
+    cadence_every: Optional[int] = None  # fixed-rhythm interval, in ticks
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
@@ -110,4 +115,10 @@ class Snapshot:
             d["hunt"] = dict(self.hunt)
         if self.servo:
             d["servo"] = dict(self.servo)
+        if self.move_mode is not None:
+            d["move_mode"] = self.move_mode
+        if self.cadence is not None:
+            d["cadence"] = self.cadence
+        if self.cadence_every is not None:
+            d["cadence_every"] = self.cadence_every
         return d

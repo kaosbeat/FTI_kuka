@@ -163,6 +163,10 @@ class Brain:
             self.machine.random_wrist()
         elif c == Cmd.STOP:
             self.machine.halt(curjpos)
+        elif c == Cmd.SET_ENGINE_MODE:
+            self._handle_set_engine_mode(p)
+        elif c == Cmd.SET_CADENCE:
+            self._handle_set_cadence(p)
         elif c == Cmd.SET_FLAG:
             name = p.get("flag")
             if name in self.machine.flags:
@@ -175,6 +179,34 @@ class Brain:
             self._handle_cam_track(p)
         elif c == Cmd.CAM_FACE:
             self._handle_cam_face(p)
+
+    # ------------------------------------------------------------------
+    # Engine move mode + cadence.
+    # ------------------------------------------------------------------
+    def _handle_set_engine_mode(self, p: dict) -> None:
+        """Set the engine move mode: ``"block"`` (wait per move) | ``"stream"`` (retarget)."""
+        mode = p.get("mode")
+        if mode not in ("block", "stream"):
+            print(f"[brain] invalid engine mode: {mode}")
+            return
+        self.machine.move_mode = mode
+        print(f"[brain] engine mode: {mode}")
+
+    def _handle_set_cadence(self, p: dict) -> None:
+        """Set the cadence: ``"fixed"`` (every N s) | ``"arrival"`` (when the move ends)."""
+        mode = p.get("mode", "fixed")
+        if mode not in ("fixed", "arrival"):
+            print(f"[brain] invalid cadence mode: {mode}")
+            return
+        self.machine.cadence = mode
+        if mode == "fixed":
+            # ``every`` is in seconds; convert to ticks (min 1 tick).
+            try:
+                every_s = float(p.get("every", 1.0))
+            except (TypeError, ValueError):
+                every_s = 1.0
+            self.machine.cadence_every = max(1, int(every_s * self.machine.tick_hz))
+        print(f"[brain] cadence: {mode} every={self.machine.cadence_every} ticks")
 
     # ------------------------------------------------------------------
     # Camera telemetry handling.

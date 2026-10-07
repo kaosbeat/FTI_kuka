@@ -106,9 +106,18 @@ class Engine:
 
             if target is not None:
                 if self.machine.target_kind == "linear":
-                    await asyncio.to_thread(self.robot.move_linear, target, self.machine.speed)
+                    move = self.robot.move_linear
                 else:
-                    await asyncio.to_thread(self.robot.move_joint, target, self.machine.speed)
+                    move = self.robot.move_joint
+                if self.machine.move_mode == "stream":
+                    # Non-blocking: fire without waiting, so the 20 Hz loop keeps
+                    # streaming a fresh target every tick (the robot retargets, like
+                    # the sim). This is the base contract (move_* only set a target).
+                    move(target, self.machine.speed, blocking=False)
+                else:
+                    # Block: wait for this move to arrive before the next tick
+                    # (the legacy kukapy behaviour).
+                    await asyncio.to_thread(move, target, self.machine.speed)
 
             self._publish(curjpos, curpos, target)
             self._publish_changes()
@@ -169,6 +178,9 @@ class Engine:
             moving=moving,
             hunt=self.brain.hunt_info(),
             servo=dict(self.machine.servo_state),
+            move_mode=self.machine.move_mode,
+            cadence=self.machine.cadence,
+            cadence_every=self.machine.cadence_every,
         )
         self.bus.set_snapshot(snap)
         self.bus.publish(Event.SNAPSHOT, snap)

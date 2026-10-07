@@ -79,9 +79,15 @@ class StateMachine:
             "reachmode": 0,
         }
 
-        # Cadence (in ticks) for the discrete behaviours.
-        self.random_every = max(1, int(tick_hz))
-        self.action_every = max(1, int(tick_hz))
+        # Engine move mode + cadence for the discrete behaviours.
+        #   move_mode: "block" (wait for each move to arrive) | "stream" (fire
+        #     without waiting, so the 20 Hz loop keeps retargeting the robot).
+        #   cadence:   "fixed" (advance every cadence_every ticks) | "arrival"
+        #     (advance when the robot reaches the current target).
+        #   cadence_every: the fixed-rhythm interval, in ticks.
+        self.move_mode = "block"
+        self.cadence = "fixed"
+        self.cadence_every = max(1, int(tick_hz))
         self.tick = 0
 
     # ------------------------------------------------------------------
@@ -252,17 +258,17 @@ class StateMachine:
             zone = self.zones.get(self.current_zone)
             action = zone._action(self.current_action)
             if "pos" in action:
-                # Legacy fixed-pose: advance at the action cadence.
-                if self.tick % self.action_every == 0:
+                # Legacy fixed-pose: advance per the configured cadence.
+                if self._cadence_due(curjpos):
                     pose = self.step_action()
                     if pose is not None:
                         self.target = clamp(self, pose)
                         self.target_kind = "joint"
             else:
-                # Variable-axis: ``random`` re-targets at a cadence (the rest servo
+                # Variable-axis: ``random`` re-targets at the cadence (the rest servo
                 # continuously every tick).
                 if zone.action_behavior(self.current_action) == "random" \
-                        and self.tick % self.random_every != 0:
+                        and not self._cadence_due(curjpos):
                     pass  # hold the last target this tick
                 else:
                     pose = build_target(self, curjpos)
@@ -272,6 +278,18 @@ class StateMachine:
         # No action: hold the last target.
 
         return self.target
+
+    def _cadence_due(self, curjpos: List[float]) -> bool:
+        """Whether the discrete cadence fires this tick.
+
+        - ``"fixed"``: fire every ``cadence_every`` ticks (the legacy fixed-rhythm).
+        - ``"arrival"``: fire when the robot reaches the current target
+          (comparelist), i.e. advance-when-ends.
+        """
+        if self.cadence == "arrival":
+            return self.target is not None \
+                and comparelist(curjpos, self.target, margin=0.1, count=5)
+        return self.tick % self.cadence_every == 0
 
     def update(self, curjpos: List[float]) -> Optional[List[float]]:
         """Drive the transition one step. Returns the target pose, or None when idle.
