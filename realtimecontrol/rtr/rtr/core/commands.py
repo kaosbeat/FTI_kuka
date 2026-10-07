@@ -90,9 +90,12 @@ class Snapshot:
     speed: float
     flags: Dict[str, Any]
     moving: bool
+    # Additive optional fields (absent from older snapshots; clients ignore unknowns).
+    hunt: Optional[dict] = None  # brain hunt state: {"state", "lock_id", "feral"}
+    servo: Optional[dict] = None  # last servo vector: {"behavior","dx","dy","dq_deg","axes"}
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "zone": self.zone,
             "mode": self.mode,
             "action": self.action,
@@ -103,3 +106,8 @@ class Snapshot:
             "flags": dict(self.flags),
             "moving": self.moving,
         }
+        if self.hunt is not None:
+            d["hunt"] = dict(self.hunt)
+        if self.servo:
+            d["servo"] = dict(self.servo)
+        return d

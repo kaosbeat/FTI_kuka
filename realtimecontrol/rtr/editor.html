@@ -287,6 +287,7 @@
   <section>
     <h2>brain — hunt loop</h2>
     <div id="brainForm"></div>
+    <div id="brainLive" style="font-size:12px;margin-top:8px"></div>
     <div id="brainInfo" style="font-size:12px;color:var(--dim);margin-top:8px"></div>
   </section>
 </main>
@@ -572,9 +573,16 @@ const PATCHES_FALLBACK = {
 const BRAIN_FALLBACK = {
   hunt: {
     lost_s: 2.0,
-    attention_guard: ["track", "focus", "look"],
+    attention_guard: ["track", "focus", "look", "face"],
     detect: { zone: "wakeup", action: "look" },
     scan: { zone: "wakeup", action: "scan" },
+  },
+  facefocus: {
+    enabled: true,
+    zone: "stretch",
+    actions: ["wink", "inspect", "call"],
+    action_s: 3.0,
+    face_lost_s: 2.5,
   },
 };
 
@@ -602,6 +610,7 @@ function connect() {
         `<div class="stateRow"><span>moving</span><span>${m.moving ? "yes" : "no"}</span></div>`;
       FLOW.live = { zone: m.zone, mode: m.mode, action: m.action };
       if (flowView) applyFlowHighlight();
+      if (brainView) renderBrainLive(m);
     } else if (m.type === "sound_changed") {
       // The running core reloaded the sound mapping; re-fetch it.
       loadSound().then(() => { if (midiView) buildMidiOutForm(); });
@@ -1407,12 +1416,23 @@ async function loadBrain() {
   if (!data) data = JSON.parse(JSON.stringify(BRAIN_FALLBACK));
   // Normalise to the full shape so the form always has every field.
   const h = (data && data.hunt) || {};
-  BRAIN = { hunt: {
-    lost_s: h.lost_s !== undefined ? h.lost_s : BRAIN_FALLBACK.hunt.lost_s,
-    attention_guard: h.attention_guard || BRAIN_FALLBACK.hunt.attention_guard.slice(),
-    detect: Object.assign({}, BRAIN_FALLBACK.hunt.detect, h.detect || {}),
-    scan: Object.assign({}, BRAIN_FALLBACK.hunt.scan, h.scan || {}),
-  }};
+  const f = (data && data.facefocus) || {};
+  const fb = BRAIN_FALLBACK.facefocus;
+  BRAIN = {
+    hunt: {
+      lost_s: h.lost_s !== undefined ? h.lost_s : BRAIN_FALLBACK.hunt.lost_s,
+      attention_guard: h.attention_guard || BRAIN_FALLBACK.hunt.attention_guard.slice(),
+      detect: Object.assign({}, BRAIN_FALLBACK.hunt.detect, h.detect || {}),
+      scan: Object.assign({}, BRAIN_FALLBACK.hunt.scan, h.scan || {}),
+    },
+    facefocus: {
+      enabled: f.enabled !== undefined ? f.enabled : fb.enabled,
+      zone: f.zone !== undefined ? f.zone : fb.zone,
+      actions: f.actions || fb.actions.slice(),
+      action_s: f.action_s !== undefined ? f.action_s : fb.action_s,
+      face_lost_s: f.face_lost_s !== undefined ? f.face_lost_s : fb.face_lost_s,
+    },
+  };
   if (brainView) buildBrainForm();
   return BRAIN;
 }
@@ -1460,20 +1480,60 @@ function buildBrainForm() {
   scanAct.type = "text"; scanAct.spellcheck = false; scanAct.id = "brainScanAct";
   scanAct.value = h.scan.action;
   addRow("hunt.scan.action", scanAct);
+  // facefocus (the "check out that human" sub-state of tracking).
+  const ffHead = document.createElement("div");
+  ffHead.className = "row";
+  ffHead.style.marginTop = "10px";
+  ffHead.style.fontSize = "12px";
+  ffHead.style.color = "var(--dim)";
+  ffHead.textContent = "facefocus — stretch + face actions while a face is visible";
+  el.appendChild(ffHead);
+  const ff = BRAIN.facefocus;
+  const ffEnabled = document.createElement("input");
+  ffEnabled.type = "checkbox"; ffEnabled.id = "brainFFEnabled";
+  ffEnabled.checked = !!ff.enabled;
+  addRow("facefocus.enabled", ffEnabled);
+  const ffZone = document.createElement("input");
+  ffZone.type = "text"; ffZone.spellcheck = false; ffZone.id = "brainFFZone";
+  ffZone.value = ff.zone;
+  addRow("facefocus.zone", ffZone);
+  const ffActions = document.createElement("input");
+  ffActions.type = "text"; ffActions.spellcheck = false; ffActions.id = "brainFFActions";
+  ffActions.value = ff.actions.join(", ");
+  addRow("facefocus.actions", ffActions);
+  const ffActionS = document.createElement("input");
+  ffActionS.type = "number"; ffActionS.step = "0.1"; ffActionS.min = "0";
+  ffActionS.id = "brainFFActionS"; ffActionS.value = ff.action_s;
+  addRow("facefocus.action_s (s)", ffActionS);
+  const ffLostS = document.createElement("input");
+  ffLostS.type = "number"; ffLostS.step = "0.1"; ffLostS.min = "0";
+  ffLostS.id = "brainFFLostS"; ffLostS.value = ff.face_lost_s;
+  addRow("facefocus.face_lost_s (s)", ffLostS);
   $("brainInfo").textContent = "detect = the action the brain triggers when it locks a target; "
     + "scan = the action it triggers when the lock is lost; attention_guard = behaviors that "
-    + "suppress the detect attention-grab (comma-separated).";
+    + "suppress the detect attention-grab (comma-separated); facefocus = stretch into the "
+    + "exterior pose and cycle the face actions while a face is visible (comma-separated).";
 }
 
 function saveBrain() {
   const lostS = parseFloat($("brainLostS").value);
   const guard = $("brainGuard").value.split(",").map((s) => s.trim()).filter((s) => s.length);
+  const ff = BRAIN.facefocus;
+  const ffActionS = parseFloat($("brainFFActionS").value);
+  const ffLostS = parseFloat($("brainFFLostS").value);
   const payload = {
     hunt: {
       lost_s: isNaN(lostS) ? BRAIN.hunt.lost_s : lostS,
       attention_guard: guard,
       detect: { zone: $("brainDetZone").value.trim(), action: $("brainDetAct").value.trim() },
       scan: { zone: $("brainScanZone").value.trim(), action: $("brainScanAct").value.trim() },
+    },
+    facefocus: {
+      enabled: $("brainFFEnabled").checked,
+      zone: $("brainFFZone").value.trim(),
+      actions: $("brainFFActions").value.split(",").map((s) => s.trim()).filter((s) => s.length),
+      action_s: isNaN(ffActionS) ? ff.action_s : ffActionS,
+      face_lost_s: isNaN(ffLostS) ? ff.face_lost_s : ffLostS,
     },
   };
   fetch("/api/brain", {
@@ -1489,6 +1549,22 @@ function saveBrain() {
       $("saveMsg").className = "err";
     }
   }).catch((e) => { $("saveMsg").textContent = "save failed: " + e; $("saveMsg").className = "err"; });
+}
+
+// Live brain state from the state frame (hunt state + lock + camera intent).
+// "facefocus" is shown as "check out" (the robot is stretching at that human).
+function renderBrainLive(m) {
+  const el = $("brainLive");
+  const hunt = m.hunt || null;
+  const cam = m.camera || null;
+  const state = hunt ? hunt.state : null;
+  const label = state === "facefocus" ? "check out" : (state || "—");
+  const lock = hunt && hunt.lock_id != null ? "#" + hunt.lock_id : "—";
+  const camTxt = cam ? cam.active + "/" + cam.mode : "—";
+  el.innerHTML =
+    `<div class="stateRow"><span>hunt</span><span>${label}</span></div>` +
+    `<div class="stateRow"><span>lock</span><span>${lock}</span></div>` +
+    `<div class="stateRow"><span>camera</span><span>${camTxt}</span></div>`;
 }
 
 // hydra-synth 1.x always evals patch code via a GLOBAL eval (globalThis.eval), so its

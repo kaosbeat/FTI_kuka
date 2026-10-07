@@ -53,11 +53,13 @@ class CameraController:
         self.face: Optional[Dict[str, Any]] = None
 
     def set_intent(self, active: str = None, mode: str = None,
-                   lock_id: Optional[int] = None) -> None:
+                   lock_id: Optional[int] = None,
+                   clear_lock: bool = False) -> None:
         """Change the camera intent; publish a ``CAM_CONTROL`` event on change.
 
         Only the supplied fields are updated; omitted fields keep their current
-        value. ``lock_id`` may be ``None`` to clear the lock.
+        value. ``lock_id`` may be ``None`` to leave the lock unchanged; pass
+        ``clear_lock=True`` to explicitly clear a stale lock.
         """
         changed = False
         if active is not None and active in CAMERA_CHOICES:
@@ -68,7 +70,11 @@ class CameraController:
             if self.intent.mode != mode:
                 self.intent.mode = mode
                 changed = True
-        if lock_id is not None:
+        if clear_lock:
+            if self.intent.lock_id is not None:
+                self.intent.lock_id = None
+                changed = True
+        elif lock_id is not None:
             if self.intent.lock_id != lock_id:
                 self.intent.lock_id = lock_id
                 changed = True

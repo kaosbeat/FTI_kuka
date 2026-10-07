@@ -50,6 +50,10 @@ class StateMachine:
         # Face telemetry (the brain stashes the latest CAM_FACE payload here; the
         # ``face`` behaviour reads it). Empty dict until the first face frame arrives.
         self.face_state: dict = {}
+        # Servo state (the behaviour policies write the last computed servo vector
+        # here on every tick; the display reads it for the state frame). Shape:
+        # {"behavior", "dx", "dy", "dq_deg", "axes"}; empty dict when no servo ran.
+        self.servo_state: dict = {}
         # Hunt state (the brain writes this on every hunt-state change; the display
         # reads it for the state frame). Shape: {"state", "lock_id", "feral"}.
         self.hunt_state: dict = {}
@@ -316,6 +320,18 @@ class StateMachine:
         if self.current_action:
             return self.zones.get(self.current_zone).action_behavior(self.current_action)
         return "hold"
+
+    @property
+    def effective_behavior(self) -> str:
+        """The behaviour that is (or is about to be) running.
+
+        While a transition is in progress this is the transition target's behaviour
+        (the action about to begin); otherwise the current action's behaviour.
+        """
+        if self._transition is not None:
+            z = self.zones.get(self._transition["zone"])
+            return z.action_behavior(self._transition["action"])
+        return self.behavior
 
     @property
     def transitioning(self) -> bool:

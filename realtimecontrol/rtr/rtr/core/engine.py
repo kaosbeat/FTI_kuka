@@ -167,6 +167,8 @@ class Engine:
             speed=self.machine.speed,
             flags=dict(self.machine.flags),
             moving=moving,
+            hunt=self.brain.hunt_info(),
+            servo=dict(self.machine.servo_state),
         )
         self.bus.set_snapshot(snap)
         self.bus.publish(Event.SNAPSHOT, snap)

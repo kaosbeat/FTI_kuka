@@ -44,7 +44,7 @@
   .empty { color: var(--dim); font-size: 13px; }
   #cand-list { font-size: 13px; }
   .cand { padding: 3px 0; border-bottom: 1px solid #20242d; word-break: break-all; }
-  .cand.locked { color: var(--accent); }
+  .cand.locked { color: #e05d5d; }
   #wire { font-size: 11px; color: var(--dim); white-space: pre-wrap; word-break: break-all;
           max-width: 640px; margin-top: 6px; min-height: 14px; }
 </style>
@@ -65,7 +65,8 @@
     <canvas id="frame" width="640" height="480"></canvas>
     <div class="legend">
       <span class="sw" style="background:#ff9f40"></span>candidate
-      &nbsp;<span class="sw" style="background:#4fc08d"></span>locked / track offset
+      &nbsp;<span class="sw" style="background:#e05d5d"></span>locked
+      &nbsp;<span class="sw" style="background:#4fc08d"></span>track offset
       &nbsp;<span class="sw" style="background:#d7dbe2"></span>image center
     </div>
     <div id="wire"></div>
@@ -95,6 +96,11 @@
     <h2>face</h2>
     <div id="face-panel"></div>
   </section>
+
+  <section>
+    <h2>motion (servo)</h2>
+    <div id="motion-panel"></div>
+  </section>
 </main>
 
 <script>
@@ -110,6 +116,7 @@ let ws = null;
 let lastStateTime = 0;
 let lastTelem = null;   // cam_telem payload
 let lastIntent = null;  // camera intent payload
+let lastState = null;   // {servo, hunt, target, joints, moving} from the state frame
 let stale = false;
 
 function setConn(on) {
@@ -133,6 +140,13 @@ function connect() {
       lastStateTime = Date.now();
       lastTelem = m.cam_telem || null;
       lastIntent = m.camera || null;
+      lastState = {
+        servo: m.servo || null,
+        hunt: m.hunt || null,
+        target: m.target || null,
+        joints: m.joints || null,
+        moving: m.moving || null,
+      };
       render();
     }
   };
@@ -202,7 +216,9 @@ function drawFrame() {
   }
 
   const cands = (t.candidates && t.candidates.candidates) || [];
-  const lockedId = t.track ? t.track.id : null;
+  // Locked id: the track payload, falling back to the camera intent's lock (the
+  // brain's current lock) when the track lags after a camera switch.
+  const lockedId = t.track?.id ?? lastIntent?.lock_id ?? null;
 
   // candidate boxes
   for (const cd of cands) {
@@ -210,12 +226,12 @@ function drawFrame() {
     const [sx, sy] = detectScale([cd.x1, cd.y1, cd.x2, cd.y2]);
     const x1 = cd.x1 * sx, y1 = cd.y1 * sy, x2 = cd.x2 * sx, y2 = cd.y2 * sy;
     const locked = lockedId != null && cd.id === lockedId;
-    ctx.strokeStyle = locked ? "#4fc08d" : "#ff9f40";
+    ctx.strokeStyle = locked ? "#e05d5d" : "#ff9f40";
     ctx.lineWidth = 2;
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
     const conf = isNum(cd.conf) ? cd.conf.toFixed(2) : "";
     const label = "#" + cd.id + " " + conf + (locked ? " LOCK" : "");
-    ctx.fillStyle = locked ? "#4fc08d" : "#ff9f40";
+    ctx.fillStyle = locked ? "#e05d5d" : "#ff9f40";
     ctx.font = "12px monospace";
     ctx.fillText(label, x1, Math.max(0, y1 - 4));
   }
@@ -243,13 +259,15 @@ function drawFrame() {
   // status overlay top-left
   const st = t.status || {};
   const n = cands.length;
+  const hs = lastState && lastState.hunt && lastState.hunt.state ? lastState.hunt.state : "";
   ctx.fillStyle = "rgba(0,0,0,0.55)";
-  ctx.fillRect(0, 0, 340, 22);
+  ctx.fillRect(0, 0, 460, 22);
   ctx.fillStyle = "#4fc08d";
   ctx.font = "13px monospace";
   const cam = st.camera || "-", mode = st.mode || "-";
   const fps = isNum(st.fps) ? st.fps.toFixed(0) : "-";
-  ctx.fillText(cam + " | " + mode + " | " + fps + " fps | " + n + " cand", 8, 15);
+  ctx.fillText(cam + " | " + mode + " | " + fps + " fps | " + n + " cand"
+               + (hs ? " | hunt=" + hs : ""), 8, 15);
 }
 
 // ------------------------------------------------------------------
@@ -301,7 +319,7 @@ function renderCandidates(t) {
   const el = $("cand-list");
   const cands = (t && t.candidates && t.candidates.candidates) || [];
   if (!cands.length) { el.innerHTML = '<div class="empty">no candidates</div>'; return; }
-  const lockedId = (t && t.track) ? t.track.id : null;
+  const lockedId = t?.track?.id ?? lastIntent?.lock_id ?? null;
   let h = "";
   for (const c of cands) {
     const locked = lockedId != null && c.id === lockedId;
@@ -316,13 +334,15 @@ function renderCandidates(t) {
 
 function renderFace(t) {
   const el = $("face-panel");
-  const f = (t && t.face) || null;
-  if (!f) { el.innerHTML = kvRow("face", "\u2014"); return; }
+  const fc = (t && t.face) || null;
+  if (!fc) { el.innerHTML = kvRow("face", "\u2014"); return; }
+  const num = (v) => isNum(v) ? v.toFixed(1) : "\u2014";
   let h = "";
-  h += kvRow("id", f.id != null ? f.id : "\u2014");
-  const bbox = Array.isArray(f.bbox) ? f.bbox.map((v) => isNum(v) ? v.toFixed(1) : "?").join(", ") : "\u2014";
+  h += kvRow("id", fc.id != null ? fc.id : "\u2014");
+  h += kvRow("dx, dy", num(fc.dx) + ", " + num(fc.dy));
+  const bbox = Array.isArray(fc.bbox) ? fc.bbox.map((v) => isNum(v) ? v.toFixed(1) : "?").join(", ") : "\u2014";
   h += kvRow("bbox", bbox);
-  const feats = f.features && typeof f.features === "object" ? JSON.stringify(f.features) : "\u2014";
+  const feats = fc.features && typeof fc.features === "object" ? JSON.stringify(fc.features) : "\u2014";
   h += kvRow("features", feats);
   el.innerHTML = h;
 }
@@ -336,6 +356,30 @@ function renderWire() {
   el.textContent = "cam_telem: " + keys;
 }
 
+function renderMotion() {
+  const el = $("motion-panel");
+  const st = lastState;
+  const s = (st && st.servo) || null;
+  const num = (v) => isNum(v) ? v.toFixed(2) : "\u2014";
+  let h = "";
+  if (!s) {
+    h += kvRow("servo", "\u2014 (no servo this tick)");
+  } else {
+    h += kvRow("behavior", s.behavior || "\u2014");
+    h += kvRow("error dx, dy", num(s.dx) + ", " + num(s.dy));
+    // Per-axis joint deltas with axis labels (A1 = axis 0).
+    const axes = Array.isArray(s.axes) ? s.axes : [];
+    const dq = Array.isArray(s.dq_deg) ? s.dq_deg : [];
+    const vec = axes.map((ax, i) => "A" + (ax + 1) + "=" + num(dq[i])).join(", ");
+    h += kvRow("dq (deg)", vec || "\u2014");
+  }
+  const pose = (p) => Array.isArray(p) ? p.map((v) => isNum(v) ? v.toFixed(1) : "?").join(", ") : "\u2014";
+  h += kvRow("target", st ? pose(st.target) : "\u2014");
+  h += kvRow("joints", st ? pose(st.joints) : "\u2014");
+  h += kvRow("moving", st && st.moving ? "yes" : "no");
+  el.innerHTML = h;
+}
+
 function render() {
   const t = lastTelem;
   renderStatus(t);
@@ -343,6 +387,7 @@ function render() {
   renderTrack(t);
   renderCandidates(t);
   renderFace(t);
+  renderMotion();
   renderWire();
   drawFrame();
 }

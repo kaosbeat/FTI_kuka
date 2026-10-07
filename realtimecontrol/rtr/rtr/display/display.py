@@ -122,8 +122,12 @@ class Display:
         telem = self._camera_telem()
         if telem is not None:
             frame["cam_telem"] = telem
-        if self._machine is not None and self._machine.hunt_state:
+        if snap.hunt is not None:
+            frame["hunt"] = dict(snap.hunt)
+        elif self._machine is not None and self._machine.hunt_state:
             frame["hunt"] = dict(self._machine.hunt_state)
+        if snap.servo:
+            frame["servo"] = dict(snap.servo)
         return frame
 
 

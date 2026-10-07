@@ -78,15 +78,18 @@ def build_target(machine, curjpos: List[float]):
     action's behaviour.
     """
     if not machine.current_action:
+        machine.servo_state = {}
         return None
     zone = machine.zones.get(machine.current_zone)
     name = machine.current_action
     action = zone._action(name)
     if not action or "pos" in action:
+        machine.servo_state = {}
         return None  # no variable-axis action active (none, unknown, or legacy)
 
     base = zone.action_base_pose(name)
     if base is None:
+        machine.servo_state = {}
         return None
     pose = list(base)
     _apply_behavior(machine, pose, zone.action_variable_axes(name),
@@ -114,7 +117,7 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
     if behavior in ("track", "look", "focus"):
         _apply_camera(machine, pose, var_axes, behavior, curjpos, image_gain, action)
     elif behavior == "face":
-        _apply_face(machine, pose, var_axes, curjpos, image_gain, action)
+        _apply_face(machine, pose, var_axes, curjpos, image_gain, action, behavior)
     elif behavior == "scan":
         _apply_scan(machine, pose, var_axes, limits)
     elif behavior == "wander":
@@ -153,10 +156,10 @@ def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain, action) -> N
     if behavior == "look":
         dx *= _LOOK_FACTOR
         dy *= _LOOK_FACTOR
-    _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action)
+    _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior)
 
 
-def _apply_face(machine, pose, var_axes, curjpos, gain, action) -> None:
+def _apply_face(machine, pose, var_axes, curjpos, gain, action, behavior) -> None:
     """Drive variable axes from the close camera's face offset (subtle).
 
     Reads the face offset the brain stashes on ``machine.face_state`` each tick
@@ -173,10 +176,10 @@ def _apply_face(machine, pose, var_axes, curjpos, gain, action) -> None:
         dy = 0.0
     dx *= _FACE_FACTOR
     dy *= _FACE_FACTOR
-    _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action)
+    _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior)
 
 
-def _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action) -> None:
+def _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior) -> None:
     """Map the image offset to joint deltas via the image Jacobian.
 
     Shared by the camera behaviours (``track`` / ``focus`` / ``look``) and the face
@@ -190,32 +193,45 @@ def _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action) -> None:
 
     Falls back to the legacy fixed-axis gain when the kinematics are not wired
     (``machine.camera_geometry`` is ``None``), e.g. a bare sim.
+
+    Records the servo state (``machine.servo_state``) on every call — including the
+    zero-offset case — so the display always reflects the last tick's vector.
     """
     if dx == 0.0 and dy == 0.0:
+        machine.servo_state = {
+            "behavior": behavior, "dx": 0.0, "dy": 0.0,
+            "dq_deg": [0.0] * len(var_axes), "axes": list(var_axes),
+        }
         return
     geo = getattr(machine, "camera_geometry", None)
     if geo is None:
         # Legacy fallback: fixed axis-aligned gain (degrees per pixel).
+        dq_deg = [dx * _DEFAULT_GAIN] * len(var_axes)
         for axis in var_axes:
             pose[axis] = pose[axis] + dx * _DEFAULT_GAIN
-        return
-    # Working depth for the target estimate: an action may override it with a
-    # ``target_depth`` field (metres); otherwise the geometry default is used.
-    depth = geo.target_depth
-    if isinstance(action, dict):
-        td = action.get("target_depth")
-        if isinstance(td, (int, float)) and not isinstance(td, bool) and td > 0:
-            depth = td
-    # Estimate the tracked target's world position, then the image Jacobian.
-    target = geo.estimate_target(curjpos, dx, dy, depth)
-    J = geo.image_jacobian(curjpos, target)
-    # Reduce the image Jacobian to the variable axes and invert it.
-    J_var = [[J[r][ax] for ax in var_axes] for r in range(2)]
-    P = pinv2(J_var)
-    n = len(var_axes)
-    dq_rad = [-gain * sum(P[i][c] * [dx, dy][c] for c in range(2)) for i in range(n)]
-    for k, ax in enumerate(var_axes):
-        pose[ax] = pose[ax] + dq_rad[k] * _DEG_PER_RAD
+    else:
+        # Working depth for the target estimate: an action may override it with a
+        # ``target_depth`` field (metres); otherwise the geometry default is used.
+        depth = geo.target_depth
+        if isinstance(action, dict):
+            td = action.get("target_depth")
+            if isinstance(td, (int, float)) and not isinstance(td, bool) and td > 0:
+                depth = td
+        # Estimate the tracked target's world position, then the image Jacobian.
+        target = geo.estimate_target(curjpos, dx, dy, depth)
+        J = geo.image_jacobian(curjpos, target)
+        # Reduce the image Jacobian to the variable axes and invert it.
+        J_var = [[J[r][ax] for ax in var_axes] for r in range(2)]
+        P = pinv2(J_var)
+        n = len(var_axes)
+        dq_rad = [-gain * sum(P[i][c] * [dx, dy][c] for c in range(2)) for i in range(n)]
+        dq_deg = [q * _DEG_PER_RAD for q in dq_rad]
+        for k, ax in enumerate(var_axes):
+            pose[ax] = pose[ax] + dq_rad[k] * _DEG_PER_RAD
+    machine.servo_state = {
+        "behavior": behavior, "dx": dx, "dy": dy,
+        "dq_deg": dq_deg, "axes": list(var_axes),
+    }
 
 
 def _apply_scan(machine, pose, var_axes, limits) -> None:

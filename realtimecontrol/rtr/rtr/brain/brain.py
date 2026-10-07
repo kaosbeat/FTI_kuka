@@ -90,6 +90,14 @@ class Brain:
         """The facefocus decision config (the "check out that human" parameters)."""
         return self._config.get("facefocus", {})
 
+    def hunt_info(self) -> dict:
+        """The hunt state for the state frame (the display/editor reads it live)."""
+        return {
+            "state": self._hunt_state,
+            "lock_id": self._hunt_lock_id,
+            "feral": self._feral,
+        }
+
     def _update_hunt_state(self) -> None:
         """Write the current hunt state to the machine (the display reads it)."""
         self.machine.hunt_state = {
@@ -309,6 +317,26 @@ class Brain:
     # ------------------------------------------------------------------
     # Per-tick hunt bookkeeping.
     # ------------------------------------------------------------------
+    def _sync_camera(self) -> None:
+        """Force the camera to close/analyze while a face action runs.
+
+        A face action (behaviour ``"face"``) needs the close camera's face telemetry
+        to move (the ``face`` behaviour reads ``machine.face_state``). This covers
+        manually triggered face actions, where no CAM_FACE-driven lock exists to set
+        the intent. The effective behaviour is the current action's, or the
+        transition target's while a transition is in progress. Leaving a face action
+        does not force wide — the hunt handlers keep camera ownership (tracking →
+        wide/track on face-lost, wide/idle on person-lost).
+        """
+        if self.camera is None:
+            return
+        ff = self._facefocus_cfg()
+        if not bool(ff.get("enabled", False)):
+            return
+        if self.machine.effective_behavior == "face":
+            self.camera.set_intent(active="close", mode="analyze",
+                                   lock_id=self._hunt_lock_id)
+
     def tick(self, curjpos: List[float]) -> None:
         """Detect a lost lock / lost face and rescan (the hunt's time-driven step).
 
@@ -317,11 +345,12 @@ class Brain:
         states arm the lost checks; ``scanning`` waits for the next
         ``CAM_CANDIDATES`` re-detect.
 
-        - Person lost (the locked person's ``CAM_TRACK`` is stale): clear the lock and
-          rescan (wide/idle, the scan action).
-        - Face lost (facefocus only; the face is stale): back to tracking (wide/track,
-          the detect action). The person is still locked, so the face can reappear.
+         - Person lost (the locked person's ``CAM_TRACK`` is stale): clear the lock and
+           rescan (wide/idle, the scan action).
+         - Face lost (facefocus only; the face is stale): back to tracking (wide/track,
+           the detect action). The person is still locked, so the face can reappear.
         """
+        self._sync_camera()
         if self._hunt_state not in ("tracking", "facefocus"):
             self._clear_feral_if_stale()
             self._update_hunt_state()
@@ -331,7 +360,7 @@ class Brain:
         if time.time() - self._hunt_last_track_ts > lost_s:
             # Person lost: clear the lock and rescan.
             if self.camera is not None:
-                self.camera.set_intent(active="wide", mode="idle", lock_id=None)
+                self.camera.set_intent(active="wide", mode="idle", clear_lock=True)
             self._hunt_lock_id = None
             self.machine.face_state = {}
             scan = hunt.get("scan", {})
