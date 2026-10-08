@@ -448,8 +448,8 @@ class RemoteTUI:
             ok = status.get("ok")
             ok_s = "—" if ok is None else ("yes" if ok else "no")
             rows.append(self._state_row([("CAM", cam), ("FPS", f"{fps:.1f}"), ("OK", ok_s)]))
-        cands = self._cam_telem.get("candidates", {})
-        cand_list = cands.get("candidates", [])
+        cands = self._cam_telem.get("candidates") or {}
+        cand_list = cands.get("candidates") or []
         n = len(cand_list)
         rows.append(self._state_row([("PERSONS", n)]))
         for c in cand_list[:5]:
@@ -517,7 +517,7 @@ class RemoteTUI:
             rows.append(self._line("  ⚠ FERAL — rapid hunt-loop cycling", Theme.RED, Theme.BG, "bold"))
         else:
             rows.append(self._line("  feral: no", Theme.GREEN))
-        face = self._cam_telem.get("face", {})
+        face = self._cam_telem.get("face") or {}
         face_vis = bool(face.get("id") is not None)
         rows.append(self._state_row([("FACE", "visible" if face_vis else "not visible")]))
         rows.append(self._divider())

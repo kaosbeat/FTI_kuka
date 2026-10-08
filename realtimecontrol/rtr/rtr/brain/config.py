@@ -1,70 +1,117 @@
-"""Brain decision config: the hunt-loop parameters.
+"""Brain decision config: autonomy + zone groups.
 
-Data-driven: the brain's hunt-loop decisions (what to do on detect / track / lost)
-live in ``brain.json`` (edited in ``editor.html``, served/saved over ``/api/brain``,
-hot-reloaded). The built-in :data:`DEFAULT_BRAIN_CONFIG` is the fallback when the
-file is missing or corrupt — and its values match the hunt logic's defaults, so a
-missing file is a no-op.
+Data-driven: the brain's autonomous navigation decisions live in ``brain.json``
+(edited in ``editor.html``, served/saved over ``/api/brain``, hot-reloaded). The
+built-in :data:`DEFAULT_BRAIN_CONFIG` is the fallback when the file is missing or
+corrupt — and its values match the hunt/facefocus logic's defaults, so a missing
+file is a no-op.
 
 Shape::
 
     {
-      "hunt": {
-        "lost_s": 2.0,
-        "attention_guard": ["track", "focus", "look", "face"],
-        "detect": { "zone": "wakeup", "action": "look" },
-        "scan":   { "zone": "wakeup", "action": "scan" }
-      },
-      "facefocus": {
+      "autonomy": {
         "enabled": true,
-        "zone": "stretch",
-        "actions": ["wink", "inspect", "call"],
-        "action_s": 3.0,
-        "face_lost_s": 2.5
+        "dwell_s": 30.0,
+        "events": { "midi": true, "camera": true, "websocket": true }
+      },
+      "zone_groups": {
+        "home":      { "zones": [...], "behaviors": [...], "enabled": true },
+        "hunt":      { "zones": [...], "behaviors": [...], "enabled": true,  "params": {...} },
+        "facefocus": { "zones": [...], "behaviors": [...], "enabled": true,  "params": {...} },
+        "perform":   { "zones": [...], "behaviors": [...], "enabled": false }
       }
     }
 
-- ``lost_s`` — seconds a locked target's ``CAM_TRACK`` may go stale before "lost"
-  clears the lock and rescans.
-- ``attention_guard`` — behaviors that suppress the detect attention-grab (the robot
-  is already hunting when the behavior is one of these).
-- ``detect`` — the (zone, action) the brain triggers when it locks a target.
-- ``scan`` — the (zone, action) the brain triggers when the lock is lost.
+- ``autonomy.enabled`` — master switch for autonomous navigation (following a
+  looping action's ``next`` link once it has dwelt for ``dwell_s`` or an event
+  fires).
+- ``autonomy.dwell_s`` — the global default dwell time (seconds) before a looping
+  action's ``next`` link is followed. A per-action ``dwell_s`` in zones.json
+  overrides it.
+- ``autonomy.events`` — which external events can trigger an immediate next link
+  (``midi`` note-on, ``camera`` detect/hunt lock, ``websocket`` proceed).
+- ``zone_groups.<name>`` — a named group of zones + the behaviors enabled in them:
+  - ``zones`` — list of zone names (must exist in zones.json).
+  - ``behaviors`` — list of behavior fields enabled in those zones.
+  - ``enabled`` — whether this group is part of the current autonomy level.
+  - ``params`` — optional; group-specific decision data (only ``hunt`` and
+    ``facefocus`` have a validated shape today; other groups may carry an
+    unvalidated passthrough).
 
-Facefocus (the "check out that human" decision): when a locked person's face is
-detected by the close camera, the robot stretches into the exterior pose and runs
-subtle face-focused actions (``wink`` / ``inspect`` / ``call``), nudging toward the
-face location.
+The autonomy level is the free combination of enabled groups; navigation runs
+across the **union** of all enabled groups' zones. Hunt and facefocus are zone
+groups, not separate special modes:
 
-- ``enabled`` — toggle the facefocus decision on/off.
-- ``zone`` — the zone the robot stretches into for the face actions.
-- ``actions`` — the face actions cycled while the face is visible.
-- ``action_s`` — seconds each face action runs before cycling to the next.
-- ``face_lost_s`` — seconds the face may go stale before exiting facefocus (back to
-  tracking; the person is still locked).
+- ``hunt`` (zones ``wakeup``): fast/aggressive person tracking. Its ``params``
+  carry the hunt-loop timing/trigger data (``lost_s``, ``attention_guard``,
+  ``detect``/``scan``). detect→``look``, lost→``scan``.
+- ``facefocus`` (zones ``stretch``): the "check out that human" face actions. Its
+  ``params`` carry the face-cycling data (``actions``, ``action_s``,
+  ``face_lost_s``).
 """
 
 import copy
 import json
 from typing import Any, Dict
 
-# The hunt-loop decision parameters, with their default values. These mirror the
-# values the hunt logic used to hardcode, so ``builtin_brain_config()`` is a faithful
-# stand-in for a missing ``brain.json``.
+from ..state.zones import BEHAVIORS
+
+# The autonomy + zone-group decision parameters, with their default values. These
+# mirror the values the old top-level ``hunt`` / ``facefocus`` sections used, so
+# ``builtin_brain_config()`` is a faithful stand-in for a missing ``brain.json``.
 DEFAULT_BRAIN_CONFIG: Dict[str, Any] = {
-    "hunt": {
-        "lost_s": 2.0,
-        "attention_guard": ["track", "focus", "look", "face"],
-        "detect": {"zone": "wakeup", "action": "look"},
-        "scan": {"zone": "wakeup", "action": "scan"},
-    },
-    "facefocus": {
+    "autonomy": {
         "enabled": True,
-        "zone": "stretch",
-        "actions": ["wink", "inspect", "call"],
-        "action_s": 3.0,
-        "face_lost_s": 2.5,
+        "dwell_s": 30.0,
+        "events": {"midi": True, "camera": True, "websocket": True},
     },
+    "zone_groups": {
+        "home": {
+            "zones": ["init", "rest", "init_rest_bridge"],
+            "behaviors": ["hold"],
+            "enabled": True,
+        },
+        "hunt": {
+            "zones": ["wakeup"],
+            "behaviors": ["look", "scan"],
+            "enabled": True,
+            "params": {
+                "lost_s": 2.0,
+                "attention_guard": ["track", "focus", "look", "face"],
+                "detect": {"zone": "wakeup", "action": "look"},
+                "scan": {"zone": "wakeup", "action": "scan"},
+            },
+        },
+        "facefocus": {
+            "zones": ["stretch"],
+            "behaviors": ["face"],
+            "enabled": True,
+            "params": {
+                "actions": ["wink", "inspect", "call"],
+                "action_s": 3.0,
+                "face_lost_s": 2.5,
+            },
+        },
+        "perform": {
+            "zones": ["watch", "perform", "fume"],
+            "behaviors": ["track", "focus"],
+            "enabled": False,
+        },
+    },
+}
+
+# The groups with a known ``params`` shape (validated); every other group's
+# ``params`` is an unvalidated passthrough for future use.
+_HUNT_PARAMS = {
+    "lost_s": 2.0,
+    "attention_guard": ["track", "focus", "look", "face"],
+    "detect": {"zone": "wakeup", "action": "look"},
+    "scan": {"zone": "wakeup", "action": "scan"},
+}
+_FACEFOCUS_PARAMS = {
+    "actions": ["wink", "inspect", "call"],
+    "action_s": 3.0,
+    "face_lost_s": 2.5,
 }
 
 
@@ -121,40 +168,125 @@ def _zone_action(value: Any, where: str, default: dict) -> dict:
     }
 
 
+def _behaviors(value: Any, where: str, default: list) -> list:
+    """A list of known behavior names (validated against :data:`BEHAVIORS`)."""
+    lst = _str_list(value, where, default)
+    for b in lst:
+        if b not in BEHAVIORS:
+            raise ValueError(f"'{where}' contains unknown behavior {b!r} (expected one of {BEHAVIORS})")
+    return lst
+
+
+def _validate_hunt_params(p: dict, where: str) -> dict:
+    """Validate the ``hunt`` group's ``params`` (the hunt-loop timing/trigger data)."""
+    d = _HUNT_PARAMS
+    return {
+        "lost_s": _num(p.get("lost_s"), f"{where}.lost_s", d["lost_s"]),
+        "attention_guard": _str_list(p.get("attention_guard"), f"{where}.attention_guard",
+                                     d["attention_guard"]),
+        "detect": _zone_action(p.get("detect"), f"{where}.detect", d["detect"]),
+        "scan": _zone_action(p.get("scan"), f"{where}.scan", d["scan"]),
+    }
+
+
+def _validate_facefocus_params(p: dict, where: str) -> dict:
+    """Validate the ``facefocus`` group's ``params`` (the face-cycling data)."""
+    d = _FACEFOCUS_PARAMS
+    return {
+        "actions": _str_list(p.get("actions"), f"{where}.actions", d["actions"]),
+        "action_s": _num(p.get("action_s"), f"{where}.action_s", d["action_s"]),
+        "face_lost_s": _num(p.get("face_lost_s"), f"{where}.face_lost_s", d["face_lost_s"]),
+    }
+
+
+def _validate_group(name: str, g: Any) -> dict:
+    """Validate a single zone group: ``{zones, behaviors, enabled, [params]}``.
+
+    ``zones`` are non-empty strings (zone existence is checked by the caller, which
+    has the zone table). ``behaviors`` are known behavior names. ``params`` is only
+    validated for the known group shapes (``hunt`` / ``facefocus``); other groups
+    carry an unvalidated passthrough.
+    """
+    where = f"zone_groups.{name}"
+    if not isinstance(g, dict):
+        raise ValueError(f"'{where}' must be an object")
+    result = {
+        "zones": _str_list(g.get("zones"), f"{where}.zones", []),
+        "behaviors": _behaviors(g.get("behaviors"), f"{where}.behaviors", []),
+        "enabled": _bool(g.get("enabled"), f"{where}.enabled", False),
+    }
+    params = g.get("params")
+    if params is not None:
+        if name == "hunt":
+            if not isinstance(params, dict):
+                raise ValueError(f"'{where}.params' must be an object")
+            result["params"] = _validate_hunt_params(params, f"{where}.params")
+        elif name == "facefocus":
+            if not isinstance(params, dict):
+                raise ValueError(f"'{where}.params' must be an object")
+            result["params"] = _validate_facefocus_params(params, f"{where}.params")
+        else:
+            # Unvalidated passthrough for future group param shapes.
+            if not isinstance(params, dict):
+                raise ValueError(f"'{where}.params' must be an object")
+            result["params"] = dict(params)
+    elif name in ("hunt", "facefocus"):
+        # Fill the known params defaults so the brain always has complete data.
+        if name == "hunt":
+            result["params"] = copy.deepcopy(_HUNT_PARAMS)
+        else:
+            result["params"] = copy.deepcopy(_FACEFOCUS_PARAMS)
+    return result
+
+
 def validate_brain_config(data: Any) -> dict:
     """Validate and normalise a brain config. Returns the filled config or raises :class:`ValueError`.
 
-    Missing keys are filled from :data:`DEFAULT_BRAIN_CONFIG`; present keys are type-checked.
+    Missing keys are filled from :data:`DEFAULT_BRAIN_CONFIG`; present keys are
+    type-checked. This is a pure type validator: it does **not** check that a
+    group's zone names exist in zones.json (that cross-reference is done by the
+    brain's :meth:`~rtr.brain.brain.Brain.reload`, which has the zone table).
     """
     if not isinstance(data, dict):
         raise ValueError("data must be an object")
-    hunt = data.get("hunt")
-    if hunt is not None and not isinstance(hunt, dict):
-        raise ValueError("'hunt' must be an object")
-    hunt = hunt or {}
-    d = DEFAULT_BRAIN_CONFIG["hunt"]
-    facefocus = data.get("facefocus")
-    if facefocus is not None and not isinstance(facefocus, dict):
-        raise ValueError("'facefocus' must be an object")
-    facefocus = facefocus or {}
-    f = DEFAULT_BRAIN_CONFIG["facefocus"]
-    return {
-        "hunt": {
-            "lost_s": _num(hunt.get("lost_s"), "hunt.lost_s", d["lost_s"]),
-            "attention_guard": _str_list(hunt.get("attention_guard"),
-                                          "hunt.attention_guard", d["attention_guard"]),
-            "detect": _zone_action(hunt.get("detect"), "hunt.detect", d["detect"]),
-            "scan": _zone_action(hunt.get("scan"), "hunt.scan", d["scan"]),
-        },
-        "facefocus": {
-            "enabled": _bool(facefocus.get("enabled"), "facefocus.enabled", f["enabled"]),
-            "zone": _str(facefocus.get("zone"), "facefocus.zone", f["zone"]),
-            "actions": _str_list(facefocus.get("actions"), "facefocus.actions", f["actions"]),
-            "action_s": _num(facefocus.get("action_s"), "facefocus.action_s", f["action_s"]),
-            "face_lost_s": _num(facefocus.get("face_lost_s"), "facefocus.face_lost_s",
-                                 f["face_lost_s"]),
+
+    # --- autonomy ----------------------------------------------------------
+    autonomy = data.get("autonomy")
+    if autonomy is not None and not isinstance(autonomy, dict):
+        raise ValueError("'autonomy' must be an object")
+    autonomy = autonomy or {}
+    a = DEFAULT_BRAIN_CONFIG["autonomy"]
+    events = autonomy.get("events")
+    if events is not None and not isinstance(events, dict):
+        raise ValueError("'autonomy.events' must be an object")
+    events = events or {}
+    ae = a["events"]
+    autonomy_cfg = {
+        "enabled": _bool(autonomy.get("enabled"), "autonomy.enabled", a["enabled"]),
+        "dwell_s": _num(autonomy.get("dwell_s"), "autonomy.dwell_s", a["dwell_s"]),
+        "events": {
+            "midi": _bool(events.get("midi"), "autonomy.events.midi", ae["midi"]),
+            "camera": _bool(events.get("camera"), "autonomy.events.camera", ae["camera"]),
+            "websocket": _bool(events.get("websocket"), "autonomy.events.websocket", ae["websocket"]),
         },
     }
+
+    # --- zone_groups -------------------------------------------------------
+    groups = data.get("zone_groups")
+    if groups is not None and not isinstance(groups, dict):
+        raise ValueError("'zone_groups' must be an object")
+    groups = groups or {}
+    zone_groups: Dict[str, dict] = {}
+    for name, g in groups.items():
+        zone_groups[name] = _validate_group(name, g)
+
+    # Fill in any default groups that were not present in the file, so the brain
+    # always has the full set (e.g. a brain.json with only "hunt" still gets "home").
+    for name in DEFAULT_BRAIN_CONFIG["zone_groups"]:
+        if name not in zone_groups:
+            zone_groups[name] = _validate_group(name, DEFAULT_BRAIN_CONFIG["zone_groups"][name])
+
+    return {"autonomy": autonomy_cfg, "zone_groups": zone_groups}
 
 
 def load_brain_config(path: str) -> dict:

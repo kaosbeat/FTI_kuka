@@ -285,7 +285,7 @@
 
 <main id="brainMain" style="display:none">
   <section>
-    <h2>brain — hunt loop</h2>
+    <h2>brain — autonomy</h2>
     <div id="brainForm"></div>
     <div id="brainLive" style="font-size:12px;margin-top:8px"></div>
     <div id="brainInfo" style="font-size:12px;color:var(--dim);margin-top:8px"></div>
@@ -571,18 +571,43 @@ const PATCHES_FALLBACK = {
 // Last-resort brain decision config (mirrors rtr/brain/config.py DEFAULT_BRAIN_CONFIG).
 // Used when both /api/brain and /brain.json fail (e.g. opened from file://).
 const BRAIN_FALLBACK = {
-  hunt: {
-    lost_s: 2.0,
-    attention_guard: ["track", "focus", "look", "face"],
-    detect: { zone: "wakeup", action: "look" },
-    scan: { zone: "wakeup", action: "scan" },
-  },
-  facefocus: {
+  autonomy: {
     enabled: true,
-    zone: "stretch",
-    actions: ["wink", "inspect", "call"],
-    action_s: 3.0,
-    face_lost_s: 2.5,
+    dwell_s: 30.0,
+    events: { midi: true, camera: true, websocket: true },
+  },
+  zone_groups: {
+    home: {
+      zones: ["init", "rest", "init_rest_bridge"],
+      behaviors: ["hold"],
+      enabled: true,
+    },
+    hunt: {
+      zones: ["wakeup"],
+      behaviors: ["look", "scan"],
+      enabled: true,
+      params: {
+        lost_s: 2.0,
+        attention_guard: ["track", "focus", "look", "face"],
+        detect: { zone: "wakeup", action: "look" },
+        scan: { zone: "wakeup", action: "scan" },
+      },
+    },
+    facefocus: {
+      zones: ["stretch"],
+      behaviors: ["face"],
+      enabled: true,
+      params: {
+        actions: ["wink", "inspect", "call"],
+        action_s: 3.0,
+        face_lost_s: 2.5,
+      },
+    },
+    perform: {
+      zones: ["watch", "perform", "fume"],
+      behaviors: ["track", "focus"],
+      enabled: false,
+    },
   },
 };
 
@@ -1883,6 +1908,10 @@ function buildActionEditor() {
       bp.appendChild(l);
     });
     vsec.appendChild(bp);
+    const bpcopy = document.createElement("button");
+    bpcopy.className = "small"; bpcopy.textContent = "copy base_pose";
+    bpcopy.onclick = () => { copyPose(a.base_pose); buildActionEditor(); };
+    vsec.appendChild(bpcopy);
     // variable_axes (checkboxes over the six axes)
     vsec.appendChild(h3("variable_axes"));
     const va = document.createElement("div");
@@ -1957,6 +1986,9 @@ function buildActionEditor() {
       const down = document.createElement("button");
       down.textContent = "▼";
       down.onclick = () => { if (pi < a.pos.length - 1) aeSwapPoses(zn, an, pi, pi + 1); };
+      const cp = document.createElement("button");
+      cp.textContent = "copy";
+      cp.onclick = () => { copyPose(a.pos[pi]); buildActionEditor(); };
       const del = document.createElement("button");
       del.textContent = "×";
       del.onclick = () => {
@@ -1966,10 +1998,18 @@ function buildActionEditor() {
         if (s && Array.isArray(s.poses)) s.poses.splice(pi, 1);
         buildActionEditor();
       };
-      ctl.appendChild(up); ctl.appendChild(down); ctl.appendChild(del);
+      ctl.appendChild(up); ctl.appendChild(down); ctl.appendChild(cp); ctl.appendChild(del);
       pr.appendChild(ctl);
       psec.appendChild(pr);
     });
+    // Paste the clipboard pose into this action's `pos` list (appends; use ▲▼ to
+    // position it). Only pose-sequence actions accept a pasted pose.
+    const pasteR = document.createElement("button");
+    pasteR.className = "small";
+    pasteR.textContent = POSE_CLIP ? "paste pose" : "paste pose (none copied)";
+    pasteR.disabled = !POSE_CLIP;
+    pasteR.onclick = () => { if (pastePose(zn, an)) buildActionEditor(); };
+    psec.appendChild(pasteR);
     const addR = document.createElement("button");
     addR.className = "small"; addR.textContent = "+ pose row";
     addR.onclick = () => {
@@ -2083,6 +2123,101 @@ function copyAction(zn, an) {
   z.actions[nn] = copy;
   if (flowView) { flowRender(); buildFlowDetail(); }
   else { selectedAction = nn; buildZoneForm(); buildZoneList(); }
+}
+
+// ---------------------------------------------------------------------------
+// Pose clipboard + per-action rename / delete / reorder. The flow tab (and the
+// zones tab, via the shared action list) uses these for per-action ops. Rename
+// re-keys the action and repoints every `next` reference to it; delete clears any
+// `next` that pointed at it; reorder re-keys the zone's actions in place. Poses
+// are copied whole (a 6-value) and pasted into a pose-sequence action's `pos` list.
+// ---------------------------------------------------------------------------
+let POSE_CLIP = null;  // a copied 6-value pose, or null
+
+// Repoint every action whose `next` points at zn/oldAn to zn/newAn.
+function updateNextRefs(zn, oldAn, newAn) {
+  for (const zn2 of Object.keys(TABLE.zones)) {
+    const z2 = TABLE.zones[zn2];
+    if (!z2.actions) continue;
+    for (const an2 of Object.keys(z2.actions)) {
+      const a2 = z2.actions[an2];
+      if (a2 && a2.next && a2.next.zone === zn && a2.next.action === oldAn) a2.next.action = newAn;
+    }
+  }
+}
+
+// Drop the `next` on any action that pointed at zn/an (now dangling after a delete).
+function clearNextRefsTo(zn, an) {
+  for (const zn2 of Object.keys(TABLE.zones)) {
+    const z2 = TABLE.zones[zn2];
+    if (!z2.actions) continue;
+    for (const an2 of Object.keys(z2.actions)) {
+      const a2 = z2.actions[an2];
+      if (a2 && a2.next && a2.next.zone === zn && a2.next.action === an) delete a2.next;
+    }
+  }
+}
+
+// Rename zn/an to nn: re-key the action, repoint `next` refs, and move the sound +
+// patch entries so neither is orphaned. Returns false (no change) on a collision.
+function renameAction(zn, an, nn) {
+  const z = TABLE.zones[zn];
+  if (!z || !z.actions || !z.actions[an]) return false;
+  nn = (nn || "").trim();
+  if (!nn || nn === an) return false;
+  if (z.actions[nn]) return false;  // name collision — caller decides how to surface it
+  z.actions[nn] = z.actions[an];
+  delete z.actions[an];
+  updateNextRefs(zn, an, nn);
+  if (SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an] !== undefined) { SOUND.actions[zn][nn] = SOUND.actions[zn][an]; delete SOUND.actions[zn][an]; }
+  if (PATCHES && PATCHES.actions && PATCHES.actions[zn] && PATCHES.actions[zn][an] !== undefined) { PATCHES.actions[zn][nn] = PATCHES.actions[zn][an]; delete PATCHES.actions[zn][an]; }
+  return true;
+}
+
+// Delete zn/an: remove the action, clear any `next` that pointed at it, and drop the
+// sound + patch entries. Re-selects a remaining action if the deleted one was selected.
+function deleteAction(zn, an) {
+  const z = TABLE.zones[zn];
+  if (!z || !z.actions || !z.actions[an]) return;
+  delete z.actions[an];
+  clearNextRefsTo(zn, an);
+  if (SOUND && SOUND.actions && SOUND.actions[zn]) delete SOUND.actions[zn][an];
+  if (PATCHES && PATCHES.actions && PATCHES.actions[zn]) delete PATCHES.actions[zn][an];
+  if (selectedAction === an) selectedAction = Object.keys(z.actions)[0] || null;
+}
+
+// Move zn/an up (-1) or down (+1) within the zone's action order by re-keying.
+function reorderAction(zn, an, dir) {
+  const z = TABLE.zones[zn];
+  if (!z || !z.actions) return;
+  const keys = Object.keys(z.actions);
+  const i = keys.indexOf(an), j = i + dir;
+  if (j < 0 || j >= keys.length) return;
+  const nk = keys.slice();
+  nk[i] = keys[j]; nk[j] = an;
+  const na = {};
+  nk.forEach((k) => na[k] = z.actions[k]);
+  z.actions = na;
+}
+
+// Copy a 6-value pose (from a pose row or a base_pose) to the clipboard.
+function copyPose(pose) {
+  POSE_CLIP = (Array.isArray(pose) && pose.length === 6) ? pose.slice() : null;
+}
+
+// Paste the clipboard pose into zn/an's `pos` list (pose-form only), at ``index``
+// (default: append). Mirrors the per-row speed default used by "+ pose row".
+function pastePose(zn, an, index) {
+  const z = TABLE.zones[zn];
+  if (!POSE_CLIP || !z || !z.actions || !z.actions[an]) return false;
+  const a = z.actions[an];
+  if (actionForm(a) !== "pose") return false;  // only pose-sequence actions accept a pasted pose
+  if (!Array.isArray(a.pos)) a.pos = [[0,0,0,0,0,0]];
+  if (!Array.isArray(a.speed)) a.speed = [10];
+  const at = (index == null || index < 0 || index > a.pos.length) ? a.pos.length : index;
+  a.pos.splice(at, 0, POSE_CLIP.slice());
+  a.speed.splice(at, 0, 10);
+  return true;
 }
 
 function openActionEditor(zn, an) {
@@ -2303,9 +2438,9 @@ function buildActionList(container, name, z, rebuild, onChanged, showPoses) {
     nm.onchange = () => {
       const nn = nm.value.trim();
       if (!nn || nn === an) { nm.value = an; return; }
-      z.actions[nn] = a; delete z.actions[an];
-      selectedAction = nn;
-      rebuild();
+      if (z.actions[nn]) { nm.value = an; alert(`name "${nn}" already exists in ${name}`); return; }
+      if (renameAction(name, an, nn)) { selectedAction = nn; rebuild(); onChanged(); }
+      else nm.value = an;
     };
     const en = document.createElement("label");
     en.className = "inline";
@@ -2322,7 +2457,18 @@ function buildActionList(container, name, z, rebuild, onChanged, showPoses) {
     const copy = document.createElement("button");
     copy.className = "small"; copy.textContent = "copy";
     copy.onclick = (e) => { e.stopPropagation(); copyAction(name, an); };
-    head.appendChild(nm); head.appendChild(en); head.appendChild(play); head.appendChild(edit); head.appendChild(copy);
+    // del / reorder: remove the action (clears any `next` pointing at it) or move it
+    // up/down within the zone. Rename is the name input above (repoints `next` refs).
+    const del = document.createElement("button");
+    del.className = "small"; del.textContent = "del";
+    del.onclick = (e) => { e.stopPropagation(); if (confirm(`remove action "${an}" from ${name}?`)) { deleteAction(name, an); rebuild(); onChanged(); } };
+    const up = document.createElement("button");
+    up.className = "small"; up.textContent = "▲";
+    up.onclick = (e) => { e.stopPropagation(); reorderAction(name, an, -1); rebuild(); onChanged(); };
+    const down = document.createElement("button");
+    down.className = "small"; down.textContent = "▼";
+    down.onclick = (e) => { e.stopPropagation(); reorderAction(name, an, +1); rebuild(); onChanged(); };
+    head.appendChild(nm); head.appendChild(en); head.appendChild(play); head.appendChild(edit); head.appendChild(copy); head.appendChild(del); head.appendChild(up); head.appendChild(down);
     box.appendChild(head);
 
     // Overview rows (hidden in the flow-detail overview; full editing is in the modal).

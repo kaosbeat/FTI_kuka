@@ -185,10 +185,11 @@ async def run(cfg: Config) -> None:
     # The MIDI-in learned mapping is data-driven as well; created before the engine
     # so the engine can hold its reload hook (POST /api/midi hot-reloads the table).
     midi = MidiInput(bus, in_port=cfg.midi_in_port,
-                     enabled=cfg.midi_in_port is not None,
-                     poses=poses, lin_poses=lin_poses,
-                     zones_provider=lambda: machine.zones,
-                     midi_loader=lambda: load_midi_data_fallback(cfg.midi_path))
+                      enabled=cfg.midi_in_port is not None,
+                      poses=poses, lin_poses=lin_poses,
+                      zones_provider=lambda: machine.zones,
+                      midi_loader=lambda: load_midi_data_fallback(cfg.midi_path),
+                      brain=brain)
     engine = Engine(bus, robot, brain, machine, tick_hz=cfg.tick_hz,
                     zone_loader=lambda: load_state_data(cfg.zones_path),
                     sound_reload=sound.reload,

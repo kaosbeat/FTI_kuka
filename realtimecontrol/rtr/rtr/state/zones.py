@@ -473,6 +473,17 @@ class Zone:
         n = a.get("next")
         return n if isinstance(n, dict) else None
 
+    def action_dwell_s(self, name: str) -> Optional[float]:
+        """The action's dwell time in seconds (autonomy advance delay), or None.
+
+        When None, the brain falls back to the global ``autonomy.dwell_s``.
+        """
+        a = self._action(name)
+        d = a.get("dwell_s")
+        if _is_num(d):
+            return d
+        return None
+
     def action_speed(self, name: str) -> Optional[float]:
         """The action's speed as a number (variable-axis form), or None.
 

@@ -1,15 +1,44 @@
 {
-  "hunt": {
-    "lost_s": 2.0,
-    "attention_guard": ["track", "focus", "look", "face"],
-    "detect": { "zone": "wakeup", "action": "look" },
-    "scan": { "zone": "wakeup", "action": "scan" }
-  },
-  "facefocus": {
+  "autonomy": {
     "enabled": true,
-    "zone": "stretch",
-    "actions": ["wink", "inspect", "call"],
-    "action_s": 3.0,
-    "face_lost_s": 2.5
+    "dwell_s": 30.0,
+    "events": {
+      "midi": true,
+      "camera": true,
+      "websocket": true
+    }
+  },
+  "zone_groups": {
+    "home": {
+      "zones": ["init", "rest", "init_rest_bridge"],
+      "behaviors": ["hold"],
+      "enabled": true
+    },
+    "hunt": {
+      "zones": ["wakeup"],
+      "behaviors": ["look", "scan"],
+      "enabled": true,
+      "params": {
+        "lost_s": 2.0,
+        "attention_guard": ["track", "focus", "look", "face"],
+        "detect": { "zone": "wakeup", "action": "look" },
+        "scan": { "zone": "wakeup", "action": "scan" }
+      }
+    },
+    "facefocus": {
+      "zones": ["stretch"],
+      "behaviors": ["face"],
+      "enabled": true,
+      "params": {
+        "actions": ["wink", "inspect", "call"],
+        "action_s": 3.0,
+        "face_lost_s": 2.5
+      }
+    },
+    "perform": {
+      "zones": ["watch", "perform", "fume"],
+      "behaviors": ["track", "focus"],
+      "enabled": false
+    }
   }
 }

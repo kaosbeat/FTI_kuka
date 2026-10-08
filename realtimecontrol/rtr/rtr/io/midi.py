@@ -244,8 +244,10 @@ class MidiInput:
     """
 
     def __init__(self, bus: StateBus, in_port: Optional[int] = None, enabled: bool = True,
-                 poses=None, lin_poses=None, zones_provider=None, midi_loader=None):
+                 poses=None, lin_poses=None, zones_provider=None, midi_loader=None,
+                 brain=None):
         self.bus = bus
+        self._brain = brain
         # The default port (legacy fallback + the port for zones with a null in_port).
         self.in_port = in_port
         self.enabled = enabled
@@ -585,6 +587,11 @@ class MidiInput:
         message = event[0]
         if len(message) < 2:
             return
+        # Autonomy trigger: a note-on (velocity > 0) notifies the brain. The brain
+        # checks ``autonomy.events.midi`` and sets ``_autonomy_triggered`` if enabled.
+        if (self._brain is not None and len(message) >= 3
+                and 0x90 <= message[0] <= 0x9F and message[2] > 0):
+            self._brain._handle_midi_trigger(message[1])
         # Learn capture: only on the armed port; the message is not dispatched.
         if self._learn is not None:
             if port == self._learn["port"]:

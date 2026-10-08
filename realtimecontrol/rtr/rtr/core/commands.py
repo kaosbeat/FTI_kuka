@@ -36,6 +36,7 @@ class Cmd(str, Enum):
     CAM_CANDIDATES = "cam_candidates"
     CAM_TRACK = "cam_track"
     CAM_FACE = "cam_face"
+    PROCEED = "proceed"
 
 
 class Event(str, Enum):
