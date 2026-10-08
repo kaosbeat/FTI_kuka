@@ -97,6 +97,12 @@
   .fedgeHit { fill: none; stroke: transparent; stroke-width: 18; cursor: pointer; }
   .fedgeLabel { fill: var(--dim); font-size: 10px; pointer-events: none; }
   .fedgeLabel.fedgeLabelCustom { fill: var(--accent); }
+  .fgroup { fill: rgba(79,192,141,0.06); stroke: var(--dim); stroke-width: 1; stroke-dasharray: 6 3; pointer-events: none; }
+  .fgroupEnabled { fill: rgba(79,192,141,0.1); stroke: var(--accent); stroke-width: 2; stroke-dasharray: none; }
+  .fgroupDisabled { fill: rgba(124,132,148,0.04); stroke: var(--dim); stroke-width: 1; opacity: 0.35; }
+  .fgroupLabel { fill: var(--dim); font-size: 11px; font-weight: bold; pointer-events: none; }
+  .fgroupLabelEnabled { fill: var(--accent); }
+  .fgroupLabelDisabled { fill: var(--dim); opacity: 0.35; }
   /* Action editor modal (Step 3). */
   #actionEditor { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; z-index: 20; }
   #actionEditor.open { display: block; }
@@ -1440,24 +1446,56 @@ async function loadBrain() {
   }
   if (!data) data = JSON.parse(JSON.stringify(BRAIN_FALLBACK));
   // Normalise to the full shape so the form always has every field.
-  const h = (data && data.hunt) || {};
-  const f = (data && data.facefocus) || {};
-  const fb = BRAIN_FALLBACK.facefocus;
+  const fb = BRAIN_FALLBACK;
+  const a = (data && data.autonomy) || {};
+  const ev = a.events || {};
   BRAIN = {
-    hunt: {
-      lost_s: h.lost_s !== undefined ? h.lost_s : BRAIN_FALLBACK.hunt.lost_s,
-      attention_guard: h.attention_guard || BRAIN_FALLBACK.hunt.attention_guard.slice(),
-      detect: Object.assign({}, BRAIN_FALLBACK.hunt.detect, h.detect || {}),
-      scan: Object.assign({}, BRAIN_FALLBACK.hunt.scan, h.scan || {}),
+    autonomy: {
+      enabled: a.enabled !== undefined ? a.enabled : fb.autonomy.enabled,
+      dwell_s: a.dwell_s !== undefined ? a.dwell_s : fb.autonomy.dwell_s,
+      events: {
+        midi: ev.midi !== undefined ? ev.midi : fb.autonomy.events.midi,
+        camera: ev.camera !== undefined ? ev.camera : fb.autonomy.events.camera,
+        websocket: ev.websocket !== undefined ? ev.websocket : fb.autonomy.events.websocket,
+      },
     },
-    facefocus: {
-      enabled: f.enabled !== undefined ? f.enabled : fb.enabled,
-      zone: f.zone !== undefined ? f.zone : fb.zone,
-      actions: f.actions || fb.actions.slice(),
-      action_s: f.action_s !== undefined ? f.action_s : fb.action_s,
-      face_lost_s: f.face_lost_s !== undefined ? f.face_lost_s : fb.face_lost_s,
-    },
+    zone_groups: {},
   };
+  const groups = (data && data.zone_groups) || {};
+  // Fill every default group that isn't present in the file.
+  for (const name of Object.keys(fb.zone_groups)) {
+    if (!(name in groups)) groups[name] = JSON.parse(JSON.stringify(fb.zone_groups[name]));
+  }
+  for (const name of Object.keys(groups)) {
+    const g = groups[name];
+    const dg = fb.zone_groups[name] || {};
+    const entry = {
+      zones: g.zones || (dg.zones ? dg.zones.slice() : []),
+      behaviors: g.behaviors || (dg.behaviors ? dg.behaviors.slice() : []),
+      enabled: g.enabled !== undefined ? g.enabled : (dg.enabled !== undefined ? dg.enabled : false),
+    };
+    if (g.params !== undefined || (name === "hunt" || name === "facefocus")) {
+      const dp = dg.params || {};
+      const p = g.params || {};
+      if (name === "hunt") {
+        entry.params = {
+          lost_s: p.lost_s !== undefined ? p.lost_s : dp.lost_s,
+          attention_guard: p.attention_guard || (dp.attention_guard ? dp.attention_guard.slice() : []),
+          detect: Object.assign({}, dp.detect, p.detect || {}),
+          scan: Object.assign({}, dp.scan, p.scan || {}),
+        };
+      } else if (name === "facefocus") {
+        entry.params = {
+          actions: p.actions || (dp.actions ? dp.actions.slice() : []),
+          action_s: p.action_s !== undefined ? p.action_s : dp.action_s,
+          face_lost_s: p.face_lost_s !== undefined ? p.face_lost_s : dp.face_lost_s,
+        };
+      } else if (g.params !== undefined) {
+        entry.params = Object.assign({}, g.params);
+      }
+    }
+    BRAIN.zone_groups[name] = entry;
+  }
   if (brainView) buildBrainForm();
   return BRAIN;
 }
@@ -1465,7 +1503,7 @@ async function loadBrain() {
 function buildBrainForm() {
   const el = $("brainForm");
   el.innerHTML = "";
-  const h = BRAIN.hunt;
+  const a = BRAIN.autonomy;
   const addRow = (label, input) => {
     const row = document.createElement("div");
     row.className = "row";
@@ -1476,91 +1514,195 @@ function buildBrainForm() {
     row.appendChild(lab);
     row.appendChild(input);
     el.appendChild(row);
+    return row;
   };
-  // lost_s (seconds a locked target's CAM_TRACK may go stale before "lost").
-  const lostS = document.createElement("input");
-  lostS.type = "number"; lostS.step = "0.1"; lostS.min = "0";
-  lostS.value = h.lost_s; lostS.id = "brainLostS";
-  addRow("hunt.lost_s (s)", lostS);
-  // attention_guard (behaviors that suppress the detect attention-grab).
-  const guard = document.createElement("input");
-  guard.type = "text"; guard.spellcheck = false; guard.id = "brainGuard";
-  guard.value = h.attention_guard.join(", ");
-  addRow("hunt.attention_guard", guard);
-  // detect zone/action.
-  const detZone = document.createElement("input");
-  detZone.type = "text"; detZone.spellcheck = false; detZone.id = "brainDetZone";
-  detZone.value = h.detect.zone;
-  addRow("hunt.detect.zone", detZone);
-  const detAct = document.createElement("input");
-  detAct.type = "text"; detAct.spellcheck = false; detAct.id = "brainDetAct";
-  detAct.value = h.detect.action;
-  addRow("hunt.detect.action", detAct);
-  // scan zone/action.
-  const scanZone = document.createElement("input");
-  scanZone.type = "text"; scanZone.spellcheck = false; scanZone.id = "brainScanZone";
-  scanZone.value = h.scan.zone;
-  addRow("hunt.scan.zone", scanZone);
-  const scanAct = document.createElement("input");
-  scanAct.type = "text"; scanAct.spellcheck = false; scanAct.id = "brainScanAct";
-  scanAct.value = h.scan.action;
-  addRow("hunt.scan.action", scanAct);
-  // facefocus (the "check out that human" sub-state of tracking).
-  const ffHead = document.createElement("div");
-  ffHead.className = "row";
-  ffHead.style.marginTop = "10px";
-  ffHead.style.fontSize = "12px";
-  ffHead.style.color = "var(--dim)";
-  ffHead.textContent = "facefocus — stretch + face actions while a face is visible";
-  el.appendChild(ffHead);
-  const ff = BRAIN.facefocus;
-  const ffEnabled = document.createElement("input");
-  ffEnabled.type = "checkbox"; ffEnabled.id = "brainFFEnabled";
-  ffEnabled.checked = !!ff.enabled;
-  addRow("facefocus.enabled", ffEnabled);
-  const ffZone = document.createElement("input");
-  ffZone.type = "text"; ffZone.spellcheck = false; ffZone.id = "brainFFZone";
-  ffZone.value = ff.zone;
-  addRow("facefocus.zone", ffZone);
-  const ffActions = document.createElement("input");
-  ffActions.type = "text"; ffActions.spellcheck = false; ffActions.id = "brainFFActions";
-  ffActions.value = ff.actions.join(", ");
-  addRow("facefocus.actions", ffActions);
-  const ffActionS = document.createElement("input");
-  ffActionS.type = "number"; ffActionS.step = "0.1"; ffActionS.min = "0";
-  ffActionS.id = "brainFFActionS"; ffActionS.value = ff.action_s;
-  addRow("facefocus.action_s (s)", ffActionS);
-  const ffLostS = document.createElement("input");
-  ffLostS.type = "number"; ffLostS.step = "0.1"; ffLostS.min = "0";
-  ffLostS.id = "brainFFLostS"; ffLostS.value = ff.face_lost_s;
-  addRow("facefocus.face_lost_s (s)", ffLostS);
-  $("brainInfo").textContent = "detect = the action the brain triggers when it locks a target; "
-    + "scan = the action it triggers when the lock is lost; attention_guard = behaviors that "
-    + "suppress the detect attention-grab (comma-separated); facefocus = stretch into the "
-    + "exterior pose and cycle the face actions while a face is visible (comma-separated).";
+  const addHead = (text, mt) => {
+    const h = document.createElement("div");
+    h.className = "row";
+    h.style.fontSize = "12px";
+    h.style.color = "var(--dim)";
+    if (mt) h.style.marginTop = mt;
+    h.textContent = text;
+    el.appendChild(h);
+  };
+  // --- autonomy section ---
+  addHead("autonomy — master switch + dwell + event triggers");
+  const autEn = document.createElement("input");
+  autEn.type = "checkbox"; autEn.id = "brainAutEnabled";
+  autEn.checked = !!a.enabled;
+  addRow("autonomy.enabled", autEn);
+  const autDwell = document.createElement("input");
+  autDwell.type = "number"; autDwell.step = "0.1"; autDwell.min = "0";
+  autDwell.id = "brainAutDwellS"; autDwell.value = a.dwell_s;
+  addRow("autonomy.dwell_s (s)", autDwell);
+  const evMidi = document.createElement("input");
+  evMidi.type = "checkbox"; evMidi.id = "brainEvMidi";
+  evMidi.checked = !!a.events.midi;
+  addRow("autonomy.events.midi", evMidi);
+  const evCam = document.createElement("input");
+  evCam.type = "checkbox"; evCam.id = "brainEvCamera";
+  evCam.checked = !!a.events.camera;
+  addRow("autonomy.events.camera", evCam);
+  const evWs = document.createElement("input");
+  evWs.type = "checkbox"; evWs.id = "brainEvWebsocket";
+  evWs.checked = !!a.events.websocket;
+  addRow("autonomy.events.websocket", evWs);
+  // --- zone groups section ---
+  addHead("zone groups — named sets of zones + behaviors; the autonomy level is the union of enabled groups", "12px");
+  const groups = BRAIN.zone_groups;
+  for (const name of Object.keys(groups)) {
+    const g = groups[name];
+    const box = document.createElement("div");
+    box.id = "brainGroup_" + name;
+    box.style.borderLeft = "2px solid var(--dim)";
+    box.style.paddingLeft = "8px";
+    box.style.marginBottom = "10px";
+    // group header row: name + enabled checkbox + remove button
+    const head = document.createElement("div");
+    head.className = "row";
+    head.style.alignItems = "center";
+    head.style.fontSize = "12px";
+    const nm = document.createElement("span");
+    nm.textContent = name;
+    nm.style.fontWeight = "bold";
+    head.appendChild(nm);
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    enabled.id = "brainGroup_" + name + "_enabled";
+    enabled.checked = !!g.enabled;
+    head.appendChild(enabled);
+    const rmBtn = document.createElement("button");
+    rmBtn.className = "small";
+    rmBtn.textContent = "remove";
+    rmBtn.style.marginLeft = "8px";
+    rmBtn.onclick = () => {
+      if (confirm("Remove zone group '" + name + "'?")) {
+        delete BRAIN.zone_groups[name];
+        buildBrainForm();
+      }
+    };
+    head.appendChild(rmBtn);
+    box.appendChild(head);
+    // zones
+    const zonesIn = document.createElement("input");
+    zonesIn.type = "text"; zonesIn.spellcheck = false;
+    zonesIn.id = "brainGroup_" + name + "_zones";
+    zonesIn.value = g.zones.join(", ");
+    addRowTo(box, "zones", zonesIn);
+    // behaviors
+    const behIn = document.createElement("input");
+    behIn.type = "text"; behIn.spellcheck = false;
+    behIn.id = "brainGroup_" + name + "_behaviors";
+    behIn.value = g.behaviors.join(", ");
+    addRowTo(box, "behaviors", behIn);
+    // params sub-form for hunt / facefocus
+    if (g.params && name === "hunt") {
+      const p = g.params;
+      addRowTo(box, "params.lost_s (s)", _numIn("brainGroup_" + name + "_lostS", p.lost_s));
+      addRowTo(box, "params.attention_guard", _txtIn("brainGroup_" + name + "_guard", p.attention_guard.join(", ")));
+      addRowTo(box, "params.detect.zone", _txtIn("brainGroup_" + name + "_detZone", p.detect.zone));
+      addRowTo(box, "params.detect.action", _txtIn("brainGroup_" + name + "_detAct", p.detect.action));
+      addRowTo(box, "params.scan.zone", _txtIn("brainGroup_" + name + "_scanZone", p.scan.zone));
+      addRowTo(box, "params.scan.action", _txtIn("brainGroup_" + name + "_scanAct", p.scan.action));
+    } else if (g.params && name === "facefocus") {
+      const p = g.params;
+      addRowTo(box, "params.actions", _txtIn("brainGroup_" + name + "_actions", p.actions.join(", ")));
+      addRowTo(box, "params.action_s (s)", _numIn("brainGroup_" + name + "_actionS", p.action_s));
+      addRowTo(box, "params.face_lost_s (s)", _numIn("brainGroup_" + name + "_faceLostS", p.face_lost_s));
+    }
+    el.appendChild(box);
+  }
+  // add-group button
+  const addBtn = document.createElement("button");
+  addBtn.className = "small";
+  addBtn.id = "brainAddGroup";
+  addBtn.textContent = "add group";
+  addBtn.onclick = () => {
+    const nm = prompt("Group name:");
+    if (nm && !BRAIN.zone_groups[nm]) {
+      BRAIN.zone_groups[nm] = { zones: [], behaviors: [], enabled: false };
+      buildBrainForm();
+    }
+  };
+  el.appendChild(addBtn);
+  // helper: add a row to a specific container (not the top-level el)
+  function addRowTo(container, label, input) {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.alignItems = "center";
+    row.style.marginBottom = "6px";
+    const lab = document.createElement("label");
+    lab.textContent = label;
+    row.appendChild(lab);
+    row.appendChild(input);
+    container.appendChild(row);
+  }
+  function _numIn(id, val) {
+    const i = document.createElement("input");
+    i.type = "number"; i.step = "0.1"; i.min = "0";
+    i.id = id; i.value = val;
+    return i;
+  }
+  function _txtIn(id, val) {
+    const i = document.createElement("input");
+    i.type = "text"; i.spellcheck = false;
+    i.id = id; i.value = val;
+    return i;
+  }
+  $("brainInfo").textContent =
+    "autonomy.enabled = master switch for autonomous navigation; "
+    + "dwell_s = default seconds before following a next link; "
+    + "events = which external triggers (MIDI note-on, camera detect, WebSocket proceed) "
+    + "can advance the brain immediately. "
+    + "Zone groups: each group names a set of zones + behaviors; the brain navigates the union of enabled groups. "
+    + "hunt params: lost_s = seconds before a locked target is lost; attention_guard = behaviors that suppress detect; "
+    + "detect = action triggered on new lock; scan = action triggered on lost. "
+    + "facefocus params: actions = face actions cycled while a face is visible; action_s = seconds per action; face_lost_s = seconds before face is lost.";
 }
 
 function saveBrain() {
-  const lostS = parseFloat($("brainLostS").value);
-  const guard = $("brainGuard").value.split(",").map((s) => s.trim()).filter((s) => s.length);
-  const ff = BRAIN.facefocus;
-  const ffActionS = parseFloat($("brainFFActionS").value);
-  const ffLostS = parseFloat($("brainFFLostS").value);
   const payload = {
-    hunt: {
-      lost_s: isNaN(lostS) ? BRAIN.hunt.lost_s : lostS,
-      attention_guard: guard,
-      detect: { zone: $("brainDetZone").value.trim(), action: $("brainDetAct").value.trim() },
-      scan: { zone: $("brainScanZone").value.trim(), action: $("brainScanAct").value.trim() },
+    autonomy: {
+      enabled: $("brainAutEnabled").checked,
+      dwell_s: parseFloat($("brainAutDwellS").value),
+      events: {
+        midi: $("brainEvMidi").checked,
+        camera: $("brainEvCamera").checked,
+        websocket: $("brainEvWebsocket").checked,
+      },
     },
-    facefocus: {
-      enabled: $("brainFFEnabled").checked,
-      zone: $("brainFFZone").value.trim(),
-      actions: $("brainFFActions").value.split(",").map((s) => s.trim()).filter((s) => s.length),
-      action_s: isNaN(ffActionS) ? ff.action_s : ffActionS,
-      face_lost_s: isNaN(ffLostS) ? ff.face_lost_s : ffLostS,
-    },
+    zone_groups: {},
   };
+  const groups = BRAIN.zone_groups;
+  for (const name of Object.keys(groups)) {
+    const g = groups[name];
+    const entry = {
+      zones: $("brainGroup_" + name + "_zones").value.split(",").map((s) => s.trim()).filter((s) => s.length),
+      behaviors: $("brainGroup_" + name + "_behaviors").value.split(",").map((s) => s.trim()).filter((s) => s.length),
+      enabled: $("brainGroup_" + name + "_enabled").checked,
+    };
+    if (name === "hunt") {
+      entry.params = {
+        lost_s: parseFloat($("brainGroup_hunt_lostS").value),
+        attention_guard: $("brainGroup_hunt_guard").value.split(",").map((s) => s.trim()).filter((s) => s.length),
+        detect: {
+          zone: $("brainGroup_hunt_detZone").value.trim(),
+          action: $("brainGroup_hunt_detAct").value.trim(),
+        },
+        scan: {
+          zone: $("brainGroup_hunt_scanZone").value.trim(),
+          action: $("brainGroup_hunt_scanAct").value.trim(),
+        },
+      };
+    } else if (name === "facefocus") {
+      entry.params = {
+        actions: $("brainGroup_facefocus_actions").value.split(",").map((s) => s.trim()).filter((s) => s.length),
+        action_s: parseFloat($("brainGroup_facefocus_actionS").value),
+        face_lost_s: parseFloat($("brainGroup_facefocus_faceLostS").value),
+      };
+    }
+    payload.zone_groups[name] = entry;
+  }
   fetch("/api/brain", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1576,10 +1718,18 @@ function saveBrain() {
   }).catch((e) => { $("saveMsg").textContent = "save failed: " + e; $("saveMsg").className = "err"; });
 }
 
-// Live brain state from the state frame (hunt state + lock + camera intent).
-// "facefocus" is shown as "check out" (the robot is stretching at that human).
+// Live brain state: autonomy config + hunt state + camera intent.
 function renderBrainLive(m) {
   const el = $("brainLive");
+  const a = BRAIN ? BRAIN.autonomy : { enabled: false };
+  // Prefer the snapshot's live autonomy state; fall back to the in-memory config.
+  const autEnabled = (typeof m.autonomy_enabled !== "undefined") ? m.autonomy_enabled : a.enabled;
+  const enabledGroups = (m.autonomy_enabled_groups && m.autonomy_enabled_groups.length)
+    ? m.autonomy_enabled_groups.join(", ")
+    : (BRAIN ? Object.keys(BRAIN.zone_groups).filter((n) => BRAIN.zone_groups[n].enabled).join(", ") || "none" : "—");
+  const perfMode = typeof m.performance_mode !== "undefined" ? m.performance_mode : false;
+  const dwellRem = (typeof m.autonomy_dwell_remaining !== "undefined" && m.autonomy_dwell_remaining != null)
+    ? m.autonomy_dwell_remaining.toFixed(1) : "—";
   const hunt = m.hunt || null;
   const cam = m.camera || null;
   const state = hunt ? hunt.state : null;
@@ -1587,6 +1737,9 @@ function renderBrainLive(m) {
   const lock = hunt && hunt.lock_id != null ? "#" + hunt.lock_id : "—";
   const camTxt = cam ? cam.active + "/" + cam.mode : "—";
   el.innerHTML =
+    `<div class="stateRow"><span>autonomy</span><span>${autEnabled ? "on" : "off"}${perfMode ? " (perf)" : ""}</span></div>` +
+    `<div class="stateRow"><span>groups</span><span>${enabledGroups}</span></div>` +
+    `<div class="stateRow"><span>dwell</span><span>${dwellRem}s</span></div>` +
     `<div class="stateRow"><span>hunt</span><span>${label}</span></div>` +
     `<div class="stateRow"><span>lock</span><span>${lock}</span></div>` +
     `<div class="stateRow"><span>camera</span><span>${camTxt}</span></div>`;
@@ -2973,6 +3126,45 @@ function flowRenderEdges() {
   actionEdgeList().forEach((e) => flowAddEdge(layer, e));
 }
 
+// Draw semi-transparent rounded rectangles around each zone group's zones.
+// Groups that are enabled get a brighter/thicker outline; disabled groups are dimmed.
+// Because groups can overlap, all outlines are drawn (the later ones overlap the
+// earlier ones). The label sits at the top-left inside the rectangle.
+function flowRenderGroups() {
+  const layer = $("flowGroupLayer");
+  if (!layer || !BRAIN || !BRAIN.zone_groups) return;
+  layer.innerHTML = "";
+  const groups = BRAIN.zone_groups;
+  for (const name of Object.keys(groups)) {
+    const g = groups[name];
+    if (!g.zones || !g.zones.length) continue;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    let found = false;
+    for (const zn of g.zones) {
+      const p = FLOW.pos[zn];
+      if (!p) continue;
+      found = true;
+      const h = nodeH(zn);
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x + NODE_W);
+      maxY = Math.max(maxY, p.y + h);
+    }
+    if (!found) continue;
+    const PAD = 16;
+    const x = minX - PAD, y = minY - PAD;
+    const w = (maxX - minX) + 2 * PAD;
+    const h = (maxY - minY) + 2 * PAD;
+    const enabled = !!g.enabled;
+    const cls = "fgroup" + (enabled ? " fgroupEnabled" : " fgroupDisabled");
+    layer.appendChild(svgEl("rect", { x: x, y: y, width: w, height: h, rx: 12, class: cls }));
+    const lblCls = "fgroupLabel" + (enabled ? " fgroupLabelEnabled" : " fgroupLabelDisabled");
+    const label = svgEl("text", { x: x + 8, y: y + 14, class: lblCls });
+    label.textContent = name;
+    layer.appendChild(label);
+  }
+}
+
 function flowAddNode(layer, name) {
   const z = TABLE.zones[name];
   const p = FLOW.pos[name] || { x: 40, y: 40 };
@@ -3023,14 +3215,17 @@ function flowRender() {
   if (!svg) return;
   svg.innerHTML = "";
   svg.appendChild(flowBuildDefs());
+  const groupLayer = svgEl("g", { id: "flowGroupLayer" });
   const edgeLayer = svgEl("g", { id: "flowEdgeLayer" });
   const nodeLayer = svgEl("g", { id: "flowNodeLayer" });
+  svg.appendChild(groupLayer);
   svg.appendChild(edgeLayer);
   svg.appendChild(nodeLayer);
   // Temporary drag line (no arrow — connections are bidirectional).
   svg.appendChild(svgEl("path", { id: "flowDragArrow", fill: "none", stroke: "var(--accent)",
-                                   "stroke-width": 2, "stroke-dasharray": "4 3", style: "display:none" }));
+                                    "stroke-width": 2, "stroke-dasharray": "4 3", style: "display:none" }));
   FLOW.nodeEls = {};
+  flowRenderGroups();
   flowRenderEdges();
   Object.keys(TABLE.zones).forEach((n) => flowAddNode(nodeLayer, n));
   flowApplyView();
@@ -3239,6 +3434,38 @@ function buildFlowDetail() {
     return;
   }
   if (sel.type === "node") {
+    // Zone group memberships: checkboxes to add/remove this zone from each group.
+    if (BRAIN && BRAIN.zone_groups) {
+      const groupEl = document.createElement("div");
+      groupEl.style.cssText = "margin-bottom:8px";
+      groupEl.appendChild(h3("zone groups"));
+      for (const gname of Object.keys(BRAIN.zone_groups)) {
+        const g = BRAIN.zone_groups[gname];
+        const inGroup = g.zones.includes(sel.zone);
+        const row = document.createElement("div");
+        row.className = "row";
+        row.style.alignItems = "center";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = inGroup;
+        cb.onchange = () => {
+          if (cb.checked) {
+            if (!g.zones.includes(sel.zone)) g.zones.push(sel.zone);
+          } else {
+            g.zones = g.zones.filter((z) => z !== sel.zone);
+          }
+          flowRender();
+          buildFlowDetail();
+        };
+        const lbl = document.createElement("label");
+        lbl.className = "inline";
+        lbl.appendChild(cb);
+        lbl.appendChild(document.createTextNode(" " + gname + (g.enabled ? "" : " (off)")));
+        row.appendChild(lbl);
+        groupEl.appendChild(row);
+      }
+      el.appendChild(groupEl);
+    }
     buildZoneForm(el, title, sel.zone, () => flowRender(), false);
     return;
   }
@@ -3302,11 +3529,15 @@ function buildFlowDetail() {
 }
 
 // Enter the flow view: (re)layout when the zone set changed, then render.
+// Loads the brain config if not yet loaded (for zone group outlines).
 function flowEnter() {
   const key = Object.keys(TABLE.zones).sort().join(",");
   if (FLOW.layoutKey !== key) { flowAutoLayout(); flowFitView(); }
   flowRender();
   buildFlowDetail();
+  if (!BRAIN) {
+    loadBrain().then(() => { flowRender(); buildFlowDetail(); });
+  }
 }
 
 // ---------------------------------------------------------------------------

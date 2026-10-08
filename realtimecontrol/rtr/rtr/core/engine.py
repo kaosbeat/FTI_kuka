@@ -166,6 +166,7 @@ class Engine:
     def _publish(self, curjpos, curpos, target: Optional[list]) -> None:
         moving = not comparelist(curjpos, target if target is not None else curjpos,
                                  margin=0.5, count=5)
+        info = self.brain.autonomy_info()
         snap = Snapshot(
             zone=self.machine.current_zone,
             mode=self.machine.behavior,
@@ -181,6 +182,10 @@ class Engine:
             move_mode=self.machine.move_mode,
             cadence=self.machine.cadence,
             cadence_every=self.machine.cadence_every,
+            autonomy_enabled=info["enabled"],
+            autonomy_enabled_groups=info["enabled_groups"],
+            performance_mode=info["performance_mode"],
+            autonomy_dwell_remaining=info["dwell_remaining"],
         )
         self.bus.set_snapshot(snap)
         self.bus.publish(Event.SNAPSHOT, snap)

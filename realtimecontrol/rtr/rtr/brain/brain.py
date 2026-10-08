@@ -143,6 +143,41 @@ class Brain:
             "feral": self._feral,
         }
 
+    def autonomy_info(self) -> dict:
+        """The autonomy state for the state frame (the display/editor reads it live).
+
+        Returns a dict with:
+        - ``enabled``: bool, whether autonomy is on.
+        - ``enabled_groups``: sorted list of enabled group names.
+        - ``performance_mode``: bool, derived — the ``perform`` group is enabled
+          while both ``hunt`` and ``facefocus`` are disabled.
+        - ``dwell_remaining``: float seconds remaining for the current action's
+          dwell, or None when autonomy is off / no active action.
+        """
+        cfg = self._autonomy_cfg()
+        enabled = bool(cfg.get("enabled", False))
+        groups = sorted(self._enabled_groups)
+        # Performance mode: perform enabled, hunt and facefocus disabled.
+        perform = self._config.get("zone_groups", {}).get("perform", {})
+        hunt = self._config.get("zone_groups", {}).get("hunt", {})
+        facefocus = self._config.get("zone_groups", {}).get("facefocus", {})
+        perf = bool(perform.get("enabled", False)) and not bool(hunt.get("enabled", False)) and not bool(facefocus.get("enabled", False))
+        # Dwell remaining: only meaningful when autonomy is on and there is an active action.
+        dwell_remaining = None
+        if enabled:
+            zone = self.machine.current_zone
+            action = self.machine.current_action
+            if zone and action:
+                dwell = self._autonomy_dwell_s(zone, action)
+                elapsed = time.time() - self._autonomy_action_start_ts
+                dwell_remaining = max(0.0, dwell - elapsed)
+        return {
+            "enabled": enabled,
+            "enabled_groups": groups,
+            "performance_mode": perf,
+            "dwell_remaining": dwell_remaining,
+        }
+
     def _update_hunt_state(self) -> None:
         """Write the current hunt state to the machine (the display reads it)."""
         self.machine.hunt_state = {

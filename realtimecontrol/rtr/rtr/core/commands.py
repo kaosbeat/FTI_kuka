@@ -99,6 +99,10 @@ class Snapshot:
     move_mode: Optional[str] = None  # engine move mode: "block" | "stream"
     cadence: Optional[str] = None  # cadence mode: "fixed" | "arrival"
     cadence_every: Optional[int] = None  # fixed-rhythm interval, in ticks
+    autonomy_enabled: Optional[bool] = None  # brain autonomy master switch
+    autonomy_enabled_groups: Optional[List[str]] = None  # sorted enabled group names
+    performance_mode: Optional[bool] = None  # perform on, hunt+facefocus off
+    autonomy_dwell_remaining: Optional[float] = None  # seconds left in current dwell
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
@@ -122,4 +126,12 @@ class Snapshot:
             d["cadence"] = self.cadence
         if self.cadence_every is not None:
             d["cadence_every"] = self.cadence_every
+        if self.autonomy_enabled is not None:
+            d["autonomy_enabled"] = self.autonomy_enabled
+        if self.autonomy_enabled_groups is not None:
+            d["autonomy_enabled_groups"] = self.autonomy_enabled_groups
+        if self.performance_mode is not None:
+            d["performance_mode"] = self.performance_mode
+        if self.autonomy_dwell_remaining is not None:
+            d["autonomy_dwell_remaining"] = self.autonomy_dwell_remaining
         return d
