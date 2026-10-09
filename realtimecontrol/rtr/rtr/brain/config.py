@@ -43,8 +43,11 @@ across the **union** of all enabled groups' zones. Hunt and facefocus are zone
 groups, not separate special modes:
 
 - ``hunt`` (zones ``wakeup``): fast/aggressive person tracking. Its ``params``
-  carry the hunt-loop timing/trigger data (``lost_s``, ``attention_guard``,
-  ``detect``/``scan``). detect→``look``, lost→``scan``.
+  carry the hunt-loop timing/trigger data (``lost_s``, ``min_conf``,
+  ``attention_guard``, ``detect``/``scan``). detect→``look``, lost→``scan``.
+  ``min_conf`` is the lock sensitivity: candidates with confidence below it are
+  ignored (lower = more sensitive; the mock camera's 0.3–0.99 range locks at
+  the default 0.1).
 - ``facefocus`` (zones ``stretch``): the "check out that human" face actions. Its
   ``params`` carry the face-cycling data (``actions``, ``action_s``,
   ``face_lost_s``).
@@ -77,6 +80,7 @@ DEFAULT_BRAIN_CONFIG: Dict[str, Any] = {
             "enabled": True,
             "params": {
                 "lost_s": 2.0,
+                "min_conf": 0.1,
                 "attention_guard": ["track", "focus", "look", "face"],
                 "detect": {"zone": "wakeup", "action": "look"},
                 "scan": {"zone": "wakeup", "action": "scan"},
@@ -104,6 +108,7 @@ DEFAULT_BRAIN_CONFIG: Dict[str, Any] = {
 # ``params`` is an unvalidated passthrough for future use.
 _HUNT_PARAMS = {
     "lost_s": 2.0,
+    "min_conf": 0.1,
     "attention_guard": ["track", "focus", "look", "face"],
     "detect": {"zone": "wakeup", "action": "look"},
     "scan": {"zone": "wakeup", "action": "scan"},
@@ -182,8 +187,9 @@ def _validate_hunt_params(p: dict, where: str) -> dict:
     d = _HUNT_PARAMS
     return {
         "lost_s": _num(p.get("lost_s"), f"{where}.lost_s", d["lost_s"]),
+        "min_conf": _num(p.get("min_conf"), f"{where}.min_conf", d["min_conf"]),
         "attention_guard": _str_list(p.get("attention_guard"), f"{where}.attention_guard",
-                                     d["attention_guard"]),
+                                      d["attention_guard"]),
         "detect": _zone_action(p.get("detect"), f"{where}.detect", d["detect"]),
         "scan": _zone_action(p.get("scan"), f"{where}.scan", d["scan"]),
     }

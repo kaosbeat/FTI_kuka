@@ -20,6 +20,10 @@ Threading: the asyncio connection runs on a worker thread; the urwid MainLoop
 runs on the main thread. The two exchange data through a thread-safe queue
 that the MainLoop polls at a fixed interval, so the UI is always updated from
 the main thread (no cross-thread widget access).
+
+This module is a thin urwid renderer: all row content and the state machine
+live in the shared pure view layer (:mod:`rtr.remote.view`); each row dict is
+mapped here to a urwid widget through the :class:`Theme` palette.
 """
 
 import asyncio
@@ -33,13 +37,7 @@ try:
 except ImportError:
     urwid = None
 
-from ..flow import (
-    activation_commands,
-    action_enabled,
-    action_loops,
-    action_next,
-    build_items,
-)
+from . import view
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +51,8 @@ class _Quit(Exception):
 #
 # urwid colors are named palette entries (no hex). This is a yellow "high
 # color" scheme: bright yellow accents on a dark background, bold labels, and
-# a strong black-on-yellow highlight for the selected row.
+# a strong black-on-yellow highlight for the selected row. The named style keys
+# produced by :mod:`rtr.remote.view` map to these AttrSpecs.
 # ---------------------------------------------------------------------------
 class Theme:
     """A yellow "high color" palette (urwid 256-color ``AttrSpec`` names)."""
@@ -73,95 +72,22 @@ class Theme:
         return urwid.AttrSpec(fg, bg or Theme.BG)
 
 
-# ---------------------------------------------------------------------------
-# Display shaping (no urwid) — the TUI renders these and the tests exercise
-# them directly. Each zone's actions carry the optional ``loop`` / ``next`` /
-# ``behavior`` fields (see state/zones.py): the TUI marks the looping ones
-# and annotates a next hand-off. The shared pure navigation helpers live in
-# :mod:`rtr.flow`.
-# ---------------------------------------------------------------------------
-SECTION_LABELS = {
-    "action": "ACTIONS",
-    "zones": "GO TO",
-}
-
-PAGES = ("NAV", "CAMERA", "BRAIN", "HUNT", "CADENCE")
-
-# Joystick button codes (Linux EV_KEY) for page navigation. L1 = previous page,
-# R1 = next page (mirrors the keyboard left/right). The device is configured via
-# --device (default /dev/input/event3; the handheld is typically event2).
-JOY_L1 = 310
-JOY_R1 = 311
-
-# Selectable rows for the CADENCE page. Each sends a command to the core.
-# The fixed-rhythm interval is offered in seconds (a few sensible steps); the
-# core converts it to ticks. "arrival" advances as soon as the robot reaches
-# its target; the fixed options advance every N seconds.
-CADENCE_ITEMS = [
-    {"kind": "engine", "name": "move: block",
-     "cmd": {"cmd": "set_engine_mode", "mode": "block"}},
-    {"kind": "engine", "name": "move: stream",
-     "cmd": {"cmd": "set_engine_mode", "mode": "stream"}},
-    {"kind": "engine", "name": "cadence: arrival",
-     "cmd": {"cmd": "set_cadence", "mode": "arrival"}},
-    {"kind": "engine", "name": "cadence: fixed 0.5 s",
-     "cmd": {"cmd": "set_cadence", "mode": "fixed", "every": 0.5}},
-    {"kind": "engine", "name": "cadence: fixed 1.0 s",
-     "cmd": {"cmd": "set_cadence", "mode": "fixed", "every": 1.0}},
-    {"kind": "engine", "name": "cadence: fixed 2.0 s",
-     "cmd": {"cmd": "set_cadence", "mode": "fixed", "every": 2.0}},
-]
-
-
-def item_label(item: dict) -> str:
-    """The display string for an item (name + loop marker + next annotation).
-
-    A "zones" row with ``back=True`` (a reverse-only target) gets a ``←`` marker
-    so forward vs. back is visible in an asymmetric next-field graph.
-    """
-    name = item.get("name", "")
-    if item.get("kind") != "action":
-        return f"{name} ←" if item.get("back") else name
-    a = item.get("action")
-    s = name
-    if action_loops(a):
-        s += " ↻"
-    n = action_next(a)
-    if n:
-        nz = n.get("zone")
-        if isinstance(nz, str):
-            s += f" → {nz}"
-        else:
-            na = n.get("action")
-            if isinstance(na, str):
-                s += f" → {na}"
-    return s
-
-
 class RemoteTUI:
-    """Remote TUI (urwid): live state + action/zone navigation."""
+    """Remote TUI (urwid): live state + action/zone navigation.
+
+    Owns the I/O (connection thread, queue, urwid MainLoop, joystick) and
+    delegates all state and row content to a shared :class:`view.RemoteState`.
+    """
 
     def __init__(self, config):
         self.config = config
         self._q: "queue.Queue" = queue.Queue()
-        self._items: List[dict] = []  # selectable rows ({section, kind, name, action})
-        self._cursor = 0
-        self._state: Dict[str, Any] = {}
-        self._state_key = object()
-        self._zones: Dict[str, dict] = {}
-        self._status = "initialising…"
-        self._dirty = True
+        self._rs = view.RemoteState()
         self._conn = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread = None
         self._top = None
         self._mainloop = None
-        self._page = 0
-        self._hunt: Dict[str, Any] = {}
-        self._cam_telem: Dict[str, Any] = {}
-        # Engine cadence state (from the snapshot): move_mode, cadence, cadence_every.
-        self._engine: Dict[str, Any] = {}
-        # Joystick (page navigation via L1/R1).
         self._joy = None
         self._joy_thread = None
 
@@ -258,72 +184,24 @@ class RemoteTUI:
             while True:
                 kind, payload = self._q.get_nowait()
                 if kind == "state":
-                    self._apply_state(payload)
+                    self._rs.apply_state(payload)
                 elif kind == "zones":
-                    self._apply_zones(payload)
+                    self._rs.apply_zones(payload)
                 elif kind == "error":
-                    self._status = str(payload)
-                    self._dirty = True
+                    self._rs.status = str(payload)
+                    self._rs.dirty = True
                 elif kind == "joy":
-                    self._on_joystick(payload)
+                    self._rs.on_joystick(payload)
         except queue.Empty:
             pass
-        if self._dirty:
-            self._dirty = False
+        if self._rs.dirty:
+            self._rs.dirty = False
             self._rebuild()
         if self._mainloop is not None:
             self._mainloop.set_alarm_in(0.1, self._poll)
 
-    def _apply_state(self, data) -> None:
-        self._hunt = data.get("hunt", {})
-        self._cam_telem = data.get("cam_telem", {})
-        self._engine = {
-            "move_mode": data.get("move_mode"),
-            "cadence": data.get("cadence"),
-            "cadence_every": data.get("cadence_every"),
-        }
-        key = (data.get("zone"), data.get("mode"), data.get("action"),
-               data.get("moving"), data.get("speed"),
-               data.get("hunt", {}).get("state"),
-               data.get("hunt", {}).get("feral"),
-               data.get("move_mode"), data.get("cadence"),
-               data.get("cadence_every"))
-        if key != self._state_key:
-            self._state = {
-                "zone": data.get("zone"),
-                "mode": data.get("mode"),
-                "action": data.get("action"),
-                "moving": data.get("moving"),
-                "speed": data.get("speed"),
-            }
-            self._state_key = key
-            self._rebuild_items()
-            self._dirty = True
-
-    def _apply_zones(self, table) -> None:
-        if table != self._zones:
-            self._zones = table
-            self._rebuild_items()
-            self._dirty = True
-
-    def _on_joystick(self, ev) -> None:
-        """Map joystick L1/R1 presses to page navigation (on press only)."""
-        event_type, code, value = ev
-        if event_type != 1 or value != 1:  # KEY event, press edge only
-            return
-        if code == JOY_L1:
-            self._set_page(self._page - 1)
-        elif code == JOY_R1:
-            self._set_page(self._page + 1)
-
-    def _rebuild_items(self) -> None:
-        zone = self._state.get("zone")
-        self._items = build_items(self._zones, zone)
-        if self._cursor >= len(self._items):
-            self._cursor = 0
-
     # ------------------------------------------------------------------
-    # Rendering.
+    # Rendering: map view row dicts → urwid widgets.
     # ------------------------------------------------------------------
     def _width(self) -> int:
         if self._mainloop is not None:
@@ -332,25 +210,6 @@ class RemoteTUI:
             except Exception:  # noqa: BLE001
                 pass
         return 80
-
-    def _bar(self, text: str, fg, bg, *attrs):
-        w = self._width()
-        pad = max(0, w - len(text))
-        left = pad // 2
-        s = " " * left + text + " " * (pad - left)
-        return urwid.AttrWrap(urwid.Text(s), Theme.attr(fg, bg, *attrs))
-
-    def _line(self, text: str, fg, bg=None, *attrs):
-        s = text[:self._width()]
-        return urwid.AttrWrap(urwid.Text(s), Theme.attr(fg, bg or Theme.BG, *attrs))
-
-    def _label(self, text: str):
-        return urwid.AttrWrap(urwid.Text(f"  {text}"),
-                               Theme.attr(Theme.YELLOW, Theme.BG, "bold"))
-
-    def _divider(self):
-        return urwid.AttrWrap(urwid.Divider(div_char="─"),
-                               Theme.attr(Theme.YELLOW_DIM, Theme.BG))
 
     def _state_row(self, pairs):
         """A row of ``label: value`` pairs (yellow bold labels, bright values).
@@ -367,180 +226,50 @@ class RemoteTUI:
             parts.append((Theme.attr(Theme.BRIGHT, Theme.BG), str(val)))
         return urwid.AttrMap(urwid.Text(parts), {})
 
-    def _item_row(self, i: int, item: dict):
-        if i == self._cursor and i < len(self._current_items()):
-            s = f"  ▸ {item_label(item)}"
-            return urwid.AttrWrap(urwid.Text(s[:self._width()]),
+    def _row_widget(self, row: dict):
+        """Map one view row dict (``style`` + ``text``/``pairs``) to a widget."""
+        style = row["style"]
+        if style == "divider":
+            return urwid.AttrWrap(urwid.Divider(div_char="─"),
+                                   Theme.attr(Theme.YELLOW_DIM, Theme.BG))
+        if style == "state":
+            return self._state_row(row["pairs"])
+        text = row.get("text", "")
+        if style == "bar":
+            return urwid.AttrWrap(urwid.Text(text),
+                                   Theme.attr(Theme.YELLOW, Theme.ACCENT_BG, "bold"))
+        if style == "conn_ok":
+            return urwid.AttrWrap(urwid.Text(text), Theme.attr(Theme.GREEN))
+        if style == "conn_bad":
+            return urwid.AttrWrap(urwid.Text(text), Theme.attr(Theme.RED))
+        if style == "page":
+            return urwid.AttrWrap(urwid.Text(text), Theme.attr(Theme.YELLOW_DIM))
+        if style == "label":
+            return urwid.AttrWrap(urwid.Text(text),
+                                   Theme.attr(Theme.YELLOW, Theme.BG, "bold"))
+        if style == "item":
+            return urwid.AttrWrap(urwid.Text(text), Theme.attr(Theme.TEXT))
+        if style == "item_sel":
+            return urwid.AttrWrap(urwid.Text(text),
                                    Theme.attr("black", Theme.YELLOW, "bold"))
-        s = f"    {item_label(item)}"
-        if item.get("kind") == "action" and item.get("action") is not None \
-           and not action_enabled(item["action"]):
-            return urwid.AttrWrap(urwid.Text(s[:self._width()]),
-                                   Theme.attr(Theme.DIM, Theme.BG))
-        return urwid.AttrWrap(urwid.Text(s[:self._width()]),
-                               Theme.attr(Theme.TEXT, Theme.BG))
+        if style == "item_dim":
+            return urwid.AttrWrap(urwid.Text(text), Theme.attr(Theme.DIM))
+        if style == "status":
+            return urwid.AttrWrap(urwid.Text(text), Theme.attr(Theme.YELLOW_DIM))
+        if style == "help":
+            return urwid.AttrWrap(urwid.Text(text), Theme.attr(Theme.DIM))
+        if style == "feral":
+            return urwid.AttrWrap(urwid.Text(text),
+                                   Theme.attr(Theme.RED, Theme.BG, "bold"))
+        # "text" and any unknown style: plain text.
+        return urwid.AttrWrap(urwid.Text(text), Theme.attr(Theme.TEXT))
 
     def _build_rows(self):
-        rows = []
-        rows.append(self._bar("RTR REMOTE", Theme.YELLOW, Theme.ACCENT_BG, "bold"))
+        width = self._width()
         up = self._conn is not None and self._conn.connected
         ep = f"ws://{self.config.core_host}:{self.config.core_port}"
-        if up:
-            rows.append(self._line(f"CONNECTED   {ep}", Theme.GREEN))
-        else:
-            rows.append(self._line(f"DISCONNECTED  {ep}", Theme.RED))
-        # Page indicator.
-        page_names = " | ".join(PAGES)
-        cur = PAGES[self._page]
-        rows.append(self._line(f"  [{cur}]  {page_names}", Theme.YELLOW_DIM))
-        rows.append(self._divider())
-        if self._page == 0:
-            rows.extend(self._nav_content())
-        elif self._page == 1:
-            rows.extend(self._camera_content())
-        elif self._page == 2:
-            rows.extend(self._brain_content())
-        elif self._page == 3:
-            rows.extend(self._hunt_content())
-        elif self._page == 4:
-            rows.extend(self._cadence_content())
-        rows.append(self._divider())
-        rows.append(self._line(self._status, Theme.YELLOW_DIM))
-        rows.append(self._line("←→ pages · ↑↓ move · enter select · q quit", Theme.DIM))
-        return rows
-
-    def _nav_content(self):
-        """Page 0: zone/action navigation (the original TUI content)."""
-        rows = []
-        zone = self._state.get("zone", "—")
-        mode = self._state.get("mode", "—")
-        action = self._state.get("action", "—")
-        rows.append(self._state_row([("ZONE", zone), ("MODE", mode), ("ACTION", action)]))
-        moving = self._state.get("moving")
-        speed = self._state.get("speed", "—")
-        mv = "—" if moving is None else ("yes" if moving else "no")
-        rows.append(self._state_row([("MOVING", mv), ("SPEED", speed)]))
-        rows.append(self._divider())
-        if not self._items:
-            if not self._zones and not self._state:
-                rows.append(self._line("  connecting… waiting for core state", Theme.DIM))
-            else:
-                rows.append(self._line("  (no actions or exits in this zone)", Theme.DIM))
-        else:
-            current_section = None
-            for i, item in enumerate(self._items):
-                sec = item["section"]
-                if sec != current_section:
-                    rows.append(self._label(SECTION_LABELS.get(sec, sec.upper())))
-                    current_section = sec
-                rows.append(self._item_row(i, item))
-        return rows
-
-    def _camera_content(self):
-        """Page 1: camera overview (person count, status, track, face)."""
-        rows = []
-        rows.append(self._label("CAMERA"))
-        rows.append(self._divider())
-        status = self._cam_telem.get("status", {})
-        if status:
-            cam = status.get("camera", "—")
-            fps = status.get("fps", 0)
-            ok = status.get("ok")
-            ok_s = "—" if ok is None else ("yes" if ok else "no")
-            rows.append(self._state_row([("CAM", cam), ("FPS", f"{fps:.1f}"), ("OK", ok_s)]))
-        cands = self._cam_telem.get("candidates") or {}
-        cand_list = cands.get("candidates") or []
-        n = len(cand_list)
-        rows.append(self._state_row([("PERSONS", n)]))
-        for c in cand_list[:5]:
-            cid = c.get("id", "?")
-            conf = c.get("conf", 0)
-            rows.append(self._line(f"  #{cid}  conf={conf:.2f}", Theme.TEXT))
-        track = self._cam_telem.get("track", {})
-        if track:
-            tid = track.get("id", "?")
-            dx = track.get("dx", 0)
-            dy = track.get("dy", 0)
-            w = track.get("w", 0)
-            h = track.get("h", 0)
-            rows.append(self._state_row([("TRACK", f"#{tid} dx={dx:.1f} dy={dy:.1f} w={w:.0f} h={h:.0f}")]))
-        face = self._cam_telem.get("face", {})
-        if face:
-            fid = face.get("id", "?")
-            fdx = face.get("dx", 0)
-            fdy = face.get("dy", 0)
-            rows.append(self._state_row([("FACE", f"#{fid} dx={fdx:.1f} dy={fdy:.1f}")]))
-        rows.append(self._divider())
-        rows.append(self._label("CAMERA ACTIONS"))
-        rows.append(self._item_row(0, {"kind": "action", "name": "detect", "action": None}))
-        rows.append(self._item_row(1, {"kind": "action", "name": "stop_hunt", "action": None}))
-        return rows
-
-    def _brain_content(self):
-        """Page 2: robot state map (zone, mode, action, heading)."""
-        rows = []
-        rows.append(self._label("BRAIN"))
-        rows.append(self._divider())
-        zone = self._state.get("zone", "—")
-        mode = self._state.get("mode", "—")
-        action = self._state.get("action", "—")
-        rows.append(self._state_row([("ZONE", zone), ("MODE", mode), ("ACTION", action)]))
-        moving = self._state.get("moving")
-        speed = self._state.get("speed", "—")
-        mv = "—" if moving is None else ("yes" if moving else "no")
-        rows.append(self._state_row([("MOVING", mv), ("SPEED", speed)]))
-        # Heading: A1 (base rotation) from the joint pose.
-        joints = self._state.get("joints")
-        if joints and len(joints) >= 6:
-            a1 = joints[0]
-            rows.append(self._state_row([("HEADING", f"A1={a1:.1f}°")]))
-        else:
-            rows.append(self._state_row([("HEADING", "—")]))
-        rows.append(self._divider())
-        rows.append(self._label("STATE"))
-        rows.append(self._line(f"  zone: {zone}", Theme.TEXT))
-        rows.append(self._line(f"  mode: {mode}", Theme.TEXT))
-        rows.append(self._line(f"  action: {action}", Theme.TEXT))
-        return rows
-
-    def _hunt_content(self):
-        """Page 3: hunt state with feral RED warning."""
-        rows = []
-        rows.append(self._label("HUNT"))
-        rows.append(self._divider())
-        hunt_state = self._hunt.get("state", "idle")
-        lock_id = self._hunt.get("lock_id")
-        feral = self._hunt.get("feral", False)
-        lock_s = f"#{lock_id}" if lock_id is not None else "—"
-        rows.append(self._state_row([("STATE", hunt_state), ("LOCK", lock_s)]))
-        if feral:
-            rows.append(self._line("  ⚠ FERAL — rapid hunt-loop cycling", Theme.RED, Theme.BG, "bold"))
-        else:
-            rows.append(self._line("  feral: no", Theme.GREEN))
-        face = self._cam_telem.get("face") or {}
-        face_vis = bool(face.get("id") is not None)
-        rows.append(self._state_row([("FACE", "visible" if face_vis else "not visible")]))
-        rows.append(self._divider())
-        rows.append(self._label("HUNT ACTIONS"))
-        rows.append(self._item_row(0, {"kind": "action", "name": "stop_hunt", "action": None}))
-        return rows
-
-    def _cadence_content(self):
-        """Page 4: engine move mode + cadence (current state + set options)."""
-        rows = []
-        rows.append(self._label("CADENCE"))
-        rows.append(self._divider())
-        eng = self._engine
-        mm = eng.get("move_mode") or "—"
-        cad = eng.get("cadence") or "—"
-        every = eng.get("cadence_every")
-        every_s = f"{every} ticks" if every is not None else "—"
-        rows.append(self._state_row([("MOVE", mm), ("CADENCE", cad), ("EVERY", every_s)]))
-        rows.append(self._divider())
-        rows.append(self._label("SET"))
-        for i, item in enumerate(CADENCE_ITEMS):
-            rows.append(self._item_row(i, item))
-        return rows
+        rows = self._rs.build_rows(width, connected=up, endpoint=ep)
+        return [self._row_widget(r) for r in rows]
 
     def _build_top(self):
         """A fresh top-level ``Pile`` for the current state (box widget).
@@ -569,69 +298,40 @@ class RemoteTUI:
             raise _Quit
         return keys
 
-    def _current_items(self) -> List[dict]:
-        """The selectable rows for the current page (NAV items vs. CADENCE options)."""
-        return CADENCE_ITEMS if self._page == 4 else self._items
-
-    def _page_item_count(self) -> int:
-        return len(self._current_items())
-
-    def _set_page(self, p: int) -> None:
-        self._page = max(0, min(len(PAGES) - 1, p))
-        n = self._page_item_count()
-        self._cursor = max(0, min(n - 1, self._cursor)) if n else 0
-        self._dirty = True
-
-    def _move_cursor(self, d: int) -> None:
-        n = self._page_item_count()
-        if not n:
-            return
-        self._cursor = max(0, min(n - 1, self._cursor + d))
-        self._dirty = True
-
     def _activate(self) -> None:
-        items = self._current_items()
-        if 0 <= self._cursor < len(items):
-            item = items[self._cursor]
-            if item.get("kind") == "engine":
-                self._send(item["cmd"])
-                self._status = f"→ {item['name']}"
-                self._dirty = True
-                return
-            for cmd in activation_commands(item):
+        res = self._rs.activate()
+        if res is not None:
+            cmds, _ = res
+            for cmd in cmds:
                 self._send(cmd)
-            if item.get("kind") == "action":
-                self._status = f"→ play {item['name']}"
-            else:
-                self._status = f"→ trigger {item['name']}"
-            self._dirty = True
 
     def _on_unhandled(self, key):
         if key == "up":
-            self._move_cursor(-1)
+            self._rs.move_cursor(-1)
             return True
         if key == "down":
-            self._move_cursor(1)
+            self._rs.move_cursor(1)
             return True
         if key == "home":
-            self._cursor = 0
-            self._dirty = True
+            self._rs.cursor = 0
+            self._rs.dirty = True
             return True
         if key == "end":
-            self._cursor = max(0, len(self._items) - 1)
-            self._dirty = True
+            self._rs.cursor = max(0, len(self._rs.items) - 1)
+            self._rs.dirty = True
             return True
         if key == "enter":
             self._activate()
             return True
         if key == "left":
-            self._set_page(self._page - 1)
+            self._rs.set_page(self._rs.page - 1)
             return True
         if key == "right":
-            self._set_page(self._page + 1)
+            self._rs.set_page(self._rs.page + 1)
             return True
         if key in ("h", "?"):
-            self._status = "←→ pages · ↑↓ move · enter select · q quit"
+            self._rs.status = "←→ pages · ↑↓ move · enter select · q quit"
+            self._rs.dirty = True
             return True
         return None
 
@@ -652,8 +352,8 @@ class RemoteTUI:
         self._start_conn()
         self._start_joy()
         self._mainloop = urwid.MainLoop(self._top,
-                                         input_filter=self._input_filter,
-                                         unhandled_input=self._on_unhandled)
+                                          input_filter=self._input_filter,
+                                          unhandled_input=self._on_unhandled)
         self._mainloop.set_alarm_in(0.1, self._poll)
         try:
             self._mainloop.run()
@@ -663,7 +363,7 @@ class RemoteTUI:
             self._shutdown()
 
     def stop(self) -> None:
-        self._dirty = False
+        self._rs.dirty = False
         if self._mainloop is not None:
             self._mainloop.stop()
 

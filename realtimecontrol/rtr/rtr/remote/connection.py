@@ -92,6 +92,7 @@ class Connection:
         self.on_event = on_event or (lambda _d: None)
 
         self.connected = False  # True while the WebSocket link is up.
+        self._last_err = None  # last surfaced WS error (avoid status spam)
         self._ws: Optional[Any] = None
         self._tasks = []
         self._stopped = asyncio.Event()
@@ -176,7 +177,11 @@ class Connection:
                     async for message in ws:
                         self._on_message(message)
             except Exception as exc:  # noqa: BLE001 - connect/read failure retries
-                logger.info("WS unavailable (%s)", exc)
+                err = str(exc) or exc.__class__.__name__
+                if err != self._last_err:
+                    self._last_err = err
+                    logger.info("WS unavailable (%s)", err)
+                    self.on_error(f"WS: {err}")
             finally:
                 self._ws = None
                 self.connected = False

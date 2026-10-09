@@ -35,6 +35,7 @@ class CameraRemote:
                  width: int = 640, height: int = 480,
                   frame_rate: int = 30,
                   model_path: str = "yolo26n.pt",
+                  face_model_path: str = "yolo26n-face.pt",
                   tracker_cfg: str = "bytetrack.yaml",
                   show: bool = False):
         self.core_host = core_host
@@ -48,6 +49,7 @@ class CameraRemote:
             height=height,
             frame_rate=frame_rate,
             model_path=model_path,
+            face_model_path=face_model_path,
             tracker_cfg=tracker_cfg,
         )
 
@@ -195,6 +197,7 @@ def parse_args(argv=None):
     parser.add_argument("--height", type=int, default=480, help="frame height")
     parser.add_argument("--fps", type=int, default=30, help="target frame rate")
     parser.add_argument("--model", default="yolo26n.pt", help="YOLO model path (resolved in rtr/camera/models)")
+    parser.add_argument("--face-model", default="yolo26n-face.pt", help="YOLO face model path for the close camera (resolved in rtr/camera/models)")
     parser.add_argument("--tracker", default="bytetrack.yaml", help="tracker config")
     parser.add_argument("--show", action="store_true", help="open the debug display window")
     parser.add_argument("--log-level", default="INFO", help="log level")
@@ -215,6 +218,7 @@ def main(argv=None) -> int:
         height=args.height,
         frame_rate=args.fps,
         model_path=args.model,
+        face_model_path=args.face_model,
         tracker_cfg=args.tracker,
         show=args.show,
     )

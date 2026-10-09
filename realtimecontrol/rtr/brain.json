@@ -20,6 +20,7 @@
       "enabled": true,
       "params": {
         "lost_s": 2.0,
+        "min_conf": 0.1,
         "attention_guard": ["track", "focus", "look", "face"],
         "detect": { "zone": "wakeup", "action": "look" },
         "scan": { "zone": "wakeup", "action": "scan" }

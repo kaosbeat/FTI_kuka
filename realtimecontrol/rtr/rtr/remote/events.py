@@ -44,20 +44,29 @@ class Joystick:
             logger.debug("closed %s", self.device)
 
     def read(self) -> Optional[Tuple[int, int, int]]:
-        """Read one event; returns (type, code, value) or None on EOF/error."""
+        """Read the next KEY/ABS event; returns (type, code, value) or None on EOF/error.
+
+        Non-KEY/ABS events (e.g. EV_SYN, type 0) are consumed and skipped: they
+        are part of a normal input batch, not EOF. Treating them as EOF made the
+        reader reopen the device after every button press (a spurious ``EOF`` on
+        each keypress). A real 0-byte read (the device dropped) still returns None.
+        """
         if self._fd is None:
             return None
-        try:
-            data = os.read(self._fd, EVENT.size)
-        except OSError as exc:
-            logger.debug("read error: %s", exc)
-            return None
-        if len(data) != EVENT.size:
-            return None
-        sec, usec, event_type, code, value = EVENT.unpack(data)
-        if event_type in (EVENT_TYPE_KEY, EVENT_TYPE_ABS):
-            return (event_type, code, value)
-        return None
+        while True:
+            try:
+                data = os.read(self._fd, EVENT.size)
+            except OSError as exc:
+                logger.debug("read error: %s", exc)
+                return None
+            if len(data) != EVENT.size:
+                if len(data) == 0:      # real EOF: the device dropped
+                    return None
+                continue                # short read: retry
+            sec, usec, event_type, code, value = EVENT.unpack(data)
+            if event_type in (EVENT_TYPE_KEY, EVENT_TYPE_ABS):
+                return (event_type, code, value)
+            # EV_SYN / other: consume, keep reading for the next real event.
 
     def __enter__(self):
         self.open()

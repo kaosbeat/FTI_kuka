@@ -267,8 +267,10 @@ class Brain:
     def _handle_cam_candidates(self, p: dict) -> None:
         """Store candidates and pick a lock target.
 
-        The lock heuristic: highest confidence, breaking ties by centrality
-        (smaller distance from image center wins).
+        The lock heuristic: the highest-confidence candidate above ``min_conf``
+        (the hunt sensitivity threshold), breaking ties by centrality (smaller
+        distance from image center wins). Candidates below ``min_conf`` are
+        ignored, so a low threshold ("very sensitive") locks even weak detections.
         """
         if self.camera is not None:
             self.camera.handle_telemetry(Cmd.CAM_CANDIDATES, p)
@@ -282,10 +284,13 @@ class Brain:
             self._cam_log("cand", "candidates: (none)")
         if not cands:
             return
+        min_conf = self._hunt_group().get("params", {}).get("min_conf", 0.1)
         best = None
         best_score = -1
         for c in cands:
             conf = c.get("conf", 0)
+            if conf < min_conf:
+                continue  # below the sensitivity threshold: not a valid lock target
             # Centrality: smaller distance from (0.5, 0.5) is better.
             cx = (c.get("x1", 0) + c.get("x2", 0)) / 2
             cy = (c.get("y1", 0) + c.get("y2", 0)) / 2

@@ -51,8 +51,10 @@
   .bar { height: 6px; background: #0d0f13; border-radius: 3px; margin-top: 3px; position: relative; overflow: hidden; }
   .bar .mark { position: absolute; top: 0; bottom: 0; width: 4px; background: var(--accent); }
   .stateRow { display: flex; justify-content: space-between; padding: 2px 0;
-               border-bottom: 1px solid #20242d; font-size: 13px; }
+                border-bottom: 1px solid #20242d; font-size: 13px; }
   .stateRow > span:first-child { color: var(--dim); }
+  .brainSec { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; margin: 12px 0 4px; }
+  .brainInject { margin-top: 4px; }
   .warn { color: #e0a030; font-size: 12px; }
   .hwlims { display: flex; flex-wrap: wrap; gap: 3px 10px; font-size: 11px; color: var(--dim); margin-bottom: 8px; }
   #tabZones { font-size: 12px; }
@@ -588,6 +590,7 @@ const BRAIN_FALLBACK = {
       enabled: true,
       params: {
         lost_s: 2.0,
+        min_conf: 0.1,
         attention_guard: ["track", "focus", "look", "face"],
         detect: { zone: "wakeup", action: "look" },
         scan: { zone: "wakeup", action: "scan" },
@@ -1422,10 +1425,94 @@ async function loadPatches() {
 }
 
 // ---------------------------------------------------------------------------
-// Brain decision config (hunt-loop parameters). Same data-file/reload pattern as
-// the other tabs: GET /api/brain (falling back to /brain.json, then the built-in
-// defaults), POST /api/brain to save + hot-reload the running core.
+// Brain decision config (autonomy + zone groups). Same data-file/reload pattern
+// as the other tabs: GET /api/brain (falling back to /brain.json, then the
+// built-in defaults), POST /api/brain to save + hot-reload the running core.
+//
+// The on-disk shape is { autonomy, zone_groups } (see rtr/brain/config.py). The
+// editor keeps a *complete* normalised copy in BRAIN so the POST always writes a
+// full brain.json — the POST handler writes the payload verbatim, so a partial
+// payload would clobber the groups it omits.
 // ---------------------------------------------------------------------------
+
+// Default group values, mirroring rtr/brain/config.py DEFAULT_BRAIN_CONFIG. Used
+// to fill in any group (or field) missing from the fetched config so BRAIN is
+// always complete.
+const BRAIN_DEFAULT_GROUPS = {
+  home:      { zones: ["init", "rest", "init_rest_bridge"], behaviors: ["hold"], enabled: true },
+  hunt:      { zones: ["wakeup"], behaviors: ["look", "scan"], enabled: true,
+               params: { lost_s: 2.0, min_conf: 0.1,
+                         attention_guard: ["track", "focus", "look", "face"],
+                         detect: { zone: "wakeup", action: "look" },
+                         scan: { zone: "wakeup", action: "scan" } } },
+  facefocus: { zones: ["stretch"], behaviors: ["face"], enabled: true,
+               params: { actions: ["wink", "inspect", "call"], action_s: 3.0, face_lost_s: 2.5 } },
+  perform:   { zones: ["watch", "perform", "fume"], behaviors: ["track", "focus"], enabled: false },
+};
+
+function _brainGroupSuffix(name) {
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+// Normalise a single zone group to the full shape (filling missing fields from
+// the defaults). ``hunt`` / ``facefocus`` get a validated params block; other
+// groups carry an unvalidated params passthrough.
+function _brainNormalizeGroup(name, g) {
+  const d = BRAIN_DEFAULT_GROUPS[name] || { zones: [], behaviors: [], enabled: false };
+  g = g || {};
+  const out = {
+    zones: Array.isArray(g.zones) ? g.zones.slice() : d.zones.slice(),
+    behaviors: Array.isArray(g.behaviors) ? g.behaviors.slice() : d.behaviors.slice(),
+    enabled: typeof g.enabled === "boolean" ? g.enabled : d.enabled,
+  };
+  if (name === "hunt") {
+    const p = g.params || {}, dp = d.params;
+    out.params = {
+      lost_s: typeof p.lost_s === "number" ? p.lost_s : dp.lost_s,
+      min_conf: typeof p.min_conf === "number" ? p.min_conf : dp.min_conf,
+      attention_guard: Array.isArray(p.attention_guard) ? p.attention_guard.slice() : dp.attention_guard.slice(),
+      detect: Object.assign({}, dp.detect, p.detect || {}),
+      scan: Object.assign({}, dp.scan, p.scan || {}),
+    };
+  } else if (name === "facefocus") {
+    const p = g.params || {}, dp = d.params;
+    out.params = {
+      actions: Array.isArray(p.actions) ? p.actions.slice() : dp.actions.slice(),
+      action_s: typeof p.action_s === "number" ? p.action_s : dp.action_s,
+      face_lost_s: typeof p.face_lost_s === "number" ? p.face_lost_s : dp.face_lost_s,
+    };
+  } else if (g.params && typeof g.params === "object") {
+    out.params = Object.assign({}, g.params);  // unvalidated passthrough
+  }
+  return out;
+}
+
+// Normalise a raw brain config to the full { autonomy, zone_groups } shape. Keeps
+// every group present in the file (including custom ones) and fills the known
+// defaults so the brain always has the full set.
+function normalizeBrain(data) {
+  data = data || {};
+  const fb = BRAIN_FALLBACK;
+  const a = data.autonomy || {};
+  const ev = a.events || {};
+  const autonomy = {
+    enabled: typeof a.enabled === "boolean" ? a.enabled : fb.autonomy.enabled,
+    dwell_s: typeof a.dwell_s === "number" ? a.dwell_s : fb.autonomy.dwell_s,
+    events: {
+      midi: typeof ev.midi === "boolean" ? ev.midi : fb.autonomy.events.midi,
+      camera: typeof ev.camera === "boolean" ? ev.camera : fb.autonomy.events.camera,
+      websocket: typeof ev.websocket === "boolean" ? ev.websocket : fb.autonomy.events.websocket,
+    },
+  };
+  const groups = {};
+  const src = data.zone_groups || {};
+  for (const name of Object.keys(src)) groups[name] = _brainNormalizeGroup(name, src[name]);
+  for (const name of Object.keys(BRAIN_DEFAULT_GROUPS)) {
+    if (!groups[name]) groups[name] = _brainNormalizeGroup(name, src[name]);
+  }
+  return { autonomy, zone_groups: groups };
+}
+
 async function loadBrain() {
   let data = null;
   try {
@@ -1439,25 +1526,7 @@ async function loadBrain() {
     } catch (e) {}
   }
   if (!data) data = JSON.parse(JSON.stringify(BRAIN_FALLBACK));
-  // Normalise to the full shape so the form always has every field.
-  const h = (data && data.hunt) || {};
-  const f = (data && data.facefocus) || {};
-  const fb = BRAIN_FALLBACK.facefocus;
-  BRAIN = {
-    hunt: {
-      lost_s: h.lost_s !== undefined ? h.lost_s : BRAIN_FALLBACK.hunt.lost_s,
-      attention_guard: h.attention_guard || BRAIN_FALLBACK.hunt.attention_guard.slice(),
-      detect: Object.assign({}, BRAIN_FALLBACK.hunt.detect, h.detect || {}),
-      scan: Object.assign({}, BRAIN_FALLBACK.hunt.scan, h.scan || {}),
-    },
-    facefocus: {
-      enabled: f.enabled !== undefined ? f.enabled : fb.enabled,
-      zone: f.zone !== undefined ? f.zone : fb.zone,
-      actions: f.actions || fb.actions.slice(),
-      action_s: f.action_s !== undefined ? f.action_s : fb.action_s,
-      face_lost_s: f.face_lost_s !== undefined ? f.face_lost_s : fb.face_lost_s,
-    },
-  };
+  BRAIN = normalizeBrain(data);
   if (brainView) buildBrainForm();
   return BRAIN;
 }
@@ -1465,8 +1534,16 @@ async function loadBrain() {
 function buildBrainForm() {
   const el = $("brainForm");
   el.innerHTML = "";
-  const h = BRAIN.hunt;
-  const addRow = (label, input) => {
+  const b = BRAIN;
+  const groups = b.zone_groups;
+
+  const mkSection = (text) => {
+    const h = document.createElement("div");
+    h.className = "brainSec";
+    h.textContent = text;
+    el.appendChild(h);
+  };
+  const mkRow = (label, input) => {
     const row = document.createElement("div");
     row.className = "row";
     row.style.alignItems = "center";
@@ -1477,90 +1554,150 @@ function buildBrainForm() {
     row.appendChild(input);
     el.appendChild(row);
   };
-  // lost_s (seconds a locked target's CAM_TRACK may go stale before "lost").
-  const lostS = document.createElement("input");
-  lostS.type = "number"; lostS.step = "0.1"; lostS.min = "0";
-  lostS.value = h.lost_s; lostS.id = "brainLostS";
-  addRow("hunt.lost_s (s)", lostS);
-  // attention_guard (behaviors that suppress the detect attention-grab).
-  const guard = document.createElement("input");
-  guard.type = "text"; guard.spellcheck = false; guard.id = "brainGuard";
-  guard.value = h.attention_guard.join(", ");
-  addRow("hunt.attention_guard", guard);
-  // detect zone/action.
-  const detZone = document.createElement("input");
-  detZone.type = "text"; detZone.spellcheck = false; detZone.id = "brainDetZone";
-  detZone.value = h.detect.zone;
-  addRow("hunt.detect.zone", detZone);
-  const detAct = document.createElement("input");
-  detAct.type = "text"; detAct.spellcheck = false; detAct.id = "brainDetAct";
-  detAct.value = h.detect.action;
-  addRow("hunt.detect.action", detAct);
-  // scan zone/action.
-  const scanZone = document.createElement("input");
-  scanZone.type = "text"; scanZone.spellcheck = false; scanZone.id = "brainScanZone";
-  scanZone.value = h.scan.zone;
-  addRow("hunt.scan.zone", scanZone);
-  const scanAct = document.createElement("input");
-  scanAct.type = "text"; scanAct.spellcheck = false; scanAct.id = "brainScanAct";
-  scanAct.value = h.scan.action;
-  addRow("hunt.scan.action", scanAct);
-  // facefocus (the "check out that human" sub-state of tracking).
-  const ffHead = document.createElement("div");
-  ffHead.className = "row";
-  ffHead.style.marginTop = "10px";
-  ffHead.style.fontSize = "12px";
-  ffHead.style.color = "var(--dim)";
-  ffHead.textContent = "facefocus — stretch + face actions while a face is visible";
-  el.appendChild(ffHead);
-  const ff = BRAIN.facefocus;
-  const ffEnabled = document.createElement("input");
-  ffEnabled.type = "checkbox"; ffEnabled.id = "brainFFEnabled";
-  ffEnabled.checked = !!ff.enabled;
-  addRow("facefocus.enabled", ffEnabled);
-  const ffZone = document.createElement("input");
-  ffZone.type = "text"; ffZone.spellcheck = false; ffZone.id = "brainFFZone";
-  ffZone.value = ff.zone;
-  addRow("facefocus.zone", ffZone);
-  const ffActions = document.createElement("input");
-  ffActions.type = "text"; ffActions.spellcheck = false; ffActions.id = "brainFFActions";
-  ffActions.value = ff.actions.join(", ");
-  addRow("facefocus.actions", ffActions);
-  const ffActionS = document.createElement("input");
-  ffActionS.type = "number"; ffActionS.step = "0.1"; ffActionS.min = "0";
-  ffActionS.id = "brainFFActionS"; ffActionS.value = ff.action_s;
-  addRow("facefocus.action_s (s)", ffActionS);
-  const ffLostS = document.createElement("input");
-  ffLostS.type = "number"; ffLostS.step = "0.1"; ffLostS.min = "0";
-  ffLostS.id = "brainFFLostS"; ffLostS.value = ff.face_lost_s;
-  addRow("facefocus.face_lost_s (s)", ffLostS);
-  $("brainInfo").textContent = "detect = the action the brain triggers when it locks a target; "
-    + "scan = the action it triggers when the lock is lost; attention_guard = behaviors that "
-    + "suppress the detect attention-grab (comma-separated); facefocus = stretch into the "
-    + "exterior pose and cycle the face actions while a face is visible (comma-separated).";
+  const mkNum = (id, value, step, min) => {
+    const inp = document.createElement("input");
+    inp.type = "number"; inp.step = step || "0.1"; inp.min = min || "0";
+    inp.value = value; inp.id = id;
+    return inp;
+  };
+  const mkText = (id, value) => {
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.spellcheck = false; inp.id = id;
+    inp.value = value;
+    return inp;
+  };
+  const mkCheck = (id, checked) => {
+    const inp = document.createElement("input");
+    inp.type = "checkbox"; inp.id = id; inp.checked = !!checked;
+    return inp;
+  };
+
+  // --- autonomy (the master switch for autonomous navigation) ---
+  mkSection("autonomy");
+  const a = b.autonomy;
+  mkRow("autonomy.enabled (master switch)", mkCheck("brainAutEnabled", a.enabled));
+  mkRow("autonomy.dwell_s (s, dwell before a looping action's next link is followed)",
+        mkNum("brainAutDwell", a.dwell_s, "1", "0"));
+  mkRow("events.midi (note-on triggers an immediate next link)", mkCheck("brainEvMidi", a.events.midi));
+  mkRow("events.camera (detect/hunt lock triggers an immediate next link)", mkCheck("brainEvCamera", a.events.camera));
+  mkRow("events.websocket (proceed triggers an immediate next link)", mkCheck("brainEvWs", a.events.websocket));
+
+  // --- zone groups (named sets of zones + the behaviors enabled in them) ---
+  mkSection("zone groups");
+  for (const name of Object.keys(groups)) {
+    const g = groups[name];
+    const s = _brainGroupSuffix(name);
+    mkRow(`group.${name}.enabled`, mkCheck("brainGrp" + s + "Enabled", g.enabled));
+    mkRow(`group.${name}.zones (comma-separated)`, mkText("brainGrp" + s + "Zones", g.zones.join(", ")));
+    mkRow(`group.${name}.behaviors (comma-separated)`, mkText("brainGrp" + s + "Behaviors", g.behaviors.join(", ")));
+    if (name === "hunt") {
+      const p = g.params;
+      mkSection("hunt.params (the hunt-loop timing/trigger data)");
+      mkRow("hunt.lost_s (s, how long a locked target's track may go stale)",
+            mkNum("brainHuntLostS", p.lost_s, "0.1", "0"));
+      mkRow("hunt.min_conf (lock sensitivity; candidates below it are ignored — lower = more sensitive)",
+            mkNum("brainHuntMinConf", p.min_conf, "0.05", "0"));
+      mkRow("hunt.attention_guard (behaviors that suppress the detect grab)",
+            mkText("brainHuntGuard", p.attention_guard.join(", ")));
+      mkRow("hunt.detect.zone", mkText("brainHuntDetZone", p.detect.zone));
+      mkRow("hunt.detect.action", mkText("brainHuntDetAct", p.detect.action));
+      mkRow("hunt.scan.zone", mkText("brainHuntScanZone", p.scan.zone));
+      mkRow("hunt.scan.action", mkText("brainHuntScanAct", p.scan.action));
+    } else if (name === "facefocus") {
+      const p = g.params;
+      mkSection("facefocus.params (the 'check out that human' face actions)");
+      mkRow("facefocus.actions (comma-separated)", mkText("brainFFActions", p.actions.join(", ")));
+      mkRow("facefocus.action_s (s, per face action)", mkNum("brainFFActionS", p.action_s, "0.1", "0"));
+      mkRow("facefocus.face_lost_s (s, before the face is lost)", mkNum("brainFFLostS", p.face_lost_s, "0.1", "0"));
+    }
+  }
+
+  // --- camera inject (send CAM_* telemetry to the running core) ---
+  mkSection("camera inject (send CAM_* telemetry to the running core)");
+  const injectBtns = document.createElement("div");
+  injectBtns.className = "row brainInject";
+  const mkInjectBtn = (label, payload) => {
+    const btn = document.createElement("button");
+    btn.className = "small";
+    btn.textContent = label;
+    btn.addEventListener("click", () => send({ cmd: payload.cmd, ...payload.body }));
+    injectBtns.appendChild(btn);
+  };
+  mkInjectBtn("cam_status", { cmd: "cam_status",
+    body: { camera: "wide", mode: "track", active: true, fps: 30, ok: true } });
+  mkInjectBtn("cam_candidates", { cmd: "cam_candidates",
+    body: { camera: "wide", candidates: [
+      { id: 1, x1: 0.35, y1: 0.3, x2: 0.65, y2: 0.8, conf: 0.9 },
+      { id: 2, x1: 0.05, y1: 0.5, x2: 0.2, y2: 0.9, conf: 0.4 },
+    ] } });
+  mkInjectBtn("cam_track", { cmd: "cam_track",
+    body: { camera: "wide", id: 1, cx: 320, cy: 240, dx: 0, dy: 0, w: 80, h: 160 } });
+  mkInjectBtn("cam_face", { cmd: "cam_face",
+    body: { camera: "close", id: 1, bbox: [280, 160, 360, 320], dx: 0, dy: 0,
+            features: { detected: true, emotion: "neutral" } } });
+  el.appendChild(injectBtns);
+
+  // --- autonomy triggers (send a proceed/stop to the running core) ---
+  mkSection("autonomy triggers (send to the running core)");
+  const trigBtns = document.createElement("div");
+  trigBtns.className = "row brainInject";
+  const mkTrigBtn = (label, cmd) => {
+    const btn = document.createElement("button");
+    btn.className = "small";
+    btn.textContent = label;
+    btn.addEventListener("click", () => send({ cmd }));
+    trigBtns.appendChild(btn);
+  };
+  mkTrigBtn("proceed (trigger the websocket autonomy event)", "proceed");
+  mkTrigBtn("stop", "stop");
+  el.appendChild(trigBtns);
+
+  $("brainInfo").textContent =
+    "autonomy = the master switch for autonomous navigation (follow a looping action's next link once it has dwelt for dwell_s or an event fires). "
+    + "zone groups = named sets of zones + the behaviors enabled in them; navigation runs across the union of the enabled groups' zones. "
+    + "hunt.params = the hunt-loop data (lost_s = how long a locked target's track may go stale; min_conf = the lock sensitivity, candidates below it are ignored; "
+    + "detect/scan = the actions triggered on lock / lock-lost; attention_guard = behaviors that suppress the detect grab). "
+    + "facefocus.params = the 'check out that human' face actions (cycled while a face is visible).";
 }
 
 function saveBrain() {
-  const lostS = parseFloat($("brainLostS").value);
-  const guard = $("brainGuard").value.split(",").map((s) => s.trim()).filter((s) => s.length);
-  const ff = BRAIN.facefocus;
-  const ffActionS = parseFloat($("brainFFActionS").value);
-  const ffLostS = parseFloat($("brainFFLostS").value);
+  const splitList = (id) => $(id).value.split(",").map((s) => s.trim()).filter((s) => s.length);
+  const num = (id, fallback) => { const v = parseFloat($(id).value); return isNaN(v) ? fallback : v; };
+  const grp = (s) => ({
+    enabled: $("brainGrp" + s + "Enabled").checked,
+    zones: splitList("brainGrp" + s + "Zones"),
+    behaviors: splitList("brainGrp" + s + "Behaviors"),
+  });
   const payload = {
-    hunt: {
-      lost_s: isNaN(lostS) ? BRAIN.hunt.lost_s : lostS,
-      attention_guard: guard,
-      detect: { zone: $("brainDetZone").value.trim(), action: $("brainDetAct").value.trim() },
-      scan: { zone: $("brainScanZone").value.trim(), action: $("brainScanAct").value.trim() },
+    autonomy: {
+      enabled: $("brainAutEnabled").checked,
+      dwell_s: num("brainAutDwell", BRAIN.autonomy.dwell_s),
+      events: { midi: $("brainEvMidi").checked, camera: $("brainEvCamera").checked, websocket: $("brainEvWs").checked },
     },
-    facefocus: {
-      enabled: $("brainFFEnabled").checked,
-      zone: $("brainFFZone").value.trim(),
-      actions: $("brainFFActions").value.split(",").map((s) => s.trim()).filter((s) => s.length),
-      action_s: isNaN(ffActionS) ? ff.action_s : ffActionS,
-      face_lost_s: isNaN(ffLostS) ? ff.face_lost_s : ffLostS,
-    },
+    zone_groups: {},
   };
+  for (const name of Object.keys(BRAIN.zone_groups)) {
+    const s = _brainGroupSuffix(name);
+    const g = grp(s);
+    if (name === "hunt") {
+      const hp = BRAIN.zone_groups.hunt.params;
+      g.params = {
+        lost_s: num("brainHuntLostS", hp.lost_s),
+        min_conf: num("brainHuntMinConf", hp.min_conf),
+        attention_guard: splitList("brainHuntGuard"),
+        detect: { zone: $("brainHuntDetZone").value.trim(), action: $("brainHuntDetAct").value.trim() },
+        scan: { zone: $("brainHuntScanZone").value.trim(), action: $("brainHuntScanAct").value.trim() },
+      };
+    } else if (name === "facefocus") {
+      const fp = BRAIN.zone_groups.facefocus.params;
+      g.params = {
+        actions: splitList("brainFFActions"),
+        action_s: num("brainFFActionS", fp.action_s),
+        face_lost_s: num("brainFFLostS", fp.face_lost_s),
+      };
+    }
+    payload.zone_groups[name] = g;
+  }
   fetch("/api/brain", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1576,20 +1713,33 @@ function saveBrain() {
   }).catch((e) => { $("saveMsg").textContent = "save failed: " + e; $("saveMsg").className = "err"; });
 }
 
-// Live brain state from the state frame (hunt state + lock + camera intent).
+// Live brain state from the state frame (hunt state + lock + camera intent + cam telemetry).
 // "facefocus" is shown as "check out" (the robot is stretching at that human).
 function renderBrainLive(m) {
   const el = $("brainLive");
   const hunt = m.hunt || null;
   const cam = m.camera || null;
+  const telem = m.cam_telem || null;
+  const rows = [];
+  const add = (label, value) => rows.push(`<div class="stateRow"><span>${label}</span><span>${value}</span></div>`);
   const state = hunt ? hunt.state : null;
-  const label = state === "facefocus" ? "check out" : (state || "—");
-  const lock = hunt && hunt.lock_id != null ? "#" + hunt.lock_id : "—";
-  const camTxt = cam ? cam.active + "/" + cam.mode : "—";
-  el.innerHTML =
-    `<div class="stateRow"><span>hunt</span><span>${label}</span></div>` +
-    `<div class="stateRow"><span>lock</span><span>${lock}</span></div>` +
-    `<div class="stateRow"><span>camera</span><span>${camTxt}</span></div>`;
+  add("hunt", state === "facefocus" ? "check out" : (state || "—"));
+  add("lock", hunt && hunt.lock_id != null ? "#" + hunt.lock_id : "—");
+  if (hunt && hunt.feral) add("feral", "yes");
+  add("camera", cam ? cam.active + "/" + cam.mode : "—");
+  if (telem) {
+    const st = telem.status;
+    add("cam.status", st && st.active ? st.camera + " ok" : "—");
+    const cands = telem.candidates ? telem.candidates.candidates : null;
+    add("cam.candidates", cands && cands.length
+      ? cands.map((c) => "#" + c.id + " " + Number(c.conf).toFixed(2)).join(", ") : "—");
+    const tr = telem.track;
+    add("cam.track", tr && tr.id != null ? "#" + tr.id + " (" + Math.round(tr.dx) + "," + Math.round(tr.dy) + ")" : "—");
+    const face = telem.face;
+    add("cam.face", face && face.features && face.features.detected
+      ? "#" + face.id + " " + (face.features.emotion || "") : "—");
+  }
+  el.innerHTML = rows.join("");
 }
 
 // hydra-synth 1.x always evals patch code via a GLOBAL eval (globalThis.eval), so its

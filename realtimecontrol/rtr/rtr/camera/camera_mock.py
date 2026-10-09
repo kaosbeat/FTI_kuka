@@ -38,6 +38,7 @@ class CameraMock:
                  num_candidates: int = 3,
                  fps: float = 30.0,
                  video: Optional[str] = None,
+                 close_video: Optional[str] = None,
                  width: int = 640, height: int = 480,
                  model_path: str = "yolo26n.pt",
                  tracker_cfg: str = "bytetrack.yaml",
@@ -48,6 +49,7 @@ class CameraMock:
         self.num_candidates = num_candidates
         self.fps = fps
         self.video = video
+        self.close_video = close_video
 
         # Shared bookkeeping.
         self._conn: Optional[Connection] = None
@@ -65,6 +67,7 @@ class CameraMock:
                 width=width, height=height, frame_rate=int(fps),
                 model_path=model_path, tracker_cfg=tracker_cfg,
                 wide_video=video,
+                close_video=(close_video or video),
             )
             self._intent = {"active": "wide", "mode": "idle", "lock_id": None}
             self._sent = {"status": 0, "candidates": 0, "track": 0, "face": 0}
@@ -362,6 +365,8 @@ def parse_args(argv=None):
     parser.add_argument("--fps", type=float, default=30.0, help="telemetry frame rate")
     parser.add_argument("--video", default=None,
                         help="video file to run the real YOLO+ByteTrack pipeline on (overrides the random-walk simulation)")
+    parser.add_argument("--close-video", default=None,
+                        help="video file for the close camera (defaults to --video)")
     parser.add_argument("--width", type=int, default=640, help="frame width (video mode)")
     parser.add_argument("--height", type=int, default=480, help="frame height (video mode)")
     parser.add_argument("--model", default="yolo26n.pt", help="YOLO model path (video mode)")
@@ -382,6 +387,7 @@ def main(argv=None) -> int:
         num_candidates=args.candidates,
         fps=args.fps,
         video=args.video,
+        close_video=args.close_video,
         width=args.width,
         height=args.height,
         model_path=args.model,

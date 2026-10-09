@@ -1,0 +1,4 @@
+# PAK runtime deps (bundled into RTRREMOTE.pak by scripts/build_pak.sh).
+# pygame bundles SDL2; websockets is the core bridge client.
+pygame
+websockets>=12,<14

@@ -52,6 +52,8 @@ class FrameResult:
     track: Optional[Dict[str, Any]] = None
     # Face analysis (close camera only).
     face: Optional[Dict[str, Any]] = None
+    # Detected face boxes (close camera, cls>=1); used to pick the face bbox.
+    faces: Optional[List[Dict[str, Any]]] = None
     # Raw BGR frame from the active camera (debug display).
     frame: Optional[np.ndarray] = None
 
@@ -83,7 +85,8 @@ class Camera:
                  frame_rate: int = 30,
                  model_path: str = "yolo26n.pt",
                  tracker_cfg: str = "bytetrack.yaml",
-                 video_source: Optional[str] = None):
+                 video_source: Optional[str] = None,
+                 classes: Tuple[int, ...] = (0,)):
         self.name = name
         self.camera_num = camera_num
         self.video_source = video_source
@@ -92,6 +95,7 @@ class Camera:
         self.model_path = model_path
         self.tracker_cfg = tracker_cfg
         self.frame_rate = frame_rate
+        self.classes = classes
 
         # Locked target state.
         self.lock_id: Optional[int] = None
@@ -176,7 +180,7 @@ class Camera:
             results = self._model.track(
                 frame,
                 persist=True,
-                classes=[0],  # COCO person
+                classes=list(self.classes),
                 tracker=self.tracker_cfg,
                 verbose=False,
             )[0]
@@ -188,6 +192,7 @@ class Camera:
             ids = results.boxes.id.cpu().numpy().astype(int)
             xyxy = results.boxes.xyxy.cpu().numpy()
             confs = results.boxes.conf.cpu().numpy() if results.boxes.conf is not None else [0.0] * len(ids)
+            cls_arr = results.boxes.cls.cpu().numpy() if results.boxes.cls is not None else [0] * len(ids)
             for i, tid in enumerate(ids):
                 x1, y1, x2, y2 = xyxy[i]
                 candidates.append({
@@ -197,6 +202,7 @@ class Camera:
                     "x2": float(x2),
                     "y2": float(y2),
                     "conf": float(confs[i]) if i < len(confs) else 0.0,
+                    "cls": int(cls_arr[i]) if i < len(cls_arr) else 0,
                 })
         return candidates
 
@@ -257,16 +263,21 @@ class Camera:
         if frame is None:
             return FrameResult(camera=self.name, active=False, ok=False)
 
-        candidates = self.detect(frame)
-        track = self.track_offset(candidates)
+        all_cands = self.detect(frame)
+        # Split by class: persons (cls==0) drive tracking; faces (cls>=1) are
+        # analysis-only and never treated as a person.
+        persons = [c for c in all_cands if c["cls"] == 0]
+        faces = [c for c in all_cands if c["cls"] >= 1]
+        track = self.track_offset(persons)
 
         return FrameResult(
             camera=self.name,
             active=True,
             fps=self._fps,
             ok=True,
-            candidates=candidates,
+            candidates=persons,
             track=track,
+            faces=faces,
             frame=frame,
         )
 
@@ -282,30 +293,53 @@ class Camera:
             self._cam = None
 
 
+def _iou(x1, y1, x2, y2, a1, b1, a2, b2) -> float:
+    """Intersection-over-union of two axis-aligned bboxes; 0.0 on bad/missing coords."""
+    try:
+        x1, y1, x2, y2 = float(x1), float(y1), float(x2), float(y2)
+        a1, b1, a2, b2 = float(a1), float(b1), float(a2), float(b2)
+    except (TypeError, ValueError):
+        return 0.0
+    ix1 = max(x1, a1)
+    iy1 = max(y1, b1)
+    ix2 = min(x2, a2)
+    iy2 = min(y2, b2)
+    iw = max(0.0, ix2 - ix1)
+    ih = max(0.0, iy2 - iy1)
+    inter = iw * ih
+    area_a = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    area_b = max(0.0, a2 - a1) * max(0.0, b2 - b1)
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
 class FaceDetector:
-    """Face analysis for the close camera (stub; deepface integration is a follow-up)."""
+    """Pick the real face box (close camera) that best overlaps the locked person.
 
-    def __init__(self, model_path: str = "yolov12n-face.pt"):
-        self.model_path = model_path
-        self._model = None
+    Stateless: the close ``Camera`` runs the face model, so the face boxes arrive
+    via ``FrameResult.faces`` (``cls >= 1``). This only selects the one that best
+    overlaps (IoU) the locked person's bbox — no separate model is loaded here.
+    """
 
-    def _ensure_model(self):
-        if self._model is None:
-            try:
-                from ultralytics import YOLO
-                self._model = YOLO(resolve_model(self.model_path))
-            except Exception:
-                self._model = None
-
-    def analyze(self, frame: np.ndarray, person_bbox: Optional[Tuple[float, float, float, float]] = None) -> Optional[Dict[str, Any]]:
-        """Analyze a face in the frame; return a face dict or None."""
-        # Stub: return a simple face dict if a person is tracked.
-        # Real face analysis (landmarks, identity, emotion) is a follow-up.
-        if person_bbox is None:
+    def analyze(self, face_boxes: Optional[List[Dict[str, Any]]],
+                person_bbox: Optional[Tuple[float, float, float, float]] = None
+                ) -> Optional[Dict[str, Any]]:
+        """Return the face box that best overlaps the person bbox, else None."""
+        if not face_boxes or person_bbox is None:
             return None
-        x1, y1, x2, y2 = person_bbox
+        px1, py1, px2, py2 = person_bbox
+        best = None
+        best_iou = 0.0
+        for f in face_boxes:
+            iou = _iou(px1, py1, px2, py2, f.get("x1"), f.get("y1"), f.get("x2"), f.get("y2"))
+            if iou > best_iou:
+                best_iou = iou
+                best = f
+        if best is None:
+            return None
         return {
-            "bbox": [float(x1), float(y1), float(x2), float(y2)],
+            "bbox": [float(best["x1"]), float(best["y1"]),
+                     float(best["x2"]), float(best["y2"])],
             "features": {},
         }
 
@@ -325,18 +359,21 @@ class Pipeline:
                  height: int = 480,
                  frame_rate: int = 30,
                  model_path: str = "yolo26n.pt",
+                 face_model_path: str = "yolo26n-face.pt",
                  tracker_cfg: str = "bytetrack.yaml",
                  wide_video: Optional[str] = None,
                  close_video: Optional[str] = None):
+        # Wide camera: person detection/tracking (person class only).
         self.wide = Camera(CAMERA_WIDE, camera_num=wide_cam_num,
                             width=width, height=height, frame_rate=frame_rate,
                             model_path=model_path, tracker_cfg=tracker_cfg,
-                            video_source=wide_video)
+                            video_source=wide_video, classes=(0,))
+        # Close camera: the face model (person for tracking + face for analysis).
         self.close = Camera(CAMERA_CLOSE, camera_num=close_cam_num,
                              width=width, height=height, frame_rate=frame_rate,
-                             model_path=model_path, tracker_cfg=tracker_cfg,
-                             video_source=close_video)
-        self.face = FaceDetector(model_path=model_path)
+                             model_path=face_model_path, tracker_cfg=tracker_cfg,
+                             video_source=close_video, classes=(0, 1))
+        self.face = FaceDetector()
         # Current intent (set by the brain via cam_control).
         self.active: str = CAMERA_WIDE
         self.mode: str = MODE_IDLE
@@ -386,7 +423,7 @@ class Pipeline:
                 result.track.get("cy", 0) - result.track.get("h", 0) / 2,
                 result.track.get("cx", 0) + result.track.get("w", 0) / 2,
                 result.track.get("cy", 0) + result.track.get("h", 0) / 2)
-        return self.face.analyze(None, bbox)
+        return self.face.analyze(result.faces, bbox)
 
     def to_telemetry(self, result: FrameResult) -> Dict[str, Dict[str, Any]]:
         """Convert a frame result to the CAM_* telemetry payloads."""
