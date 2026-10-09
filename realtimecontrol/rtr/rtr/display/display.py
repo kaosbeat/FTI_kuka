@@ -128,6 +128,14 @@ class Display:
             frame["hunt"] = dict(self._machine.hunt_state)
         if snap.servo:
             frame["servo"] = dict(snap.servo)
+        if snap.autonomy_enabled is not None:
+            frame["autonomy_enabled"] = snap.autonomy_enabled
+        if snap.autonomy_enabled_groups is not None:
+            frame["autonomy_enabled_groups"] = snap.autonomy_enabled_groups
+        if snap.performance_mode is not None:
+            frame["performance_mode"] = snap.performance_mode
+        if snap.autonomy_dwell_remaining is not None:
+            frame["autonomy_dwell_remaining"] = snap.autonomy_dwell_remaining
         return frame
 
 

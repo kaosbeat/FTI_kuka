@@ -99,6 +99,12 @@
   .fedgeHit { fill: none; stroke: transparent; stroke-width: 18; cursor: pointer; }
   .fedgeLabel { fill: var(--dim); font-size: 10px; pointer-events: none; }
   .fedgeLabel.fedgeLabelCustom { fill: var(--accent); }
+  .fgroup { fill: rgba(79,192,141,0.06); stroke: var(--dim); stroke-width: 1; stroke-dasharray: 6 3; pointer-events: none; }
+  .fgroupEnabled { fill: rgba(79,192,141,0.1); stroke: var(--accent); stroke-width: 2; stroke-dasharray: none; }
+  .fgroupDisabled { fill: rgba(124,132,148,0.04); stroke: var(--dim); stroke-width: 1; opacity: 0.35; }
+  .fgroupLabel { fill: var(--dim); font-size: 11px; font-weight: bold; pointer-events: none; }
+  .fgroupLabelEnabled { fill: var(--accent); }
+  .fgroupLabelDisabled { fill: var(--dim); opacity: 0.35; }
   /* Action editor modal (Step 3). */
   #actionEditor { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; z-index: 20; }
   #actionEditor.open { display: block; }
@@ -1553,6 +1559,7 @@ function buildBrainForm() {
     row.appendChild(lab);
     row.appendChild(input);
     el.appendChild(row);
+    return row;
   };
   const mkNum = (id, value, step, min) => {
     const inp = document.createElement("input");
@@ -1717,12 +1724,24 @@ function saveBrain() {
 // "facefocus" is shown as "check out" (the robot is stretching at that human).
 function renderBrainLive(m) {
   const el = $("brainLive");
+  const a = BRAIN ? BRAIN.autonomy : { enabled: false };
+  // Prefer the snapshot's live autonomy state; fall back to the in-memory config.
+  const autEnabled = (typeof m.autonomy_enabled !== "undefined") ? m.autonomy_enabled : a.enabled;
+  const enabledGroups = (m.autonomy_enabled_groups && m.autonomy_enabled_groups.length)
+    ? m.autonomy_enabled_groups.join(", ")
+    : (BRAIN ? Object.keys(BRAIN.zone_groups).filter((n) => BRAIN.zone_groups[n].enabled).join(", ") || "none" : "—");
+  const perfMode = typeof m.performance_mode !== "undefined" ? m.performance_mode : false;
+  const dwellRem = (typeof m.autonomy_dwell_remaining !== "undefined" && m.autonomy_dwell_remaining != null)
+    ? m.autonomy_dwell_remaining.toFixed(1) : "—";
   const hunt = m.hunt || null;
   const cam = m.camera || null;
   const telem = m.cam_telem || null;
   const rows = [];
   const add = (label, value) => rows.push(`<div class="stateRow"><span>${label}</span><span>${value}</span></div>`);
   const state = hunt ? hunt.state : null;
+  add("autonomy", autEnabled ? "on" : ("off" + (perfMode ? " (perf)" : "")));
+  add("groups", enabledGroups);
+  add("dwell", dwellRem === "—" ? "—" : dwellRem + "s");
   add("hunt", state === "facefocus" ? "check out" : (state || "—"));
   add("lock", hunt && hunt.lock_id != null ? "#" + hunt.lock_id : "—");
   if (hunt && hunt.feral) add("feral", "yes");
@@ -3123,6 +3142,45 @@ function flowRenderEdges() {
   actionEdgeList().forEach((e) => flowAddEdge(layer, e));
 }
 
+// Draw semi-transparent rounded rectangles around each zone group's zones.
+// Groups that are enabled get a brighter/thicker outline; disabled groups are dimmed.
+// Because groups can overlap, all outlines are drawn (the later ones overlap the
+// earlier ones). The label sits at the top-left inside the rectangle.
+function flowRenderGroups() {
+  const layer = $("flowGroupLayer");
+  if (!layer || !BRAIN || !BRAIN.zone_groups) return;
+  layer.innerHTML = "";
+  const groups = BRAIN.zone_groups;
+  for (const name of Object.keys(groups)) {
+    const g = groups[name];
+    if (!g.zones || !g.zones.length) continue;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    let found = false;
+    for (const zn of g.zones) {
+      const p = FLOW.pos[zn];
+      if (!p) continue;
+      found = true;
+      const h = nodeH(zn);
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x + NODE_W);
+      maxY = Math.max(maxY, p.y + h);
+    }
+    if (!found) continue;
+    const PAD = 16;
+    const x = minX - PAD, y = minY - PAD;
+    const w = (maxX - minX) + 2 * PAD;
+    const h = (maxY - minY) + 2 * PAD;
+    const enabled = !!g.enabled;
+    const cls = "fgroup" + (enabled ? " fgroupEnabled" : " fgroupDisabled");
+    layer.appendChild(svgEl("rect", { x: x, y: y, width: w, height: h, rx: 12, class: cls }));
+    const lblCls = "fgroupLabel" + (enabled ? " fgroupLabelEnabled" : " fgroupLabelDisabled");
+    const label = svgEl("text", { x: x + 8, y: y + 14, class: lblCls });
+    label.textContent = name;
+    layer.appendChild(label);
+  }
+}
+
 function flowAddNode(layer, name) {
   const z = TABLE.zones[name];
   const p = FLOW.pos[name] || { x: 40, y: 40 };
@@ -3173,14 +3231,17 @@ function flowRender() {
   if (!svg) return;
   svg.innerHTML = "";
   svg.appendChild(flowBuildDefs());
+  const groupLayer = svgEl("g", { id: "flowGroupLayer" });
   const edgeLayer = svgEl("g", { id: "flowEdgeLayer" });
   const nodeLayer = svgEl("g", { id: "flowNodeLayer" });
+  svg.appendChild(groupLayer);
   svg.appendChild(edgeLayer);
   svg.appendChild(nodeLayer);
   // Temporary drag line (no arrow — connections are bidirectional).
   svg.appendChild(svgEl("path", { id: "flowDragArrow", fill: "none", stroke: "var(--accent)",
-                                   "stroke-width": 2, "stroke-dasharray": "4 3", style: "display:none" }));
+                                    "stroke-width": 2, "stroke-dasharray": "4 3", style: "display:none" }));
   FLOW.nodeEls = {};
+  flowRenderGroups();
   flowRenderEdges();
   Object.keys(TABLE.zones).forEach((n) => flowAddNode(nodeLayer, n));
   flowApplyView();
@@ -3389,6 +3450,38 @@ function buildFlowDetail() {
     return;
   }
   if (sel.type === "node") {
+    // Zone group memberships: checkboxes to add/remove this zone from each group.
+    if (BRAIN && BRAIN.zone_groups) {
+      const groupEl = document.createElement("div");
+      groupEl.style.cssText = "margin-bottom:8px";
+      groupEl.appendChild(h3("zone groups"));
+      for (const gname of Object.keys(BRAIN.zone_groups)) {
+        const g = BRAIN.zone_groups[gname];
+        const inGroup = g.zones.includes(sel.zone);
+        const row = document.createElement("div");
+        row.className = "row";
+        row.style.alignItems = "center";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = inGroup;
+        cb.onchange = () => {
+          if (cb.checked) {
+            if (!g.zones.includes(sel.zone)) g.zones.push(sel.zone);
+          } else {
+            g.zones = g.zones.filter((z) => z !== sel.zone);
+          }
+          flowRender();
+          buildFlowDetail();
+        };
+        const lbl = document.createElement("label");
+        lbl.className = "inline";
+        lbl.appendChild(cb);
+        lbl.appendChild(document.createTextNode(" " + gname + (g.enabled ? "" : " (off)")));
+        row.appendChild(lbl);
+        groupEl.appendChild(row);
+      }
+      el.appendChild(groupEl);
+    }
     buildZoneForm(el, title, sel.zone, () => flowRender(), false);
     return;
   }
@@ -3452,11 +3545,15 @@ function buildFlowDetail() {
 }
 
 // Enter the flow view: (re)layout when the zone set changed, then render.
+// Loads the brain config if not yet loaded (for zone group outlines).
 function flowEnter() {
   const key = Object.keys(TABLE.zones).sort().join(",");
   if (FLOW.layoutKey !== key) { flowAutoLayout(); flowFitView(); }
   flowRender();
   buildFlowDetail();
+  if (!BRAIN) {
+    loadBrain().then(() => { flowRender(); buildFlowDetail(); });
+  }
 }
 
 // ---------------------------------------------------------------------------
