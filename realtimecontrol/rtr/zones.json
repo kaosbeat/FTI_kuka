@@ -1,457 +1,208 @@
 {
   "zones": {
-    "init": {
+    "home": {
       "enabled": true,
+      "mode_group": "museum-closed",
       "safezone": [
-        [
-          -94,
-          122
-        ],
-        [
-          -105,
-          -65
-        ],
-        [
-          89,
-          115
-        ],
-        [
-          -15,
-          15
-        ],
-        [
-          -15,
-          45
-        ],
-        [
-          -357,
-          357
-        ]
+        [-94, 122],
+        [-105, -65],
+        [89, 115],
+        [-15, 15],
+        [-15, 45],
+        [-357, 357]
       ],
       "speed": 20,
+      "exits": [
+        ["sleep", "breathe"],
+        ["cuddle", "breathe"],
+        ["stretch", "look"],
+        ["hunt", "track"]
+      ],
       "actions": {
-        "wake": {
+        "hold": {
           "enabled": true,
-          "base_pose": [
-            -60,
-            -90,
-            90,
-            0,
-            15,
-            0
-          ],
+          "base_pose": [-60, -90, 90, 0, 15, 0],
           "variable_axes": [],
           "behavior": "hold",
           "speed": 20,
           "loop": true,
-          "next": {
-            "zone": "init_rest_bridge",
-            "action": "bridge"
-          }
+          "next": {}
+        },
+        "wake": {
+          "enabled": true,
+          "base_pose": [-60, -90, 90, 0, 15, 0],
+          "variable_axes": [0, 1, 2, 4],
+          "behavior": "wander",
+          "speed": 20,
+          "loop": true,
+          "next": {}
         }
       }
     },
-    "rest": {
+    "sleep": {
       "enabled": true,
+      "mode_group": "museum-closed",
       "safezone": [
-        [
-          -5,
-          5
-        ],
-        [
-          -134,
-          -130
-        ],
-        [
-          155,
-          157
-        ],
-        [
-          -3,
-          3
-        ],
-        [
-          -10,
-          10
-        ],
-        [
-          -357,
-          357
-        ]
+        [-5, 5],
+        [-134, -130],
+        [155, 157],
+        [-3, 3],
+        [-10, 10],
+        [-357, 357]
       ],
       "speed": 20,
+      "exits": [
+        ["cuddle", "breathe"],
+        ["purr", "purr"],
+        ["home", "hold"],
+        ["stretch", "look"]
+      ],
       "actions": {
         "breathe": {
           "enabled": true,
           "pos": [
-            [
-              -5,
-              -130,
-              155,
-              -2,
-              0,
-              0
-            ],
-            [
-              -3,
-              -134,
-              157,
-              -2,
-              0,
-              0
-            ],
-            [
-              5,
-              -132,
-              155,
-              -2,
-              0,
-              0
-            ]
+            [-3, -133, 156, -2, 0, 0],
+            [-5, -130, 155, -2, 0, 0],
+            [0, -134, 157, -2, 0, 0]
           ],
-          "speed": [
-            100,
-            50,
-            10
-          ],
+          "speed": [10, 50, 10],
           "loop": true,
           "next": {}
         },
-        "look": {
+        "snore": {
           "enabled": true,
           "pos": [
-            [
-              -5,
-              -130,
-              155,
-              -2,
-              10,
-              0
-            ],
-            [
-              -3,
-              -134,
-              157,
-              -3,
-              -10,
-              0
-            ],
-            [
-              5,
-              -132,
-              155,
-              3,
-              -10,
-              0
-            ]
+            [-3, -133, 156, -2, 0, 0],
+            [-3, -133, 156, -2, 5, 0]
           ],
-          "speed": [
-            100,
-            100,
-            100
-          ],
+          "speed": [5, 5],
           "loop": true,
-          "next": {
-            "zone": "wakeup",
-            "action": "breathe"
-          }
+          "next": {}
         },
         "yawn": {
           "enabled": true,
-          "base_pose": [
-            -3,
-            -133,
-            156,
-            -2,
-            0,
-            0
-          ],
-          "variable_axes": [],
-          "behavior": "hold",
+          "base_pose": [-3, -133, 156, -2, 0, 0],
+          "variable_axes": [4],
+          "behavior": "scan",
           "speed": 10,
-          "loop": false,
-          "next": {
-            "zone": "rest",
-            "action": "breathe"
-          }
-        },
-        "breathe_copy": {
-          "enabled": true,
-          "pos": [
-            [
-              -5,
-              -130,
-              155,
-              -2,
-              0,
-              0
-            ],
-            [
-              -3,
-              -134,
-              157,
-              -2,
-              0,
-              0
-            ],
-            [
-              5,
-              -132,
-              155,
-              -2,
-              0,
-              0
-            ]
-          ],
-          "speed": [
-            100,
-            50,
-            10
-          ],
           "loop": true,
           "next": {}
         }
       }
     },
-    "wakeup": {
+    "cuddle": {
       "enabled": true,
+      "mode_group": "museum-closed",
       "safezone": [
-        [
-          -94,
-          122
-        ],
-        [
-          -134,
-          -123
-        ],
-        [
-          136,
-          157
-        ],
-        [
-          -23,
-          23
-        ],
-        [
-          -25,
-          25
-        ],
-        [
-          -357,
-          357
-        ]
+        [-5, 5],
+        [-134, -130],
+        [155, 157],
+        [-3, 3],
+        [-10, 10],
+        [-357, 357]
       ],
-      "speed": 40,
+      "speed": 20,
+      "exits": [
+        ["purr", "purr"],
+        ["sleep", "breathe"],
+        ["home", "wake"]
+      ],
       "actions": {
         "breathe": {
           "enabled": true,
           "pos": [
-            [
-              -85,
-              -130,
-              137,
-              -2,
-              -25,
-              0
-            ],
-            [
-              -73,
-              -134,
-              150,
-              -2,
-              -10,
-              0
-            ],
-            [
-              35,
-              -132,
-              140,
-              -2,
-              10,
-              0
-            ],
-            [
-              110,
-              123,
-              150,
-              -2,
-              15,
-              0
-            ]
+            [-3, -133, 156, -2, 0, 0],
+            [-2, -132, 156, -2, 0, 0],
+            [-4, -134, 156, -2, 0, 0]
           ],
-          "speed": [
-            10,
-            10,
-            10,
-            10
-          ],
+          "speed": [10, 50, 10],
           "loop": true,
-          "next": {
-            "zone": "stretch",
-            "action": "look"
-          }
+          "next": {}
         },
-        "look": {
+        "purr": {
           "enabled": true,
-          "speed": 50,
+          "base_pose": [-3, -133, 156, -2, 0, 0],
+          "variable_axes": [0, 2],
+          "behavior": "purr",
+          "speed": 10,
           "loop": true,
-          "next": {},
-          "base_pose": [
-            -85,
-            -130,
-            137,
-            -2,
-            0,
-            0
-          ],
-          "variable_axes": [
-            0,
-            3
-          ],
-          "behavior": "look"
-        },
-        "scan": {
+          "next": {}
+        }
+      }
+    },
+    "purr": {
+      "enabled": true,
+      "mode_group": "museum-closed",
+      "safezone": [
+        [-5, 5],
+        [-134, -130],
+        [155, 157],
+        [-3, 3],
+        [-10, 10],
+        [-357, 357]
+      ],
+      "speed": 20,
+      "exits": [
+        ["sleep", "breathe"],
+        ["home", "hold"],
+        ["cuddle", "breathe"]
+      ],
+      "actions": {
+        "hold": {
           "enabled": true,
+          "base_pose": [-3, -133, 156, -2, 0, 0],
+          "variable_axes": [],
+          "behavior": "hold",
           "speed": 20,
           "loop": true,
-          "next": {},
-          "base_pose": [
-            -85,
-            -130,
-            137,
-            -2,
-            0,
-            0
-          ],
-          "variable_axes": [
-            0
-          ],
-          "behavior": "scan"
+          "next": {}
         },
-        "roar": {
+        "purr": {
           "enabled": true,
-          "pos": [
-            [
-              0,
-              0,
-              0,
-              0,
-              0,
-              0
-            ]
-          ],
-          "speed": [
-            10
-          ],
-          "loop": false
-        },
-        "breathe_copy": {
-          "enabled": true,
-          "speed": 100,
+          "base_pose": [-3, -133, 156, -2, 0, 0],
+          "variable_axes": [0, 2],
+          "behavior": "purr",
+          "speed": 10,
           "loop": true,
-          "next": {
-            "zone": "stretch",
-            "action": "look"
-          },
-          "base_pose": [
-            -85,
-            -130,
-            137,
-            -2,
-            0,
-            0
-          ],
-          "variable_axes": [
-            0,
-            1,
-            2
-          ],
-          "behavior": "random"
+          "next": {}
         }
       }
     },
     "stretch": {
       "enabled": true,
+      "mode_group": "event-sit-back",
       "safezone": [
-        [
-          -94,
-          122
-        ],
-        [
-          -98,
-          -96
-        ],
-        [
-          13,
-          19
-        ],
-        [
-          -2,
-          2
-        ],
-        [
-          85,
-          95
-        ],
-        [
-          -357,
-          357
-        ]
+        [-94, 122],
+        [-98, -96],
+        [13, 19],
+        [-2, 2],
+        [-5, 5],
+        [-357, 357]
       ],
       "speed": 100,
+      "exits": [
+        ["hunt", "track"],
+        ["closeup", "focus"],
+        ["perform", "trick"],
+        ["home", "hold"],
+        ["roar", "roar"]
+      ],
       "actions": {
         "look": {
           "enabled": true,
           "pos": [
-            [
-              85,
-              -97,
-              17,
-              -2,
-              0.3,
-              0
-            ],
-            [
-              73,
-              -97,
-              15,
-              -2,
-              0,
-              0
-            ],
-            [
-              35,
-              -97,
-              14,
-              -2,
-              0,
-              0
-            ]
+            [85, -97, 17, -2, 0.3, 0],
+            [80, -97, 15, -2, 3, 0],
+            [90, -97, 19, -2, -3, 0]
           ],
-          "speed": [
-            100,
-            100,
-            100
-          ],
-          "loop": false,
-          "next": {
-            "zone": "wander",
-            "action": "breathe"
-          }
+          "speed": [100, 50, 100],
+          "loop": true,
+          "next": {}
         },
         "wink": {
           "enabled": true,
-          "base_pose": [
-            85,
-            -97,
-            17,
-            -2,
-            0.3,
-            0
-          ],
-          "variable_axes": [
-            0
-          ],
+          "base_pose": [85, -97, 17, -2, 0.3, 0],
+          "variable_axes": [4, 5],
           "behavior": "face",
           "speed": 100,
           "loop": true,
@@ -459,17 +210,8 @@
         },
         "inspect": {
           "enabled": true,
-          "base_pose": [
-            85,
-            -97,
-            17,
-            -2,
-            0.3,
-            0
-          ],
-          "variable_axes": [
-            0
-          ],
+          "base_pose": [85, -97, 17, -2, 0.3, 0],
+          "variable_axes": [4, 5],
           "behavior": "face",
           "speed": 100,
           "loop": true,
@@ -477,17 +219,8 @@
         },
         "call": {
           "enabled": true,
-          "base_pose": [
-            85,
-            -97,
-            17,
-            -2,
-            0.3,
-            0
-          ],
-          "variable_axes": [
-            0
-          ],
+          "base_pose": [85, -97, 17, -2, 0.3, 0],
+          "variable_axes": [4, 5],
           "behavior": "face",
           "speed": 100,
           "loop": true,
@@ -495,635 +228,296 @@
         }
       }
     },
-    "wander": {
+    "hunt": {
       "enabled": true,
+      "mode_group": "event-sit-back",
       "safezone": [
-        [
-          -94,
-          122
-        ],
-        [
-          -70,
-          -60
-        ],
-        [
-          29,
-          100
-        ],
-        [
-          -4,
-          4
-        ],
-        [
-          -118,
-          118
-        ],
-        [
-          -357,
-          357
-        ]
-      ],
-      "speed": 30,
-      "actions": {
-        "breathe": {
-          "enabled": true,
-          "pos": [
-            [
-              85,
-              -65,
-              37,
-              -2,
-              0,
-              0
-            ],
-            [
-              -85,
-              -66,
-              59,
-              -2,
-              0,
-              0
-            ],
-            [
-              35,
-              -68,
-              40,
-              -2,
-              0,
-              0
-            ]
-          ],
-          "speed": [
-            10,
-            10,
-            10
-          ],
-          "loop": true,
-          "next": {
-            "zone": "wildwander",
-            "action": "breathe"
-          }
-        },
-        "look": {
-          "enabled": true,
-          "pos": [
-            [
-              -85,
-              -66,
-              70,
-              -2,
-              0,
-              0
-            ],
-            [
-              -73,
-              -69,
-              50,
-              -2,
-              0,
-              0
-            ],
-            [
-              35,
-              -61,
-              44,
-              -2,
-              0,
-              0
-            ]
-          ],
-          "speed": [
-            100,
-            100,
-            100
-          ],
-          "loop": true
-        }
-      }
-    },
-    "wildwander": {
-      "enabled": true,
-      "safezone": [
-        [
-          -94,
-          122
-        ],
-        [
-          -124,
-          -60
-        ],
-        [
-          -19,
-          157
-        ],
-        [
-          -1,
-          1
-        ],
-        [
-          -118,
-          118
-        ],
-        [
-          -357,
-          357
-        ]
-      ],
-      "speed": 100,
-      "actions": {
-        "breathe": {
-          "enabled": true,
-          "pos": [
-            [
-              -85,
-              -120,
-              137,
-              0,
-              0,
-              0
-            ],
-            [
-              -73,
-              -114,
-              150,
-              0,
-              0,
-              0
-            ],
-            [
-              35,
-              -112,
-              140,
-              -2,
-              0,
-              0
-            ]
-          ],
-          "speed": [
-            10,
-            10,
-            10
-          ],
-          "loop": true,
-          "next": {
-            "zone": "wander",
-            "action": "breathe"
-          }
-        },
-        "look": {
-          "enabled": true,
-          "pos": [
-            [
-              -85,
-              -120,
-              137,
-              0,
-              0,
-              0
-            ],
-            [
-              -73,
-              -114,
-              150,
-              0,
-              0,
-              0
-            ],
-            [
-              35,
-              -112,
-              140,
-              -2,
-              0,
-              0
-            ]
-          ],
-          "speed": [
-            100,
-            100,
-            100
-          ],
-          "loop": true
-        }
-      }
-    },
-    "watch": {
-      "enabled": true,
-      "safezone": [
-        [
-          -20,
-          20
-        ],
-        [
-          -134,
-          -130
-        ],
-        [
-          155,
-          157
-        ],
-        [
-          -3,
-          3
-        ],
-        [
-          0,
-          60
-        ],
-        [
-          -357,
-          357
-        ]
+        [-20, 20],
+        [-134, -130],
+        [155, 157],
+        [-3, 3],
+        [0, 60],
+        [-357, 357]
       ],
       "speed": 20,
+      "exits": [
+        ["closeup", "focus"],
+        ["stretch", "look"],
+        ["perform", "trick"],
+        ["growl", "growl"]
+      ],
       "actions": {
         "track": {
           "enabled": true,
-          "base_pose": [
-            -3,
-            -133,
-            156,
-            -2,
-            45,
-            0
-          ],
-          "variable_axes": [
-            0
-          ],
+          "base_pose": [-3, -133, 156, -2, 45, 0],
+          "variable_axes": [3, 4],
           "behavior": "track",
           "speed": 20,
           "loop": true,
-          "next": {
-            "zone": "perform",
-            "action": "trick"
-          }
+          "next": {}
         },
         "focus": {
           "enabled": true,
-          "base_pose": [
-            -3,
-            -133,
-            156,
-            -2,
-            45,
-            0
-          ],
-          "variable_axes": [
-            4
-          ],
+          "base_pose": [-3, -133, 156, -2, 45, 0],
+          "variable_axes": [4],
           "behavior": "focus",
           "speed": 20,
-          "loop": true
-        }
-      }
-    },
-    "perform": {
-      "enabled": true,
-      "safezone": [
-        [
-          -30,
-          30
-        ],
-        [
-          -98,
-          -50
-        ],
-        [
-          13,
-          19
-        ],
-        [
-          -2,
-          2
-        ],
-        [
-          -30,
-          60
-        ],
-        [
-          -357,
-          357
-        ]
-      ],
-      "speed": 40,
-      "actions": {
-        "trick": {
-          "enabled": true,
-          "pos": [
-            [
-              -3,
-              -97,
-              16,
-              -2,
-              20,
-              0
-            ],
-            [
-              -3,
-              -97,
-              16,
-              -2,
-              60,
-              0
-            ],
-            [
-              -3,
-              -97,
-              16,
-              -2,
-              20,
-              0
-            ]
-          ],
-          "speed": [
-            40,
-            40,
-            40
-          ],
           "loop": true,
-          "next": {
-            "zone": "watch",
-            "action": "track"
-          }
+          "next": {}
         },
-        "bow": {
+        "scan": {
           "enabled": true,
-          "pos": [
-            [
-              -3,
-              -97,
-              16,
-              -2,
-              0,
-              0
-            ],
-            [
-              -3,
-              -50,
-              14,
-              2,
-              -20,
-              0
-            ],
-            [
-              -3,
-              -97,
-              16,
-              -2,
-              0,
-              0
-            ]
-          ],
-          "speed": [
-            40,
-            40,
-            40
-          ],
+          "base_pose": [-3, -133, 156, -2, 45, 0],
+          "variable_axes": [4],
+          "behavior": "scan",
+          "speed": 20,
           "loop": true,
           "next": {}
         }
       }
     },
-    "fume": {
+    "closeup": {
       "enabled": true,
+      "mode_group": "event-sit-back",
       "safezone": [
-        [
-          -94,
-          122
-        ],
-        [
-          -134,
-          -123
-        ],
-        [
-          136,
-          157
-        ],
-        [
-          -23,
-          23
-        ],
-        [
-          0,
-          118
-        ],
-        [
-          -357,
-          357
-        ]
+        [-20, 20],
+        [-134, -130],
+        [155, 157],
+        [-3, 3],
+        [0, 60],
+        [-357, 357]
+      ],
+      "speed": 20,
+      "exits": [
+        ["hunt", "track"],
+        ["stretch", "call"],
+        ["perform", "trick"]
+      ],
+      "actions": {
+        "focus": {
+          "enabled": true,
+          "base_pose": [-3, -133, 156, -2, 45, 0],
+          "variable_axes": [4],
+          "behavior": "focus",
+          "speed": 20,
+          "loop": true,
+          "next": {}
+        },
+        "face": {
+          "enabled": true,
+          "base_pose": [-3, -133, 156, -2, 45, 0],
+          "variable_axes": [4, 5],
+          "behavior": "face",
+          "speed": 20,
+          "loop": true,
+          "next": {}
+        }
+      }
+    },
+    "perform": {
+      "enabled": true,
+      "mode_group": "event-sit-back",
+      "safezone": [
+        [-30, 30],
+        [-98, -50],
+        [13, 19],
+        [-2, 2],
+        [-30, 60],
+        [-357, 357]
       ],
       "speed": 40,
+      "exits": [
+        ["hunt", "track"],
+        ["stretch", "look"],
+        ["roar", "roar"]
+      ],
+      "actions": {
+        "trick": {
+          "enabled": true,
+          "pos": [
+            [-3, -97, 16, -2, 20, 0],
+            [0, -95, 15, -2, 30, 0],
+            [-5, -90, 17, -2, 10, 0]
+          ],
+          "speed": [40, 40, 40],
+          "loop": true,
+          "next": {}
+        },
+        "bow": {
+          "enabled": true,
+          "pos": [
+            [-3, -97, 16, -2, 20, 0],
+            [0, -95, 15, -2, 40, 0],
+            [-3, -90, 16, -2, 50, 0]
+          ],
+          "speed": [40, 40, 40],
+          "loop": true,
+          "next": {}
+        }
+      }
+    },
+    "roar": {
+      "enabled": true,
+      "mode_group": "stage-takeover",
+      "safezone": [
+        [-94, 122],
+        [-134, -123],
+        [136, 157],
+        [-23, 23],
+        [0, 118],
+        [-357, 357]
+      ],
+      "speed": 40,
+      "exits": [
+        ["growl", "growl"],
+        ["claw", "claw"],
+        ["leap", "leap"],
+        ["perform", "trick"]
+      ],
       "actions": {
         "roar": {
           "enabled": true,
           "pos": [
-            [
-              -3,
-              -134,
-              156,
-              -2,
-              90,
-              0
-            ],
-            [
-              -3,
-              -134,
-              156,
-              -2,
-              100,
-              0
-            ],
-            [
-              -3,
-              -134,
-              156,
-              -2,
-              90,
-              0
-            ]
+            [-3, -134, 156, -2, 90, 0],
+            [0, -130, 155, -2, 95, 0],
+            [-5, -125, 150, -2, 100, 0]
           ],
-          "speed": [
-            40,
-            40,
-            40
-          ],
+          "speed": [40, 40, 40],
           "loop": true,
-          "next": {
-            "zone": "watch",
-            "action": "track"
-          }
+          "next": {}
         },
         "snarl": {
           "enabled": true,
           "pos": [
-            [
-              -3,
-              -134,
-              156,
-              -2,
-              90,
-              0
-            ],
-            [
-              -3,
-              -134,
-              156,
-              -2,
-              95,
-              0
-            ]
+            [-3, -134, 156, -2, 90, 0],
+            [0, -130, 155, -2, 80, 0]
           ],
-          "speed": [
-            40,
-            40
-          ],
-          "loop": true
+          "speed": [40, 40],
+          "loop": true,
+          "next": {}
         }
       }
     },
-    "init_rest_bridge": {
+    "growl": {
       "enabled": true,
+      "mode_group": "stage-takeover",
       "safezone": [
-        [
-          -94,
-          122
-        ],
-        [
-          -134,
-          -65
-        ],
-        [
-          89,
-          157
-        ],
-        [
-          -15,
-          15
-        ],
-        [
-          -15,
-          45
-        ],
-        [
-          -357,
-          357
-        ]
+        [-94, 122],
+        [-134, -123],
+        [136, 157],
+        [-23, 23],
+        [0, 118],
+        [-357, 357]
       ],
-      "speed": 20,
+      "speed": 40,
+      "exits": [
+        ["roar", "roar"],
+        ["claw", "claw"],
+        ["leap", "leap"]
+      ],
       "actions": {
-        "bridge": {
+        "growl": {
           "enabled": true,
-          "loop": false,
+          "base_pose": [-3, -134, 156, -2, 90, 0],
+          "variable_axes": [4],
+          "behavior": "scan",
+          "speed": 40,
+          "loop": true,
+          "next": {}
+        },
+        "snarl": {
+          "enabled": true,
           "pos": [
-            [
-              -60,
-              -90,
-              90,
-              0,
-              15,
-              0
-            ],
-            [
-              -5,
-              -130,
-              155,
-              -2,
-              0,
-              0
-            ]
+            [-3, -134, 156, -2, 90, 0],
+            [0, -130, 155, -2, 85, 0]
           ],
-          "speed": [
-            20,
-            20
+          "speed": [40, 40],
+          "loop": true,
+          "next": {}
+        }
+      }
+    },
+    "claw": {
+      "enabled": true,
+      "mode_group": "stage-takeover",
+      "safezone": [
+        [-94, 122],
+        [-98, -96],
+        [13, 19],
+        [-2, 2],
+        [-5, 5],
+        [-357, 357]
+      ],
+      "speed": 40,
+      "exits": [
+        ["growl", "snarl"],
+        ["roar", "roar"],
+        ["leap", "leap"],
+        ["stretch", "look"]
+      ],
+      "actions": {
+        "claw": {
+          "enabled": true,
+          "base_pose": [85, -97, 17, -2, 0, 0],
+          "variable_axes": [0, 2],
+          "behavior": "claw",
+          "speed": 40,
+          "loop": true,
+          "next": {}
+        },
+        "grab": {
+          "enabled": true,
+          "base_pose": [85, -97, 17, -2, 0, 0],
+          "variable_axes": [0, 2],
+          "behavior": "grab",
+          "speed": 40,
+          "loop": true,
+          "next": {}
+        }
+      }
+    },
+    "leap": {
+      "enabled": true,
+      "mode_group": "stage-takeover",
+      "safezone": [
+        [-94, 122],
+        [-124, -60],
+        [-19, 157],
+        [-2, 2],
+        [-118, 118],
+        [-357, 357]
+      ],
+      "speed": 100,
+      "exits": [
+        ["roar", "roar"],
+        ["claw", "claw"],
+        ["growl", "growl"],
+        ["home", "hold"]
+      ],
+      "actions": {
+        "leap": {
+          "enabled": true,
+          "pos": [
+            [-85, -120, 137, 0, 0, 0],
+            [-90, -115, 140, -2, 10, 0],
+            [-80, -110, 145, 0, 20, 0]
           ],
-          "next": {
-            "zone": "rest",
-            "action": "breathe"
-          }
+          "speed": [10, 50, 100],
+          "loop": true,
+          "next": {}
+        },
+        "pacing": {
+          "enabled": true,
+          "pos": [
+            [-85, -120, 137, 0, 0, 0],
+            [-75, -115, 130, 0, -5, 0],
+            [-90, -124, 140, 0, 5, 0]
+          ],
+          "speed": [10, 50, 100],
+          "loop": true,
+          "next": {}
         }
       }
     }
-  },
-  "poses": {
-    "init": [
-      [
-        0,
-        -90,
-        90,
-        0,
-        90,
-        0
-      ]
-    ],
-    "ch1": [
-      [
-        0,
-        -80,
-        90,
-        0,
-        80,
-        0
-      ],
-      [
-        0,
-        -90,
-        90,
-        0,
-        40,
-        0
-      ],
-      [
-        0,
-        -70,
-        90,
-        0,
-        60,
-        0
-      ],
-      [
-        0,
-        -100,
-        90,
-        0,
-        20,
-        0
-      ]
-    ]
-  },
-  "lin_poses": {
-    "pos1": [
-      [
-        855.209656,
-        -577.229004,
-        1515.260742,
-        145.978836,
-        -27.013065,
-        -179.960007
-      ],
-      [
-        500.209656,
-        -527.229004,
-        1515.260742,
-        105.978836,
-        55.013065,
-        117.960007
-      ],
-      [
-        1780.209656,
-        -527.229004,
-        1515.260742,
-        105.978836,
-        55.013065,
-        117.960007
-      ],
-      [
-        1750.209656,
-        -527.229004,
-        1515.260742,
-        105.978836,
-        55.013065,
-        117.960007
-      ]
-    ]
   }
 }

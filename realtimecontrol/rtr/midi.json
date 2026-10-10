@@ -1,6 +1,19 @@
 {
   "enabled": true,
-  "zones": {},
+  "zones": {
+    "home": { "in_port": null, "command": null, "actions": {} },
+    "sleep": { "in_port": null, "command": null, "actions": {} },
+    "cuddle": { "in_port": null, "command": null, "actions": {} },
+    "purr": { "in_port": null, "command": null, "actions": {} },
+    "stretch": { "in_port": null, "command": null, "actions": {} },
+    "hunt": { "in_port": null, "command": null, "actions": {} },
+    "closeup": { "in_port": null, "command": null, "actions": {} },
+    "perform": { "in_port": null, "command": null, "actions": {} },
+    "roar": { "in_port": null, "command": null, "actions": {} },
+    "growl": { "in_port": null, "command": null, "actions": {} },
+    "claw": { "in_port": null, "command": null, "actions": {} },
+    "leap": { "in_port": null, "command": null, "actions": {} }
+  },
   "nav": {
     "next_action": null,
     "next_zone": null,

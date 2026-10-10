@@ -124,6 +124,18 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
         _apply_wander(machine, pose, var_axes, limits, curjpos)
     elif behavior == "random":
         _apply_random(pose, var_axes, limits)
+    elif behavior == "purr":
+        _apply_oscillation(machine, pose, var_axes, limits, freq=0.5, amp_scale=0.1)
+    elif behavior == "claw":
+        _apply_oscillation(machine, pose, var_axes, limits, freq=1.0, amp_scale=0.3)
+    elif behavior == "grab":
+        _apply_oscillation(machine, pose, var_axes, limits, freq=1.0, amp_scale=0.3)
+    elif behavior == "leap":
+        _apply_oscillation(machine, pose, var_axes, limits, freq=2.0, amp_scale=0.5)
+    elif behavior == "pacing":
+        _apply_oscillation(machine, pose, var_axes, limits, freq=1.0, amp_scale=0.3)
+    elif behavior == "snore":
+        _apply_oscillation(machine, pose, var_axes, limits, freq=0.3, amp_scale=0.2)
 
 
 def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain, action) -> None:
@@ -257,3 +269,21 @@ def _apply_random(pose, var_axes, limits) -> None:
     for axis in var_axes:
         lo, hi = limits[axis]
         pose[axis] = random.uniform(lo, hi)
+
+
+def _apply_oscillation(machine, pose, var_axes, limits, freq=1.0, amp_scale=0.5) -> None:
+    """Oscillate the variable axes around the action's base pose (bounded sine).
+
+    Shared by the animal behaviours (``purr`` / ``claw`` / ``grab`` / ``leap`` /
+    ``pacing`` / ``snore``). ``freq`` scales the sine rate (relative to the scan base
+    rate); ``amp_scale`` scales the amplitude so the motion stays a small fraction of
+    the safezone width. The axis is clamped to the effective safezone so the pose
+    always remains within the zone's safe bounds (no collision from overshoot).
+    """
+    t = machine.tick * 0.1 * freq
+    for axis in var_axes:
+        lo, hi = limits[axis]
+        center = pose[axis]  # the base_pose value (pose starts as base_pose)
+        amplitude = (hi - lo) / 2.0 * amp_scale
+        val = center + amplitude * math.sin(t)
+        pose[axis] = max(lo, min(hi, val))

@@ -9,37 +9,54 @@
     }
   },
   "zone_groups": {
-    "home": {
-      "zones": ["init", "rest", "init_rest_bridge"],
-      "behaviors": ["hold"],
-      "enabled": true
-    },
-    "hunt": {
-      "zones": ["wakeup"],
-      "behaviors": ["look", "scan"],
+    "museum-closed": {
+      "zones": ["home", "sleep", "cuddle", "purr"],
       "enabled": true,
-      "params": {
-        "lost_s": 2.0,
-        "min_conf": 0.1,
-        "attention_guard": ["track", "focus", "look", "face"],
-        "detect": { "zone": "wakeup", "action": "look" },
-        "scan": { "zone": "wakeup", "action": "scan" }
-      }
+      "params": { "speed": 10, "dwell_s": 60.0 }
     },
-    "facefocus": {
-      "zones": ["stretch"],
-      "behaviors": ["face"],
+    "event-sit-back": {
+      "zones": ["stretch", "hunt", "closeup", "perform"],
       "enabled": true,
-      "params": {
-        "actions": ["wink", "inspect", "call"],
-        "action_s": 3.0,
-        "face_lost_s": 2.5
-      }
+      "params": { "speed": 40, "dwell_s": 30.0 }
     },
-    "perform": {
-      "zones": ["watch", "perform", "fume"],
-      "behaviors": ["track", "focus"],
-      "enabled": false
+    "stage-takeover": {
+      "zones": ["roar", "growl", "claw", "leap"],
+      "enabled": true,
+      "params": { "speed": 80, "dwell_s": 15.0 }
     }
+  },
+  "hunt": {
+    "zones": ["hunt"],
+    "enabled": true,
+    "params": {
+      "lost_s": 2.0,
+      "min_conf": 0.1,
+      "attention_guard": ["track", "focus", "look", "face"],
+      "detect": { "zone": "hunt", "action": "track" },
+      "scan": { "zone": "hunt", "action": "scan" }
+    }
+  },
+  "facefocus": {
+    "zones": ["stretch"],
+    "enabled": true,
+    "params": {
+      "actions": ["wink", "inspect", "call"],
+      "action_s": 3.0,
+      "face_lost_s": 2.5
+    }
+  },
+  "cam_control": {
+    "home": { "active": "wide", "mode": "idle", "lock": "none" },
+    "sleep": { "active": "wide", "mode": "idle", "lock": "none" },
+    "cuddle": { "active": "wide", "mode": "idle", "lock": "none" },
+    "purr": { "active": "wide", "mode": "idle", "lock": "none" },
+    "stretch": { "active": "wide", "mode": "track", "lock": "auto" },
+    "hunt": { "active": "wide", "mode": "track", "lock": "auto" },
+    "closeup": { "active": "close", "mode": "analyze", "lock": "auto" },
+    "perform": { "active": "both", "mode": "track", "lock": "auto" },
+    "roar": { "active": "wide", "mode": "track", "lock": "auto" },
+    "growl": { "active": "wide", "mode": "track", "lock": "auto" },
+    "claw": { "active": "close", "mode": "analyze", "lock": "auto" },
+    "leap": { "active": "wide", "mode": "track", "lock": "auto" }
   }
 }

@@ -1,7 +1,9 @@
 """Zone and pose data.
 
-A zone is a pure safe-boundary: ``safezone`` + ``speed`` + ``actions``. Zones are
-linked only via actions' ``next`` fields — there is no zone-level ``exits`` graph.
+A zone is a safe-boundary: ``safezone`` + ``speed`` + ``actions``. Zones are
+grouped into mode groups (``museum-closed``, ``event-sit-back``,
+``stage-takeover``) and linked via zone-level ``exits`` (list of ``[zone, action]``
+pairs) and actions' ``next`` fields.
 
 Each action declares one of two forms:
 
@@ -42,7 +44,13 @@ HARDWARE_LIMITS: List[Tuple[float, float]] = [
 ]
 
 # Behavior names: the policies that drive variable axes.
-BEHAVIORS = ("track", "focus", "scan", "look", "wander", "random", "face", "hold")
+BEHAVIORS = (
+    "track", "focus", "scan", "look", "wander", "random", "face", "hold",
+    "purr", "claw", "grab", "leap", "pacing", "snore",
+)
+
+# Mode groups: the three thematic clusters of zones.
+MODE_GROUPS = ("museum-closed", "event-sit-back", "stage-takeover")
 
 # Kept for backward compat (MIDI legacy dispatch, display patches); no longer
 # used by zones or the state machine.
@@ -62,140 +70,165 @@ def effective_limits(zone_safezone: List[Tuple[float, float]]) -> List[Tuple[flo
 
 # ---------------------------------------------------------------------------
 # Built-in fallback zone table (used when zones.json is missing or corrupt).
-# Zones are pure safe-boundaries: safezone + speed + actions. The zone graph
-# is derived from actions' ``next`` fields.
+# Zones are safe-boundaries + mode_group + exits + actions. The zone graph is
+# derived from both actions' ``next`` fields and zone-level ``exits``.
 # ---------------------------------------------------------------------------
 ZONES: Dict[str, dict] = {
-    "init": {
+    "home": {
         "enabled": True,
+        "mode_group": "museum-closed",
         "safezone": [(-94, 122), (-105, -65), (89, 115), (-15, 15), (-15, 45), (-357, 357)],
         "speed": 20,
+        "exits": [("sleep", "breathe"), ("cuddle", "breathe"), ("stretch", "look"), ("hunt", "track")],
         "actions": {
-            "wake": {
+            "hold": {
                 "base_pose": [-60, -90, 90, 0, 15, 0],
                 "variable_axes": [],
                 "behavior": "hold",
                 "speed": 20,
                 "loop": True,
-                "next": {"zone": "rest", "action": "breathe"},
-            }
+                "next": {},
+            },
+            "wake": {
+                "base_pose": [-60, -90, 90, 0, 15, 0],
+                "variable_axes": [0, 1, 2, 4],
+                "behavior": "wander",
+                "speed": 20,
+                "loop": True,
+                "next": {},
+            },
         },
     },
-    "rest": {
+    "sleep": {
         "enabled": True,
+        "mode_group": "museum-closed",
         "safezone": [(-5, 5), (-134, -130), (155, 157), (-3, 3), (-10, 10), (-357, 357)],
         "speed": 20,
+        "exits": [("cuddle", "breathe"), ("purr", "purr"), ("home", "hold"), ("stretch", "look")],
         "actions": {
             "breathe": {
+                "pos": [[-3, -133, 156, -2, 0, 0], [-5, -130, 155, -2, 0, 0], [0, -134, 157, -2, 0, 0]],
+                "speed": [10, 50, 10],
+                "loop": True,
+                "next": {},
+            },
+            "snore": {
+                "pos": [[-3, -133, 156, -2, 0, 0], [-3, -133, 156, -2, 5, 0]],
+                "speed": [5, 5],
+                "loop": True,
+                "next": {},
+            },
+            "yawn": {
                 "base_pose": [-3, -133, 156, -2, 0, 0],
-                "variable_axes": [0, 1, 2],
-                "behavior": "wander",
+                "variable_axes": [4],
+                "behavior": "scan",
                 "speed": 10,
                 "loop": True,
-            },
-            "look": {
-                "base_pose": [-3, -133, 156, -2, 0, 0],
-                "variable_axes": [0, 4],
-                "behavior": "look",
-                "speed": 100,
-                "loop": True,
-                "next": {"zone": "wakeup", "action": "breathe"},
+                "next": {},
             },
         },
     },
-    "wakeup": {
+    "cuddle": {
         "enabled": True,
-        "safezone": [(-94, 122), (-134, -123), (136, 157), (-23, 23), (-25, 25), (-357, 357)],
-        "speed": 40,
+        "mode_group": "museum-closed",
+        "safezone": [(-5, 5), (-134, -130), (155, 157), (-3, 3), (-10, 10), (-357, 357)],
+        "speed": 20,
+        "exits": [("purr", "purr"), ("sleep", "breathe"), ("home", "wake")],
         "actions": {
             "breathe": {
-                "base_pose": [-3, -134, 156, -2, 0, 0],
-                "variable_axes": [0, 1, 2],
-                "behavior": "wander",
+                "pos": [[-3, -133, 156, -2, 0, 0], [-2, -132, 156, -2, 0, 0], [-4, -134, 156, -2, 0, 0]],
+                "speed": [10, 50, 10],
+                "loop": True,
+                "next": {},
+            },
+            "purr": {
+                "base_pose": [-3, -133, 156, -2, 0, 0],
+                "variable_axes": [0, 2],
+                "behavior": "purr",
                 "speed": 10,
                 "loop": True,
-                "next": {"zone": "stretch", "action": "look"},
+                "next": {},
             },
-            "look": {
-                "base_pose": [-3, -134, 156, -2, 0, 0],
-                "variable_axes": [0, 4],
-                "behavior": "look",
-                "speed": 100,
+        },
+    },
+    "purr": {
+        "enabled": True,
+        "mode_group": "museum-closed",
+        "safezone": [(-5, 5), (-134, -130), (155, 157), (-3, 3), (-10, 10), (-357, 357)],
+        "speed": 20,
+        "exits": [("sleep", "breathe"), ("home", "hold"), ("cuddle", "breathe")],
+        "actions": {
+            "hold": {
+                "base_pose": [-3, -133, 156, -2, 0, 0],
+                "variable_axes": [],
+                "behavior": "hold",
+                "speed": 20,
                 "loop": True,
+                "next": {},
+            },
+            "purr": {
+                "base_pose": [-3, -133, 156, -2, 0, 0],
+                "variable_axes": [0, 2],
+                "behavior": "purr",
+                "speed": 10,
+                "loop": True,
+                "next": {},
             },
         },
     },
     "stretch": {
         "enabled": True,
-        "safezone": [(-94, 122), (-98, -96), (13, 19), (-2, 2), (85, 95), (-357, 357)],
+        "mode_group": "event-sit-back",
+        "safezone": [(-94, 122), (-98, -96), (13, 19), (-2, 2), (-5, 5), (-357, 357)],
         "speed": 100,
+        "exits": [("hunt", "track"), ("closeup", "focus"), ("perform", "trick"), ("home", "hold"), ("roar", "roar")],
         "actions": {
             "look": {
-                "base_pose": [-3, -97, 16, -2, 0, 0],
-                "variable_axes": [0, 4],
-                "behavior": "look",
+                "pos": [[85, -97, 17, -2, 0.3, 0], [80, -97, 15, -2, 3, 0], [90, -97, 19, -2, -3, 0]],
+                "speed": [100, 50, 100],
+                "loop": True,
+                "next": {},
+            },
+            "wink": {
+                "base_pose": [85, -97, 17, -2, 0.3, 0],
+                "variable_axes": [4, 5],
+                "behavior": "face",
                 "speed": 100,
                 "loop": True,
-                "next": {"zone": "wander", "action": "breathe"},
+                "next": {},
+            },
+            "inspect": {
+                "base_pose": [85, -97, 17, -2, 0.3, 0],
+                "variable_axes": [4, 5],
+                "behavior": "face",
+                "speed": 100,
+                "loop": True,
+                "next": {},
+            },
+            "call": {
+                "base_pose": [85, -97, 17, -2, 0.3, 0],
+                "variable_axes": [4, 5],
+                "behavior": "face",
+                "speed": 100,
+                "loop": True,
+                "next": {},
             },
         },
     },
-    "wander": {
+    "hunt": {
         "enabled": True,
-        "safezone": [(-94, 122), (-70, -60), (29, 100), (-4, 4), (-118, 118), (-357, 357)],
-        "speed": 30,
-        "actions": {
-            "breathe": {
-                "base_pose": [60, -65, 60, 0, 45, 0],
-                "variable_axes": [0, 1, 2],
-                "behavior": "wander",
-                "speed": 10,
-                "loop": True,
-                "next": {"zone": "wildwander", "action": "breathe"},
-            },
-            "look": {
-                "base_pose": [60, -65, 60, 0, 45, 0],
-                "variable_axes": [0, 4],
-                "behavior": "look",
-                "speed": 100,
-                "loop": True,
-            },
-        },
-    },
-    "wildwander": {
-        "enabled": True,
-        "safezone": [(-94, 122), (-124, -60), (-19, 157), (-1, 1), (-118, 118), (-357, 357)],
-        "speed": 100,
-        "actions": {
-            "breathe": {
-                "base_pose": [60, -22.5, -112.5, 0, 45, 0],
-                "variable_axes": [0, 1, 2],
-                "behavior": "wander",
-                "speed": 10,
-                "loop": True,
-                "next": {"zone": "wander", "action": "breathe"},
-            },
-            "look": {
-                "base_pose": [60, -22.5, -112.5, 0, 45, 0],
-                "variable_axes": [0, 4],
-                "behavior": "look",
-                "speed": 100,
-                "loop": True,
-            },
-        },
-    },
-    "watch": {
-        "enabled": True,
+        "mode_group": "event-sit-back",
         "safezone": [(-20, 20), (-134, -130), (155, 157), (-3, 3), (0, 60), (-357, 357)],
         "speed": 20,
+        "exits": [("closeup", "focus"), ("stretch", "look"), ("perform", "trick"), ("growl", "growl")],
         "actions": {
             "track": {
                 "base_pose": [-3, -133, 156, -2, 45, 0],
-                "variable_axes": [0],
+                "variable_axes": [3, 4],
                 "behavior": "track",
                 "speed": 20,
                 "loop": True,
-                "next": {"zone": "perform", "action": "trick"},
+                "next": {},
             },
             "focus": {
                 "base_pose": [-3, -133, 156, -2, 45, 0],
@@ -203,50 +236,151 @@ ZONES: Dict[str, dict] = {
                 "behavior": "focus",
                 "speed": 20,
                 "loop": True,
+                "next": {},
+            },
+            "scan": {
+                "base_pose": [-3, -133, 156, -2, 45, 0],
+                "variable_axes": [4],
+                "behavior": "scan",
+                "speed": 20,
+                "loop": True,
+                "next": {},
+            },
+        },
+    },
+    "closeup": {
+        "enabled": True,
+        "mode_group": "event-sit-back",
+        "safezone": [(-20, 20), (-134, -130), (155, 157), (-3, 3), (0, 60), (-357, 357)],
+        "speed": 20,
+        "exits": [("hunt", "track"), ("stretch", "call"), ("perform", "trick")],
+        "actions": {
+            "focus": {
+                "base_pose": [-3, -133, 156, -2, 45, 0],
+                "variable_axes": [4],
+                "behavior": "focus",
+                "speed": 20,
+                "loop": True,
+                "next": {},
+            },
+            "face": {
+                "base_pose": [-3, -133, 156, -2, 45, 0],
+                "variable_axes": [4, 5],
+                "behavior": "face",
+                "speed": 20,
+                "loop": True,
+                "next": {},
             },
         },
     },
     "perform": {
         "enabled": True,
-        "safezone": [(-30, 30), (-98, -96), (13, 19), (-2, 2), (-30, 60), (-357, 357)],
+        "mode_group": "event-sit-back",
+        "safezone": [(-30, 30), (-98, -50), (13, 19), (-2, 2), (-30, 60), (-357, 357)],
         "speed": 40,
+        "exits": [("hunt", "track"), ("stretch", "look"), ("roar", "roar")],
         "actions": {
             "trick": {
-                "base_pose": [-3, -97, 16, -2, 45, 0],
-                "variable_axes": [4],
-                "behavior": "scan",
-                "speed": 40,
+                "pos": [[-3, -97, 16, -2, 20, 0], [0, -95, 15, -2, 30, 0], [-5, -90, 17, -2, 10, 0]],
+                "speed": [40, 40, 40],
                 "loop": True,
-                "next": {"zone": "watch", "action": "track"},
+                "next": {},
             },
             "bow": {
-                "base_pose": [-3, -97, 16, -2, 0, 0],
-                "variable_axes": [4],
-                "behavior": "scan",
-                "speed": 40,
+                "pos": [[-3, -97, 16, -2, 20, 0], [0, -95, 15, -2, 40, 0], [-3, -90, 16, -2, 50, 0]],
+                "speed": [40, 40, 40],
                 "loop": True,
+                "next": {},
             },
         },
     },
-    "fume": {
+    "roar": {
         "enabled": True,
+        "mode_group": "stage-takeover",
         "safezone": [(-94, 122), (-134, -123), (136, 157), (-23, 23), (0, 118), (-357, 357)],
         "speed": 40,
+        "exits": [("growl", "growl"), ("claw", "claw"), ("leap", "leap"), ("perform", "trick")],
         "actions": {
             "roar": {
-                "base_pose": [-3, -134, 156, -2, 90, 0],
-                "variable_axes": [4],
-                "behavior": "scan",
-                "speed": 40,
+                "pos": [[-3, -134, 156, -2, 90, 0], [0, -130, 155, -2, 95, 0], [-5, -125, 150, -2, 100, 0]],
+                "speed": [40, 40, 40],
                 "loop": True,
-                "next": {"zone": "watch", "action": "track"},
+                "next": {},
             },
             "snarl": {
+                "pos": [[-3, -134, 156, -2, 90, 0], [0, -130, 155, -2, 80, 0]],
+                "speed": [40, 40],
+                "loop": True,
+                "next": {},
+            },
+        },
+    },
+    "growl": {
+        "enabled": True,
+        "mode_group": "stage-takeover",
+        "safezone": [(-94, 122), (-134, -123), (136, 157), (-23, 23), (0, 118), (-357, 357)],
+        "speed": 40,
+        "exits": [("roar", "roar"), ("claw", "claw"), ("leap", "leap")],
+        "actions": {
+            "growl": {
                 "base_pose": [-3, -134, 156, -2, 90, 0],
                 "variable_axes": [4],
                 "behavior": "scan",
                 "speed": 40,
                 "loop": True,
+                "next": {},
+            },
+            "snarl": {
+                "pos": [[-3, -134, 156, -2, 90, 0], [0, -130, 155, -2, 85, 0]],
+                "speed": [40, 40],
+                "loop": True,
+                "next": {},
+            },
+        },
+    },
+    "claw": {
+        "enabled": True,
+        "mode_group": "stage-takeover",
+        "safezone": [(-94, 122), (-98, -96), (13, 19), (-2, 2), (-5, 5), (-357, 357)],
+        "speed": 40,
+        "exits": [("growl", "snarl"), ("roar", "roar"), ("leap", "leap"), ("stretch", "look")],
+        "actions": {
+            "claw": {
+                "base_pose": [85, -97, 17, -2, 0, 0],
+                "variable_axes": [0, 2],
+                "behavior": "claw",
+                "speed": 40,
+                "loop": True,
+                "next": {},
+            },
+            "grab": {
+                "base_pose": [85, -97, 17, -2, 0, 0],
+                "variable_axes": [0, 2],
+                "behavior": "grab",
+                "speed": 40,
+                "loop": True,
+                "next": {},
+            },
+        },
+    },
+    "leap": {
+        "enabled": True,
+        "mode_group": "stage-takeover",
+        "safezone": [(-94, 122), (-124, -60), (-19, 157), (-2, 2), (-118, 118), (-357, 357)],
+        "speed": 100,
+        "exits": [("roar", "roar"), ("claw", "claw"), ("growl", "growl"), ("home", "hold")],
+        "actions": {
+            "leap": {
+                "pos": [[-85, -120, 137, 0, 0, 0], [-90, -115, 140, -2, 10, 0], [-80, -110, 145, 0, 20, 0]],
+                "speed": [10, 50, 100],
+                "loop": True,
+                "next": {},
+            },
+            "pacing": {
+                "pos": [[-85, -120, 137, 0, 0, 0], [-75, -115, 130, 0, -5, 0], [-90, -124, 140, 0, 5, 0]],
+                "speed": [10, 50, 100],
+                "loop": True,
+                "next": {},
             },
         },
     },
@@ -344,6 +478,8 @@ def _validate_zone(name: str, z: dict, all_names: set) -> None:
         raise ValueError(f"zone {name!r}: must be an object")
     if "enabled" in z and not isinstance(z["enabled"], bool):
         raise ValueError(f"zone {name!r}: 'enabled' must be a bool")
+    if "mode_group" in z and not (isinstance(z["mode_group"], str) and z["mode_group"] in MODE_GROUPS):
+        raise ValueError(f"zone {name!r}: mode_group must be one of {MODE_GROUPS}")
     sz = z.get("safezone")
     if not (isinstance(sz, list) and len(sz) == 6):
         raise ValueError(f"zone {name!r}: safezone must be a list of 6 [lo, hi] pairs")
@@ -353,6 +489,12 @@ def _validate_zone(name: str, z: dict, all_names: set) -> None:
             raise ValueError(f"zone {name!r}: safezone axis {i} must be [lo, hi] with lo < hi")
     if not _is_num(z.get("speed")):
         raise ValueError(f"zone {name!r}: speed must be a number")
+    exits = z.get("exits")
+    if exits is not None:
+        if not (isinstance(exits, list) and all(
+                isinstance(e, list) and len(e) == 2 and isinstance(e[0], str) and e[0] in all_names
+                and isinstance(e[1], str) for e in exits)):
+            raise ValueError(f"zone {name!r}: exits must be a list of [zone, action] pairs")
     acts = z.get("actions", {})
     if not isinstance(acts, dict):
         raise ValueError(f"zone {name!r}: actions must be an object")
@@ -496,6 +638,26 @@ class Zone:
             return s
         return None
 
+    @property
+    def mode_group(self) -> Optional[str]:
+        """The zone's mode group, or None when absent."""
+        mg = self.data.get("mode_group")
+        if isinstance(mg, str) and mg in MODE_GROUPS:
+            return mg
+        return None
+
+    def exits(self) -> List[Tuple[str, str]]:
+        """The zone-level exits as a list of (zone, action) tuples.
+
+        Returns [] when the field is absent or malformed.
+        """
+        e = self.data.get("exits")
+        if not (isinstance(e, list)):
+            return []
+        return [(pair[0], pair[1]) for pair in e
+                if isinstance(pair, list) and len(pair) == 2
+                and isinstance(pair[0], str) and isinstance(pair[1], str)]
+
     def action_entry_pose(self, name: str) -> Optional[List[float]]:
         """The pose the robot moves to when transitioning into this action.
 
@@ -548,11 +710,11 @@ class Zones:
         return self._by_name[name]
 
     def graph(self) -> Dict[str, List[str]]:
-        """The zone graph derived from all actions' ``next`` fields.
+        """The zone graph derived from actions' ``next`` fields and zone-level ``exits``.
 
         Returns ``{zone_name: [reachable_zone_names]}`` where each reachable
-        zone is named by some action's ``next.zone`` in that zone. Used by the
-        display and editor to render the navigation graph.
+        zone is named by some action's ``next.zone`` or zone-level ``exits`` entry.
+        Used by the display and editor to render the navigation graph.
         """
         g: Dict[str, List[str]] = {}
         for name, z in self._by_name.items():
@@ -561,9 +723,22 @@ class Zones:
                 n = z.action_next(an)
                 if n and isinstance(n.get("zone"), str):
                     targets.add(n["zone"])
+            for tz, _ in z.exits():
+                targets.add(tz)
             g[name] = sorted(targets)
         return g
 
     def table(self) -> Dict[str, dict]:
         """A copy of the full zone table (for the HTTP ``GET /api/zones`` endpoint)."""
         return {n: dict(d) for n, d in self._zones.items()}
+
+    def mode_groups(self) -> Dict[str, List[str]]:
+        """Zones grouped by mode_group: ``{group_name: [zone_names]}``.
+
+        Zones without a mode_group are collected under ``"ungrouped"``.
+        """
+        groups: Dict[str, List[str]] = {}
+        for name, z in self._by_name.items():
+            mg = z.mode_group or "ungrouped"
+            groups.setdefault(mg, []).append(name)
+        return groups

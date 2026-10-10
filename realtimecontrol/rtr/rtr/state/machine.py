@@ -7,10 +7,9 @@ behaviour cadence. It does **not** delegate motion decisions to a separate brain
 the :meth:`step` driver dispatches to the pure policies in
 :mod:`rtr.state.behavior` directly.
 
-Zones are pure safe-boundaries (``safezone`` + ``speed`` + ``actions``). They carry
-no ``exits``/``startpos``/``mode`` of their own; the navigation graph is derived
-from actions' ``next`` fields. Each action declares a behaviour (``track`` /
-``focus`` / ``scan`` / ``look`` / ``wander`` / ``random`` / ``hold``) that drives its
+Zones are safe-boundaries (``safezone`` + ``speed`` + ``actions``) grouped into
+mode groups and linked via zone-level ``exits`` (list of ``[zone, action]`` pairs)
+and actions' ``next`` fields. Each action declares a behaviour that drives its
 variable axes; the non-variable axes rest at the action's ``base_pose``.
 
 Transitions
@@ -33,7 +32,7 @@ from .zones import Zones
 class StateMachine:
     """Owns the composite state ``(zone, action)`` and drives it one tick at a time."""
 
-    def __init__(self, zones: Zones, initial_zone: str = "init", tick_hz: float = 20.0):
+    def __init__(self, zones: Zones, initial_zone: str = "home", tick_hz: float = 20.0):
         self.zones = zones
         self.tick_hz = tick_hz
 
@@ -213,26 +212,35 @@ class StateMachine:
     def _advance_after_action(self, action: str) -> None:
         """Hand off after a single-run (legacy) action completes.
 
-        Reads the action's ``next`` field:
-        - no next  -> stop the action (the robot holds the last pose);
-        - next in another zone -> :meth:`trigger_action` (transition to its entry pose);
-        - next in the same zone -> :meth:`play_action`.
+        Priority: action ``next`` > zone-level ``exits`` (first valid, deterministic).
+        No valid target -> stop the action (the robot holds the last pose).
         """
         zone = self.zones.get(self.current_zone)
         n = zone.action_next(action)
-        if n is None:
-            self.clear_action()
-            return
-        target_zone = n.get("zone", self.current_zone)
-        target_action = n.get("action")
-        if target_zone != self.current_zone:
-            if not self.trigger_action(target_zone, target_action):
+        if n and n.get("zone"):
+            target_zone = n["zone"]
+            target_action = n.get("action")
+            if target_zone != self.current_zone:
+                if not self.trigger_action(target_zone, target_action):
+                    self.clear_action()
+                return
+            if target_action and target_action in zone.actions() and zone.action_enabled(target_action):
+                self.play_action(target_action)
+            else:
                 self.clear_action()
             return
-        if target_action and target_action in zone.actions() and zone.action_enabled(target_action):
-            self.play_action(target_action)
-        else:
-            self.clear_action()
+        # No valid next: fall back to the first valid zone-level exit (deterministic).
+        for tz, ta in zone.exits():
+            if self.zones.has(tz) and self.zones.get(tz).enabled:
+                if ta in self.zones.get(tz).actions() and self.zones.get(tz).action_enabled(ta):
+                    if tz != self.current_zone:
+                        if not self.trigger_action(tz, ta):
+                            self.clear_action()
+                        return
+                    else:
+                        self.play_action(ta)
+                        return
+        self.clear_action()
 
     # ------------------------------------------------------------------
     # Per-tick driver.
@@ -361,7 +369,7 @@ class StateMachine:
         Seeds the target to the robot's pose so the first tick has something to hold.
         """
         self._transition = None
-        self.current_zone = "init"
+        self.current_zone = "home"
         self.current_action = None
         self.action_index = 0
         self.speed = self.zones.get(self.current_zone).speed

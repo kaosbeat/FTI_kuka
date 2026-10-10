@@ -1,4 +1,4 @@
-"""Brain decision config: autonomy + zone groups.
+"""Brain decision config: autonomy + mode groups + hunt/facefocus + cam_control.
 
 Data-driven: the brain's autonomous navigation decisions live in ``brain.json``
 (edited in ``editor.html``, served/saved over ``/api/brain``, hot-reloaded). The
@@ -15,53 +15,50 @@ Shape::
         "events": { "midi": true, "camera": true, "websocket": true }
       },
       "zone_groups": {
-        "home":      { "zones": [...], "behaviors": [...], "enabled": true },
-        "hunt":      { "zones": [...], "behaviors": [...], "enabled": true,  "params": {...} },
-        "facefocus": { "zones": [...], "behaviors": [...], "enabled": true,  "params": {...} },
-        "perform":   { "zones": [...], "behaviors": [...], "enabled": false }
-      }
+        "museum-closed":  { "zones": [...], "enabled": true, "params": { "speed": 10, "dwell_s": 60.0 } },
+        "event-sit-back": { "zones": [...], "enabled": true, "params": { "speed": 40, "dwell_s": 30.0 } },
+        "stage-takeover": { "zones": [...], "enabled": true, "params": { "speed": 80, "dwell_s": 15.0 } }
+      },
+      "hunt":      { "zones": [...], "enabled": true, "params": {...} },
+      "facefocus": { "zones": [...], "enabled": true, "params": {...} },
+      "cam_control": { "home": { "active": "wide", "mode": "idle", "lock": "none" }, ... }
     }
 
 - ``autonomy.enabled`` — master switch for autonomous navigation (following a
-  looping action's ``next`` link once it has dwelt for ``dwell_s`` or an event
-  fires).
-- ``autonomy.dwell_s`` — the global default dwell time (seconds) before a looping
-  action's ``next`` link is followed. A per-action ``dwell_s`` in zones.json
-  overrides it.
+  looping action's ``next`` link — or a random valid zone exit when there is none —
+  once it has dwelt, or an event fires).
+- ``autonomy.dwell_s`` — the global default dwell time (seconds). A per-action
+  ``dwell_s`` in zones.json and a mode-group ``params.dwell_s`` override it.
 - ``autonomy.events`` — which external events can trigger an immediate next link
   (``midi`` note-on, ``camera`` detect/hunt lock, ``websocket`` proceed).
-- ``zone_groups.<name>`` — a named group of zones + the behaviors enabled in them:
-  - ``zones`` — list of zone names (must exist in zones.json).
-  - ``behaviors`` — list of behavior fields enabled in those zones.
-  - ``enabled`` — whether this group is part of the current autonomy level.
-  - ``params`` — optional; group-specific decision data (only ``hunt`` and
-    ``facefocus`` have a validated shape today; other groups may carry an
-    unvalidated passthrough).
-
-The autonomy level is the free combination of enabled groups; navigation runs
-across the **union** of all enabled groups' zones. Hunt and facefocus are zone
-groups, not separate special modes:
-
-- ``hunt`` (zones ``wakeup``): fast/aggressive person tracking. Its ``params``
-  carry the hunt-loop timing/trigger data (``lost_s``, ``min_conf``,
-  ``attention_guard``, ``detect``/``scan``). detect→``look``, lost→``scan``.
-  ``min_conf`` is the lock sensitivity: candidates with confidence below it are
-  ignored (lower = more sensitive; the mock camera's 0.3–0.99 range locks at
-  the default 0.1).
-- ``facefocus`` (zones ``stretch``): the "check out that human" face actions. Its
+- ``zone_groups.<name>`` — a thematic mode group of zones. ``zones`` is the list
+  of zone names; ``enabled`` whether the group is part of the current autonomy
+  level; ``params`` carries the group's base ``speed`` and default ``dwell_s``.
+  Navigation runs across the **union** of all enabled groups' zones.
+- ``hunt`` (top-level): the person-tracking loop. Its ``params`` carry the
+  hunt-loop timing/trigger data (``lost_s``, ``min_conf``, ``attention_guard``,
+  ``detect``/``scan``). ``min_conf`` is the lock sensitivity: candidates with
+  confidence below it are ignored (lower = more sensitive).
+- ``facefocus`` (top-level): the "check out that human" face actions. Its
   ``params`` carry the face-cycling data (``actions``, ``action_s``,
   ``face_lost_s``).
+- ``cam_control`` (top-level): the per-zone camera baseline (``active`` camera,
+  ``mode``, and ``lock`` = ``"none"`` | ``"auto"`` | a specific id). Applied on
+  every zone change; the hunt/facefocus logic overrides it while tracking.
 """
 
 import copy
 import json
 from typing import Any, Dict
 
-from ..state.zones import BEHAVIORS
+# The camera intent vocabulary (kept in sync with ``rtr.camera.camera``;
+# defined here — rather than imported — to avoid the core↔brain import cycle).
+CAMERA_CHOICES = ("wide", "close", "both")
+CAMERA_MODES = ("idle", "track", "analyze")
 
-# The autonomy + zone-group decision parameters, with their default values. These
-# mirror the values the old top-level ``hunt`` / ``facefocus`` sections used, so
-# ``builtin_brain_config()`` is a faithful stand-in for a missing ``brain.json``.
+# The autonomy + mode-group + hunt/facefocus + cam_control decision parameters,
+# with their default values. ``builtin_brain_config()`` is a faithful stand-in for
+# a missing ``brain.json``.
 DEFAULT_BRAIN_CONFIG: Dict[str, Any] = {
     "autonomy": {
         "enabled": True,
@@ -69,49 +66,66 @@ DEFAULT_BRAIN_CONFIG: Dict[str, Any] = {
         "events": {"midi": True, "camera": True, "websocket": True},
     },
     "zone_groups": {
-        "home": {
-            "zones": ["init", "rest", "init_rest_bridge"],
-            "behaviors": ["hold"],
+        "museum-closed": {
+            "zones": ["home", "sleep", "cuddle", "purr"],
             "enabled": True,
+            "params": {"speed": 10, "dwell_s": 60.0},
         },
-        "hunt": {
-            "zones": ["wakeup"],
-            "behaviors": ["look", "scan"],
+        "event-sit-back": {
+            "zones": ["stretch", "hunt", "closeup", "perform"],
             "enabled": True,
-            "params": {
-                "lost_s": 2.0,
-                "min_conf": 0.1,
-                "attention_guard": ["track", "focus", "look", "face"],
-                "detect": {"zone": "wakeup", "action": "look"},
-                "scan": {"zone": "wakeup", "action": "scan"},
-            },
+            "params": {"speed": 40, "dwell_s": 30.0},
         },
-        "facefocus": {
-            "zones": ["stretch"],
-            "behaviors": ["face"],
+        "stage-takeover": {
+            "zones": ["roar", "growl", "claw", "leap"],
             "enabled": True,
-            "params": {
-                "actions": ["wink", "inspect", "call"],
-                "action_s": 3.0,
-                "face_lost_s": 2.5,
-            },
+            "params": {"speed": 80, "dwell_s": 15.0},
         },
-        "perform": {
-            "zones": ["watch", "perform", "fume"],
-            "behaviors": ["track", "focus"],
-            "enabled": False,
+    },
+    "hunt": {
+        "zones": ["hunt"],
+        "enabled": True,
+        "params": {
+            "lost_s": 2.0,
+            "min_conf": 0.1,
+            "attention_guard": ["track", "focus", "look", "face"],
+            "detect": {"zone": "hunt", "action": "track"},
+            "scan": {"zone": "hunt", "action": "scan"},
         },
+    },
+    "facefocus": {
+        "zones": ["stretch"],
+        "enabled": True,
+        "params": {
+            "actions": ["wink", "inspect", "call"],
+            "action_s": 3.0,
+            "face_lost_s": 2.5,
+        },
+    },
+    "cam_control": {
+        "home": {"active": "wide", "mode": "idle", "lock": "none"},
+        "sleep": {"active": "wide", "mode": "idle", "lock": "none"},
+        "cuddle": {"active": "wide", "mode": "idle", "lock": "none"},
+        "purr": {"active": "wide", "mode": "idle", "lock": "none"},
+        "stretch": {"active": "wide", "mode": "track", "lock": "auto"},
+        "hunt": {"active": "wide", "mode": "track", "lock": "auto"},
+        "closeup": {"active": "close", "mode": "analyze", "lock": "auto"},
+        "perform": {"active": "both", "mode": "track", "lock": "auto"},
+        "roar": {"active": "wide", "mode": "track", "lock": "auto"},
+        "growl": {"active": "wide", "mode": "track", "lock": "auto"},
+        "claw": {"active": "close", "mode": "analyze", "lock": "auto"},
+        "leap": {"active": "wide", "mode": "track", "lock": "auto"},
     },
 }
 
-# The groups with a known ``params`` shape (validated); every other group's
-# ``params`` is an unvalidated passthrough for future use.
+# The known params shapes (validated); used to fill defaults when a section omits
+# a field.
 _HUNT_PARAMS = {
     "lost_s": 2.0,
     "min_conf": 0.1,
     "attention_guard": ["track", "focus", "look", "face"],
-    "detect": {"zone": "wakeup", "action": "look"},
-    "scan": {"zone": "wakeup", "action": "scan"},
+    "detect": {"zone": "hunt", "action": "track"},
+    "scan": {"zone": "hunt", "action": "scan"},
 }
 _FACEFOCUS_PARAMS = {
     "actions": ["wink", "inspect", "call"],
@@ -173,30 +187,21 @@ def _zone_action(value: Any, where: str, default: dict) -> dict:
     }
 
 
-def _behaviors(value: Any, where: str, default: list) -> list:
-    """A list of known behavior names (validated against :data:`BEHAVIORS`)."""
-    lst = _str_list(value, where, default)
-    for b in lst:
-        if b not in BEHAVIORS:
-            raise ValueError(f"'{where}' contains unknown behavior {b!r} (expected one of {BEHAVIORS})")
-    return lst
-
-
 def _validate_hunt_params(p: dict, where: str) -> dict:
-    """Validate the ``hunt`` group's ``params`` (the hunt-loop timing/trigger data)."""
+    """Validate the hunt params (the hunt-loop timing/trigger data)."""
     d = _HUNT_PARAMS
     return {
         "lost_s": _num(p.get("lost_s"), f"{where}.lost_s", d["lost_s"]),
         "min_conf": _num(p.get("min_conf"), f"{where}.min_conf", d["min_conf"]),
         "attention_guard": _str_list(p.get("attention_guard"), f"{where}.attention_guard",
-                                      d["attention_guard"]),
+                                     d["attention_guard"]),
         "detect": _zone_action(p.get("detect"), f"{where}.detect", d["detect"]),
         "scan": _zone_action(p.get("scan"), f"{where}.scan", d["scan"]),
     }
 
 
 def _validate_facefocus_params(p: dict, where: str) -> dict:
-    """Validate the ``facefocus`` group's ``params`` (the face-cycling data)."""
+    """Validate the facefocus params (the face-cycling data)."""
     d = _FACEFOCUS_PARAMS
     return {
         "actions": _str_list(p.get("actions"), f"{where}.actions", d["actions"]),
@@ -205,44 +210,50 @@ def _validate_facefocus_params(p: dict, where: str) -> dict:
     }
 
 
-def _validate_group(name: str, g: Any) -> dict:
-    """Validate a single zone group: ``{zones, behaviors, enabled, [params]}``.
+def _validate_mode_group(name: str, g: Any) -> dict:
+    """Validate a mode group: ``{zones, enabled, [params: {speed, dwell_s}]}``.
 
     ``zones`` are non-empty strings (zone existence is checked by the caller, which
-    has the zone table). ``behaviors`` are known behavior names. ``params`` is only
-    validated for the known group shapes (``hunt`` / ``facefocus``); other groups
-    carry an unvalidated passthrough.
+    has the zone table). ``params`` carries the group's base ``speed`` and default
+    ``dwell_s`` (both numbers, optional).
     """
     where = f"zone_groups.{name}"
     if not isinstance(g, dict):
         raise ValueError(f"'{where}' must be an object")
     result = {
         "zones": _str_list(g.get("zones"), f"{where}.zones", []),
-        "behaviors": _behaviors(g.get("behaviors"), f"{where}.behaviors", []),
         "enabled": _bool(g.get("enabled"), f"{where}.enabled", False),
     }
     params = g.get("params")
     if params is not None:
-        if name == "hunt":
-            if not isinstance(params, dict):
-                raise ValueError(f"'{where}.params' must be an object")
-            result["params"] = _validate_hunt_params(params, f"{where}.params")
-        elif name == "facefocus":
-            if not isinstance(params, dict):
-                raise ValueError(f"'{where}.params' must be an object")
-            result["params"] = _validate_facefocus_params(params, f"{where}.params")
-        else:
-            # Unvalidated passthrough for future group param shapes.
-            if not isinstance(params, dict):
-                raise ValueError(f"'{where}.params' must be an object")
-            result["params"] = dict(params)
-    elif name in ("hunt", "facefocus"):
-        # Fill the known params defaults so the brain always has complete data.
-        if name == "hunt":
-            result["params"] = copy.deepcopy(_HUNT_PARAMS)
-        else:
-            result["params"] = copy.deepcopy(_FACEFOCUS_PARAMS)
+        if not isinstance(params, dict):
+            raise ValueError(f"'{where}.params' must be an object")
+        p = {}
+        for key in ("speed", "dwell_s"):
+            if key in params:
+                v = params[key]
+                if not (isinstance(v, (int, float)) and not isinstance(v, bool)):
+                    raise ValueError(f"'{where}.params.{key}' must be a number")
+                p[key] = v
+        result["params"] = p
     return result
+
+
+def _validate_cam_entry(zone: str, entry: Any) -> dict:
+    """Validate a single ``cam_control`` entry: ``{active, mode, lock}``."""
+    where = f"cam_control.{zone}"
+    if not isinstance(entry, dict):
+        raise ValueError(f"'{where}' must be an object")
+    active = entry.get("active", "wide")
+    if not (isinstance(active, str) and active in CAMERA_CHOICES):
+        raise ValueError(f"'{where}.active' must be one of {CAMERA_CHOICES}")
+    mode = entry.get("mode", "idle")
+    if not (isinstance(mode, str) and mode in CAMERA_MODES):
+        raise ValueError(f"'{where}.mode' must be one of {CAMERA_MODES}")
+    lock = entry.get("lock", "none")
+    if not (isinstance(lock, str) and lock):
+        raise ValueError(f"'{where}.lock' must be a non-empty string")
+    return {"active": active, "mode": mode, "lock": lock}
 
 
 def validate_brain_config(data: Any) -> dict:
@@ -277,22 +288,63 @@ def validate_brain_config(data: Any) -> dict:
         },
     }
 
-    # --- zone_groups -------------------------------------------------------
+    # --- zone_groups (the three mode groups) --------------------------------
     groups = data.get("zone_groups")
     if groups is not None and not isinstance(groups, dict):
         raise ValueError("'zone_groups' must be an object")
     groups = groups or {}
     zone_groups: Dict[str, dict] = {}
     for name, g in groups.items():
-        zone_groups[name] = _validate_group(name, g)
-
-    # Fill in any default groups that were not present in the file, so the brain
-    # always has the full set (e.g. a brain.json with only "hunt" still gets "home").
+        zone_groups[name] = _validate_mode_group(name, g)
+    # Fill in any default mode groups not present in the file, so the brain always
+    # has the full set.
     for name in DEFAULT_BRAIN_CONFIG["zone_groups"]:
         if name not in zone_groups:
-            zone_groups[name] = _validate_group(name, DEFAULT_BRAIN_CONFIG["zone_groups"][name])
+            zone_groups[name] = _validate_mode_group(name, DEFAULT_BRAIN_CONFIG["zone_groups"][name])
 
-    return {"autonomy": autonomy_cfg, "zone_groups": zone_groups}
+    # --- hunt (top-level) ---------------------------------------------------
+    hunt = data.get("hunt")
+    if hunt is not None and not isinstance(hunt, dict):
+        raise ValueError("'hunt' must be an object")
+    hunt = hunt or {}
+    dh = DEFAULT_BRAIN_CONFIG["hunt"]
+    hunt_params = hunt.get("params")
+    hunt_cfg = {
+        "zones": _str_list(hunt.get("zones"), "hunt.zones", dh["zones"]),
+        "enabled": _bool(hunt.get("enabled"), "hunt.enabled", dh["enabled"]),
+        "params": _validate_hunt_params(
+            hunt_params if isinstance(hunt_params, dict) else {}, "hunt.params"),
+    }
+
+    # --- facefocus (top-level) ---------------------------------------------
+    ff = data.get("facefocus")
+    if ff is not None and not isinstance(ff, dict):
+        raise ValueError("'facefocus' must be an object")
+    ff = ff or {}
+    df = DEFAULT_BRAIN_CONFIG["facefocus"]
+    ff_params = ff.get("params")
+    ff_cfg = {
+        "zones": _str_list(ff.get("zones"), "facefocus.zones", df["zones"]),
+        "enabled": _bool(ff.get("enabled"), "facefocus.enabled", df["enabled"]),
+        "params": _validate_facefocus_params(
+            ff_params if isinstance(ff_params, dict) else {}, "facefocus.params"),
+    }
+
+    # --- cam_control (top-level) -------------------------------------------
+    cam = data.get("cam_control")
+    if cam is not None and not isinstance(cam, dict):
+        raise ValueError("'cam_control' must be an object")
+    cam = cam or {}
+    cam_control = {zone: _validate_cam_entry(zone, entry)
+                  for zone, entry in cam.items()}
+
+    return {
+        "autonomy": autonomy_cfg,
+        "zone_groups": zone_groups,
+        "hunt": hunt_cfg,
+        "facefocus": ff_cfg,
+        "cam_control": cam_control,
+    }
 
 
 def load_brain_config(path: str) -> dict:

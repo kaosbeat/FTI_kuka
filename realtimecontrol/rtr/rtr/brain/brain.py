@@ -17,6 +17,7 @@ and read by the variable-axis behaviours — the brain no longer nudges the targ
 directly.
 """
 
+import random
 import time
 from typing import List, Optional
 
@@ -63,6 +64,7 @@ class Brain:
         self._autonomy_action_start_ts = 0.0
         self._autonomy_prev: Optional[tuple] = None  # last (zone, action)
         self._autonomy_triggered = False  # event fired; advance on next tick
+        self._cam_zone = None  # last zone the camera intent was applied to
         self._enabled_groups: set = set()
         self._enabled_zones: set = set()
         if self._config is not None:
@@ -96,13 +98,13 @@ class Brain:
             for zn in g.get("zones", []):
                 if zn not in zone_names:
                     print(f"[brain] WARNING: zone_groups.{gname} references unknown zone {zn!r}")
-        hunt = groups.get("hunt", {})
+        hunt = cfg.get("hunt", {})
         hp = hunt.get("params", {})
         print(f"[brain] config reloaded: hunt.enabled={hunt.get('enabled')} "
               f"lost_s={hp.get('lost_s')} "
               f"detect={hp.get('detect', {}).get('zone')}/{hp.get('detect', {}).get('action')} "
               f"scan={hp.get('scan', {}).get('zone')}/{hp.get('scan', {}).get('action')}")
-        ff = groups.get("facefocus", {})
+        ff = cfg.get("facefocus", {})
         fp = ff.get("params", {})
         print(f"[brain] facefocus: enabled={ff.get('enabled')} zones={ff.get('zones')} "
               f"actions={fp.get('actions')} action_s={fp.get('action_s')} "
@@ -113,12 +115,39 @@ class Brain:
         return self._config.get("autonomy", {})
 
     def _hunt_group(self) -> dict:
-        """The hunt zone-group config (``{zones, behaviors, enabled, params}``)."""
-        return self._config.get("zone_groups", {}).get("hunt", {})
+        """The hunt config (``{zones, enabled, params}``) — a top-level section, not a zone group."""
+        return self._config.get("hunt", {})
 
     def _facefocus_group(self) -> dict:
-        """The facefocus zone-group config (``{zones, behaviors, enabled, params}``)."""
-        return self._config.get("zone_groups", {}).get("facefocus", {})
+        """The facefocus config (``{zones, enabled, params}``) — a top-level section, not a zone group."""
+        return self._config.get("facefocus", {})
+
+    def _cam_control(self) -> dict:
+        """The camera-control map (zone name -> ``{active, mode, lock}``)."""
+        return self._config.get("cam_control", {})
+
+    def _apply_zone_cam(self, zone: str) -> None:
+        """Apply the zone's camera intent (the ``cam_control`` entry).
+
+        Called on every zone change (regardless of autonomy): the zone's camera
+        baseline is set here, and the hunt/facefocus logic overrides it while a
+        person is actively tracked. ``lock: "auto"`` resolves to the current hunt
+        lock (or None); ``"none"`` clears any lock; a specific id locks it.
+        """
+        if self.camera is None or not zone:
+            return
+        entry = self._cam_control().get(zone)
+        if not isinstance(entry, dict):
+            return
+        active = entry.get("active")
+        mode = entry.get("mode")
+        lock = entry.get("lock")
+        if lock == "auto":
+            self.camera.set_intent(active=active, mode=mode, lock_id=self._hunt_lock_id)
+        elif lock == "none":
+            self.camera.set_intent(active=active, mode=mode, clear_lock=True)
+        else:
+            self.camera.set_intent(active=active, mode=mode, lock_id=lock)
 
     def _recompute_enabled(self) -> None:
         """Recompute the set of enabled groups and their zone union.
@@ -149,19 +178,20 @@ class Brain:
         Returns a dict with:
         - ``enabled``: bool, whether autonomy is on.
         - ``enabled_groups``: sorted list of enabled group names.
-        - ``performance_mode``: bool, derived — the ``perform`` group is enabled
-          while both ``hunt`` and ``facefocus`` are disabled.
+        - ``performance_mode``: bool, derived — the ``stage-takeover`` group is
+          enabled while the ``event-sit-back`` group is disabled.
         - ``dwell_remaining``: float seconds remaining for the current action's
           dwell, or None when autonomy is off / no active action.
         """
         cfg = self._autonomy_cfg()
         enabled = bool(cfg.get("enabled", False))
         groups = sorted(self._enabled_groups)
-        # Performance mode: perform enabled, hunt and facefocus disabled.
-        perform = self._config.get("zone_groups", {}).get("perform", {})
-        hunt = self._config.get("zone_groups", {}).get("hunt", {})
-        facefocus = self._config.get("zone_groups", {}).get("facefocus", {})
-        perf = bool(perform.get("enabled", False)) and not bool(hunt.get("enabled", False)) and not bool(facefocus.get("enabled", False))
+        # Performance mode: the stage-takeover group is enabled while the
+        # event-sit-back group is disabled (the robot "takes over the stage").
+        zgs = self._config.get("zone_groups", {})
+        stage = zgs.get("stage-takeover", {})
+        event = zgs.get("event-sit-back", {})
+        perf = bool(stage.get("enabled", False)) and not bool(event.get("enabled", False))
         # Dwell remaining: only meaningful when autonomy is on and there is an active action.
         dwell_remaining = None
         if enabled:
@@ -259,6 +289,8 @@ class Brain:
             self._handle_cam_track(p)
         elif c == Cmd.CAM_FACE:
             self._handle_cam_face(p)
+        elif c == Cmd.CAM_FORCE_LOCK:
+            self._handle_cam_force_lock(p)
         elif c == Cmd.PROCEED:
             self._handle_proceed()
 
@@ -335,40 +367,62 @@ class Brain:
                 best_score = score
                 best = c
         if best is not None:
-            lock_id = best.get("id")
-            ff = self._facefocus_group()
-            ff_enabled = bool(ff.get("enabled", False))
-            if self.camera is not None and lock_id is not None:
-                if ff_enabled:
-                    # Facefocus: the close camera does the face analysis (it also sends
-                    # track for the locked person, so the hunt lost-check still works).
-                    self.camera.set_intent(active="close", mode="analyze", lock_id=lock_id)
-                else:
-                    self.camera.set_intent(lock_id=lock_id, mode="track")
-                if lock_id != self._hunt_lock_id:
-                    # New lock: the new target's CAM_TRACK lags ~1 frame, so seed the
-                    # lost timer now (a stale timestamp would cause a false "lost").
-                    self._hunt_last_track_ts = time.time()
-                    self._hunt_lock_id = lock_id
-                # Camera event: trigger autonomy advance if enabled.
-                if ff_enabled and self._autonomy_cfg().get("events", {}).get("camera", False):
-                    self._autonomy_triggered = True
-                # Attention grab: pull the robot into the hunt unless it is already
-                # tracking/looking, already facefocusing, or a zone transition is in
-                # progress.
-                hunt = self._hunt_group()
-                hp = hunt.get("params", {})
-                guard = tuple(hp.get("attention_guard", []))
-                detect = hp.get("detect", {})
-                if (self._hunt_state != "facefocus"
-                        and self.machine.behavior not in guard
-                        and not self.machine.transitioning
-                        and hunt.get("enabled", False)):
-                    self.machine.trigger_action(detect.get("zone"), detect.get("action"))
-                # Facefocus keeps the facefocus state; otherwise the lock means tracking.
-                if self._hunt_state != "facefocus":
-                    self._hunt_state = "tracking"
-                self._update_hunt_state()
+            self._apply_lock(best.get("id"))
+
+    def _apply_lock(self, lock_id) -> None:
+        """Apply a lock to candidate ``lock_id`` (camera intent + hunt state).
+
+        Shared by the automatic heuristic (:meth:`_handle_cam_candidates`) and the
+        manual debug lock (:meth:`_handle_cam_force_lock`). Sets the camera intent,
+        records the lock id, triggers the attention grab, and moves to tracking.
+        """
+        ff = self._facefocus_group()
+        ff_enabled = bool(ff.get("enabled", False))
+        if self.camera is not None and lock_id is not None:
+            if ff_enabled:
+                # Facefocus: the close camera does the face analysis (it also sends
+                # track for the locked person, so the hunt lost-check still works).
+                self.camera.set_intent(active="close", mode="analyze", lock_id=lock_id)
+            else:
+                self.camera.set_intent(lock_id=lock_id, mode="track")
+            if lock_id != self._hunt_lock_id:
+                # New lock: the new target's CAM_TRACK lags ~1 frame, so seed the
+                # lost timer now (a stale timestamp would cause a false "lost").
+                self._hunt_last_track_ts = time.time()
+                self._hunt_lock_id = lock_id
+            # Camera event: trigger autonomy advance if enabled.
+            if ff_enabled and self._autonomy_cfg().get("events", {}).get("camera", False):
+                self._autonomy_triggered = True
+            # Attention grab: pull the robot into the hunt unless it is already
+            # tracking/looking, already facefocusing, or a zone transition is in
+            # progress.
+            hunt = self._hunt_group()
+            hp = hunt.get("params", {})
+            guard = tuple(hp.get("attention_guard", []))
+            detect = hp.get("detect", {})
+            if (self._hunt_state != "facefocus"
+                    and self.machine.behavior not in guard
+                    and not self.machine.transitioning
+                    and hunt.get("enabled", False)):
+                self.machine.trigger_action(detect.get("zone"), detect.get("action"))
+            # Facefocus keeps the facefocus state; otherwise the lock means tracking.
+            if self._hunt_state != "facefocus":
+                self._hunt_state = "tracking"
+            self._update_hunt_state()
+
+    def _handle_cam_force_lock(self, p: dict) -> None:
+        """Manual lock (debug): force-lock a candidate id, bypassing ``min_conf``.
+
+        Lets a debug client (the camera debug page) lock a specific person so the
+        hunt/track/facefocus behaviour can be exercised without a real detection
+        clearing the ``min_conf`` threshold.
+        """
+        lock_id = p.get("id")
+        if lock_id is None:
+            print("[brain] force_lock: no id; ignored")
+            return
+        self._cam_log("force_lock", f"force_lock: id={lock_id} (manual)")
+        self._apply_lock(lock_id)
 
     def _handle_cam_track(self, p: dict) -> None:
         """Store the track telemetry on the machine; the behaviours read it.
@@ -522,35 +576,48 @@ class Brain:
     # Autonomy navigation (follow next links across the enabled zone union).
     # ------------------------------------------------------------------
     def _autonomy_dwell_s(self, zone: str, action: str) -> float:
-        """The dwell time for an action: per-action override or the global default."""
+        """The dwell time for an action: per-action override, the zone's mode-group
+        ``params.dwell_s``, or the global ``autonomy.dwell_s`` default."""
         z = self.machine.zones.get(zone)
         if z is not None:
             d = z.action_dwell_s(action)
             if d is not None:
                 return d
+            mg = z.mode_group
+            if mg:
+                g = self._config.get("zone_groups", {}).get(mg, {})
+                if isinstance(g, dict) and isinstance(g.get("params"), dict):
+                    pd = g["params"].get("dwell_s")
+                    if isinstance(pd, (int, float)) and not isinstance(pd, bool):
+                        return float(pd)
         return self._autonomy_cfg().get("dwell_s", 30.0)
 
     def _autonomy_follow_next(self, zone: str, action: str) -> None:
-        """Follow the current action's ``next`` link if its target is in the enabled union.
+        """Follow the current action's ``next`` link; else pick a random valid zone exit.
 
-        The brain can ONLY follow existing action ``next`` links from the flow editor.
-        No manual override, no arbitrary zone jumps. If the target zone is not in the
-        enabled union, consume the trigger and stay (the action keeps looping).
+        The brain prefers an existing action ``next`` link (from the flow editor). When
+        the action has no usable ``next``, it falls back to a random valid zone-level
+        ``exits`` pair — the wandering navigator. Targets outside the enabled union are
+        skipped (the action keeps looping).
         """
         z = self.machine.zones.get(zone)
         if z is None:
             return
         n = z.action_next(action)
-        if n is None:
-            return
-        target_zone = n.get("zone")
-        target_action = n.get("action")
-        if not target_zone or not target_action:
-            return
-        # Gate: the target zone must be in the union of enabled groups' zones.
-        if target_zone not in self._enabled_zones:
-            return
-        # Follow the link: same-zone uses play_action, cross-zone uses trigger_action.
+        if n is not None:
+            target_zone = n.get("zone")
+            target_action = n.get("action")
+            if target_zone and target_action and target_zone in self._enabled_zones:
+                self._autonomy_go(zone, target_zone, target_action)
+                return
+        # No usable ``next`` link: pick a random valid zone exit (wandering).
+        valid = [(ez, ea) for (ez, ea) in z.exits() if ez in self._enabled_zones]
+        if valid:
+            ez, ea = random.choice(valid)
+            self._autonomy_go(zone, ez, ea)
+
+    def _autonomy_go(self, zone: str, target_zone: str, target_action: str) -> None:
+        """Follow a target: same-zone uses play_action, cross-zone uses trigger_action."""
         if target_zone == zone:
             self.machine.play_action(target_action)
         else:
@@ -569,6 +636,11 @@ class Brain:
             self._autonomy_prev = cur
             self._autonomy_action_start_ts = time.time()
             self._autonomy_triggered = False
+        # The camera intent follows the zone (applied on every zone change,
+        # regardless of whether autonomy is on).
+        if self.machine.current_zone != self._cam_zone:
+            self._cam_zone = self.machine.current_zone
+            self._apply_zone_cam(self.machine.current_zone)
         if not self._autonomy_cfg().get("enabled", False):
             return
         if self.machine.transitioning:

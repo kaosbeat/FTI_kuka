@@ -36,6 +36,7 @@ class Cmd(str, Enum):
     CAM_CANDIDATES = "cam_candidates"
     CAM_TRACK = "cam_track"
     CAM_FACE = "cam_face"
+    CAM_FORCE_LOCK = "cam_force_lock"
     PROCEED = "proceed"
 
 

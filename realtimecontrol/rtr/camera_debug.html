@@ -68,6 +68,7 @@
       &nbsp;<span class="sw" style="background:#e05d5d"></span>locked
       &nbsp;<span class="sw" style="background:#4fc08d"></span>track offset
       &nbsp;<span class="sw" style="background:#d7dbe2"></span>image center
+      &nbsp;· click a candidate to force-lock it
     </div>
     <div id="wire"></div>
   </section>
@@ -117,7 +118,12 @@ let lastStateTime = 0;
 let lastTelem = null;   // cam_telem payload
 let lastIntent = null;  // camera intent payload
 let lastState = null;   // {servo, hunt, target, joints, moving} from the state frame
+let lastCandBoxes = []; // candidate boxes in canvas coords, for click hit-testing
 let stale = false;
+
+function wsSend(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
 
 function setConn(on) {
   $("dot").className = "dot" + (on ? " on" : "");
@@ -219,6 +225,7 @@ function drawFrame() {
   // Locked id: the track payload, falling back to the camera intent's lock (the
   // brain's current lock) when the track lags after a camera switch.
   const lockedId = t.track?.id ?? lastIntent?.lock_id ?? null;
+  lastCandBoxes = [];  // reset for this frame (the click handler hit-tests these)
 
   // candidate boxes
   for (const cd of cands) {
@@ -234,6 +241,7 @@ function drawFrame() {
     ctx.fillStyle = locked ? "#e05d5d" : "#ff9f40";
     ctx.font = "12px monospace";
     ctx.fillText(label, x1, Math.max(0, y1 - 4));
+    lastCandBoxes.push({ id: cd.id, x1, y1, x2, y2 });
   }
 
   // track: arrow from image center to the tracked point + cross marker
@@ -403,6 +411,22 @@ setInterval(() => {
 }, 500);
 
 $("connect").onclick = () => { const u = $("host").value.trim(); $("host").value = u; connect(); };
+
+// Click a candidate box to force-lock that person (the brain applies it, bypassing
+// min_conf). Useful when the automatic lock never fires (real detections below the
+// sensitivity threshold) — it lets you watch the track/facefocus behaviour on demand.
+$("frame").addEventListener("click", (ev) => {
+  const c = $("frame");
+  const rect = c.getBoundingClientRect();
+  const scale = c.width / rect.width;
+  const mx = (ev.clientX - rect.left) * scale;
+  const my = (ev.clientY - rect.top) * scale;
+  const hit = lastCandBoxes.find((b) => mx >= b.x1 && mx <= b.x2 && my >= b.y1 && my <= b.y2);
+  if (!hit) return;
+  wsSend({ cmd: "cam_force_lock", id: hit.id });
+  $("wire").textContent = "force_lock: " + hit.id + " (sent)";
+});
+
 connect();
 </script>
 </body>
