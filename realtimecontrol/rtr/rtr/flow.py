@@ -57,9 +57,8 @@ def reachable_targets(zones: Dict[str, dict], zone: Optional[str]) -> List[str]:
     if isinstance(actions, dict):
         for a in actions.values():
             if isinstance(a, dict):
-                n = a.get("next")
-                if isinstance(n, dict) and isinstance(n.get("zone"), str):
-                    if n["zone"] not in seen:
+                for n in action_next_list(a):
+                    if isinstance(n.get("zone"), str) and n["zone"] not in seen:
                         seen.add(n["zone"])
                         out.append(n["zone"])
     return out
@@ -80,8 +79,7 @@ def reverse_targets(zones: Dict[str, dict], zone: Optional[str]) -> List[str]:
         if isinstance(actions, dict):
             for a in actions.values():
                 if isinstance(a, dict):
-                    nxt = a.get("next")
-                    if isinstance(nxt, dict) and nxt.get("zone") == zone:
+                    if any(x.get("zone") == zone for x in action_next_list(a)):
                         if n not in out:
                             out.append(n)
                         break
@@ -100,13 +98,30 @@ def action_loops(a: dict) -> bool:
     return True
 
 
-def action_next(a: dict) -> Optional[dict]:
-    """The action's ``next`` field (``{zone, action}``), or None when absent."""
+def action_next(a: dict):
+    """The action's ``next`` field as stored (a single ``{zone, action}`` dict,
+    an ordered list of ``{zone, action}`` dicts, or None when absent)."""
     if isinstance(a, dict):
         n = a.get("next")
-        if isinstance(n, dict):
+        if isinstance(n, dict) or isinstance(n, list):
             return n
     return None
+
+
+def action_next_list(a: dict) -> List[dict]:
+    """The action's ``next`` as an ordered list of ``{zone, action}`` dicts.
+
+    Accepts the legacy single-dict form (wrapped into a 1-element list) or the
+    new list form. Returns ``[]`` when the field is absent or malformed.
+    """
+    if not isinstance(a, dict):
+        return []
+    n = a.get("next")
+    if isinstance(n, dict):
+        return [n]
+    if isinstance(n, list):
+        return [x for x in n if isinstance(x, dict)]
+    return []
 
 
 def action_enabled(a: dict) -> bool:

@@ -212,35 +212,40 @@ class StateMachine:
     def _advance_after_action(self, action: str) -> None:
         """Hand off after a single-run (legacy) action completes.
 
-        Priority: action ``next`` > zone-level ``exits`` (first valid, deterministic).
-        No valid target -> stop the action (the robot holds the last pose).
+        Priority: the action's ordered ``next`` list (first valid candidate) >
+        zone-level ``exits`` (first valid, deterministic). No valid target ->
+        stop the action (the robot holds the last pose).
         """
         zone = self.zones.get(self.current_zone)
-        n = zone.action_next(action)
-        if n and n.get("zone"):
-            target_zone = n["zone"]
-            target_action = n.get("action")
-            if target_zone != self.current_zone:
-                if not self.trigger_action(target_zone, target_action):
-                    self.clear_action()
+        for tz, ta in zone.action_next_list(action):
+            if self._try_go(tz, ta):
                 return
-            if target_action and target_action in zone.actions() and zone.action_enabled(target_action):
-                self.play_action(target_action)
-            else:
-                self.clear_action()
-            return
-        # No valid next: fall back to the first valid zone-level exit (deterministic).
+        # No valid next candidate: fall back to the first valid zone-level exit.
         for tz, ta in zone.exits():
-            if self.zones.has(tz) and self.zones.get(tz).enabled:
-                if ta in self.zones.get(tz).actions() and self.zones.get(tz).action_enabled(ta):
-                    if tz != self.current_zone:
-                        if not self.trigger_action(tz, ta):
-                            self.clear_action()
-                        return
-                    else:
-                        self.play_action(ta)
-                        return
+            if self._try_go(tz, ta):
+                return
         self.clear_action()
+
+    def _try_go(self, tz: str, ta: str) -> bool:
+        """Attempt to hand off to ``(tz, ta)``. Returns True if the handoff was taken.
+
+        A candidate is taken when the zone exists and is enabled and the action is
+        named, exists, and is enabled. Same-zone uses ``play_action``; cross-zone
+        uses ``trigger_action`` (clearing the action if the transition is refused).
+        """
+        if not isinstance(tz, str) or not self.zones.has(tz):
+            return False
+        z = self.zones.get(tz)
+        if not z.enabled:
+            return False
+        if not isinstance(ta, str) or ta not in z.actions() or not z.action_enabled(ta):
+            return False
+        if tz != self.current_zone:
+            if not self.trigger_action(tz, ta):
+                self.clear_action()
+            return True
+        self.play_action(ta)
+        return True
 
     # ------------------------------------------------------------------
     # Per-tick driver.

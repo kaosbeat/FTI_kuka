@@ -463,13 +463,20 @@ def _validate_action(name: str, a: dict, all_zone_names: set) -> None:
 
     if "next" in a:
         n = a["next"]
-        if not isinstance(n, dict):
-            raise ValueError(f"action {name!r}: 'next' must be an object")
-        if "zone" in n:
-            if not (isinstance(n["zone"], str) and n["zone"] in all_zone_names):
-                raise ValueError(f"action {name!r}: next.zone must name an existing zone")
-        if "action" in n and not isinstance(n["action"], str):
-            raise ValueError(f"action {name!r}: next.action must be a string")
+        if isinstance(n, dict):
+            items = [n]
+        elif isinstance(n, list):
+            items = n
+        else:
+            raise ValueError(f"action {name!r}: 'next' must be an object or a list of objects")
+        for entry in items:
+            if not isinstance(entry, dict):
+                raise ValueError(f"action {name!r}: 'next' entries must be objects")
+            if "zone" in entry:
+                if not (isinstance(entry["zone"], str) and entry["zone"] in all_zone_names):
+                    raise ValueError(f"action {name!r}: next.zone must name an existing zone")
+            if "action" in entry and not isinstance(entry["action"], str):
+                raise ValueError(f"action {name!r}: next.action must be a string")
 
 
 def _validate_zone(name: str, z: dict, all_names: set) -> None:
@@ -609,11 +616,28 @@ class Zone:
             return beh
         return "hold"
 
-    def action_next(self, name: str) -> Optional[dict]:
-        """The action's ``next`` field (``{zone, action}``), or None."""
+    def action_next(self, name: str):
+        """The action's ``next`` field as stored (a single ``{zone, action}`` dict,
+        an ordered list of ``{zone, action}`` dicts, or None when absent)."""
         a = self._action(name)
         n = a.get("next")
-        return n if isinstance(n, dict) else None
+        if isinstance(n, dict) or isinstance(n, list):
+            return n
+        return None
+
+    def action_next_list(self, name: str) -> List[dict]:
+        """The action's ``next`` as an ordered list of ``{zone, action}`` dicts.
+
+        Accepts the legacy single-dict form (wrapped into a 1-element list) or the
+        new list form. Returns ``[]`` when the field is absent or malformed.
+        """
+        a = self._action(name)
+        n = a.get("next")
+        if isinstance(n, dict):
+            return [n]
+        if isinstance(n, list):
+            return [x for x in n if isinstance(x, dict)]
+        return []
 
     def action_dwell_s(self, name: str) -> Optional[float]:
         """The action's dwell time in seconds (autonomy advance delay), or None.
@@ -720,9 +744,9 @@ class Zones:
         for name, z in self._by_name.items():
             targets = set()
             for an in z.actions():
-                n = z.action_next(an)
-                if n and isinstance(n.get("zone"), str):
-                    targets.add(n["zone"])
+                for n in z.action_next_list(an):
+                    if isinstance(n.get("zone"), str):
+                        targets.add(n["zone"])
             for tz, _ in z.exits():
                 targets.add(tz)
             g[name] = sorted(targets)

@@ -592,29 +592,63 @@ class Brain:
                         return float(pd)
         return self._autonomy_cfg().get("dwell_s", 30.0)
 
-    def _autonomy_follow_next(self, zone: str, action: str) -> None:
-        """Follow the current action's ``next`` link; else pick a random valid zone exit.
-
-        The brain prefers an existing action ``next`` link (from the flow editor). When
-        the action has no usable ``next``, it falls back to a random valid zone-level
-        ``exits`` pair — the wandering navigator. Targets outside the enabled union are
-        skipped (the action keeps looping).
+    def _first_valid_next(self, zone: str, action: str) -> Optional[tuple]:
+        """The first valid ``(zone, action)`` candidate from the action's ordered
+        ``next`` list: the zone is in the enabled union, and the action is named,
+        exists, and is enabled. Returns None when no candidate is usable.
         """
         z = self.machine.zones.get(zone)
         if z is None:
-            return
-        n = z.action_next(action)
-        if n is not None:
-            target_zone = n.get("zone")
-            target_action = n.get("action")
-            if target_zone and target_action and target_zone in self._enabled_zones:
-                self._autonomy_go(zone, target_zone, target_action)
-                return
-        # No usable ``next`` link: pick a random valid zone exit (wandering).
-        valid = [(ez, ea) for (ez, ea) in z.exits() if ez in self._enabled_zones]
-        if valid:
+            return None
+        for n in z.action_next_list(action):
+            tz = n.get("zone")
+            ta = n.get("action")
+            if not isinstance(tz, str) or tz not in self._enabled_zones:
+                continue
+            if not isinstance(ta, str):
+                continue
+            tz_zone = self.machine.zones.get(tz)
+            if tz_zone is None or not tz_zone.enabled:
+                continue
+            if ta not in tz_zone.actions() or not tz_zone.action_enabled(ta):
+                continue
+            return (tz, ta)
+        return None
+
+    def _wants_stay(self, zone: str, action: str) -> bool:
+        """Whether the brain wants the current action to keep looping (stay).
+
+        The robot stays while it is actively tracking a locked person (the hunt loop
+        is running): advancing would interrupt the tracking. The dwell-expiry decision
+        consults this; an external event overrides it (the event is a push to move on).
+        """
+        return self._hunt_state in ("tracking", "facefocus") and self._hunt_lock_id is not None
+
+    def _autonomy_decide(self, zone: str, action: str, event: bool) -> bool:
+        """The brain's decision on the current action's "end" (an event, or dwell
+        expiry): stay (keep looping) or advance (pick a next). Returns True if it
+        advanced.
+
+        - An external event (midi / camera / websocket) is a push to move on: advance.
+        - While the camera is actively tracking a locked person, the robot stays (it
+          keeps looping the current action to keep following the person).
+        - Otherwise (idle, dwell expired), advance to the first valid candidate.
+        - No valid candidate: stay (the action keeps looping).
+        """
+        if not event and self._wants_stay(zone, action):
+            return False
+        target = self._first_valid_next(zone, action)
+        if target is None:
+            # No usable next link: pick a random valid zone exit (wandering).
+            z = self.machine.zones.get(zone)
+            valid = [(ez, ea) for (ez, ea) in z.exits() if ez in self._enabled_zones]
+            if not valid:
+                return False
             ez, ea = random.choice(valid)
-            self._autonomy_go(zone, ez, ea)
+        else:
+            ez, ea = target
+        self._autonomy_go(zone, ez, ea)
+        return True
 
     def _autonomy_go(self, zone: str, target_zone: str, target_action: str) -> None:
         """Follow a target: same-zone uses play_action, cross-zone uses trigger_action."""
@@ -624,11 +658,14 @@ class Brain:
             self.machine.trigger_action(target_zone, target_action)
 
     def _autonomy_tick(self, curjpos: List[float]) -> None:
-        """Per-tick autonomy decision: advance to the next link when dwell expires.
+        """Per-tick autonomy decision: on the current action's "end" (an event, or
+        dwell expiry) the brain decides to stay (loop) or advance (pick a next).
 
         Called at the end of :meth:`tick`, after hunt bookkeeping. Detects a
-        (zone, action) change to reset the dwell timer, then checks whether the
-        current action should advance (dwell expired or event triggered).
+        (zone, action) change to reset the dwell timer, then — when the action has
+        ended (event fired or dwell expired) — asks the brain whether to loop or
+        advance. Staying resets the dwell timer so the action keeps looping and the
+        brain re-evaluates on the next dwell expiry.
         """
         cur = (self.machine.current_zone, self.machine.current_action)
         if cur != self._autonomy_prev:
@@ -655,9 +692,17 @@ class Brain:
             return
         dwell = self._autonomy_dwell_s(zone, action)
         now = time.time()
-        if self._autonomy_triggered or (now - self._autonomy_action_start_ts >= dwell):
-            self._autonomy_follow_next(zone, action)
-            self._autonomy_triggered = False
+        event = self._autonomy_triggered
+        if not (event or (now - self._autonomy_action_start_ts >= dwell)):
+            return
+        # The action has "ended": the brain decides to stay (loop) or advance.
+        self._autonomy_decide(zone, action, event)
+        self._autonomy_triggered = False
+        # If the (zone, action) did not change (stayed, or the advance was refused),
+        # reset the dwell timer so the brain re-evaluates on the next dwell expiry
+        # instead of re-firing every tick.
+        if (self.machine.current_zone, self.machine.current_action) == cur:
+            self._autonomy_action_start_ts = time.time()
 
     # ------------------------------------------------------------------
     # External event handlers (autonomy triggers).
