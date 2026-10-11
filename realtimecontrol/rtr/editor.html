@@ -178,6 +178,7 @@
     <div class="zoneList" id="zoneList"></div>
     <div class="row" style="margin-top:8px">
       <button id="addZone">+ add zone</button>
+      <button id="renameZone" class="small">rename</button>
       <button id="delZone" class="small">remove</button>
     </div>
   </section>
@@ -235,6 +236,7 @@
     <h2>flow</h2>
     <div class="row">
       <button id="flowAddZone">+ add zone</button>
+      <button id="flowRenameZone" class="small">rename</button>
       <button id="flowDelZone" class="small">remove</button>
       <button id="flowAutoLayout" class="small">auto layout</button>
       <button id="flowFit" class="small">fit view</button>
@@ -3745,6 +3747,36 @@ function delZone() {
       setNext(a, nextList(a).filter((t) => t.zone !== nm));
     });
   });
+  // Clean orphaned per-zone references (sound, patches, midi, brain) so the deleted
+  // zone never leaves stale entries behind (mirrors renameZone's re-pointing).
+  if (SOUND) {
+    if (SOUND.zones[nm]) delete SOUND.zones[nm];
+    if (SOUND.actions[nm]) delete SOUND.actions[nm];
+  }
+  if (PATCHES) {
+    if (PATCHES.zones[nm]) delete PATCHES.zones[nm];
+    if (PATCHES.actions[nm]) delete PATCHES.actions[nm];
+  }
+  if (MIDI) {
+    if (MIDI.zones[nm]) delete MIDI.zones[nm];
+  }
+  if (BRAIN) {
+    if (BRAIN.zone_groups) {
+      Object.values(BRAIN.zone_groups).forEach((g) => {
+        if (g.zones) g.zones = g.zones.filter((x) => x !== nm);
+      });
+    }
+    if (BRAIN.hunt) {
+      if (BRAIN.hunt.zones) BRAIN.hunt.zones = BRAIN.hunt.zones.filter((x) => x !== nm);
+      const hp = BRAIN.hunt.params;
+      if (hp && hp.detect && hp.detect.zone === nm) delete hp.detect.zone;
+      if (hp && hp.scan && hp.scan.zone === nm) delete hp.scan.zone;
+    }
+    if (BRAIN.facefocus && BRAIN.facefocus.zones) {
+      BRAIN.facefocus.zones = BRAIN.facefocus.zones.filter((x) => x !== nm);
+    }
+    if (BRAIN.cam_control && BRAIN.cam_control[nm]) delete BRAIN.cam_control[nm];
+  }
   // Re-point the shared zone editor to a live zone immediately (both views), so the
   // deleted zone is never left selected. Then handle the flow-view specifics.
   const names = Object.keys(TABLE.zones);
@@ -3759,6 +3791,83 @@ function delZone() {
     buildFlowDetail();
     return;
   }
+}
+
+// Rename the selected zone (zones tab) / selected node (flow tab), re-pointing every
+// cross-reference so the rename never strands a dangling `next`, sound, patch, midi,
+// brain, or flow-position entry. The rename is in-memory only until save.
+function renameZone() {
+  const nm = flowView ? (FLOW.sel && FLOW.sel.type === "node" ? FLOW.sel.zone : null) : selectedZone;
+  if (!nm) { if (flowView) $("saveMsg").textContent = "select a node to rename"; return; }
+  const nn = prompt(`rename zone "${nm}" to:`, nm);
+  if (!nn || nn === nm) return;
+  const clean = nn.trim();
+  if (!clean || TABLE.zones[clean]) {
+    $("saveMsg").textContent = `cannot rename to "${clean}" (empty or already exists)`;
+    $("saveMsg").className = "err";
+    return;
+  }
+  // 1. Move the zone object under the new key.
+  const z = TABLE.zones[nm];
+  delete TABLE.zones[nm];
+  TABLE.zones[clean] = z;
+  // 2. Re-point every action's `next` target that names this zone.
+  Object.values(TABLE.zones).forEach((oz) => {
+    if (!oz.actions) return;
+    Object.values(oz.actions).forEach((a) => {
+      const list = nextList(a);
+      if (list.some((t) => t.zone === nm)) {
+        setNext(a, list.map((t) => t.zone === nm ? Object.assign({}, t, { zone: clean }) : t));
+      }
+    });
+  });
+  // 3. Sound mapping (zone-entry + per-zone actions).
+  if (SOUND) {
+    if (SOUND.zones[nm]) { SOUND.zones[clean] = SOUND.zones[nm]; delete SOUND.zones[nm]; }
+    if (SOUND.actions[nm]) { SOUND.actions[clean] = SOUND.actions[nm]; delete SOUND.actions[nm]; }
+  }
+  // 4. Patches (zone + per-zone actions; `modes` is keyed by behavior, not zone).
+  if (PATCHES) {
+    if (PATCHES.zones[nm]) { PATCHES.zones[clean] = PATCHES.zones[nm]; delete PATCHES.zones[nm]; }
+    if (PATCHES.actions[nm]) { PATCHES.actions[clean] = PATCHES.actions[nm]; delete PATCHES.actions[nm]; }
+  }
+  // 5. Midi-in mapping (per-zone in_port + command + action keys).
+  if (MIDI) {
+    if (MIDI.zones[nm]) { MIDI.zones[clean] = MIDI.zones[nm]; delete MIDI.zones[nm]; }
+  }
+  // 6. Brain config (group/hunt/facefocus zone lists, cam_control, detect/scan refs).
+  if (BRAIN) {
+    if (BRAIN.zone_groups) {
+      Object.values(BRAIN.zone_groups).forEach((g) => {
+        if (g.zones) g.zones = g.zones.map((x) => x === nm ? clean : x);
+      });
+    }
+    if (BRAIN.hunt) {
+      if (BRAIN.hunt.zones) BRAIN.hunt.zones = BRAIN.hunt.zones.map((x) => x === nm ? clean : x);
+      const hp = BRAIN.hunt.params;
+      if (hp && hp.detect && hp.detect.zone === nm) hp.detect.zone = clean;
+      if (hp && hp.scan && hp.scan.zone === nm) hp.scan.zone = clean;
+    }
+    if (BRAIN.facefocus && BRAIN.facefocus.zones) {
+      BRAIN.facefocus.zones = BRAIN.facefocus.zones.map((x) => x === nm ? clean : x);
+    }
+    if (BRAIN.cam_control && BRAIN.cam_control[nm]) {
+      BRAIN.cam_control[clean] = BRAIN.cam_control[nm]; delete BRAIN.cam_control[nm];
+    }
+  }
+  // 7. Flow node positions + selection.
+  if (FLOW.pos[nm]) { FLOW.pos[clean] = FLOW.pos[nm]; delete FLOW.pos[nm]; }
+  selectedZone = clean;
+  buildZoneList();
+  selectZone(clean);
+  if (flowView) {
+    if (FLOW.sel && FLOW.sel.zone === nm) FLOW.sel = { type: "node", zone: clean };
+    FLOW.layoutKey = Object.keys(TABLE.zones).sort().join(",");
+    flowRender();
+    buildFlowDetail();
+  }
+  $("saveMsg").textContent = `renamed "${nm}" -> "${clean}" (save to persist)`;
+  $("saveMsg").className = "";
 }
 
 Robot3D.init($("robot3d"), { log: (m) => console.log(m), environment: true });
@@ -3784,6 +3893,7 @@ loadTable().then(loadSound).then(loadPatches).then(loadMidi).then(loadLimits).th
 $("connect").onclick = () => { $("host").value = $("host").value.trim(); connect(); };
 $("save").onclick = save;
 $("addZone").onclick = addZone;
+$("renameZone").onclick = renameZone;
 $("delZone").onclick = delZone;
   $("tabZones").onclick = () => switchView("zones");
   $("tabPatches").onclick = () => switchView("patches");
@@ -3800,6 +3910,7 @@ $("sndRefreshPorts").onclick = () => {
   }).catch(() => { sndPorts = []; buildMidiOutForm(); });
 };
 $("flowAddZone").onclick = addZone;
+$("flowRenameZone").onclick = renameZone;
 $("flowDelZone").onclick = delZone;
 // Auto layout: scoped to the selection (node, or an edge's both ends) so a
 // manually laid-out flow survives. No selection -> confirm before moving everything.
