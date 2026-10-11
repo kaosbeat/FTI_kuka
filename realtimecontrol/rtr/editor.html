@@ -329,7 +329,7 @@
 "use strict";
 
 const AXES = ["A1", "A2", "A3", "A4", "A5", "A6"];
-const BEHAVIORS = ["track", "focus", "scan", "look", "wander", "random", "face", "hold", "purr", "claw", "grab", "leap", "pacing", "snore"];
+const BEHAVIORS = ["calm", "restless", "spontaneous", "vigilant", "locked", "intent", "curious", "gentle", "soothing", "drowsy", "agitated", "aggressive", "impatient", "exhilarated"];
 const NAV_COMMANDS = ["next_action", "next_zone", "back", "retrigger"];
 const $ = (id) => document.getElementById(id);
 
@@ -344,11 +344,11 @@ $("host").value = defaultHost;
 // {enabled, safezone, speed, actions}; the navigation graph is the per-action `next`.
 const FALLBACK = {
   zones: {
-    init: { safezone: [[-94,122],[-105,-65],[89,115],[-15,15],[-15,45],[-357,357]],
+    resting: {safezone: [[-94,122],[-105,-65],[89,115],[-15,15],[-15,45],[-357,357]],
             speed: 20, enabled: true,
             actions: {wake: {enabled: true, base_pose: [-60,-90,90,0,15,0], variable_axes: [],
-                             behavior: "hold", speed: 20, loop: true,
-                             next: {zone: "rest", action: "breathe"}}}},
+                             behavior: "calm", speed: 20, loop: true,
+                             next: {zone: "sleeping", action: "breathe"}}}},
   },
   poses: {}, lin_poses: {},
 };
@@ -620,37 +620,45 @@ const BRAIN_FALLBACK = {
     events: { midi: true, camera: true, websocket: true },
   },
   zone_groups: {
-    home: {
-      zones: ["init", "rest", "init_rest_bridge"],
-      behaviors: ["hold"],
+    "museum-closed": {
+      zones: ["resting", "sleeping", "cuddling", "purring"],
+      behaviors: [],
       enabled: true,
+      params: { speed: 10, dwell_s: 60.0 },
     },
-    hunt: {
-      zones: ["wakeup"],
-      behaviors: ["look", "scan"],
+    "event-sit-back": {
+      zones: ["stretching", "hunting", "examining", "performing"],
+      behaviors: [],
       enabled: true,
-      params: {
-        lost_s: 2.0,
-        min_conf: 0.1,
-        attention_guard: ["track", "focus", "look", "face"],
-        detect: { zone: "wakeup", action: "look" },
-        scan: { zone: "wakeup", action: "scan" },
-      },
+      params: { speed: 40, dwell_s: 30.0 },
     },
-    facefocus: {
-      zones: ["stretch"],
-      behaviors: ["face"],
+    "stage-takeover": {
+      zones: ["roaring", "growling", "clawing", "leaping"],
+      behaviors: [],
       enabled: true,
-      params: {
-        actions: ["wink", "inspect", "call"],
-        action_s: 3.0,
-        face_lost_s: 2.5,
-      },
+      params: { speed: 80, dwell_s: 15.0 },
     },
-    perform: {
-      zones: ["watch", "perform", "fume"],
-      behaviors: ["track", "focus"],
-      enabled: false,
+  },
+  hunt: {
+    zones: ["hunting"],
+    behaviors: [],
+    enabled: true,
+    params: {
+      lost_s: 2.0,
+      min_conf: 0.1,
+      attention_guard: ["locked", "intent", "curious", "gentle"],
+      detect: { zone: "hunting", action: "track" },
+      scan: { zone: "hunting", action: "scan" },
+    },
+  },
+  facefocus: {
+    zones: ["stretching"],
+    behaviors: [],
+    enabled: true,
+    params: {
+      actions: ["wink", "inspect", "call"],
+      action_s: 3.0,
+      face_lost_s: 2.5,
     },
   },
 };
@@ -1481,15 +1489,19 @@ async function loadPatches() {
 // to fill in any group (or field) missing from the fetched config so BRAIN is
 // always complete.
 const BRAIN_DEFAULT_GROUPS = {
-  home:      { zones: ["init", "rest", "init_rest_bridge"], behaviors: ["hold"], enabled: true },
-  hunt:      { zones: ["wakeup"], behaviors: ["look", "scan"], enabled: true,
-               params: { lost_s: 2.0, min_conf: 0.1,
-                         attention_guard: ["track", "focus", "look", "face"],
-                         detect: { zone: "wakeup", action: "look" },
-                         scan: { zone: "wakeup", action: "scan" } } },
-  facefocus: { zones: ["stretch"], behaviors: ["face"], enabled: true,
-               params: { actions: ["wink", "inspect", "call"], action_s: 3.0, face_lost_s: 2.5 } },
-  perform:   { zones: ["watch", "perform", "fume"], behaviors: ["track", "focus"], enabled: false },
+  "museum-closed":  { zones: ["resting", "sleeping", "cuddling", "purring"], behaviors: [], enabled: true,
+                      params: { speed: 10, dwell_s: 60.0 } },
+  "event-sit-back": { zones: ["stretching", "hunting", "examining", "performing"], behaviors: [], enabled: true,
+                      params: { speed: 40, dwell_s: 30.0 } },
+  "stage-takeover": { zones: ["roaring", "growling", "clawing", "leaping"], behaviors: [], enabled: true,
+                      params: { speed: 80, dwell_s: 15.0 } },
+  hunt:      { zones: ["hunting"], behaviors: [], enabled: true,
+                params: { lost_s: 2.0, min_conf: 0.1,
+                          attention_guard: ["locked", "intent", "curious", "gentle"],
+                          detect: { zone: "hunting", action: "track" },
+                          scan: { zone: "hunting", action: "scan" } } },
+  facefocus: { zones: ["stretching"], behaviors: [], enabled: true,
+                params: { actions: ["wink", "inspect", "call"], action_s: 3.0, face_lost_s: 2.5 } },
 };
 
 function _brainGroupSuffix(name) {
@@ -1548,11 +1560,18 @@ function normalizeBrain(data) {
   };
   const groups = {};
   const src = data.zone_groups || {};
-  for (const name of Object.keys(src)) groups[name] = _brainNormalizeGroup(name, src[name]);
-  for (const name of Object.keys(BRAIN_DEFAULT_GROUPS)) {
-    if (!groups[name]) groups[name] = _brainNormalizeGroup(name, src[name]);
+  for (const name of Object.keys(src)) {
+    if (name !== "hunt" && name !== "facefocus") groups[name] = _brainNormalizeGroup(name, src[name]);
   }
-  return { autonomy, zone_groups: groups };
+  for (const name of Object.keys(BRAIN_DEFAULT_GROUPS)) {
+    if (name !== "hunt" && name !== "facefocus") {
+      if (!groups[name]) groups[name] = _brainNormalizeGroup(name, src[name]);
+    }
+  }
+  const hunt = _brainNormalizeGroup("hunt", data.hunt || fb.hunt);
+  const facefocus = _brainNormalizeGroup("facefocus", data.facefocus || fb.facefocus);
+  const cam_control = data.cam_control || fb.cam_control || {};
+  return { autonomy, zone_groups: groups, hunt, facefocus, cam_control };
 }
 
 async function loadBrain() {
@@ -1633,26 +1652,39 @@ function buildBrainForm() {
     mkRow(`group.${name}.enabled`, mkCheck("brainGrp" + s + "Enabled", g.enabled));
     mkRow(`group.${name}.zones (comma-separated)`, mkText("brainGrp" + s + "Zones", g.zones.join(", ")));
     mkRow(`group.${name}.behaviors (comma-separated)`, mkText("brainGrp" + s + "Behaviors", g.behaviors.join(", ")));
-    if (name === "hunt") {
-      const p = g.params;
-      mkSection("hunt.params (the hunt-loop timing/trigger data)");
-      mkRow("hunt.lost_s (s, how long a locked target's track may go stale)",
-            mkNum("brainHuntLostS", p.lost_s, "0.1", "0"));
-      mkRow("hunt.min_conf (lock sensitivity; candidates below it are ignored — lower = more sensitive)",
-            mkNum("brainHuntMinConf", p.min_conf, "0.05", "0"));
-      mkRow("hunt.attention_guard (behaviors that suppress the detect grab)",
-            mkText("brainHuntGuard", p.attention_guard.join(", ")));
-      mkRow("hunt.detect.zone", mkText("brainHuntDetZone", p.detect.zone));
-      mkRow("hunt.detect.action", mkText("brainHuntDetAct", p.detect.action));
-      mkRow("hunt.scan.zone", mkText("brainHuntScanZone", p.scan.zone));
-      mkRow("hunt.scan.action", mkText("brainHuntScanAct", p.scan.action));
-    } else if (name === "facefocus") {
-      const p = g.params;
-      mkSection("facefocus.params (the 'check out that human' face actions)");
-      mkRow("facefocus.actions (comma-separated)", mkText("brainFFActions", p.actions.join(", ")));
-      mkRow("facefocus.action_s (s, per face action)", mkNum("brainFFActionS", p.action_s, "0.1", "0"));
-      mkRow("facefocus.face_lost_s (s, before the face is lost)", mkNum("brainFFLostS", p.face_lost_s, "0.1", "0"));
-    }
+  }
+
+  // --- hunt (top-level, the hunt-loop timing/trigger data) ---
+  {
+    const h = BRAIN.hunt;
+    const hs = "Hunt";
+    mkSection("hunt");
+    mkRow("hunt.enabled", mkCheck("brainGrp" + hs + "Enabled", h.enabled));
+    mkRow("hunt.zones (comma-separated)", mkText("brainGrp" + hs + "Zones", h.zones.join(", ")));
+    const hp = h.params;
+    mkRow("hunt.lost_s (s, how long a locked target's track may go stale)",
+          mkNum("brainHuntLostS", hp.lost_s, "0.1", "0"));
+    mkRow("hunt.min_conf (lock sensitivity; candidates below it are ignored — lower = more sensitive)",
+          mkNum("brainHuntMinConf", hp.min_conf, "0.05", "0"));
+    mkRow("hunt.attention_guard (behaviors that suppress the detect grab)",
+          mkText("brainHuntGuard", hp.attention_guard.join(", ")));
+    mkRow("hunt.detect.zone", mkText("brainHuntDetZone", hp.detect.zone));
+    mkRow("hunt.detect.action", mkText("brainHuntDetAct", hp.detect.action));
+    mkRow("hunt.scan.zone", mkText("brainHuntScanZone", hp.scan.zone));
+    mkRow("hunt.scan.action", mkText("brainHuntScanAct", hp.scan.action));
+  }
+
+  // --- facefocus (top-level, the 'check out that human' face actions) ---
+  {
+    const ff = BRAIN.facefocus;
+    const ffs = "Facefocus";
+    mkSection("facefocus");
+    mkRow("facefocus.enabled", mkCheck("brainGrp" + ffs + "Enabled", ff.enabled));
+    mkRow("facefocus.zones (comma-separated)", mkText("brainGrp" + ffs + "Zones", ff.zones.join(", ")));
+    const fp = ff.params;
+    mkRow("facefocus.actions (comma-separated)", mkText("brainFFActions", fp.actions.join(", ")));
+    mkRow("facefocus.action_s (s, per face action)", mkNum("brainFFActionS", fp.action_s, "0.1", "0"));
+    mkRow("facefocus.face_lost_s (s, before the face is lost)", mkNum("brainFFLostS", fp.face_lost_s, "0.1", "0"));
   }
 
   // --- camera inject (send CAM_* telemetry to the running core) ---
@@ -1718,28 +1750,31 @@ function saveBrain() {
       events: { midi: $("brainEvMidi").checked, camera: $("brainEvCamera").checked, websocket: $("brainEvWs").checked },
     },
     zone_groups: {},
-  };
-  for (const name of Object.keys(BRAIN.zone_groups)) {
-    const s = _brainGroupSuffix(name);
-    const g = grp(s);
-    if (name === "hunt") {
-      const hp = BRAIN.zone_groups.hunt.params;
-      g.params = {
-        lost_s: num("brainHuntLostS", hp.lost_s),
-        min_conf: num("brainHuntMinConf", hp.min_conf),
+    hunt: {
+      zones: splitList("brainGrpHuntZones"),
+      enabled: $("brainGrpHuntEnabled").checked,
+      params: {
+        lost_s: num("brainHuntLostS", BRAIN.hunt.params.lost_s),
+        min_conf: num("brainHuntMinConf", BRAIN.hunt.params.min_conf),
         attention_guard: splitList("brainHuntGuard"),
         detect: { zone: $("brainHuntDetZone").value.trim(), action: $("brainHuntDetAct").value.trim() },
         scan: { zone: $("brainHuntScanZone").value.trim(), action: $("brainHuntScanAct").value.trim() },
-      };
-    } else if (name === "facefocus") {
-      const fp = BRAIN.zone_groups.facefocus.params;
-      g.params = {
+      },
+    },
+    facefocus: {
+      zones: splitList("brainGrpFacefocusZones"),
+      enabled: $("brainGrpFacefocusEnabled").checked,
+      params: {
         actions: splitList("brainFFActions"),
-        action_s: num("brainFFActionS", fp.action_s),
-        face_lost_s: num("brainFFLostS", fp.face_lost_s),
-      };
-    }
-    payload.zone_groups[name] = g;
+        action_s: num("brainFFActionS", BRAIN.facefocus.params.action_s),
+        face_lost_s: num("brainFFLostS", BRAIN.facefocus.params.face_lost_s),
+      },
+    },
+  };
+  for (const name of Object.keys(BRAIN.zone_groups)) {
+    if (name === "hunt" || name === "facefocus") continue;
+    const s = _brainGroupSuffix(name);
+    payload.zone_groups[name] = grp(s);
   }
   fetch("/api/brain", {
     method: "POST",
@@ -2034,7 +2069,7 @@ function convertActionForm(a, form) {
   if (form === "var") {
     a.base_pose = (a.pos && a.pos[0]) ? a.pos[0].slice() : [0,0,0,0,0,0];
     a.variable_axes = Array.isArray(a.variable_axes) ? a.variable_axes : [];
-    a.behavior = (typeof a.behavior === "string" && BEHAVIORS.includes(a.behavior)) ? a.behavior : "hold";
+    a.behavior = (typeof a.behavior === "string" && BEHAVIORS.includes(a.behavior)) ? a.behavior : "calm";
     a.speed = (Array.isArray(a.speed) && a.speed[0] != null) ? a.speed[0] : 20;
     delete a.pos;
   } else {
@@ -2140,7 +2175,7 @@ function buildActionEditor() {
     bl.innerHTML = "behavior <select class='aeBehavior'></select>";
     const bsel = bl.querySelector("select");
     BEHAVIORS.forEach((b) => { const o = document.createElement("option"); o.value = b; o.textContent = b; bsel.appendChild(o); });
-    bsel.value = (a.behavior && BEHAVIORS.includes(a.behavior)) ? a.behavior : "hold";
+    bsel.value = (a.behavior && BEHAVIORS.includes(a.behavior)) ? a.behavior : "calm";
     bsel.onchange = () => { a.behavior = bsel.value; };
     row.appendChild(bl);
     const sp = document.createElement("label");
@@ -2663,7 +2698,7 @@ function buildZoneForm(containerEl, titleEl, name, onChanged, showPoses) {
   addA.onclick = () => {
     const nm = prompt("action name:", "new");
     if (!nm) return;
-    z.actions[nm] = { enabled: true, base_pose: [0,0,0,0,0,0], variable_axes: [], behavior: "hold", speed: 20, loop: true };
+    z.actions[nm] = { enabled: true, base_pose: [0,0,0,0,0,0], variable_axes: [], behavior: "calm", speed: 20, loop: true };
     selectedAction = nm;
     rebuild(); onChanged();
   };
@@ -2743,7 +2778,7 @@ function buildActionList(container, name, z, rebuild, onChanged, showPoses) {
         const beh = document.createElement("select");
         beh.className = "aeBehavior";
         BEHAVIORS.forEach((b) => { const o = document.createElement("option"); o.value = b; o.textContent = b; beh.appendChild(o); });
-        beh.value = (a.behavior && BEHAVIORS.includes(a.behavior)) ? a.behavior : "hold";
+        beh.value = (a.behavior && BEHAVIORS.includes(a.behavior)) ? a.behavior : "calm";
         beh.onchange = () => { a.behavior = beh.value; };
         pr.appendChild(beh);
         const spd = document.createElement("input");
@@ -3299,7 +3334,7 @@ function flowAddNode(layer, name) {
       const hit = svgEl("rect", { x: 0, y: ry - FA_ROW / 2, width: NODE_W, height: FA_ROW, fill: "transparent" });
       hit.addEventListener("mousedown", (e) => { e.stopPropagation(); flowDragStart(e, name, an); });
       g.appendChild(hit);
-      const beh = actionForm(act) === "var" ? (act.behavior || "hold") : "pose";
+      const beh = actionForm(act) === "var" ? (act.behavior || "calm") : "pose";
       const txt = svgEl("text", { x: 8, y: ry + 4, class: "faRow", "text-anchor": "start" });
       const lbl = svgEl("tspan", { class: "faLabel" });
       lbl.textContent = an;
