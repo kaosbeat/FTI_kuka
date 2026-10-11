@@ -32,7 +32,7 @@ from .zones import Zones
 class StateMachine:
     """Owns the composite state ``(zone, action)`` and drives it one tick at a time."""
 
-    def __init__(self, zones: Zones, initial_zone: str = "home", tick_hz: float = 20.0):
+    def __init__(self, zones: Zones, initial_zone: str = "resting", tick_hz: float = 20.0):
         self.zones = zones
         self.tick_hz = tick_hz
 
@@ -47,7 +47,7 @@ class StateMachine:
         # behaviour policies read it). Empty dict until the first frame arrives.
         self.camera_state: dict = {}
         # Face telemetry (the brain stashes the latest CAM_FACE payload here; the
-        # ``face`` behaviour reads it). Empty dict until the first face frame arrives.
+        # ``gentle`` behaviour reads it). Empty dict until the first face frame arrives.
         self.face_state: dict = {}
         # Servo state (the behaviour policies write the last computed servo vector
         # here on every tick; the display reads it for the state frame). Shape:
@@ -278,9 +278,9 @@ class StateMachine:
                         self.target = clamp(self, pose)
                         self.target_kind = "joint"
             else:
-                # Variable-axis: ``random`` re-targets at the cadence (the rest servo
+                # Variable-axis: ``spontaneous`` re-targets at the cadence (the rest servo
                 # continuously every tick).
-                if zone.action_behavior(self.current_action) == "random" \
+                if zone.action_behavior(self.current_action) == "spontaneous" \
                         and not self._cadence_due(curjpos):
                     pass  # hold the last target this tick
                 else:
@@ -347,10 +347,10 @@ class StateMachine:
 
     @property
     def behavior(self) -> str:
-        """The current action's behaviour (the state-frame mode), or ``"hold"``."""
+        """The current action's behaviour (the state-frame mode), or ``"calm"``."""
         if self.current_action:
             return self.zones.get(self.current_zone).action_behavior(self.current_action)
-        return "hold"
+        return "calm"
 
     @property
     def effective_behavior(self) -> str:
@@ -374,7 +374,7 @@ class StateMachine:
         Seeds the target to the robot's pose so the first tick has something to hold.
         """
         self._transition = None
-        self.current_zone = "home"
+        self.current_zone = "resting"
         self.current_action = None
         self.action_index = 0
         self.speed = self.zones.get(self.current_zone).speed

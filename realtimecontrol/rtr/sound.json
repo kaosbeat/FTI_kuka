@@ -1,226 +1,427 @@
 {
   "channel": 0,
   "zones": {
-    "home": {
+    "resting": {
       "out_port": null,
-      "command": { "note": 48, "velocity": 50 }
+      "command": {
+        "note": 48,
+        "velocity": 50
+      }
     },
-    "sleep": {
+    "sleeping": {
       "out_port": null,
-      "command": { "note": 36, "velocity": 50 }
+      "command": {
+        "note": 36,
+        "velocity": 50
+      }
     },
-    "cuddle": {
+    "cuddling": {
       "out_port": null,
-      "command": { "note": 40, "velocity": 45 }
+      "command": {
+        "note": 40,
+        "velocity": 45
+      }
     },
-    "purr": {
+    "purring": {
       "out_port": null,
-      "command": { "note": 42, "velocity": 45 }
+      "command": {
+        "note": 42,
+        "velocity": 45
+      }
     },
-    "stretch": {
+    "stretching": {
       "out_port": null,
-      "command": { "note": 55, "velocity": 75 }
+      "command": {
+        "note": 55,
+        "velocity": 75
+      }
     },
-    "hunt": {
+    "hunting": {
       "out_port": null,
-      "command": { "note": 52, "velocity": 70 }
+      "command": {
+        "note": 52,
+        "velocity": 70
+      }
     },
-    "closeup": {
+    "examining": {
       "out_port": null,
-      "command": { "note": 67, "velocity": 80 }
+      "command": {
+        "note": 67,
+        "velocity": 80
+      }
     },
-    "perform": {
+    "performing": {
       "out_port": null,
-      "command": { "note": 60, "velocity": 60 }
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
     },
-    "roar": {
+    "roaring": {
       "out_port": null,
-      "command": { "note": 64, "velocity": 90 }
+      "command": {
+        "note": 64,
+        "velocity": 90
+      }
     },
-    "growl": {
+    "growling": {
       "out_port": null,
-      "command": { "note": 56, "velocity": 80 }
+      "command": {
+        "note": 56,
+        "velocity": 80
+      }
     },
-    "claw": {
+    "clawing": {
       "out_port": null,
-      "command": { "note": 62, "velocity": 80 }
+      "command": {
+        "note": 62,
+        "velocity": 80
+      }
     },
-    "leap": {
+    "leaping": {
       "out_port": null,
-      "command": { "note": 66, "velocity": 90 }
+      "command": {
+        "note": 66,
+        "velocity": 90
+      }
     }
   },
   "actions": {
-    "home": {
+    "resting": {
       "hold": {
-        "start": { "note": 48, "velocity": 50 },
+        "start": {
+          "note": 48,
+          "velocity": 50
+        },
         "poses": []
       },
       "wake": {
-        "start": { "note": 48, "velocity": 60 },
+        "start": {
+          "note": 48,
+          "velocity": 60
+        },
         "poses": []
       }
     },
-    "sleep": {
+    "sleeping": {
       "breathe": {
-        "start": { "note": 36, "velocity": 50 },
+        "start": {
+          "note": 36,
+          "velocity": 50
+        },
         "poses": [
-          { "note": 36, "velocity": 50 },
-          { "note": 38, "velocity": 48 },
-          { "note": 36, "velocity": 50 }
+          {
+            "note": 36,
+            "velocity": 50
+          },
+          {
+            "note": 38,
+            "velocity": 48
+          },
+          {
+            "note": 36,
+            "velocity": 50
+          }
         ]
       },
       "snore": {
-        "start": { "note": 30, "velocity": 40 },
+        "start": {
+          "note": 30,
+          "velocity": 40
+        },
         "poses": [
-          { "note": 30, "velocity": 40 },
-          { "note": 29, "velocity": 38 }
+          {
+            "note": 30,
+            "velocity": 40
+          },
+          {
+            "note": 29,
+            "velocity": 38
+          }
         ]
       },
       "yawn": {
-        "start": { "note": 32, "velocity": 45 },
+        "start": {
+          "note": 32,
+          "velocity": 45
+        },
         "poses": []
       }
     },
-    "cuddle": {
+    "cuddling": {
       "breathe": {
-        "start": { "note": 40, "velocity": 45 },
+        "start": {
+          "note": 40,
+          "velocity": 45
+        },
         "poses": [
-          { "note": 40, "velocity": 45 },
-          { "note": 42, "velocity": 43 },
-          { "note": 40, "velocity": 45 }
+          {
+            "note": 40,
+            "velocity": 45
+          },
+          {
+            "note": 42,
+            "velocity": 43
+          },
+          {
+            "note": 40,
+            "velocity": 45
+          }
         ]
       },
       "purr": {
-        "start": { "cc": 70, "value": 56 },
+        "start": {
+          "cc": 70,
+          "value": 56
+        },
         "poses": []
       }
     },
-    "purr": {
+    "purring": {
       "hold": {
-        "start": { "note": 42, "velocity": 45 },
+        "start": {
+          "note": 42,
+          "velocity": 45
+        },
         "poses": []
       },
       "purr": {
-        "start": { "cc": 70, "value": 64 },
+        "start": {
+          "cc": 70,
+          "value": 64
+        },
         "poses": []
       }
     },
-    "stretch": {
+    "stretching": {
       "look": {
-        "start": { "note": 55, "velocity": 75 },
+        "start": {
+          "note": 55,
+          "velocity": 75
+        },
         "poses": [
-          { "note": 55, "velocity": 75 },
-          { "note": 57, "velocity": 72 },
-          { "note": 55, "velocity": 75 }
+          {
+            "note": 55,
+            "velocity": 75
+          },
+          {
+            "note": 57,
+            "velocity": 72
+          },
+          {
+            "note": 55,
+            "velocity": 75
+          }
         ]
       },
       "wink": {
-        "start": { "note": 57, "velocity": 70 },
+        "start": {
+          "note": 57,
+          "velocity": 70
+        },
         "poses": []
       },
       "inspect": {
-        "start": { "note": 58, "velocity": 70 },
+        "start": {
+          "note": 58,
+          "velocity": 70
+        },
         "poses": []
       },
       "call": {
-        "start": { "note": 59, "velocity": 72 },
+        "start": {
+          "note": 59,
+          "velocity": 72
+        },
         "poses": []
       }
     },
-    "hunt": {
+    "hunting": {
       "track": {
-        "start": { "cc": 70, "value": 127 },
+        "start": {
+          "cc": 70,
+          "value": 127
+        },
         "poses": []
       },
       "focus": {
-        "start": { "cc": 70, "value": 110 },
+        "start": {
+          "cc": 70,
+          "value": 110
+        },
         "poses": []
       },
       "scan": {
-        "start": { "cc": 70, "value": 96 },
+        "start": {
+          "cc": 70,
+          "value": 96
+        },
         "poses": []
       }
     },
-    "closeup": {
+    "examining": {
       "focus": {
-        "start": { "note": 67, "velocity": 80 },
+        "start": {
+          "note": 67,
+          "velocity": 80
+        },
         "poses": []
       },
       "face": {
-        "start": { "note": 69, "velocity": 75 },
+        "start": {
+          "note": 69,
+          "velocity": 75
+        },
         "poses": []
       }
     },
-    "perform": {
+    "performing": {
       "trick": {
-        "start": { "note": 60, "velocity": 60 },
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
         "poses": [
-          { "note": 60, "velocity": 60 },
-          { "note": 62, "velocity": 58 },
-          { "note": 60, "velocity": 60 }
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 62,
+            "velocity": 58
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
         ]
       },
       "bow": {
-        "start": { "note": 62, "velocity": 55 },
+        "start": {
+          "note": 62,
+          "velocity": 55
+        },
         "poses": []
       }
     },
-    "roar": {
+    "roaring": {
       "roar": {
-        "start": { "note": 64, "velocity": 90 },
+        "start": {
+          "note": 64,
+          "velocity": 90
+        },
         "poses": [
-          { "note": 64, "velocity": 90 },
-          { "note": 65, "velocity": 88 },
-          { "note": 64, "velocity": 90 }
+          {
+            "note": 64,
+            "velocity": 90
+          },
+          {
+            "note": 65,
+            "velocity": 88
+          },
+          {
+            "note": 64,
+            "velocity": 90
+          }
         ]
       },
       "snarl": {
-        "start": { "note": 63, "velocity": 85 },
+        "start": {
+          "note": 63,
+          "velocity": 85
+        },
         "poses": [
-          { "note": 63, "velocity": 85 },
-          { "note": 62, "velocity": 83 }
+          {
+            "note": 63,
+            "velocity": 85
+          },
+          {
+            "note": 62,
+            "velocity": 83
+          }
         ]
       }
     },
-    "growl": {
+    "growling": {
       "growl": {
-        "start": { "note": 56, "velocity": 80 },
+        "start": {
+          "note": 56,
+          "velocity": 80
+        },
         "poses": []
       },
       "snarl": {
-        "start": { "note": 58, "velocity": 85 },
+        "start": {
+          "note": 58,
+          "velocity": 85
+        },
         "poses": [
-          { "note": 58, "velocity": 85 },
-          { "note": 57, "velocity": 83 }
+          {
+            "note": 58,
+            "velocity": 85
+          },
+          {
+            "note": 57,
+            "velocity": 83
+          }
         ]
       }
     },
-    "claw": {
+    "clawing": {
       "claw": {
-        "start": { "note": 61, "velocity": 75 },
+        "start": {
+          "note": 61,
+          "velocity": 75
+        },
         "poses": []
       },
       "grab": {
-        "start": { "note": 62, "velocity": 80 },
+        "start": {
+          "note": 62,
+          "velocity": 80
+        },
         "poses": []
       }
     },
-    "leap": {
+    "leaping": {
       "leap": {
-        "start": { "note": 66, "velocity": 90 },
+        "start": {
+          "note": 66,
+          "velocity": 90
+        },
         "poses": [
-          { "note": 66, "velocity": 90 },
-          { "note": 67, "velocity": 88 },
-          { "note": 66, "velocity": 90 }
+          {
+            "note": 66,
+            "velocity": 90
+          },
+          {
+            "note": 67,
+            "velocity": 88
+          },
+          {
+            "note": 66,
+            "velocity": 90
+          }
         ]
       },
       "pacing": {
-        "start": { "note": 64, "velocity": 90 },
+        "start": {
+          "note": 64,
+          "velocity": 90
+        },
         "poses": [
-          { "note": 64, "velocity": 90 },
-          { "note": 65, "velocity": 88 },
-          { "note": 64, "velocity": 90 }
+          {
+            "note": 64,
+            "velocity": 90
+          },
+          {
+            "note": 65,
+            "velocity": 88
+          },
+          {
+            "note": 64,
+            "velocity": 90
+          }
         ]
       }
     }

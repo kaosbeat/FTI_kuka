@@ -458,21 +458,54 @@ function firstEnabledAction(zn) {
   }
   return null;
 }
-// Zones reachable from `zn` via its actions' `next` fields (first-seen order).
+// ---------------------------------------------------------------------------
+// The action's `next` is an ordered LIST of {zone, action} targets: the brain
+// walks the list and takes the first usable candidate (loop-vs-advance decision).
+// The on-disk form is backward-compatible — a single {zone, action} dict (one
+// target) or a list of dicts (multiple). These helpers normalize both.
+// ---------------------------------------------------------------------------
+// The action's `next` as an ordered list of {zone, action} dicts. Accepts the
+// legacy single-dict form (wrapped into a 1-element list) or the list form.
+// Returns [] when absent or malformed. Mirrors zones.action_next_list.
+function nextList(a) {
+  if (!a) return [];
+  const n = a.next;
+  if (Array.isArray(n)) return n.filter((x) => x && typeof x === "object");
+  if (n && typeof n === "object") return [n];
+  return [];
+}
+// Write the action's `next` from an ordered list of {zone?, action?} targets.
+// 0 targets -> delete the field; 1 target -> the legacy single-dict form;
+// 2+ targets -> the list form. Empty targets (no zone and no action) are kept as
+// draft rows in the editor; the save path (cleanNextLists) filters them pre-POST.
+function setNext(a, list) {
+  if (!list || !list.length) { delete a.next; return; }
+  const clean = list.map((x) => {
+    const o = {};
+    if (x && x.zone) o.zone = x.zone;
+    if (x && x.action) o.action = x.action;
+    return o;
+  });
+  if (clean.length === 1) a.next = clean[0];
+  else a.next = clean;
+}
+// Zones reachable from `zn` via its actions' `next` targets (first-seen order).
 function zoneForward(zn) {
   const out = [], seen = new Set();
   const z = TABLE.zones[zn];
   if (z && z.actions) {
     for (const an of Object.keys(z.actions)) {
       const a = z.actions[an];
-      if (a && a.next && a.next.zone && TABLE.zones[a.next.zone] && !seen.has(a.next.zone)) {
-        seen.add(a.next.zone); out.push(a.next.zone);
+      for (const t of nextList(a)) {
+        if (t.zone && TABLE.zones[t.zone] && !seen.has(t.zone)) {
+          seen.add(t.zone); out.push(t.zone);
+        }
       }
     }
   }
   return out;
 }
-// Zones whose actions' `next` point back to `zn` (table order).
+// Zones whose actions' `next` list points back to `zn` (table order).
 function zoneReverse(zn) {
   const out = [];
   for (const n of Object.keys(TABLE.zones)) {
@@ -480,7 +513,7 @@ function zoneReverse(zn) {
     if (z && z.actions) {
       for (const an of Object.keys(z.actions)) {
         const a = z.actions[an];
-        if (a && a.next && a.next.zone === zn) { if (!out.includes(n)) out.push(n); break; }
+        if (nextList(a).some((t) => t.zone === zn)) { if (!out.includes(n)) out.push(n); break; }
       }
     }
   }
@@ -519,16 +552,18 @@ function actionEdgeList() {
     if (!z.actions) continue;
     for (const an of Object.keys(z.actions)) {
       const a = z.actions[an];
-      if (!a || !a.next || !a.next.zone || !a.next.action) continue;
-      const toZn = a.next.zone, toAn = a.next.action;
-      const tz = TABLE.zones[toZn];
-      if (!tz || !tz.actions || !tz.actions[toAn]) continue;  // dangling reference
-      const from = { zone: zn, action: an };
-      const to = { zone: toZn, action: toAn };
-      const k = [zn + "/" + an, toZn + "/" + toAn].sort().join(" \u2194 ");
-      if (seen.has(k)) continue;
-      seen.add(k);
-      edges.push({ from, to });
+      for (const t of nextList(a)) {
+        const toZn = t.zone, toAn = t.action;
+        if (!toZn || !toAn) continue;
+        const tz = TABLE.zones[toZn];
+        if (!tz || !tz.actions || !tz.actions[toAn]) continue;  // dangling reference
+        const from = { zone: zn, action: an };
+        const to = { zone: toZn, action: toAn };
+        const k = [zn + "/" + an, toZn + "/" + toAn].sort().join(" \u2194 ");
+        if (seen.has(k)) continue;
+        seen.add(k);
+        edges.push({ from, to });
+      }
     }
   }
   return edges;
@@ -984,7 +1019,8 @@ function buildMidiOutForm() {
       atxt += ` · axes ${tinfo.variable_axes.join(",")}`;
     }
     if (tinfo.loop !== false) atxt += " · loop";
-    if (tinfo.next && tinfo.next.zone) atxt += ` · next ${tinfo.next.zone}${tinfo.next.action ? "/" + tinfo.next.action : ""}`;
+    const nxts = nextList(tinfo).filter((t) => t.zone || t.action);
+    if (nxts.length) atxt += ` · next ${nxts.map((t) => `${t.zone ? t.zone : "?"}${t.action ? "/" + t.action : ""}`).join(", ")}`;
     if (tinfo.enabled === false) atxt += " · disabled";
     attrs.textContent = atxt;
     box.appendChild(attrs);
@@ -2192,63 +2228,96 @@ function buildActionEditor() {
     el.appendChild(psec);
   }
 
-  // --- next section: the action's successor {zone, action} in the zone graph ---
+  // --- next section: the action's ordered LIST of successor {zone, action} targets ---
+  // The brain walks this list and takes the first usable candidate (loop-vs-advance
+  // decision). Each row is one target: a zone select + an action select, with
+  // up/down to reorder and remove to drop the row. A blank row (no zone and no
+  // action) is a draft; the save path (cleanNextLists) drops blank rows pre-POST.
   const nsec = document.createElement("div");
   nsec.className = "aeSec";
   nsec.appendChild(h3("next"));
-  if (!a.next) a.next = {};
-  const nrow = document.createElement("div");
-  nrow.className = "row";
-  const nzl = document.createElement("label");
-  nzl.className = "inline";
-  nzl.innerHTML = "zone <select class='aeNextZone'></select>";
-  const nsel = nzl.querySelector("select");
-  const nnone = document.createElement("option");
-  nnone.value = ""; nnone.textContent = "(none)";
-  nsel.appendChild(nnone);
-  Object.keys(TABLE.zones).forEach((on) => {
-    const o = document.createElement("option"); o.value = on; o.textContent = on; nsel.appendChild(o);
-  });
-  nsel.value = a.next.zone || "";
-  nsel.onchange = () => {
-    if (nsel.value === "") { delete a.next.zone; if (!a.next.action) delete a.next.action; if (!Object.keys(a.next).length) delete a.next; }
-    else { a.next.zone = nsel.value; if (a.next.action && !(a.next.action in TABLE.zones[nsel.value].actions)) delete a.next.action; }
-    buildActionEditor();
-  };
-  nrow.appendChild(nzl);
-  const nal = document.createElement("label");
-  nal.className = "inline";
-  nal.innerHTML = "action <select class='aeNextAction'></select>";
-  const anel = nal.querySelector("select");
-  const anone = document.createElement("option");
-  anone.value = ""; anone.textContent = "(none)";
-  anel.appendChild(anone);
-  const targetZone = a.next.zone || null;
-  const tz = targetZone ? TABLE.zones[targetZone] : null;
-  if (tz && tz.actions) {
-    Object.keys(tz.actions).forEach((on) => {
-      const o = document.createElement("option"); o.value = on; o.textContent = on; anel.appendChild(o);
+  const targets = nextList(a);
+  const commitNext = (list) => { setNext(a, list); buildActionEditor(); };
+  targets.forEach((t, i) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const zl = document.createElement("label");
+    zl.className = "inline";
+    zl.innerHTML = "zone <select class='aeNextZone'></select>";
+    const zsel = zl.querySelector("select");
+    const znone = document.createElement("option");
+    znone.value = ""; znone.textContent = "(none)";
+    zsel.appendChild(znone);
+    Object.keys(TABLE.zones).forEach((on) => {
+      const o = document.createElement("option"); o.value = on; o.textContent = on; zsel.appendChild(o);
     });
-  }
-  anel.value = (a.next.zone && a.next.action) ? a.next.action : "";
-  anel.onchange = () => {
-    if (anel.value === "") delete a.next.action;
-    else { a.next.zone = nsel.value || a.next.zone; a.next.action = anel.value; }
-    buildActionEditor();
-  };
-  nrow.appendChild(nal);
-  nsec.appendChild(nrow);
-  // Pose-continuity hint: a var-form action's base_pose should match the successor's.
-  if (a.next && a.next.zone && a.next.action && TABLE.zones[a.next.zone] && TABLE.zones[a.next.zone].actions[a.next.action]) {
-    const tgt = TABLE.zones[a.next.zone].actions[a.next.action];
-    if (form === "var" && tgt.base_pose) {
-      const same = a.base_pose.every((v, i) => Math.abs(v - tgt.base_pose[i]) < 0.001);
+    zsel.value = t.zone || "";
+    zsel.onchange = () => {
+      if (zsel.value === "") { delete t.zone; delete t.action; }
+      else { t.zone = zsel.value; if (t.action && !(t.action in TABLE.zones[zsel.value].actions)) delete t.action; }
+      buildActionEditor();
+    };
+    row.appendChild(zl);
+    const al = document.createElement("label");
+    al.className = "inline";
+    al.innerHTML = "action <select class='aeNextAction'></select>";
+    const asel = al.querySelector("select");
+    const anone = document.createElement("option");
+    anone.value = ""; anone.textContent = "(none)";
+    asel.appendChild(anone);
+    const tz = t.zone ? TABLE.zones[t.zone] : null;
+    if (tz && tz.actions) {
+      Object.keys(tz.actions).forEach((on) => {
+        const o = document.createElement("option"); o.value = on; o.textContent = on; asel.appendChild(o);
+      });
+    }
+    asel.value = (t.zone && t.action) ? t.action : "";
+    asel.onchange = () => {
+      if (asel.value === "") delete t.action;
+      else { t.zone = zsel.value || t.zone; t.action = asel.value; }
+      buildActionEditor();
+    };
+    row.appendChild(al);
+    const mkBtn = (label, idx, delta, cls) => {
+      const b = document.createElement("button");
+      b.className = "small " + cls;
+      b.textContent = label;
+      b.onclick = () => {
+        const j = idx + delta;
+        if (j < 0 || j >= targets.length) return;
+        const tmp = targets[idx]; targets[idx] = targets[j]; targets[j] = tmp;
+        commitNext(targets);
+      };
+      return b;
+    };
+    row.appendChild(mkBtn("up", i, -1, "aeNextUp"));
+    row.appendChild(mkBtn("down", i, 1, "aeNextDown"));
+    const rm = document.createElement("button");
+    rm.className = "small aeNextRm";
+    rm.textContent = "remove";
+    rm.onclick = () => {
+      delete t.zone; delete t.action;  // blank out the row (kept as a draft)
+      commitNext(targets);
+    };
+    row.appendChild(rm);
+    nsec.appendChild(row);
+  });
+  const addRow = document.createElement("button");
+  addRow.className = "small aeNextAdd";
+  addRow.textContent = "+ add next";
+  addRow.onclick = () => { targets.push({}); commitNext(targets); };
+  nsec.appendChild(addRow);
+  // Pose-continuity hint: a var-form action's base_pose should match each successor's.
+  if (form === "var") {
+    const diffs = targets.filter((t) =>
+      t.zone && t.action && TABLE.zones[t.zone] && TABLE.zones[t.zone].actions[t.action] &&
+      TABLE.zones[t.zone].actions[t.action].base_pose &&
+      !a.base_pose.every((v, i) => Math.abs(v - TABLE.zones[t.zone].actions[t.action].base_pose[i]) < 0.001));
+    if (diffs.length) {
       const hint = document.createElement("div");
       hint.className = "aeHint";
-      hint.style.cssText = "font-size:11px;color:" + (same ? "var(--dim)" : "#e0a030");
-      hint.textContent = same
-        ? "base_pose matches the successor"
-        : `base_pose differs from ${a.next.zone}/${a.next.action} (${tgt.base_pose.join(", ")})`;
+      hint.style.cssText = "font-size:11px;color:#e0a030";
+      hint.textContent = "base_pose differs from next " + diffs.map((t) => `${t.zone}/${t.action} (${TABLE.zones[t.zone].actions[t.action].base_pose.join(", ")})`).join(", ");
       nsec.appendChild(hint);
     }
   }
@@ -2303,26 +2372,44 @@ function copyAction(zn, an) {
 // ---------------------------------------------------------------------------
 let POSE_CLIP = null;  // a copied 6-value pose, or null
 
-// Repoint every action whose `next` points at zn/oldAn to zn/newAn.
+// Repoint every `next` entry pointing at zn/oldAn to zn/newAn (dict or list form).
 function updateNextRefs(zn, oldAn, newAn) {
   for (const zn2 of Object.keys(TABLE.zones)) {
     const z2 = TABLE.zones[zn2];
     if (!z2.actions) continue;
     for (const an2 of Object.keys(z2.actions)) {
       const a2 = z2.actions[an2];
-      if (a2 && a2.next && a2.next.zone === zn && a2.next.action === oldAn) a2.next.action = newAn;
+      for (const t of nextList(a2)) {
+        if (t.zone === zn && t.action === oldAn) t.action = newAn;
+      }
     }
   }
 }
 
-// Drop the `next` on any action that pointed at zn/an (now dangling after a delete).
+// Drop every `next` entry pointing at zn/an (now dangling after a delete); when the
+// list becomes empty, collapse it back to the legacy single-dict form (or delete it).
 function clearNextRefsTo(zn, an) {
   for (const zn2 of Object.keys(TABLE.zones)) {
     const z2 = TABLE.zones[zn2];
     if (!z2.actions) continue;
     for (const an2 of Object.keys(z2.actions)) {
       const a2 = z2.actions[an2];
-      if (a2 && a2.next && a2.next.zone === zn && a2.next.action === an) delete a2.next;
+      const list = nextList(a2).filter((t) => !(t.zone === zn && t.action === an));
+      setNext(a2, list);
+    }
+  }
+}
+// Drop blank draft rows (no zone and no action) from every action's `next` list,
+// collapsing to the legacy single-dict form (or deleting the field) as needed.
+// Called pre-POST so the core never sees a blank target row.
+function cleanNextLists() {
+  for (const zn2 of Object.keys(TABLE.zones)) {
+    const z2 = TABLE.zones[zn2];
+    if (!z2.actions) continue;
+    for (const an2 of Object.keys(z2.actions)) {
+      const a2 = z2.actions[an2];
+      const list = nextList(a2).filter((t) => t.zone || t.action);
+      setNext(a2, list);
     }
   }
 }
@@ -2828,13 +2915,17 @@ function validate() {
         if (a.speed !== undefined && (Array.isArray(a.speed) ? a.speed.length !== a.pos.length || !a.speed.every(isNum) : !isNum(a.speed)))
           errs.push(`${name}/${an}: speed needs one number per pose`);
       }
-      // next: optional {zone, action} naming an existing zone.
+      // next: optional {zone, action} dict OR a list of them (ordered targets).
       if (a.next !== undefined) {
-        if (typeof a.next !== "object" || a.next === null || Array.isArray(a.next)) { errs.push(`${name}/${an}: next must be an object`); }
-        else {
-          if (a.next.zone !== undefined && !TABLE.zones[a.next.zone]) errs.push(`${name}/${an}: next.zone "${a.next.zone}" does not exist`);
-          if (a.next.action !== undefined && typeof a.next.action !== "string") errs.push(`${name}/${an}: next.action must be a string`);
-        }
+        const items = Array.isArray(a.next) ? a.next : [a.next];
+        if (typeof a.next !== "object" || a.next === null) errs.push(`${name}/${an}: next must be an object or a list`);
+        else items.forEach((t, ti) => {
+          if (!t || typeof t !== "object" || Array.isArray(t)) errs.push(`${name}/${an}: next[${ti}] must be an object`);
+          else {
+            if (t.zone !== undefined && !TABLE.zones[t.zone]) errs.push(`${name}/${an}: next[${ti}].zone "${t.zone}" does not exist`);
+            if (t.action !== undefined && typeof t.action !== "string") errs.push(`${name}/${an}: next[${ti}].action must be a string`);
+          }
+        });
       }
     }
   }
@@ -2879,15 +2970,18 @@ function saveZones() {
           if (p[ax] < hlo || p[ax] > hhi) warns.push(`${name}/${an} ${actionForm(a) === "var" ? "base_pose" : `pose ${i}`} axis ${AXES[ax]} outside hardware limits`);
         }
       });
-      // Pose continuity: the action's base_pose should match the successor's.
-      if (a.next && a.next.zone && a.next.action && TABLE.zones[a.next.zone] && TABLE.zones[a.next.zone].actions[a.next.action]) {
-        const tgt = TABLE.zones[a.next.zone].actions[a.next.action];
-        if (a.base_pose && tgt.base_pose && !a.base_pose.every((v, i) => Math.abs(v - tgt.base_pose[i]) < 0.001)) {
-          warns.push(`${name}/${an}: base_pose differs from next ${a.next.zone}/${a.next.action}`);
+      // Pose continuity: the action's base_pose should match each successor's.
+      for (const t of nextList(a)) {
+        if (t.zone && t.action && TABLE.zones[t.zone] && TABLE.zones[t.zone].actions[t.action]) {
+          const tgt = TABLE.zones[t.zone].actions[t.action];
+          if (a.base_pose && tgt.base_pose && !a.base_pose.every((v, i) => Math.abs(v - tgt.base_pose[i]) < 0.001)) {
+            warns.push(`${name}/${an}: base_pose differs from next ${t.zone}/${t.action}`);
+          }
         }
       }
     }
   }
+  cleanNextLists();  // drop blank draft rows before POST
   fetch("/api/zones", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2917,6 +3011,7 @@ function saveActionEditor() {
     $("aeSaveStatus").className = "aeStatus err";
     return;
   }
+  cleanNextLists();  // drop blank draft rows before POST
   Promise.all([
     fetch("/api/zones", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(TABLE) }),
     fetch("/api/sound", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(SOUND) }),
@@ -3347,9 +3442,12 @@ function flowDragEnd(ev) {
     const tgtAn = flowActionAt(pt, target) || firstEnabledAction(target);
     if (srcAn && tgtAn) {
       const z = TABLE.zones[name];
-      if (!z.actions[srcAn].next) z.actions[srcAn].next = {};
-      z.actions[srcAn].next.zone = target;
-      z.actions[srcAn].next.action = tgtAn;
+      const a = z.actions[srcAn];
+      // Add the target to the action's ordered `next` list (append if absent —
+      // the brain walks the list for the first usable candidate).
+      const list = nextList(a);
+      if (!list.some((t) => t.zone === target && t.action === tgtAn)) list.push({ zone: target, action: tgtAn });
+      setNext(a, list);
     }
     FLOW.pos[name] = d.startNode;
   }
@@ -3419,9 +3517,12 @@ function flowBridge(from, to) {
   TABLE.zones[plan.name] = plan.zone;
   const zFrom = TABLE.zones[from.zone];
   const aFrom = zFrom.actions[from.action];
-  if (!aFrom.next) aFrom.next = {};
-  aFrom.next.zone = plan.name;
-  aFrom.next.action = plan.actionName;
+  // Rewire: append the bridge target to the from-action's ordered `next` list.
+  const fList = nextList(aFrom);
+  if (!fList.some((t) => t.zone === plan.name && t.action === plan.actionName)) {
+    fList.push({ zone: plan.name, action: plan.actionName });
+    setNext(aFrom, fList);
+  }
   const pa = FLOW.pos[from.zone], pb = FLOW.pos[to.zone];
   let x, y;
   if (pa && pb) {
@@ -3522,8 +3623,18 @@ function buildFlowDetail() {
   }
   asel.value = to.action;
   asel.onchange = () => {
-    if (asel.value === "") delete act.next;
-    else { if (!act.next) act.next = {}; act.next.zone = to.zone; act.next.action = asel.value; }
+    // Edit this specific link: update the entry in the source's `next` list that
+    // points at `to.zone` (this edge's target). A blank selection drops the entry.
+    const list = nextList(act);
+    const idx = list.findIndex((t) => t.zone === to.zone);
+    if (asel.value === "") {
+      if (idx >= 0) list.splice(idx, 1);
+    } else if (idx >= 0) {
+      list[idx].action = asel.value;
+    } else {
+      list.push({ zone: to.zone, action: asel.value });
+    }
+    setNext(act, list);
     FLOW.sel = null;
     flowRender(); buildFlowDetail();
   };
@@ -3531,7 +3642,8 @@ function buildFlowDetail() {
   const rm = document.createElement("button");
   rm.className = "small"; rm.textContent = "remove link";
   rm.onclick = () => {
-    delete act.next;
+    // Remove this specific link from the source's `next` list (not the whole field).
+    setNext(act, nextList(act).filter((t) => !(t.zone === to.zone && t.action === to.action)));
     FLOW.sel = null;
     flowRender(); buildFlowDetail();
   };
@@ -3588,14 +3700,14 @@ function delZone() {
   if (Object.keys(TABLE.zones).length <= 1) { $("saveMsg").textContent = "cannot remove the last zone"; return; }
   if (!confirm(`remove zone "${nm}"?`)) return;
   delete TABLE.zones[nm];
-  // Clean dangling references: any action whose `next` pointed at the removed zone
-  // (the zone graph is derived from actions' `next` fields).
+  // Clean dangling references: drop any `next` entry pointing at the removed zone
+  // (the zone graph is derived from actions' `next` fields). Other targets survive.
   Object.keys(TABLE.zones).forEach((other) => {
     const oz = TABLE.zones[other];
     if (!oz.actions) return;
     Object.keys(oz.actions).forEach((an) => {
       const a = oz.actions[an];
-      if (a && a.next && a.next.zone === nm) delete a.next;
+      setNext(a, nextList(a).filter((t) => t.zone !== nm));
     });
   });
   // Re-point the shared zone editor to a live zone immediately (both views), so the

@@ -45,8 +45,8 @@ HARDWARE_LIMITS: List[Tuple[float, float]] = [
 
 # Behavior names: the policies that drive variable axes.
 BEHAVIORS = (
-    "track", "focus", "scan", "look", "wander", "random", "face", "hold",
-    "purr", "claw", "grab", "leap", "pacing", "snore",
+    "locked", "intent", "vigilant", "curious", "restless", "spontaneous", "gentle", "calm",
+    "soothing", "agitated", "aggressive", "exhilarated", "impatient", "drowsy",
 )
 
 # Mode groups: the three thematic clusters of zones.
@@ -74,316 +74,316 @@ def effective_limits(zone_safezone: List[Tuple[float, float]]) -> List[Tuple[flo
 # derived from both actions' ``next`` fields and zone-level ``exits``.
 # ---------------------------------------------------------------------------
 ZONES: Dict[str, dict] = {
-    "home": {
+    "resting": {
         "enabled": True,
-        "mode_group": "museum-closed",
+        "mode_group": 'museum-closed',
         "safezone": [(-94, 122), (-105, -65), (89, 115), (-15, 15), (-15, 45), (-357, 357)],
         "speed": 20,
-        "exits": [("sleep", "breathe"), ("cuddle", "breathe"), ("stretch", "look"), ("hunt", "track")],
+        "exits": [('sleeping', 'breathe'), ('cuddling', 'breathe'), ('stretching', 'look'), ('hunting', 'track')],
         "actions": {
             "hold": {
                 "base_pose": [-60, -90, 90, 0, 15, 0],
                 "variable_axes": [],
-                "behavior": "hold",
+                "behavior": 'calm',
                 "speed": 20,
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "wake": {
                 "base_pose": [-60, -90, 90, 0, 15, 0],
                 "variable_axes": [0, 1, 2, 4],
-                "behavior": "wander",
+                "behavior": 'restless',
                 "speed": 20,
                 "loop": True,
-                "next": {},
-            },
-        },
+                "next": {}
+            }
+        }
     },
-    "sleep": {
+    "sleeping": {
         "enabled": True,
-        "mode_group": "museum-closed",
+        "mode_group": 'museum-closed',
         "safezone": [(-5, 5), (-134, -130), (155, 157), (-3, 3), (-10, 10), (-357, 357)],
         "speed": 20,
-        "exits": [("cuddle", "breathe"), ("purr", "purr"), ("home", "hold"), ("stretch", "look")],
+        "exits": [('cuddling', 'breathe'), ('purring', 'purr'), ('resting', 'hold'), ('stretching', 'look')],
         "actions": {
             "breathe": {
                 "pos": [[-3, -133, 156, -2, 0, 0], [-5, -130, 155, -2, 0, 0], [0, -134, 157, -2, 0, 0]],
                 "speed": [10, 50, 10],
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "snore": {
                 "pos": [[-3, -133, 156, -2, 0, 0], [-3, -133, 156, -2, 5, 0]],
                 "speed": [5, 5],
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "yawn": {
                 "base_pose": [-3, -133, 156, -2, 0, 0],
                 "variable_axes": [4],
-                "behavior": "scan",
+                "behavior": 'vigilant',
                 "speed": 10,
                 "loop": True,
-                "next": {},
-            },
-        },
+                "next": {}
+            }
+        }
     },
-    "cuddle": {
+    "cuddling": {
         "enabled": True,
-        "mode_group": "museum-closed",
+        "mode_group": 'museum-closed',
         "safezone": [(-5, 5), (-134, -130), (155, 157), (-3, 3), (-10, 10), (-357, 357)],
         "speed": 20,
-        "exits": [("purr", "purr"), ("sleep", "breathe"), ("home", "wake")],
+        "exits": [('purring', 'purr'), ('sleeping', 'breathe'), ('resting', 'wake')],
         "actions": {
             "breathe": {
                 "pos": [[-3, -133, 156, -2, 0, 0], [-2, -132, 156, -2, 0, 0], [-4, -134, 156, -2, 0, 0]],
                 "speed": [10, 50, 10],
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "purr": {
                 "base_pose": [-3, -133, 156, -2, 0, 0],
                 "variable_axes": [0, 2],
-                "behavior": "purr",
+                "behavior": 'soothing',
                 "speed": 10,
                 "loop": True,
-                "next": {},
-            },
-        },
+                "next": {}
+            }
+        }
     },
-    "purr": {
+    "purring": {
         "enabled": True,
-        "mode_group": "museum-closed",
+        "mode_group": 'museum-closed',
         "safezone": [(-5, 5), (-134, -130), (155, 157), (-3, 3), (-10, 10), (-357, 357)],
         "speed": 20,
-        "exits": [("sleep", "breathe"), ("home", "hold"), ("cuddle", "breathe")],
+        "exits": [('sleeping', 'breathe'), ('resting', 'hold'), ('cuddling', 'breathe')],
         "actions": {
             "hold": {
                 "base_pose": [-3, -133, 156, -2, 0, 0],
                 "variable_axes": [],
-                "behavior": "hold",
+                "behavior": 'calm',
                 "speed": 20,
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "purr": {
                 "base_pose": [-3, -133, 156, -2, 0, 0],
                 "variable_axes": [0, 2],
-                "behavior": "purr",
+                "behavior": 'soothing',
                 "speed": 10,
                 "loop": True,
-                "next": {},
-            },
-        },
+                "next": {}
+            }
+        }
     },
-    "stretch": {
+    "stretching": {
         "enabled": True,
-        "mode_group": "event-sit-back",
+        "mode_group": 'event-sit-back',
         "safezone": [(-94, 122), (-98, -96), (13, 19), (-2, 2), (-5, 5), (-357, 357)],
         "speed": 100,
-        "exits": [("hunt", "track"), ("closeup", "focus"), ("perform", "trick"), ("home", "hold"), ("roar", "roar")],
+        "exits": [('hunting', 'track'), ('examining', 'focus'), ('performing', 'trick'), ('resting', 'hold'), ('roaring', 'roar')],
         "actions": {
             "look": {
                 "pos": [[85, -97, 17, -2, 0.3, 0], [80, -97, 15, -2, 3, 0], [90, -97, 19, -2, -3, 0]],
                 "speed": [100, 50, 100],
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "wink": {
                 "base_pose": [85, -97, 17, -2, 0.3, 0],
                 "variable_axes": [4, 5],
-                "behavior": "face",
+                "behavior": 'gentle',
                 "speed": 100,
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "inspect": {
                 "base_pose": [85, -97, 17, -2, 0.3, 0],
                 "variable_axes": [4, 5],
-                "behavior": "face",
+                "behavior": 'gentle',
                 "speed": 100,
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "call": {
                 "base_pose": [85, -97, 17, -2, 0.3, 0],
                 "variable_axes": [4, 5],
-                "behavior": "face",
+                "behavior": 'gentle',
                 "speed": 100,
                 "loop": True,
-                "next": {},
-            },
-        },
+                "next": {}
+            }
+        }
     },
-    "hunt": {
+    "hunting": {
         "enabled": True,
-        "mode_group": "event-sit-back",
+        "mode_group": 'event-sit-back',
         "safezone": [(-20, 20), (-134, -130), (155, 157), (-3, 3), (0, 60), (-357, 357)],
         "speed": 20,
-        "exits": [("closeup", "focus"), ("stretch", "look"), ("perform", "trick"), ("growl", "growl")],
+        "exits": [('examining', 'focus'), ('stretching', 'look'), ('performing', 'trick'), ('growling', 'growl')],
         "actions": {
             "track": {
                 "base_pose": [-3, -133, 156, -2, 45, 0],
                 "variable_axes": [3, 4],
-                "behavior": "track",
+                "behavior": 'locked',
                 "speed": 20,
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "focus": {
                 "base_pose": [-3, -133, 156, -2, 45, 0],
                 "variable_axes": [4],
-                "behavior": "focus",
+                "behavior": 'intent',
                 "speed": 20,
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "scan": {
                 "base_pose": [-3, -133, 156, -2, 45, 0],
                 "variable_axes": [4],
-                "behavior": "scan",
+                "behavior": 'vigilant',
                 "speed": 20,
                 "loop": True,
-                "next": {},
-            },
-        },
+                "next": {}
+            }
+        }
     },
-    "closeup": {
+    "examining": {
         "enabled": True,
-        "mode_group": "event-sit-back",
+        "mode_group": 'event-sit-back',
         "safezone": [(-20, 20), (-134, -130), (155, 157), (-3, 3), (0, 60), (-357, 357)],
         "speed": 20,
-        "exits": [("hunt", "track"), ("stretch", "call"), ("perform", "trick")],
+        "exits": [('hunting', 'track'), ('stretching', 'call'), ('performing', 'trick')],
         "actions": {
             "focus": {
                 "base_pose": [-3, -133, 156, -2, 45, 0],
                 "variable_axes": [4],
-                "behavior": "focus",
+                "behavior": 'intent',
                 "speed": 20,
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "face": {
                 "base_pose": [-3, -133, 156, -2, 45, 0],
                 "variable_axes": [4, 5],
-                "behavior": "face",
+                "behavior": 'gentle',
                 "speed": 20,
                 "loop": True,
-                "next": {},
-            },
-        },
+                "next": {}
+            }
+        }
     },
-    "perform": {
+    "performing": {
         "enabled": True,
-        "mode_group": "event-sit-back",
+        "mode_group": 'event-sit-back',
         "safezone": [(-30, 30), (-98, -50), (13, 19), (-2, 2), (-30, 60), (-357, 357)],
         "speed": 40,
-        "exits": [("hunt", "track"), ("stretch", "look"), ("roar", "roar")],
+        "exits": [('hunting', 'track'), ('stretching', 'look'), ('roaring', 'roar')],
         "actions": {
             "trick": {
                 "pos": [[-3, -97, 16, -2, 20, 0], [0, -95, 15, -2, 30, 0], [-5, -90, 17, -2, 10, 0]],
                 "speed": [40, 40, 40],
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "bow": {
                 "pos": [[-3, -97, 16, -2, 20, 0], [0, -95, 15, -2, 40, 0], [-3, -90, 16, -2, 50, 0]],
                 "speed": [40, 40, 40],
                 "loop": True,
-                "next": {},
-            },
-        },
+                "next": {}
+            }
+        }
     },
-    "roar": {
+    "roaring": {
         "enabled": True,
-        "mode_group": "stage-takeover",
+        "mode_group": 'stage-takeover',
         "safezone": [(-94, 122), (-134, -123), (136, 157), (-23, 23), (0, 118), (-357, 357)],
         "speed": 40,
-        "exits": [("growl", "growl"), ("claw", "claw"), ("leap", "leap"), ("perform", "trick")],
+        "exits": [('growling', 'growl'), ('clawing', 'claw'), ('leaping', 'leap'), ('performing', 'trick')],
         "actions": {
             "roar": {
                 "pos": [[-3, -134, 156, -2, 90, 0], [0, -130, 155, -2, 95, 0], [-5, -125, 150, -2, 100, 0]],
                 "speed": [40, 40, 40],
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "snarl": {
                 "pos": [[-3, -134, 156, -2, 90, 0], [0, -130, 155, -2, 80, 0]],
                 "speed": [40, 40],
                 "loop": True,
-                "next": {},
-            },
-        },
+                "next": {}
+            }
+        }
     },
-    "growl": {
+    "growling": {
         "enabled": True,
-        "mode_group": "stage-takeover",
+        "mode_group": 'stage-takeover',
         "safezone": [(-94, 122), (-134, -123), (136, 157), (-23, 23), (0, 118), (-357, 357)],
         "speed": 40,
-        "exits": [("roar", "roar"), ("claw", "claw"), ("leap", "leap")],
+        "exits": [('roaring', 'roar'), ('clawing', 'claw'), ('leaping', 'leap')],
         "actions": {
             "growl": {
                 "base_pose": [-3, -134, 156, -2, 90, 0],
                 "variable_axes": [4],
-                "behavior": "scan",
+                "behavior": 'vigilant',
                 "speed": 40,
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "snarl": {
                 "pos": [[-3, -134, 156, -2, 90, 0], [0, -130, 155, -2, 85, 0]],
                 "speed": [40, 40],
                 "loop": True,
-                "next": {},
-            },
-        },
+                "next": {}
+            }
+        }
     },
-    "claw": {
+    "clawing": {
         "enabled": True,
-        "mode_group": "stage-takeover",
+        "mode_group": 'stage-takeover',
         "safezone": [(-94, 122), (-98, -96), (13, 19), (-2, 2), (-5, 5), (-357, 357)],
         "speed": 40,
-        "exits": [("growl", "snarl"), ("roar", "roar"), ("leap", "leap"), ("stretch", "look")],
+        "exits": [('growling', 'snarl'), ('roaring', 'roar'), ('leaping', 'leap'), ('stretching', 'look')],
         "actions": {
             "claw": {
                 "base_pose": [85, -97, 17, -2, 0, 0],
                 "variable_axes": [0, 2],
-                "behavior": "claw",
+                "behavior": 'agitated',
                 "speed": 40,
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "grab": {
                 "base_pose": [85, -97, 17, -2, 0, 0],
                 "variable_axes": [0, 2],
-                "behavior": "grab",
+                "behavior": 'aggressive',
                 "speed": 40,
                 "loop": True,
-                "next": {},
-            },
-        },
+                "next": {}
+            }
+        }
     },
-    "leap": {
+    "leaping": {
         "enabled": True,
-        "mode_group": "stage-takeover",
+        "mode_group": 'stage-takeover',
         "safezone": [(-94, 122), (-124, -60), (-19, 157), (-2, 2), (-118, 118), (-357, 357)],
         "speed": 100,
-        "exits": [("roar", "roar"), ("claw", "claw"), ("growl", "growl"), ("home", "hold")],
+        "exits": [('roaring', 'roar'), ('clawing', 'claw'), ('growling', 'growl'), ('resting', 'hold')],
         "actions": {
             "leap": {
                 "pos": [[-85, -120, 137, 0, 0, 0], [-90, -115, 140, -2, 10, 0], [-80, -110, 145, 0, 20, 0]],
                 "speed": [10, 50, 100],
                 "loop": True,
-                "next": {},
+                "next": {}
             },
             "pacing": {
                 "pos": [[-85, -120, 137, 0, 0, 0], [-75, -115, 130, 0, -5, 0], [-90, -124, 140, 0, 5, 0]],
                 "speed": [10, 50, 100],
                 "loop": True,
-                "next": {},
-            },
-        },
-    },
+                "next": {}
+            }
+        }
+    }
 }
 
 
@@ -441,7 +441,7 @@ def _validate_action(name: str, a: dict, all_zone_names: set) -> None:
                 isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= 5
                 for x in va)):
             raise ValueError(f"action {name!r}: variable_axes must be a list of axis indices (0-5)")
-        beh = a.get("behavior", "hold")
+        beh = a.get("behavior", "calm")
         if not (isinstance(beh, str) and beh in BEHAVIORS):
             raise ValueError(f"action {name!r}: behavior must be one of {BEHAVIORS}")
         spd = a.get("speed")
@@ -609,12 +609,12 @@ class Zone:
         return []
 
     def action_behavior(self, name: str) -> str:
-        """The action's behavior name, or ``"hold"`` for legacy/absent."""
+        """The action's behavior name, or ``"calm"`` for legacy/absent."""
         a = self._action(name)
         beh = a.get("behavior")
         if isinstance(beh, str) and beh in BEHAVIORS:
             return beh
-        return "hold"
+        return "calm"
 
     def action_next(self, name: str):
         """The action's ``next`` field as stored (a single ``{zone, action}`` dict,

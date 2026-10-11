@@ -513,7 +513,7 @@ class Brain:
         ff = self._facefocus_group()
         if not bool(ff.get("enabled", False)):
             return
-        if self.machine.effective_behavior == "face":
+        if self.machine.effective_behavior == "gentle":
             self.camera.set_intent(active="close", mode="analyze",
                                    lock_id=self._hunt_lock_id)
 

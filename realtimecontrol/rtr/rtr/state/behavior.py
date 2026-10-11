@@ -6,7 +6,7 @@ held at the action's ``base_pose``. The :class:`~rtr.state.machine.StateMachine`
 per-tick ``step`` dispatches to :func:`build_target` for variable-axis actions; legacy
 fixed-pose actions (a ``pos`` list) are stepped by the machine's ``step_action``.
 
-Camera-driven behaviours (``track`` / ``focus`` / ``look``) read the camera telemetry
+Camera-driven behaviours (``locked`` / ``intent`` / ``curious``) read the camera telemetry
 the brain stashes on ``machine.camera_state`` each tick — the brain no longer nudges
 the target directly.
 """
@@ -32,11 +32,11 @@ _DEFAULT_IMAGE_GAIN = 0.3
 
 _DEG_PER_RAD = 180.0 / math.pi
 
-# ``look`` is a reduced-motion behaviour: it moves less than ``track`` for the same
+# ``curious`` is a reduced-motion behaviour: it moves less than ``locked`` for the same
 # offset. Applied on top of the (per-action or default) gain.
 _LOOK_FACTOR = 0.5
 
-# ``face`` is a reduced-motion behaviour driven by the close camera's face offset:
+# ``gentle`` is a reduced-motion behaviour driven by the close camera's face offset:
 # it nudges the variable axes toward the face (kept subtle) so the robot holds its
 # exterior pose and only gestures toward the face location.
 _FACE_FACTOR = 0.5
@@ -102,7 +102,7 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
 
     Non-variable axes remain at ``base_pose`` (already set in ``pose``).
     """
-    if not var_axes or behavior == "hold":
+    if not var_axes or behavior == "calm":
         return
 
     limits = effective(machine)
@@ -114,27 +114,27 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
         if isinstance(g, (int, float)) and not isinstance(g, bool) and g:
             image_gain = g
 
-    if behavior in ("track", "look", "focus"):
+    if behavior in ("locked", "curious", "intent"):
         _apply_camera(machine, pose, var_axes, behavior, curjpos, image_gain, action)
-    elif behavior == "face":
+    elif behavior == "gentle":
         _apply_face(machine, pose, var_axes, curjpos, image_gain, action, behavior)
-    elif behavior == "scan":
+    elif behavior == "vigilant":
         _apply_scan(machine, pose, var_axes, limits)
-    elif behavior == "wander":
+    elif behavior == "restless":
         _apply_wander(machine, pose, var_axes, limits, curjpos)
-    elif behavior == "random":
+    elif behavior == "spontaneous":
         _apply_random(pose, var_axes, limits)
-    elif behavior == "purr":
+    elif behavior == "soothing":
         _apply_oscillation(machine, pose, var_axes, limits, freq=0.5, amp_scale=0.1)
-    elif behavior == "claw":
+    elif behavior == "agitated":
         _apply_oscillation(machine, pose, var_axes, limits, freq=1.0, amp_scale=0.3)
-    elif behavior == "grab":
+    elif behavior == "aggressive":
         _apply_oscillation(machine, pose, var_axes, limits, freq=1.0, amp_scale=0.3)
-    elif behavior == "leap":
+    elif behavior == "exhilarated":
         _apply_oscillation(machine, pose, var_axes, limits, freq=2.0, amp_scale=0.5)
-    elif behavior == "pacing":
+    elif behavior == "impatient":
         _apply_oscillation(machine, pose, var_axes, limits, freq=1.0, amp_scale=0.3)
-    elif behavior == "snore":
+    elif behavior == "drowsy":
         _apply_oscillation(machine, pose, var_axes, limits, freq=0.3, amp_scale=0.2)
 
 
@@ -153,7 +153,7 @@ def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain, action) -> N
     so the offset decays to zero (convergent). This is correct in *any* arm
     configuration, because the image Jacobian is derived from the exact camera pose
     (position *and* orientation). A zero offset means no motion (the axes rest at
-    base_pose). ``look`` uses a reduced offset (see :data:`_LOOK_FACTOR`).
+    base_pose). ``curious`` uses a reduced offset (see :data:`_LOOK_FACTOR`).
 
     Falls back to the legacy fixed-axis gain when the kinematics are not wired
     (``machine.camera_geometry`` is ``None``), e.g. a bare sim.
@@ -165,7 +165,7 @@ def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain, action) -> N
         dx = 0.0
     if not isinstance(dy, (int, float)) or isinstance(dy, bool):
         dy = 0.0
-    if behavior == "look":
+    if behavior == "curious":
         dx *= _LOOK_FACTOR
         dy *= _LOOK_FACTOR
     _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior)
@@ -194,7 +194,7 @@ def _apply_face(machine, pose, var_axes, curjpos, gain, action, behavior) -> Non
 def _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior) -> None:
     """Map the image offset to joint deltas via the image Jacobian.
 
-    Shared by the camera behaviours (``track`` / ``focus`` / ``look``) and the face
+    Shared by the camera behaviours (``locked`` / ``intent`` / ``curious``) and the face
     behaviour:
 
         dq = -gain · pinv2(J_img_var) · (dx, dy)
@@ -274,8 +274,8 @@ def _apply_random(pose, var_axes, limits) -> None:
 def _apply_oscillation(machine, pose, var_axes, limits, freq=1.0, amp_scale=0.5) -> None:
     """Oscillate the variable axes around the action's base pose (bounded sine).
 
-    Shared by the animal behaviours (``purr`` / ``claw`` / ``grab`` / ``leap`` /
-    ``pacing`` / ``snore``). ``freq`` scales the sine rate (relative to the scan base
+    Shared by the animal behaviours (``soothing`` / ``agitated`` / ``aggressive`` / ``exhilarated`` /
+    ``impatient`` / ``drowsy``). ``freq`` scales the sine rate (relative to the vigilant base
     rate); ``amp_scale`` scales the amplitude so the motion stays a small fraction of
     the safezone width. The axis is clamped to the effective safezone so the pose
     always remains within the zone's safe bounds (no collision from overshoot).

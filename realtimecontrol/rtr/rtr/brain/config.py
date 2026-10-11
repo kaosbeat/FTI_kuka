@@ -67,34 +67,34 @@ DEFAULT_BRAIN_CONFIG: Dict[str, Any] = {
     },
     "zone_groups": {
         "museum-closed": {
-            "zones": ["home", "sleep", "cuddle", "purr"],
+            "zones": ["resting", "sleeping", "cuddling", "purring"],
             "enabled": True,
             "params": {"speed": 10, "dwell_s": 60.0},
         },
         "event-sit-back": {
-            "zones": ["stretch", "hunt", "closeup", "perform"],
+            "zones": ["stretching", "hunting", "examining", "performing"],
             "enabled": True,
             "params": {"speed": 40, "dwell_s": 30.0},
         },
         "stage-takeover": {
-            "zones": ["roar", "growl", "claw", "leap"],
+            "zones": ["roaring", "growling", "clawing", "leaping"],
             "enabled": True,
             "params": {"speed": 80, "dwell_s": 15.0},
         },
     },
     "hunt": {
-        "zones": ["hunt"],
+        "zones": ["hunting"],
         "enabled": True,
         "params": {
             "lost_s": 2.0,
             "min_conf": 0.1,
-            "attention_guard": ["track", "focus", "look", "face"],
-            "detect": {"zone": "hunt", "action": "track"},
-            "scan": {"zone": "hunt", "action": "scan"},
+            "attention_guard": ["locked", "intent", "curious", "gentle"],
+            "detect": {"zone": "hunting", "action": "track"},
+            "scan": {"zone": "hunting", "action": "scan"},
         },
     },
     "facefocus": {
-        "zones": ["stretch"],
+        "zones": ["stretching"],
         "enabled": True,
         "params": {
             "actions": ["wink", "inspect", "call"],
@@ -103,18 +103,18 @@ DEFAULT_BRAIN_CONFIG: Dict[str, Any] = {
         },
     },
     "cam_control": {
-        "home": {"active": "wide", "mode": "idle", "lock": "none"},
-        "sleep": {"active": "wide", "mode": "idle", "lock": "none"},
-        "cuddle": {"active": "wide", "mode": "idle", "lock": "none"},
-        "purr": {"active": "wide", "mode": "idle", "lock": "none"},
-        "stretch": {"active": "wide", "mode": "track", "lock": "auto"},
-        "hunt": {"active": "wide", "mode": "track", "lock": "auto"},
-        "closeup": {"active": "close", "mode": "analyze", "lock": "auto"},
-        "perform": {"active": "both", "mode": "track", "lock": "auto"},
-        "roar": {"active": "wide", "mode": "track", "lock": "auto"},
-        "growl": {"active": "wide", "mode": "track", "lock": "auto"},
-        "claw": {"active": "close", "mode": "analyze", "lock": "auto"},
-        "leap": {"active": "wide", "mode": "track", "lock": "auto"},
+        "resting": {"active": "wide", "mode": "idle", "lock": "none"},
+        "sleeping": {"active": "wide", "mode": "idle", "lock": "none"},
+        "cuddling": {"active": "wide", "mode": "idle", "lock": "none"},
+        "purring": {"active": "wide", "mode": "idle", "lock": "none"},
+        "stretching": {"active": "wide", "mode": "track", "lock": "auto"},
+        "hunting": {"active": "wide", "mode": "track", "lock": "auto"},
+        "examining": {"active": "close", "mode": "analyze", "lock": "auto"},
+        "performing": {"active": "both", "mode": "track", "lock": "auto"},
+        "roaring": {"active": "wide", "mode": "track", "lock": "auto"},
+        "growling": {"active": "wide", "mode": "track", "lock": "auto"},
+        "clawing": {"active": "close", "mode": "analyze", "lock": "auto"},
+        "leaping": {"active": "wide", "mode": "track", "lock": "auto"},
     },
 }
 
@@ -123,9 +123,9 @@ DEFAULT_BRAIN_CONFIG: Dict[str, Any] = {
 _HUNT_PARAMS = {
     "lost_s": 2.0,
     "min_conf": 0.1,
-    "attention_guard": ["track", "focus", "look", "face"],
-    "detect": {"zone": "hunt", "action": "track"},
-    "scan": {"zone": "hunt", "action": "scan"},
+    "attention_guard": ["locked", "intent", "curious", "gentle"],
+    "detect": {"zone": "hunting", "action": "track"},
+    "scan": {"zone": "hunting", "action": "scan"},
 }
 _FACEFOCUS_PARAMS = {
     "actions": ["wink", "inspect", "call"],
