@@ -72,6 +72,18 @@
   #patchesMain { display: grid; gap: 16px; grid-template-columns: 210px 1fr 380px; align-items: start; }
   .patchList { display: flex; flex-direction: column; gap: 4px; }
   .patchList button { width: 100%; text-align: left; }
+  #validateMain { display: grid; gap: 16px; grid-template-columns: 210px 1fr 380px; align-items: start; }
+  .valResult { font-size: 12px; line-height: 1.6; }
+  .valResult .ok { color: var(--accent); }
+   .valResult .bad { color: #e05d5d; }
+   #validateMain section:nth-child(3) { position: sticky; top: 8px; }
+   .valPoseGrid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin-bottom: 6px; }
+    .poseArrow { width: 100%; padding: 1px 0; font-size: 9px; line-height: 1.1; cursor: pointer; }
+    .valPoseGrid input[type=number] { -moz-appearance: textfield; }
+    .valPoseGrid input[type=number]::-webkit-inner-spin-button,
+    .valPoseGrid input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+   .valAxis { display: grid; grid-template-columns: 36px 1fr 1fr; gap: 4px; margin-bottom: 4px; align-items: center; }
+  .valAxis span { font-size: 11px; color: var(--dim); }
   .patchList .grp { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
                      color: var(--dim); margin: 8px 0 2px; }
   .patchList .grp:first-child { margin-top: 0; }
@@ -168,6 +180,7 @@
   <button id="tabMidi">midi</button>
   <button id="tabFlow">flow</button>
   <button id="tabBrain">brain</button>
+  <button id="tabValidate">validate</button>
   <button id="save">save</button>
   <span id="saveMsg"></span>
 </header>
@@ -208,6 +221,37 @@
   </section>
 </main>
 
+<main id="validateMain" style="display:none">
+  <section>
+    <h2>zones</h2>
+    <div class="zoneList" id="valZoneList"></div>
+  </section>
+
+  <section>
+    <h2>validate safezone</h2>
+    <div id="valForm"></div>
+  </section>
+
+  <section>
+    <h2>3d preview</h2>
+    <div id="valRobot3dMount"></div>
+    <div class="row" style="margin-top:6px">
+      <button id="valMeshEnvReal" class="active" title="Show/hide the environment's real (rendered) mesh">env real</button>
+      <button id="valMeshEnvColl" title="Show/hide the environment's collision mesh (low-res proxy)">env collision</button>
+      <button id="valMeshRobReal" class="active" title="Show/hide the robot's real (visual) mesh">robot real</button>
+      <button id="valMeshRobColl" title="Show/hide the robot's collision mesh (red wireframe geometry)">robot collision</button>
+      <button id="valMeshToolColl" title="Show/hide the tool's collision mesh (red wireframe geometry)">tool collision</button>
+    </div>
+    <h3>joint pose</h3>
+    <div class="valPoseGrid" id="valPoseGrid"></div>
+    <div class="row">
+      <button id="valPoseGo">apply pose</button>
+      <button id="valCopyCollision" title="Copy the last reported collision pose into the setter and drive the arm to it">copy collision pose</button>
+    </div>
+    <h3>scan result</h3>
+    <div id="valResult" class="valResult"><span style="color:var(--dim)">select a zone and run a scan</span></div>
+  </section>
+</main>
 
 
 <main id="patchesMain" style="display:none">
@@ -331,7 +375,7 @@
 "use strict";
 
 const AXES = ["A1", "A2", "A3", "A4", "A5", "A6"];
-const BEHAVIORS = ["calm", "restless", "spontaneous", "vigilant", "locked", "intent", "curious", "gentle", "soothing", "drowsy", "agitated", "aggressive", "impatient", "exhilarated"];
+const BEHAVIORS = ["calm", "restless", "spontaneous", "vigilant", "locked", "intent", "curious", "gentle", "soothing", "drowsy", "agitated", "aggressive", "impatient", "exhilarated", "bridge"];
 const NAV_COMMANDS = ["next_action", "next_zone", "back", "retrigger"];
 const $ = (id) => document.getElementById(id);
 
@@ -408,6 +452,8 @@ let ghostIndex = 0;
 let ws = null;
 let flowView = false;
 let brainView = false;
+let validateView = false;
+let valScanTimer = null;   // active scan animation frame id
 // Flow-tab state (session only — node positions are not persisted to zones.json).
 const FLOW = {
   pos: {},        // zone -> {x, y}
@@ -680,7 +726,11 @@ function connect() {
   ws.onmessage = (e) => {
     let m; try { m = JSON.parse(e.data); } catch (err) { return; }
     if (m.type === "state") {
-      Robot3D.update({ joints: m.joints, target: m.target, patch: m.patch });
+      // In the validate tab the local 3D arm is owned by the validate logic (scan /
+      // pose setter); the core's live pose must not overwrite an inspected pose.
+      // The core is in manual mode (holding its pose) while the tab is open, so
+      // skipping its drive here keeps the inspected pose stable.
+      if (!validateView) Robot3D.update({ joints: m.joints, target: m.target, patch: m.patch });
       $("liveState").innerHTML =
         `<div class="stateRow"><span>zone</span><span>${m.zone}</span></div>` +
         `<div class="stateRow"><span>mode</span><span>${m.mode}</span></div>` +
@@ -2188,11 +2238,25 @@ function buildActionEditor() {
     vsec.appendChild(row);
     el.appendChild(vsec);
   } else {
-    // --- legacy fixed-pose form: one row per pose (6 values + speed + ▲ ▼ ×) + add ---
+    // --- legacy fixed-pose form: behavior marker + one row per pose (6 values + speed + ▲ ▼ ×) + add ---
     if (!Array.isArray(a.pos)) a.pos = [[0,0,0,0,0,0]];
     if (!Array.isArray(a.speed)) a.speed = [10];
     const psec = document.createElement("div");
     psec.className = "aeSec";
+    // Behavior marker for the fixed-sequence form. Legacy actions are stepped by pose
+    // (no variable axes), so this is a label + the "bridge" no-op constraint; the
+    // auto-inserted bridge action is tagged "bridge" here.
+    const brow = document.createElement("div");
+    brow.className = "row";
+    const bl = document.createElement("label");
+    bl.className = "inline";
+    bl.innerHTML = "behavior <select class='aeBehavior'></select>";
+    const bsel = bl.querySelector("select");
+    BEHAVIORS.forEach((b) => { const o = document.createElement("option"); o.value = b; o.textContent = b; bsel.appendChild(o); });
+    bsel.value = (a.behavior && BEHAVIORS.includes(a.behavior)) ? a.behavior : "calm";
+    bsel.onchange = () => { a.behavior = bsel.value; };
+    brow.appendChild(bl);
+    psec.appendChild(brow);
     psec.appendChild(h3("poses"));
     a.pos.forEach((pose, pi) => {
       const p = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
@@ -2538,22 +2602,36 @@ function closeActionEditor() {
 // ---------------------------------------------------------------------------
 function switchView(v) {
   const wasPatch = patchView;
+  const wasValidate = validateView;
   patchView = v === "patches";
   midiView = v === "midi";
   flowView = v === "flow";
   brainView = v === "brain";
+  validateView = v === "validate";
   if (wasPatch && !patchView) commitPatchEditor();  // leaving the patches view: commit
-  const other = patchView || midiView || flowView || brainView;
+  // While in the validate tab, put the core in manual mode so the brain's
+  // autonomy/hunt loop does not retarget the pose while inspecting zones.
+  // Restore to auto (the core default) when leaving the tab.
+  if (validateView && !wasValidate) send({ cmd: "set_control_mode", mode: "manual" });
+  else if (!validateView && wasValidate) send({ cmd: "set_control_mode", mode: "auto" });
+  const other = patchView || midiView || flowView || brainView || validateView;
   $("zoneMain").style.display = other ? "none" : "";
   $("patchesMain").style.display = patchView ? "" : "none";
   $("midiMain").style.display = midiView ? "" : "none";
   $("flowMain").style.display = flowView ? "" : "none";
   $("brainMain").style.display = brainView ? "" : "none";
+  $("validateMain").style.display = validateView ? "" : "none";
   $("tabZones").className = other ? "" : "active";
   $("tabPatches").className = patchView ? "active" : "";
   $("tabMidi").className = midiView ? "active" : "";
   $("tabFlow").className = flowView ? "active" : "";
   $("tabBrain").className = brainView ? "active" : "";
+  $("tabValidate").className = validateView ? "active" : "";
+  // Move the shared 3D singleton between the zones and validate tabs. Leaving
+  // the tab stops any running scan so it does not keep driving the (now
+  // core-owned) arm in the background.
+  if (validateView) { mountRobot3dValidate(); buildValidateForm(); }
+  else { stopValidateScan(); unmountRobot3dValidate(); }
   if (midiView) {
     // Show/hide the In/Out sub-views based on midiSubView.
     $("midiOutView").style.display = midiSubView === "out" ? "" : "none";
@@ -2578,6 +2656,332 @@ function switchMidiSubView(v) {
   $("midiInView").style.display = v === "in" ? "" : "none";
   $("midiTabOut").className = v === "out" ? "small active" : "small";
   $("midiTabIn").className = v === "in" ? "small active" : "small";
+}
+
+// ---------------------------------------------------------------------------
+// Validate tab: scan a zone's safezone box for collisions.
+//
+// The safezone is a 6-axis box [lo, hi] per axis. A scan sweeps the robot
+// through sample points of that box and checks each pose against the collision
+// engine (self + environment). The scan stops at the first collision so the
+// user can shrink the safezone and rescan.
+//
+// Scan modes:
+//   - "corner": the 2^6 = 64 corners of the box (max-reach extremes, where
+//     collision is most likely). Fast.
+//   - "grid": N samples per axis (N^6 points). Slower, finer coverage.
+// ---------------------------------------------------------------------------
+let valScan = { active: false, poses: [], index: 0, timer: null, collisions: [], current: null };
+let valScanSpeed = "normal"; // "normal" | "fast" | "max" — how the arm sweeps the poses
+// Multiplier on the real move time (distance / zone-speed in deg/s). normal = 1x
+// (the arm sweeps at the speed the robot actually moves, like client.html),
+// fast = 10x faster, max = instant jump (the old fixed-delay behaviour).
+const VAL_SCAN_SPEED_MULT = { normal: 1, fast: 0.1, max: 0 };
+const VAL_SCAN_FRAME_MS = 16; // animation frame interval (~60 fps)
+let valLastCollision = null; // last collision pose (scan or manual check), for the pose setter
+
+function buildValidateForm() {
+  const el = $("valForm");
+  el.innerHTML = "";
+  const z = TABLE.zones[selectedZone];
+
+  // Zone selector (reuse the zone list pattern)
+  el.appendChild(h3("zone"));
+  const zsel = document.createElement("div");
+  zsel.className = "zoneList";
+  Object.keys(TABLE.zones).forEach((name) => {
+    const b = document.createElement("button");
+    b.textContent = name + (TABLE.zones[name].enabled === false ? " (off)" : "");
+    b.className = name === selectedZone ? "active" : "";
+    b.onclick = () => { selectZone(name); buildValidateForm(); };
+    zsel.appendChild(b);
+  });
+  el.appendChild(zsel);
+
+  if (!z || !z.safezone) {
+    el.appendChild(h3("safezone"));
+    const msg = document.createElement("span");
+    msg.style.color = "var(--dim)";
+    msg.textContent = "no zone selected";
+    el.appendChild(msg);
+    return;
+  }
+
+  // Safezone editor (lo / hi per axis)
+  el.appendChild(h3("safezone (lo / hi)"));
+  const sz = document.createElement("div");
+  sz.style.display = "grid";
+  sz.style.gridTemplateColumns = "36px 1fr 1fr";
+  sz.style.gap = "4px";
+  for (let i = 0; i < 6; i++) {
+    const ax = document.createElement("span");
+    ax.style.cssText = "font-size:11px;color:var(--dim);align-self:center";
+    ax.textContent = AXES[i];
+    sz.appendChild(ax);
+    for (const k of [0, 1]) {
+      const inp = document.createElement("input");
+      inp.type = "number"; inp.step = "0.1";
+      const pair = z.safezone[i];
+      inp.value = pair[k];
+      inp.oninput = () => {
+        z.safezone[i][k] = parseFloat(inp.value);
+        buildBars();
+        updateGhost();
+      };
+      sz.appendChild(inp);
+    }
+  }
+  el.appendChild(sz);
+
+  // Scan controls
+  el.appendChild(h3("scan"));
+  const scanRow = document.createElement("div");
+  scanRow.className = "row";
+  const cornerBtn = document.createElement("button");
+  cornerBtn.textContent = "corner scan";
+  cornerBtn.onclick = () => runValidateScan("corner");
+  scanRow.appendChild(cornerBtn);
+  const gridBtn = document.createElement("button");
+  gridBtn.textContent = "grid scan";
+  gridBtn.onclick = () => runValidateScan("grid");
+  scanRow.appendChild(gridBtn);
+  const stopBtn = document.createElement("button");
+  stopBtn.textContent = "stop";
+  stopBtn.onclick = () => stopValidateScan();
+  scanRow.appendChild(stopBtn);
+  const checkBtn = document.createElement("button");
+  checkBtn.textContent = "check now";
+   checkBtn.onclick = () => checkValidateNow();
+   scanRow.appendChild(checkBtn);
+   el.appendChild(scanRow);
+
+   // Speed toggle (normal / fast / max): how fast the arm steps through the scan
+   // poses, so you can visually inspect the sweep. Applies to both scan modes and
+   // takes effect live on the next step of a running scan.
+   const speedRow = document.createElement("div");
+   speedRow.className = "row";
+   const speedLabel = document.createElement("span");
+   speedLabel.textContent = "speed:";
+   speedLabel.style.cssText = "font-size:11px;color:var(--dim);align-self:center";
+   speedRow.appendChild(speedLabel);
+    const speedNames = Object.keys(VAL_SCAN_SPEED_MULT);
+   const speedBtns = speedNames.map((name) => {
+     const b = document.createElement("button");
+     b.textContent = name;
+     b.className = name === valScanSpeed ? "active" : "";
+     b.onclick = () => {
+       valScanSpeed = name;
+       speedBtns.forEach((btn, i) => { btn.className = (speedNames[i] === valScanSpeed) ? "active" : ""; });
+     };
+     speedRow.appendChild(b);
+     return b;
+   });
+   el.appendChild(speedRow);
+
+   // Progress
+  const prog = document.createElement("div");
+  prog.id = "valProgress";
+  prog.style.cssText = "font-size:12px;color:var(--dim);margin-top:4px";
+  el.appendChild(prog);
+}
+
+function validateCorners(sz) {
+  const out = [];
+  for (let mask = 0; mask < 64; mask++) {
+    const p = [];
+    for (let i = 0; i < 6; i++) p[i] = (mask & (1 << i)) ? sz[i][1] : sz[i][0];
+    out.push(p);
+  }
+  return out;
+}
+
+function validateGrid(sz, n) {
+  const out = [];
+  const axis = [0,1,2,3,4,5];
+  for (let a = 0; a < n; a++)
+  for (let b = 0; b < n; b++)
+  for (let c = 0; c < n; c++)
+  for (let d = 0; d < n; d++)
+  for (let e = 0; e < n; e++)
+  for (let f = 0; f < n; f++) {
+    const p = [0,0,0,0,0,0];
+    p[0] = sz[0][0] + (sz[0][1]-sz[0][0]) * (a/(n-1));
+    p[1] = sz[1][0] + (sz[1][1]-sz[1][0]) * (b/(n-1));
+    p[2] = sz[2][0] + (sz[2][1]-sz[2][0]) * (c/(n-1));
+    p[3] = sz[3][0] + (sz[3][1]-sz[3][0]) * (d/(n-1));
+    p[4] = sz[4][0] + (sz[4][1]-sz[4][0]) * (e/(n-1));
+    p[5] = sz[5][0] + (sz[5][1]-sz[5][0]) * (f/(n-1));
+    out.push(p);
+  }
+  return out;
+}
+
+function runValidateScan(mode) {
+  const z = TABLE.zones[selectedZone];
+  if (!z || !z.safezone) return;
+  stopValidateScan();
+  const sz = z.safezone;
+  const poses = mode === "corner" ? validateCorners(sz) : validateGrid(sz, 3);
+  valScan = { active: true, poses, index: 0, timer: null, collisions: [], current: poses[0] ? poses[0].slice() : null };
+  $("valResult").innerHTML = `<span style="color:var(--dim)">scanning ${poses.length} poses…</span>`;
+  stepValidateScan();
+}
+
+// Drive the local real arm (and ghost) to a pose. Shared by the scan and the pose setter.
+function applyValidatePose(pose) {
+  Robot3D.setTarget(pose);
+  Robot3D.update({ joints: pose });
+  valScan.current = pose.slice();
+}
+
+// Collision check at a pose. On collision: record it, fill the pose setter so the
+// collision pose is immediately visible, and stop the scan. Returns true if it collided.
+function checkValidatePose(pose) {
+  const res = Robot3D.checkPoseCollision(pose);
+  if (res && res.bodies.length > 0) {
+    valScan.collisions.push({ pose, bodies: res.bodies, hits: res.collisions });
+    valLastCollision = pose.slice();
+    valPoseInputs.forEach((el, i) => { el.value = Math.round(pose[i] * 1000) / 1000; });
+    const c = res.collisions.map((x) => x.a + "~" + x.b).join(", ");
+    $("valResult").innerHTML =
+      `<span class="bad">COLLISION</span> at pose [${pose.map((x)=>+x.toFixed(1)).join(",")}] — ${c}`;
+    $("valProgress").textContent = `${valScan.index}/${valScan.poses.length}`;
+    valScan.active = false;
+    return true;
+  }
+  return false;
+}
+
+// Move the arm from `from` to `to` over `durationMs` (linear interp, ~60 fps frames).
+function animateValidateMove(from, to, durationMs) {
+  const start = performance.now();
+  const tick = () => {
+    if (!valScan.active) return;
+    const t = Math.min(1, (performance.now() - start) / durationMs);
+    Robot3D.setTarget(to);
+    Robot3D.update({ joints: from.map((f, i) => f + (to[i] - f) * t) });
+    if (t < 1) {
+      valScan.timer = setTimeout(tick, VAL_SCAN_FRAME_MS);
+    } else {
+      applyValidatePose(to);
+      if (checkValidatePose(to)) return;
+      valScan.index++;
+      $("valProgress").textContent = `${valScan.index}/${valScan.poses.length}`;
+      stepValidateScan();
+    }
+  };
+  tick();
+}
+
+function stepValidateScan() {
+  if (!valScan.active) return;
+  if (valScan.index >= valScan.poses.length) {
+    valScan.active = false;
+    const n = valScan.collisions.length;
+    $("valResult").innerHTML = n
+      ? `<span class="ok">complete</span> — ${n} collision${n>1?"s":""} found (see log)`
+      : `<span class="ok">complete</span> — all ${valScan.poses.length} poses clear`;
+    $("valProgress").textContent = `${valScan.poses.length}/${valScan.poses.length}`;
+    return;
+  }
+  const pose = valScan.poses[valScan.index];
+  const from = valScan.current ? valScan.current.slice() : pose.slice();
+  const z = TABLE.zones[selectedZone];
+  const speed = (z && z.speed > 0) ? z.speed : 20;
+  let maxDelta = 0;
+  for (let i = 0; i < 6; i++) maxDelta = Math.max(maxDelta, Math.abs(pose[i] - from[i]));
+  // Real move time = (max joint delta / zone speed deg/s) * 1000 ms, scaled by the
+  // speed multiplier (normal = 1x, fast = 10x faster, max = instant jump).
+  const ms = (maxDelta / speed) * 1000 * VAL_SCAN_SPEED_MULT[valScanSpeed];
+  if (ms <= VAL_SCAN_FRAME_MS) {
+    applyValidatePose(pose);
+    if (checkValidatePose(pose)) return;
+    valScan.index++;
+    $("valProgress").textContent = `${valScan.index}/${valScan.poses.length}`;
+    valScan.timer = setTimeout(stepValidateScan, 0);
+  } else {
+    animateValidateMove(from, pose, ms);
+  }
+}
+
+function stopValidateScan() {
+  if (valScan.timer) { clearTimeout(valScan.timer); valScan.timer = null; }
+  valScan.active = false;
+}
+
+function checkValidateNow() {
+  const pose = currentGhostPose();
+  if (!pose) { $("valResult").innerHTML = `<span style="color:var(--dim)">no pose to check</span>`; return; }
+  const res = Robot3D.checkPoseCollision(pose);
+  if (!res) { $("valResult").innerHTML = `<span style="color:var(--dim)">collision engine not ready</span>`; return; }
+  if (res.bodies.length === 0) {
+    $("valResult").innerHTML = `<span class="ok">clear</span> at pose [${pose.map((x)=>+x.toFixed(1)).join(",")}]`;
+  } else {
+    const c = res.collisions.map((x) => x.a + "~" + x.b).join(", ");
+    valLastCollision = pose.slice();
+    valPoseInputs.forEach((el, i) => { el.value = Math.round(pose[i] * 1000) / 1000; });
+    $("valResult").innerHTML = `<span class="bad">COLLIDES</span> at pose [${pose.map((x)=>+x.toFixed(1)).join(",")}] — ${c}`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Validate tab: joint pose setter. Type a pose and drive the local 3D arm to it,
+// so you can inspect a pose the scan/arm didn't visibly reach (e.g. a collision).
+// ---------------------------------------------------------------------------
+const valPoseInputs = [];
+function buildValPoseSetter() {
+  const grid = $("valPoseGrid");
+  grid.innerHTML = "";
+  AXES.forEach((n, i) => {
+    const l = document.createElement("label");
+    l.textContent = n;
+    const up = document.createElement("button");
+    up.type = "button"; up.className = "poseArrow"; up.textContent = "▲"; up.title = "increase";
+    const inp = document.createElement("input");
+    inp.type = "number"; inp.step = "0.1";
+    const down = document.createElement("button");
+    down.type = "button"; down.className = "poseArrow"; down.textContent = "▼"; down.title = "decrease";
+    const bump = (dir, step) => {
+      const v = parseFloat(inp.value);
+      const base = isNaN(v) ? 0 : v;
+      inp.value = Math.round((base + dir * step) * 1000) / 1000;
+    };
+    up.onclick = (e) => bump(1, e.shiftKey ? 10 : 1);
+    down.onclick = (e) => bump(-1, e.shiftKey ? 10 : 1);
+    l.appendChild(up);
+    l.appendChild(inp);
+    l.appendChild(down);
+    grid.appendChild(l);
+    valPoseInputs.push(inp);
+  });
+}
+
+function readValPose() {
+  const pose = valPoseInputs.map((el) => parseFloat(el.value));
+  return pose.every((v) => !isNaN(v)) ? pose : null;
+}
+
+// Drive the local arm to the typed pose and report whether it collides.
+function applyValPose() {
+  const pose = readValPose();
+  if (!pose) { $("valResult").innerHTML = `<span style="color:var(--dim)">all 6 values required</span>`; return; }
+  applyValidatePose(pose);
+  const res = Robot3D.checkPoseCollision(pose);
+  if (!res) { $("valResult").innerHTML = `<span style="color:var(--dim)">collision engine not ready</span>`; return; }
+  if (res.bodies.length === 0) {
+    $("valResult").innerHTML = `<span class="ok">clear</span> at pose [${pose.map((x)=>+x.toFixed(1)).join(",")}]`;
+  } else {
+    const c = res.collisions.map((x) => x.a + "~" + x.b).join(", ");
+    valLastCollision = pose.slice();
+    $("valResult").innerHTML = `<span class="bad">COLLIDES</span> at pose [${pose.map((x)=>+x.toFixed(1)).join(",")}] — ${c}`;
+  }
+}
+
+// Copy the last reported collision pose into the setter and drive the arm to it.
+function copyValCollisionPose() {
+  if (!valLastCollision) { $("valResult").innerHTML = `<span style="color:var(--dim)">no collision pose yet — run a scan or check a pose</span>`; return; }
+  valPoseInputs.forEach((el, i) => { el.value = Math.round(valLastCollision[i] * 1000) / 1000; });
+  applyValidatePose(valLastCollision);
 }
 
 // ---------------------------------------------------------------------------
@@ -2741,7 +3145,11 @@ function buildActionList(container, name, z, rebuild, onChanged, showPoses) {
     en.querySelector("input").onchange = (e) => { a.enabled = e.target.checked; };
     const play = document.createElement("button");
     play.className = "small"; play.textContent = "play";
-    play.onclick = () => send({ cmd: "play_action", action: an });
+    // Zone-scoped: trigger_action moves the robot to this zone's entry pose (if it is
+    // not already there) and starts the action, so the action runs for *this* zone —
+    // not the robot's current zone (play_action alone would resolve the action against
+    // the current zone and no-op when the robot is parked elsewhere, e.g. in manual mode).
+    play.onclick = () => send({ cmd: "trigger_action", zone: name, action: an });
     const edit = document.createElement("button");
     edit.className = "small"; edit.textContent = "edit";
     edit.onclick = (e) => { e.stopPropagation(); openActionEditor(name, an); };
@@ -2951,6 +3359,8 @@ function validate() {
         a.pos.forEach((p, i) => { if (!Array.isArray(p) || p.length !== 6 || !p.every(isNum)) errs.push(`${name}/${an}: pose ${i} needs 6 numbers`); });
         if (a.speed !== undefined && (Array.isArray(a.speed) ? a.speed.length !== a.pos.length || !a.speed.every(isNum) : !isNum(a.speed)))
           errs.push(`${name}/${an}: speed needs one number per pose`);
+        if (a.behavior !== undefined && !BEHAVIORS.includes(a.behavior))
+          errs.push(`${name}/${an}: behavior "${a.behavior}" not in ${BEHAVIORS.join("/")}`);
       }
       // next: optional {zone, action} dict OR a list of them (ordered targets).
       if (a.next !== undefined) {
@@ -3530,6 +3940,7 @@ function bridgePlan(from, to) {
       [actionName]: {
         enabled: true,
         loop: false,
+        behavior: "bridge",
         pos: [aEnd.slice(), bStart.slice()],
         speed: [speed, speed],
         next: { zone: to.zone, action: to.action },
@@ -3871,6 +4282,23 @@ function renameZone() {
 }
 
 Robot3D.init($("robot3d"), { log: (m) => console.log(m), environment: true });
+// The 3D singleton is shared between the zones and validate tabs. We move the
+// #robot3d DOM node between the two mounts; the renderer holds a reference to the
+// node, so its state (camera, ghost) survives the move. We capture the next sibling
+// at boot so unmount restores the node to its original position in the zones tab.
+const robot3dNextSibling = $("robot3d").nextElementSibling;
+function _triggerResize() { window.dispatchEvent(new Event("resize")); }
+function mountRobot3dValidate() {
+  $("valRobot3dMount").appendChild($("robot3d"));
+  _triggerResize();
+}
+function unmountRobot3dValidate() {
+  const el = $("robot3d");
+  const home = robot3dNextSibling ? robot3dNextSibling.parentNode : el.parentNode;
+  if (robot3dNextSibling) home.insertBefore(el, robot3dNextSibling);
+  else home.appendChild(el);
+  _triggerResize();
+}
 // Toggle the green ghost (target) arm in the 3D preview.
 let ghostVisible = true;
 $("ghostToggle").onclick = () => {
@@ -3878,6 +4306,15 @@ $("ghostToggle").onclick = () => {
   Robot3D.setGhostVisible(ghostVisible);
   $("ghostToggle").className = ghostVisible ? "active" : "";
 };
+// Mesh visibility toggles (validate tab): the real (visual) and collision meshes for
+// the robot and the environment. The 3D singleton is shared, so these apply to the
+// whole scene; the active class mirrors the on/off state.
+let valMeshEnvReal = true, valMeshEnvColl = false, valMeshRobReal = true, valMeshRobColl = false, valMeshToolColl = false;
+$("valMeshEnvReal").onclick = () => { valMeshEnvReal = !valMeshEnvReal; Robot3D.setEnvRealVisible(valMeshEnvReal); $("valMeshEnvReal").className = valMeshEnvReal ? "active" : ""; };
+$("valMeshEnvColl").onclick = () => { valMeshEnvColl = !valMeshEnvColl; Robot3D.setEnvCollisionVisible(valMeshEnvColl); $("valMeshEnvColl").className = valMeshEnvColl ? "active" : ""; };
+$("valMeshRobReal").onclick = () => { valMeshRobReal = !valMeshRobReal; Robot3D.setRobotRealVisible(valMeshRobReal); $("valMeshRobReal").className = valMeshRobReal ? "active" : ""; };
+$("valMeshRobColl").onclick = () => { valMeshRobColl = !valMeshRobColl; Robot3D.setRobotCollisionVisible(valMeshRobColl); $("valMeshRobColl").className = valMeshRobColl ? "active" : ""; };
+$("valMeshToolColl").onclick = () => { valMeshToolColl = !valMeshToolColl; Robot3D.setToolCollisionVisible(valMeshToolColl); $("valMeshToolColl").className = valMeshToolColl ? "active" : ""; };
 // The live-preview textarea: commit + re-render (debounced) as the user types.
 $("patchCode").oninput = () => {
   if (patchTimer) clearTimeout(patchTimer);
@@ -3900,6 +4337,10 @@ $("delZone").onclick = delZone;
   $("tabMidi").onclick = () => switchView("midi");
   $("tabFlow").onclick = () => switchView("flow");
   $("tabBrain").onclick = () => switchView("brain");
+  $("tabValidate").onclick = () => switchView("validate");
+  buildValPoseSetter();
+  $("valPoseGo").onclick = applyValPose;
+  $("valCopyCollision").onclick = copyValCollisionPose;
 $("midiTabOut").onclick = () => switchMidiSubView("out");
 $("midiTabIn").onclick = () => switchMidiSubView("in");
 $("midiStopLearn").onclick = midiStopLearn;

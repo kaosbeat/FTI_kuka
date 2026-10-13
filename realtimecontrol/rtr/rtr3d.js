@@ -61,6 +61,14 @@ const Robot3D = (() => {
   // Ghost (target) arm visibility — toggled per view by the page's button. Stored so
   // a toggle before the meshes finish loading still applies once the arm is built.
   let ghostVisible = true;
+  // Mesh visibility toggles (validate tab). robotReal = the orange/black KR60 visual
+  // (link meshes + pedestal + tool); robotCollision = the red wireframe collision
+  // geometry; envReal = the rendered environment GLB; envCollision = the low-res
+  // collision proxy. Stored so a toggle before the meshes finish loading still applies
+  // once they build.
+  let robotRealVisible = true, robotCollisionVisible = false;
+  let envRealVisible = true, envCollisionVisible = false;
+  let realMeshes = [];  // current arm's link meshes + pedestal + tool (the robot real mesh)
   let container, toolEl, logFn, running = false;
   // The tool-screen texture (fed by hydra); re-uploaded from the hydra canvas each frame.
   let screenTex = null;
@@ -81,6 +89,9 @@ const Robot3D = (() => {
   let collHighlightMeshes = {}; // name -> THREE.Mesh (red wireframe, child of rotor)
   // Tool collision (the tool GLB may load after the collision world is built).
   let toolTris = null, toolBodyAdded = false;
+  // The tool collision wireframe (a red wireframe mirror of the tool GLB, parented under
+  // the A6 rotor so it tracks the tool but is independent of the "robot real" toggle).
+  let toolCollisionVisible = false, toolCollRoot = null;
   // Collision STOP: debounced, fires once per collision event (rising edge).
   let onCollision = null, collStreak = 0, stopSent = false, lastTarget = null;
   const COLLISION_STOP_THRESHOLD = 3;
@@ -121,6 +132,7 @@ const Robot3D = (() => {
   // target tool reads like the ghost links.
   function buildArm(geos, matFor, toolObj, isGhost, root) {
     const rot = [];
+    const meshes = [];
     for (let j = 0; j < 6; j++) {
       const jt = JOINTS[j];
       const rotor = new THREE.Group();
@@ -128,13 +140,15 @@ const Robot3D = (() => {
       (j === 0 ? (root || scene) : rot[j - 1]).add(rotor);
       rot.push(rotor);
       const name = "link_" + (j + 1);
+      let mesh;
       if (geos[name]) {
-        rotor.add(new THREE.Mesh(geos[name], matFor(name)));
+        mesh = new THREE.Mesh(geos[name], matFor(name));
       } else {
-        const ph = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 0.3), matFor(name));
-        rotor.add(ph);
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 0.3), matFor(name));
         logFn(name + ".stl not loaded; placeholder link");
       }
+      rotor.add(mesh);
+      meshes.push(mesh);
     }
     // tool0 marker ($FLANGE) — a child of rotor[5]; drives the tool readout.
     const tool = new THREE.Group();
@@ -148,7 +162,7 @@ const Robot3D = (() => {
     } else {
       tool.add(new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.14), matFor("tool")));
     }
-    return { rot, tool };
+    return { rot, tool, meshes };
   }
 
   // Swap the contents of a tool node (placeholder box vs the loaded GLB). Used to attach
@@ -196,6 +210,7 @@ const Robot3D = (() => {
     new THREE.GLTFLoader().load(url, (gltf) => {
       const env = gltf.scene;
       env.rotation.x = Math.PI / 2;
+      env.visible = envRealVisible;
       envScene = env;
       scene.add(env);
     }, undefined, (err) => {
@@ -211,7 +226,7 @@ const Robot3D = (() => {
     new THREE.GLTFLoader().load(url, (gltf) => {
       const env = gltf.scene;
       env.rotation.x = Math.PI / 2;
-      env.visible = false;
+      env.visible = envCollisionVisible;
       collisionEnvScene = env;
       scene.add(env);
       if (collWorld) {
@@ -286,7 +301,7 @@ const Robot3D = (() => {
       if (collGeos[name]) {
         const bodyName = name === "base_link" ? "base" : name;
         const hl = new THREE.Mesh(collGeos[name], hlMat);
-        hl.visible = false;
+        hl.visible = robotCollisionVisible;
         if (name === "base_link") { scene.add(hl); }
         else {
           const j = parseInt(name.split("_")[1]) - 1;
@@ -332,10 +347,14 @@ const Robot3D = (() => {
         console.log("[collision] " + _collMsg);
         collDiagPrevKey = key;
       }
-      // Update red wireframe highlights.
+      // Update red wireframe highlights. The collision-mesh toggle forces them visible
+      // (to inspect the collision geometry); otherwise they flash on collision.
       for (const name in collHighlightMeshes) {
-        collHighlightMeshes[name].visible = res.bodies.has(name);
+        collHighlightMeshes[name].visible = robotCollisionVisible || res.bodies.has(name);
       }
+      // The tool collision wireframe is independent of the robot collision toggle;
+      // its own toggle forces it visible, otherwise it flashes on a tool collision.
+      if (toolCollRoot) toolCollRoot.visible = toolCollisionVisible || res.bodies.has("tool");
       // Collision STOP: combine current-pose + target-pose (ghost) hits.
       // Fire on rising edge (debounced by COLLISION_STOP_THRESHOLD consecutive frames).
       const curHit = res.bodies.size > 0;
@@ -423,6 +442,25 @@ const Robot3D = (() => {
     if (toolBodyAdded || !collWorld || !toolTris || !toolNode) return;
     collWorld.addBody("tool", toolTris, () => toolNode.matrixWorld.elements);
     toolBodyAdded = true;
+  }
+
+  // Build the tool collision wireframe (a red wireframe mirror of the tool GLB). It is
+  // parented under the A6 rotor (a sibling of the tool node) so it tracks the tool as
+  // the arm moves but is NOT hidden by the "robot real" toggle (which hides the tool
+  // node itself). The tool node's local transform is fixed, so baking the clone's world
+  // matrix into the rotor frame keeps the wireframe in sync for all poses.
+  function buildToolCollisionHighlight(toolClone) {
+    if (!rotors || !rotors[5] || !toolClone || !toolNode) return;
+    const hlMat = new THREE.MeshBasicMaterial({ color: 0xff2020, wireframe: true, transparent: true, opacity: 0.45 });
+    const root = toolClone.clone();
+    root.traverse((o) => { if (o.isMesh && o.geometry) o.material = hlMat; });
+    scene.updateMatrixWorld(true);
+    const m = new THREE.Matrix4().copy(rotors[5].matrixWorld).invert().multiply(toolClone.matrixWorld);
+    root.matrix.copy(m);
+    root.matrixAutoUpdate = false;
+    rotors[5].add(root);
+    toolCollRoot = root;
+    root.visible = toolCollisionVisible;
   }
 
   // ------------------------------------------------------------------
@@ -610,14 +648,12 @@ const Robot3D = (() => {
       const curMat = makeMats("cur");
       const ghostMat = makeMats("ghost");
       // Static base_link (the pedestal) — added once, shared by both arms.
-      if (geos.base_link) {
-        scene.add(new THREE.Mesh(geos.base_link, curMat("base_link")));
-      } else {
-        const ph = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 0.5, 24), curMat("base_link"));
-        ph.position.set(0, 0, 0.25);
-        scene.add(ph);
+      const pedestal = new THREE.Mesh(geos.base_link || new THREE.CylinderGeometry(0.22, 0.28, 0.5, 24), curMat("base_link"));
+      if (!geos.base_link) {
+        pedestal.position.set(0, 0, 0.25);
         logFn("base_link.stl not loaded; placeholder pedestal");
       }
+      scene.add(pedestal);
       // Build both arms now (with a placeholder tool) and mark the scene ready so the
       // robot moves immediately. The tool GLB + hydra screen are cosmetic add-ons: they
       // attach when they load and must NEVER gate the arm's motion — a slow or failed
@@ -626,6 +662,12 @@ const Robot3D = (() => {
       rotors = cur.rot; toolNode = cur.tool;
       const tgt = buildArm(geos, ghostMat, null, true, ghostRoot);
       rotorsT = tgt.rot;
+      // The robot real mesh = the current arm's link meshes + the pedestal + the tool.
+      // Collected so the validate tab can hide/show the visual arm independently of the
+      // ghost and the collision overlays (which share the rotor chain).
+      realMeshes = cur.meshes.slice();
+      realMeshes.push(pedestal, cur.tool);
+      realMeshes.forEach((m) => { m.visible = robotRealVisible; });
       setJoints(rotors, HOME);
       setJoints(rotorsT, HOME);
       running = true;
@@ -639,6 +681,7 @@ const Robot3D = (() => {
             cur.tool.updateMatrixWorld(true);
             toolTris = extractToolTris(curClone);
             ensureToolBody();
+            if (collisionEnabled) buildToolCollisionHighlight(curClone);
           }
           setupToolScreen(cur.tool);  // render the hydra screen onto the tool's red mesh
         } catch (e) {
@@ -683,6 +726,43 @@ const Robot3D = (() => {
   function setGhostVisible(v) {
     ghostVisible = !!v;
     if (ghostRoot) ghostRoot.visible = ghostVisible;
+  }
+
+  // Show/hide the robot's real (visual) mesh — the orange/black KR60 (link meshes +
+  // pedestal + tool). Toggled by the validate tab; the ghost and collision overlays
+  // are independent (they share the rotor chain but are hidden per-mesh).
+  function setRobotRealVisible(v) {
+    robotRealVisible = !!v;
+    realMeshes.forEach((m) => { m.visible = robotRealVisible; });
+  }
+
+  // Show/hide the robot's collision mesh (the red wireframe collision geometry). When
+  // on, the bodies stay visible for inspection; when off they flash on collision only.
+  function setRobotCollisionVisible(v) {
+    robotCollisionVisible = !!v;
+    for (const name in collHighlightMeshes) {
+      collHighlightMeshes[name].visible = robotCollisionVisible;
+    }
+  }
+
+  // Show/hide the tool's collision mesh (the red wireframe of the tool GLB). When on, it
+  // stays visible for inspection; when off it flashes on a tool collision only. Stored
+  // so a toggle before the tool GLB finishes loading still applies once it builds.
+  function setToolCollisionVisible(v) {
+    toolCollisionVisible = !!v;
+    if (toolCollRoot) toolCollRoot.visible = toolCollisionVisible;
+  }
+
+  // Show/hide the environment's real (rendered) mesh.
+  function setEnvRealVisible(v) {
+    envRealVisible = !!v;
+    if (envScene) envScene.visible = envRealVisible;
+  }
+
+  // Show/hide the environment's collision mesh (the low-res collision proxy).
+  function setEnvCollisionVisible(v) {
+    envCollisionVisible = !!v;
+    if (collisionEnvScene) collisionEnvScene.visible = envCollisionVisible;
   }
 
   function collisions() {
@@ -751,6 +831,7 @@ const Robot3D = (() => {
     new THREE.GLTFLoader().load(u, (gltf) => {
       const env = gltf.scene;
       env.rotation.x = Math.PI / 2;
+      env.visible = envRealVisible;
       envScene = env;
       scene.add(env);
       logFn("environment reloaded: " + u);
@@ -819,5 +900,5 @@ const Robot3D = (() => {
     console.log("[collision] " + (collisionOn ? "enabled" : "disabled") + " (runtime)");
   }
 
-  return { init, update, setTarget, screenResolution, setGhostVisible, collisions, checkPoseCollision, reloadEnv, diagCollision, diagEnv, setCollisionEnabled };
+  return { init, update, setTarget, screenResolution, setGhostVisible, setRobotRealVisible, setRobotCollisionVisible, setToolCollisionVisible, setEnvRealVisible, setEnvCollisionVisible, collisions, checkPoseCollision, reloadEnv, diagCollision, diagEnv, setCollisionEnabled };
 })();

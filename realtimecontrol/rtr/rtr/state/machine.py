@@ -88,6 +88,9 @@ class StateMachine:
         self.cadence = "fixed"
         self.cadence_every = max(1, int(tick_hz))
         self.tick = 0
+        # Control mode: "auto" (the brain drives autonomous decisions) or
+        # "manual" (only explicit client commands move the robot).
+        self.control_mode = "auto"
 
     # ------------------------------------------------------------------
     # Requested changes (called by the brain when a command arrives).
@@ -158,6 +161,35 @@ class StateMachine:
             self.target = clamp(self, t)
         self.clear_action()  # hold the target
 
+    def set_control_mode(self, mode: str, curjpos: Optional[List[float]] = None) -> None:
+        """Set the control mode: ``"auto"`` (brain drives) or ``"manual"`` (operator only).
+
+        In manual mode the brain skips autonomous decisions (hunt, facefocus,
+        autonomy advance) and the machine does not auto-advance after a
+        single-run action completes. Explicit client commands
+        (``trigger_action``, ``play_action``, ``set_joint_pose``,
+        ``random_wrist``, ``stop``) still work.
+
+        Entering manual mode also freezes the robot: an already-running action
+        would otherwise keep retargeting the pose every tick (see :meth:`step`),
+        which is what "resets" an inspected pose. Clearing the action and any
+        in-progress transition and holding the current pose makes the robot stop
+        where it is until an explicit command moves it. ``curjpos`` (the robot's
+        current joint position) is used for the hold pose when provided.
+        """
+        if mode not in ("manual", "auto"):
+            print(f"[state] invalid control mode: {mode}")
+            return
+        if mode == "manual" and self.control_mode != "manual":
+            self._transition = None
+            self.current_action = None
+            self.action_index = 0
+            if curjpos is not None:
+                self.target = list(curjpos)
+                self.target_kind = "joint"
+        self.control_mode = mode
+        print(f"[state] control mode: {mode}")
+
     # ------------------------------------------------------------------
     # Actions.
     # ------------------------------------------------------------------
@@ -215,9 +247,16 @@ class StateMachine:
         Priority: the action's ordered ``next`` list (first valid candidate) >
         zone-level ``exits`` (first valid, deterministic). No valid target ->
         stop the action (the robot holds the last pose).
+
+        In manual mode the action is simply cleared (no auto-advance): the
+        operator explicitly triggers the next action.
         """
+        if self.control_mode == "manual":
+            self.clear_action()
+            return
         zone = self.zones.get(self.current_zone)
-        for tz, ta in zone.action_next_list(action):
+        for entry in zone.action_next_list(action):
+            tz, ta = entry.get("zone"), entry.get("action")
             if self._try_go(tz, ta):
                 return
         # No valid next candidate: fall back to the first valid zone-level exit.

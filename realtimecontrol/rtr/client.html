@@ -28,6 +28,17 @@
   button:hover { border-color: var(--accent); }
   button.active { background: var(--accent); color: #0b0d10; border-color: var(--accent); }
   button.dim { opacity: .45; }
+  /* Control mode: a left/right segmented toggle. The active side is highlighted
+     (manual = red, auto = green) so it visually points to the current state; the
+     inactive side stays dim. Click a side to switch to that mode. */
+  .seg-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .seg { background: #22262f; color: var(--dim); border: none; padding: 8px 18px; font-size: 13px;
+         font-weight: bold; text-transform: uppercase; letter-spacing: .06em; cursor: pointer; }
+  .seg + .seg { border-left: 1px solid var(--border); }
+  .seg:hover { color: var(--text); }
+  .seg.active { color: #0b0d10; }
+  .seg.manual.active { background: #e05d5d; color: #fff; }
+  .seg.auto.active { background: var(--accent); }
   main { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
   section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
   h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
@@ -46,7 +57,10 @@
   .bar .mark { position: absolute; top: 0; bottom: 0; width: 4px; background: var(--accent); }
   .btnrow { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; align-items: center; }
   .poseGrid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-bottom: 8px; }
-  .poseGrid label { display: flex; flex-direction: column; font-size: 11px; color: var(--dim); gap: 2px; }
+  .poseGrid label { display: flex; flex-direction: column; font-size: 11px; color: var(--dim); gap: 2px; align-items: stretch; }
+  .poseArrow { width: 100%; padding: 1px 0; font-size: 9px; line-height: 1.1; cursor: pointer; }
+  .poseNum { -moz-appearance: textfield; }
+  .poseNum::-webkit-inner-spin-button, .poseNum::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
   input[type=number] { width: 100%; background: #0d0f13; color: var(--text);
     border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; font: inherit; }
   input[type=range] { width: 130px; vertical-align: middle; }
@@ -90,6 +104,10 @@
   <span class="dot" id="dot"></span><span id="status">disconnected</span>
   <input id="host" value="ws://localhost:8765" spellcheck="false">
   <button id="connect">connect</button>
+  <div id="controlMode" class="seg-toggle" title="control mode — click a side to switch">
+    <button id="cmManual" class="seg manual">manual</button>
+    <button id="cmAuto" class="seg auto">auto</button>
+  </div>
 </header>
 
 <main>
@@ -489,6 +507,13 @@ function renderState(s) {
   $("moving").textContent = s.moving ? "yes" : "no";
   $("cart").textContent = s.cart.map(fmt).join(" ");
 
+  // Sync the control mode toggle with the core state: highlight the active side.
+  if (s.control_mode) {
+    const manual = s.control_mode === "manual";
+    $("cmManual").className = "seg manual" + (manual ? " active" : "");
+    $("cmAuto").className = "seg auto" + (!manual ? " active" : "");
+  }
+
   for (let i = 0; i < 6; i++) {
     valEls[i].textContent = fmt(s.joints[i]);
     tgtEls[i].textContent = "→ " + fmt(s.target[i]);
@@ -611,14 +636,28 @@ function buildUI() {
   // actions (per-zone; rebuilt when the zone changes)
   buildActionButtons(null);
 
-  // joint pose inputs
+  // joint pose inputs (up arrow above the field, down arrow below it)
   AXES.forEach((n, i) => {
     const l = document.createElement("label");
     l.textContent = n;
+    const up = document.createElement("button");
+    up.type = "button"; up.className = "poseArrow"; up.textContent = "▲"; up.title = "increase";
     const inp = document.createElement("input");
     inp.type = "number";
     inp.step = "0.1";
+    inp.className = "poseNum";
+    const down = document.createElement("button");
+    down.type = "button"; down.className = "poseArrow"; down.textContent = "▼"; down.title = "decrease";
+    const bump = (dir, step) => {
+      const v = parseFloat(inp.value);
+      const base = isNaN(v) ? 0 : v;
+      inp.value = Math.round((base + dir * step) * 1000) / 1000;
+    };
+    up.onclick = (e) => bump(1, e.shiftKey ? 10 : 1);
+    down.onclick = (e) => bump(-1, e.shiftKey ? 10 : 1);
+    l.appendChild(up);
     l.appendChild(inp);
+    l.appendChild(down);
     $("poseGrid").appendChild(l);
     poseInputs.push(inp);
   });
@@ -653,6 +692,11 @@ function buildUI() {
 
   $("randomWrist").onclick = () => send({ cmd: "random_wrist" });
   $("connect").onclick = () => { const u = $("host").value.trim(); $("host").value = u; connect(); };
+
+  // Control mode: clicking a side switches to that mode (manual = operator drives,
+  // auto = brain drives). The snapshot render highlights the active side.
+  $("cmManual").onclick = () => send({ cmd: "set_control_mode", mode: "manual" });
+  $("cmAuto").onclick = () => send({ cmd: "set_control_mode", mode: "auto" });
 
   // engine (move mode + cadence)
   $("engineMode").onchange = () => send({ cmd: "set_engine_mode", mode: $("engineMode").value });

@@ -136,6 +136,8 @@ class Display:
             frame["performance_mode"] = snap.performance_mode
         if snap.autonomy_dwell_remaining is not None:
             frame["autonomy_dwell_remaining"] = snap.autonomy_dwell_remaining
+        if snap.control_mode is not None:
+            frame["control_mode"] = snap.control_mode
         return frame
 
 

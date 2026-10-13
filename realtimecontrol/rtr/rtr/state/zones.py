@@ -44,9 +44,14 @@ HARDWARE_LIMITS: List[Tuple[float, float]] = [
 ]
 
 # Behavior names: the policies that drive variable axes.
+#
+# ``bridge`` is a no-op policy for bridge zones: it drives NO variable axes and does
+# NO random movement. A bridge action holds its specific (curated) poses so the robot
+# can transition safely between zones. It is the only behaviour a bridge zone may use.
 BEHAVIORS = (
     "locked", "intent", "vigilant", "curious", "restless", "spontaneous", "gentle", "calm",
     "soothing", "agitated", "aggressive", "exhilarated", "impatient", "drowsy",
+    "bridge",
 )
 
 # Mode groups: the three thematic clusters of zones.
@@ -444,6 +449,10 @@ def _validate_action(name: str, a: dict, all_zone_names: set) -> None:
         beh = a.get("behavior", "calm")
         if not (isinstance(beh, str) and beh in BEHAVIORS):
             raise ValueError(f"action {name!r}: behavior must be one of {BEHAVIORS}")
+        # ``bridge`` is a no-op policy (like ``calm``): it drives no variable axes. A
+        # variable-axis action may not pair it with a non-empty ``variable_axes`` list.
+        if beh == "bridge" and va:
+            raise ValueError(f"action {name!r}: 'bridge' is a no-op behaviour and must not drive variable axes")
         spd = a.get("speed")
         if spd is not None and not _is_num(spd):
             raise ValueError(f"action {name!r}: speed must be a number (variable-axis form)")
@@ -457,6 +466,12 @@ def _validate_action(name: str, a: dict, all_zone_names: set) -> None:
         if spd is not None and not (
                 isinstance(spd, list) and len(spd) == len(pos) and all(_is_num(x) for x in spd)):
             raise ValueError(f"action {name!r}: speed must have one value per pose")
+        # Legacy actions are stepped by pose (no variable axes), so ``behavior`` is a
+        # marker/label only — but when present it must still name a known behaviour
+        # (the bridge action is tagged ``behavior: "bridge"`` here).
+        beh = a.get("behavior")
+        if beh is not None and not (isinstance(beh, str) and beh in BEHAVIORS):
+            raise ValueError(f"action {name!r}: behavior must be one of {BEHAVIORS}")
 
     if "loop" in a and not isinstance(a["loop"], bool):
         raise ValueError(f"action {name!r}: 'loop' must be a bool")

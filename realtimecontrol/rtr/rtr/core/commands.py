@@ -32,6 +32,7 @@ class Cmd(str, Enum):
     STOP = "stop"
     SET_ENGINE_MODE = "set_engine_mode"
     SET_CADENCE = "set_cadence"
+    SET_CONTROL_MODE = "set_control_mode"
     CAM_STATUS = "cam_status"
     CAM_CANDIDATES = "cam_candidates"
     CAM_TRACK = "cam_track"
@@ -104,6 +105,7 @@ class Snapshot:
     autonomy_enabled_groups: Optional[List[str]] = None  # sorted enabled group names
     performance_mode: Optional[bool] = None  # perform on, hunt+facefocus off
     autonomy_dwell_remaining: Optional[float] = None  # seconds left in current dwell
+    control_mode: Optional[str] = None  # "manual" | "auto"
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
@@ -135,4 +137,6 @@ class Snapshot:
             d["performance_mode"] = self.performance_mode
         if self.autonomy_dwell_remaining is not None:
             d["autonomy_dwell_remaining"] = self.autonomy_dwell_remaining
+        if self.control_mode is not None:
+            d["control_mode"] = self.control_mode
         return d

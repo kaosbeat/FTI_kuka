@@ -186,6 +186,7 @@ class Engine:
             autonomy_enabled_groups=info["enabled_groups"],
             performance_mode=info["performance_mode"],
             autonomy_dwell_remaining=info["dwell_remaining"],
+            control_mode=self.machine.control_mode,
         )
         self.bus.set_snapshot(snap)
         self.bus.publish(Event.SNAPSHOT, snap)

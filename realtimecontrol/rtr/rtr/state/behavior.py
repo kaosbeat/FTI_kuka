@@ -102,7 +102,9 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
 
     Non-variable axes remain at ``base_pose`` (already set in ``pose``).
     """
-    if not var_axes or behavior == "calm":
+    # ``calm`` and ``bridge`` are no-op policies: they drive no variable axes (a bridge
+    # action holds its curated poses so the robot transitions safely between zones).
+    if not var_axes or behavior in ("calm", "bridge"):
         return
 
     limits = effective(machine)

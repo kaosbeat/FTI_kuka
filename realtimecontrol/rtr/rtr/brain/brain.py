@@ -277,6 +277,10 @@ class Brain:
             self._handle_set_engine_mode(p)
         elif c == Cmd.SET_CADENCE:
             self._handle_set_cadence(p)
+        elif c == Cmd.SET_CONTROL_MODE:
+            # Pass the current joint position so entering manual mode holds the
+            # robot where it is (a freeze), not just stops new autonomous triggers.
+            self.machine.set_control_mode(p.get("mode"), curjpos)
         elif c == Cmd.SET_FLAG:
             name = p.get("flag")
             if name in self.machine.flags:
@@ -400,7 +404,8 @@ class Brain:
             hp = hunt.get("params", {})
             guard = tuple(hp.get("attention_guard", []))
             detect = hp.get("detect", {})
-            if (self._hunt_state != "facefocus"
+            if (self.machine.control_mode != "manual"
+                    and self._hunt_state != "facefocus"
                     and self.machine.behavior not in guard
                     and not self.machine.transitioning
                     and hunt.get("enabled", False)):
@@ -470,6 +475,8 @@ class Brain:
         }
         self._facefocus_last_face_ts = time.time()
         self._cam_log("face", f"face: id={p.get('id')} bbox={bbox}")
+        if self.machine.control_mode == "manual":
+            return
         ff = self._facefocus_group()
         if not bool(ff.get("enabled", False)):
             return
@@ -531,6 +538,10 @@ class Brain:
            the detect action). The person is still locked, so the face can reappear.
         """
         self._sync_camera()
+        if self.machine.control_mode == "manual":
+            self._clear_feral_if_stale()
+            self._update_hunt_state()
+            return
         hunt = self._hunt_group()
         hunt_enabled = bool(hunt.get("enabled", False))
         if self._hunt_state not in ("tracking", "facefocus") or not hunt_enabled:
@@ -712,11 +723,19 @@ class Brain:
 
         Called by the MIDI adapter on note-on. Sets ``_autonomy_triggered`` so the
         next :meth:`_autonomy_tick` follows the current action's next link.
+        No-op in manual mode (the operator drives the robot).
         """
+        if self.machine.control_mode == "manual":
+            return
         if self._autonomy_cfg().get("events", {}).get("midi", False):
             self._autonomy_triggered = True
 
     def _handle_proceed(self) -> None:
-        """WebSocket PROCEED event: trigger an immediate next-link advance."""
+        """WebSocket PROCEED event: trigger an immediate next-link advance.
+
+        No-op in manual mode (the operator drives the robot).
+        """
+        if self.machine.control_mode == "manual":
+            return
         if self._autonomy_cfg().get("events", {}).get("websocket", False):
             self._autonomy_triggered = True
