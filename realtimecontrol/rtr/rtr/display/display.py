@@ -64,6 +64,9 @@ class Display:
         elif event == Event.CAM_CONTROL:
             # Fast-path camera control frame (emitted when the intent changes).
             self._send({"type": "cam_control", **data})
+        elif event == Event.SAFETY_DISCARD:
+            # Auto mode discarded a safety-blocked move; the control client logs it.
+            self._send({"type": "safety_discard", **data})
 
     def _patch_for(self, snap: Snapshot) -> str | None:
         """The resolved hydra patch for this state, or None if resolution is unavailable.
@@ -114,7 +117,6 @@ class Display:
             "target": list(snap.target_pose),
             "speed": snap.speed,
             "moving": snap.moving,
-            "flags": dict(snap.flags),
         }
         cam = self._camera_field()
         if cam is not None:
@@ -138,6 +140,10 @@ class Display:
             frame["autonomy_dwell_remaining"] = snap.autonomy_dwell_remaining
         if snap.control_mode is not None:
             frame["control_mode"] = snap.control_mode
+        if snap.safety is not None:
+            frame["safety"] = dict(snap.safety)
+        elif self._machine is not None and self._machine.pending:
+            frame["safety"] = self._machine.pending_info()
         return frame
 
 

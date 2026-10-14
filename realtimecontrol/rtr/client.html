@@ -7,7 +7,7 @@
 <style>
   :root {
     --bg: #111318; --panel: #181c24; --border: #2a2f3a;
-    --text: #d7dbe2; --dim: #7c8494; --accent: #4fc08d;
+    --text: #d7dbe2; --dim: #7c8494; --accent: #4fc08d; --warn: #e0a030;
   }
   * { box-sizing: border-box; }
   body {
@@ -67,6 +67,7 @@
   .limrow { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; }
   #log { height: 180px; overflow-y: auto; font-size: 12px; color: var(--dim);
          white-space: pre-wrap; word-break: break-all; }
+  #log .log-warn { color: var(--warn); }
   #robot3d-section { grid-column: 1 / -1; }
   #robot3d { width: 100%; height: 360px; border: 1px solid var(--border);
             border-radius: 6px; overflow: hidden; background: #0d0f13; }
@@ -95,6 +96,17 @@
   #patchPreview { width: 100%; height: 200px; border: 1px solid var(--border);
                   border-radius: 6px; overflow: hidden; background: #0d0f13; margin-top: 8px; }
   #patchPreview canvas { display: block; width: 100%; height: 100%; }
+  /* Safety popup: shown when a safety-gated move is blocked (manual mode). */
+  #safetyPopup { position: fixed; inset: 0; background: rgba(0,0,0,.65); display: none; z-index: 25; }
+  #safetyPopup.open { display: block; }
+  #spPanel { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+             width: 480px; max-width: 90vw; max-height: 80vh; overflow: auto;
+             background: var(--panel); border: 1px solid #e04040; border-radius: 10px; padding: 16px; }
+  #spPanel h2 { margin: 0 0 10px; color: #e04040; text-transform: none; letter-spacing: 0; font-size: 15px; }
+  #spTarget { font-size: 13px; color: var(--text); margin-bottom: 8px; }
+  #spIssues { margin: 0 0 12px; font-size: 13px; line-height: 1.5; list-style: none; padding: 0; }
+  #spIssues li { margin-bottom: 4px; color: var(--dim); }
+  #spActions { display: flex; gap: 8px; justify-content: flex-end; }
 </style>
 </head>
 <body>
@@ -128,7 +140,6 @@
     <div class="kv"><span>action</span><span id="action">&#8211;</span></div>
     <div class="kv"><span>speed</span><span id="speed">&#8211;</span></div>
     <div class="kv"><span>moving</span><span id="moving">&#8211;</span></div>
-    <div class="chips" id="flags"></div>
   </section>
 
   <section>
@@ -194,6 +205,18 @@
   </section>
 </main>
 
+<div id="safetyPopup">
+  <div id="spPanel">
+    <h2 id="spTitle">safety alert</h2>
+    <div id="spTarget"></div>
+    <ul id="spIssues"></ul>
+    <div id="spActions">
+      <button id="spConfirm">confirm move</button>
+      <button id="spCancel" class="small">cancel</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
@@ -223,7 +246,6 @@ let currentZone = null;
 
 const AXES = ["A1","A2","A3","A4","A5","A6"];
 const BEHAVIORS = ["track","focus","scan","look","wander","random","hold"];
-const FLAGS = ["wandermode","randomwristmode","dynmode","reachmode"];
 
 const $ = (id) => document.getElementById(id);
 
@@ -405,10 +427,18 @@ function buildPatchChooser() {
 // Log.
 // ------------------------------------------------------------------
 const logLines = [];
-function log(line) {
-  logLines.unshift("[" + new Date().toLocaleTimeString() + "] " + line);
+function log(line, level) {
+  logLines.unshift({ ts: new Date().toLocaleTimeString(), line: String(line), level: level || "" });
   if (logLines.length > 100) logLines.pop();
-  $("log").textContent = logLines.join("\n");
+  const el = $("log");
+  el.textContent = "";
+  for (const e of logLines) {
+    const div = document.createElement("div");
+    if (e.level) div.className = "log-" + e.level;
+    const flag = e.level ? "[" + e.level.toUpperCase() + "] " : "";
+    div.textContent = "[" + e.ts + "] " + flag + e.line;
+    el.appendChild(div);
+  }
 }
 
 // ------------------------------------------------------------------
@@ -441,6 +471,13 @@ function connect() {
     }
     else if (m.type === "zones_changed") { fetchZones(); log("zones changed; re-fetching"); }
     else if (m.type === "patches_changed") { fetchPatches(); log("patches changed; re-fetching"); }
+    else if (m.type === "safety_discard") {
+      const reasons = [];
+      if (m.conflict) reasons.push("red-link conflict");
+      if (m.collision) reasons.push("self-collision");
+      const reason = reasons.length ? reasons.join(" + ") : "safety block";
+      log("auto discarded move to " + m.zone + " / " + m.action + " — " + reason, "warn");
+    }
     else log("event " + m.type + " = " + (m.zone !== undefined ? m.zone : m.mode));
   };
 }
@@ -489,7 +526,7 @@ function firstEnabledAction(zoneName) {
 // ------------------------------------------------------------------
 // Render snapshots.
 // ------------------------------------------------------------------
-const valEls = [], tgtEls = [], markEls = [], flagEls = {};
+const valEls = [], tgtEls = [], markEls = [];
 const zoneBtns = {}, actionBtns = {};
 const poseInputs = [];
 
@@ -525,10 +562,6 @@ function renderState(s) {
     }
   }
 
-  for (const f of FLAGS) {
-    flagEls[f].className = "chip" + (s.flags[f] ? " on" : "");
-  }
-
   // Zone buttons: active = current; dim = disabled or not an available next
   // state (a direct exit or a reverse exit of the current zone).
   const avail = availableZones(s.zone);
@@ -548,6 +581,18 @@ function renderState(s) {
     if (unavailable) cls = "dim";
     else if (a === s.action) cls = "active";
     actionBtns[a].className = cls;
+  }
+
+  // Safety popup: driven by s.safety (pending safety-gated move).
+  if (s.safety && s.safety.phase === "confirm") {
+    $("safetyPopup").classList.add("open");
+    $("spTitle").textContent = "safety alert — move blocked";
+    $("spTarget").textContent = s.safety.zone + " / " + s.safety.action;
+    const issues = (s.safety.issues || []).slice();
+    if (s.safety.collision) issues.push("self-collision detected at entry pose");
+    $("spIssues").innerHTML = issues.map((str) => "<li>" + str + "</li>").join("");
+  } else {
+    $("safetyPopup").classList.remove("open");
   }
 }
 
@@ -619,15 +664,6 @@ function buildUI() {
     valEls[i] = d.querySelector("#val" + i);
     tgtEls[i] = d.querySelector("#tgt" + i);
     markEls[i] = d.querySelector("#mark" + i);
-  });
-
-  // flags
-  FLAGS.forEach((f) => {
-    const c = document.createElement("span");
-    c.className = "chip";
-    c.textContent = f;
-    $("flags").appendChild(c);
-    flagEls[f] = c;
   });
 
   // zones (built from the current zone table; rebuilt on fetch)
@@ -714,6 +750,22 @@ function buildUI() {
     const every = parseFloat($("cadenceEvery").value);
     if (isNaN(every) || every < 0.1) { log("cadence: interval must be >= 0.1 s"); return; }
     send({ cmd: "set_cadence", mode: "fixed", every });
+  };
+
+  // Safety popup: confirm (override) or cancel a blocked move.
+  $("spConfirm").onclick = () => {
+    send({ cmd: "safety_confirm" });
+    $("safetyPopup").classList.remove("open");
+  };
+  $("spCancel").onclick = () => {
+    send({ cmd: "safety_cancel" });
+    $("safetyPopup").classList.remove("open");
+  };
+  $("safetyPopup").onclick = (e) => {
+    if (e.target === e.currentTarget) {
+      send({ cmd: "safety_cancel" });
+      $("safetyPopup").classList.remove("open");
+    }
   };
 }
 

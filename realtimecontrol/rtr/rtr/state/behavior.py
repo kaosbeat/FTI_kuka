@@ -2,9 +2,11 @@
 
 These are the variable-axis behaviour policies and the clamp helpers. Each behaviour
 drives the *variable* axes of the current action while the *non-variable* axes are
-held at the action's ``base_pose``. The :class:`~rtr.state.machine.StateMachine`'s
-per-tick ``step`` dispatches to :func:`build_target` for variable-axis actions; legacy
-fixed-pose actions (a ``pos`` list) are stepped by the machine's ``step_action``.
+held at the current anchor pose (``poses[action_index]``). The
+:class:`~rtr.state.machine.StateMachine`'s per-tick ``step`` dispatches to
+:func:`build_target` for every action: it reads the current anchor, applies the
+wiggle (variable axes + behaviour) on top, and advances the anchor index on the
+configured cadence.
 
 Camera-driven behaviours (``locked`` / ``intent`` / ``curious``) read the camera telemetry
 the brain stashes on ``machine.camera_state`` each tick — the brain no longer nudges
@@ -70,12 +72,13 @@ def hardware_clamp(pose: List[float]) -> List[float]:
 
 
 def build_target(machine, curjpos: List[float]):
-    """Compute the target pose for a *variable-axis* action this tick.
+    """Compute the target pose for the current action this tick.
 
-    Returns the pose, or ``None`` if there is no active action or the action is a
-    legacy fixed-pose action (those are stepped by the machine's ``step_action``).
-    The non-variable axes stay at ``base_pose``; the variable axes are driven by the
-    action's behaviour.
+    Reads the *current* anchor (``poses[action_index]``), applies the action's wiggle
+    (variable axes + behaviour) on top, and returns the pose. The non-variable axes
+    stay at the current anchor; the variable axes are driven by the action's
+    behaviour. Returns ``None`` if there is no active action or the action has no
+    ``poses``.
     """
     if not machine.current_action:
         machine.servo_state = {}
@@ -83,24 +86,21 @@ def build_target(machine, curjpos: List[float]):
     zone = machine.zones.get(machine.current_zone)
     name = machine.current_action
     action = zone._action(name)
-    if not action or "pos" in action:
+    poses = action.get("poses")
+    if not (isinstance(poses, list) and poses):
         machine.servo_state = {}
-        return None  # no variable-axis action active (none, unknown, or legacy)
-
-    base = zone.action_base_pose(name)
-    if base is None:
-        machine.servo_state = {}
-        return None
-    pose = list(base)
-    _apply_behavior(machine, pose, zone.action_variable_axes(name),
+        return None  # no active action, or the action has no poses
+    idx = machine.action_index if 0 <= machine.action_index < len(poses) else 0
+    anchor = list(poses[idx])
+    _apply_behavior(machine, anchor, zone.action_variable_axes(name),
                     zone.action_behavior(name), curjpos, action)
-    return pose
+    return anchor
 
 
 def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
     """Drive the variable axes according to the behaviour policy.
 
-    Non-variable axes remain at ``base_pose`` (already set in ``pose``).
+    Non-variable axes remain at the current anchor (already set in ``pose``).
     """
     # ``calm`` and ``bridge`` are no-op policies: they drive no variable axes (a bridge
     # action holds its curated poses so the robot transitions safely between zones).
@@ -155,7 +155,7 @@ def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain, action) -> N
     so the offset decays to zero (convergent). This is correct in *any* arm
     configuration, because the image Jacobian is derived from the exact camera pose
     (position *and* orientation). A zero offset means no motion (the axes rest at
-    base_pose). ``curious`` uses a reduced offset (see :data:`_LOOK_FACTOR`).
+    the current anchor). ``curious`` uses a reduced offset (see :data:`_LOOK_FACTOR`).
 
     Falls back to the legacy fixed-axis gain when the kinematics are not wired
     (``machine.camera_geometry`` is ``None``), e.g. a bare sim.
@@ -203,7 +203,7 @@ def _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior) -> 
 
     ``gain`` is the fraction of the image error corrected per tick (dimensionless),
     so the offset decays to zero (convergent). A zero offset means no motion (the
-    axes rest at base_pose).
+    axes rest at the current anchor).
 
     Falls back to the legacy fixed-axis gain when the kinematics are not wired
     (``machine.camera_geometry`` is ``None``), e.g. a bare sim.
@@ -285,7 +285,7 @@ def _apply_oscillation(machine, pose, var_axes, limits, freq=1.0, amp_scale=0.5)
     t = machine.tick * 0.1 * freq
     for axis in var_axes:
         lo, hi = limits[axis]
-        center = pose[axis]  # the base_pose value (pose starts as base_pose)
+        center = pose[axis]  # the current-anchor value (pose starts as the anchor)
         amplitude = (hi - lo) / 2.0 * amp_scale
         val = center + amplitude * math.sin(t)
         pose[axis] = max(lo, min(hi, val))

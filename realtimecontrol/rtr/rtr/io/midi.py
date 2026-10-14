@@ -45,9 +45,7 @@ Legacy hardcoded protocol (default port only)
 ---------------------------------------------
 - CC1 (value 1-6)      → trigger_action (zone + first enabled action)
 - CC3 (value i)        → play the i-th action (1-based) in the current zone; 0 clears
-- CC13                 → set_flag("dynvel", value)
 - CC20 / 21 / 22       → adjust_limit (index 0/1/2)
-- Note ch1: 41/42/73/74 → set_flag (wandermode / randomwristmode / dynmode / reachmode)
 - Note ch1 / ch2: 61-64 → set_joint_pose (named ch1 poses)
 - Note ch3             → random_wrist
 - Note ch6             → set_linear_pose (random cartesian pose)
@@ -66,9 +64,6 @@ from ..state.zones import LIN_POSES, POSES
 
 # Legacy hardcoded protocol tables (channel-0 fallback, default port only).
 ZONE_BY_CC1 = {1: "init", 2: "rest", 3: "wakeup", 4: "stretch", 5: "wander", 6: "wildwander"}
-
-# ch1 flag notes -> flag name.
-FLAG_BY_NOTE = {41: "wandermode", 42: "randomwristmode", 73: "dynmode", 74: "reachmode"}
 
 # The global navigation commands: a relative virtual cursor over the current
 # zone's ``build_items`` rows (mirrors the TUI flow-map navigation).
@@ -666,8 +661,6 @@ class MidiInput:
                 self._submit(Cmd.TRIGGER_ACTION, {"zone": zone, "action": action})
         elif cc == 3:
             self._play_action_by_index(value)
-        elif cc == 13:
-            self._submit(Cmd.SET_FLAG, {"flag": "dynvel", "value": value})
         elif cc in (20, 21, 22):
             self._submit(Cmd.ADJUST_LIMIT, {"index": cc - 20, "value": value / 4})
 
@@ -699,8 +692,6 @@ class MidiInput:
             table = self.poses.get("ch1")
             if table and 0 <= note - 61 < len(table):
                 self._submit(Cmd.SET_JOINT_POSE, {"pose": table[note - 61]})
-        elif channel == 0 and note in FLAG_BY_NOTE:
-            self._submit(Cmd.SET_FLAG, {"flag": FLAG_BY_NOTE[note], "value": velocity})
         elif channel == 2:
             self._submit(Cmd.RANDOM_WRIST, {})
         elif channel == 5:

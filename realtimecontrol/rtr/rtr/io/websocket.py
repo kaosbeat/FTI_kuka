@@ -27,8 +27,9 @@ from ..core.commands import Command
 _BROWSER_CMDS = {
     "trigger_action", "play_action", "clear_action",
     "set_joint_pose", "set_linear_pose", "adjust_limit",
-    "random_wrist", "set_flag", "set_screen_patch",
+    "random_wrist", "set_screen_patch",
     "stop", "proceed", "cam_force_lock", "set_control_mode",
+    "safety_confirm", "safety_cancel",
 }
 
 

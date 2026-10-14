@@ -102,6 +102,9 @@ class Engine:
             # triggered transition is driven the same tick.
             self.brain.tick(curjpos)
 
+            # Resolve any pending safety-gated move before stepping.
+            await self._resolve_pending(curjpos)
+
             target = self.machine.step(curjpos)
 
             if target is not None:
@@ -163,6 +166,91 @@ class Engine:
         self.bus.publish(Event.ZONES_CHANGED, zones.names())
         print(f"[engine] zones reloaded: {', '.join(zones.names())}")
 
+    async def _resolve_pending(self, curjpos) -> None:
+        """Resolve a pending safety-gated move (conflict + collision checks).
+
+        Called every tick before ``machine.step``. When the machine has a pending
+        move in the ``"check"`` phase, this method:
+
+        1. Computes the red-link conflict via the safety gate.
+        2. If no conflict, runs the self-collision check on the target entry pose.
+        3. If the move is blocked (conflict or collision):
+           - Manual mode: set pending to ``"confirm"`` phase + publish
+             ``Event.SAFETY_ALERT`` (the operator decides via the editor popup).
+           - Auto mode: clear the pending + mark the candidate blocked in the brain
+             (the brain skips it on the next autonomy tick).
+        4. If the move is safe: commit the pending.
+
+        When the pending is in the ``"confirm"`` phase, this method does nothing
+        (the brain handles ``SAFETY_CONFIRM`` / ``SAFETY_CANCEL`` commands).
+        """
+        m = self.machine
+        if m._pending is None:
+            return
+        p = m._pending
+        if p.get("phase") != "check":
+            return  # waiting for operator confirm/cancel
+
+        safety = m.safety
+        if safety is None:
+            # No safety gate wired (should not happen, but be safe).
+            m.commit_pending()
+            return
+
+        # 1. Red-link conflict check.
+        conflict, issues = safety.check_conflict(
+            p["from_zone"], p["from_action"], p["zone"], p["action"]
+        )
+        p["conflict"] = conflict
+        p["issues"] = issues
+
+        # 2. Collision check (only when no conflict, and a checker is wired).
+        blocked = conflict
+        if not conflict and safety.collision is not None:
+            try:
+                result = await asyncio.to_thread(safety.collision.check, p["entry"])
+            except Exception as exc:
+                print(f"[engine] collision check failed: {exc}")
+                result = {"collision": True, "collisions": [], "error": str(exc)}
+            p["collision"] = result.get("collision", False)
+            p["collisions"] = result.get("collisions", [])
+            if result.get("collision"):
+                blocked = True
+        elif not conflict and safety.collision is None:
+            print("[engine] WARNING: no collision checker wired; degrading to conflict-only")
+
+        if blocked:
+            if m.control_mode == "manual":
+                # Show the popup; the operator decides (confirm or cancel).
+                m.set_pending_confirm()
+                self.bus.publish(Event.SAFETY_ALERT, {
+                    "zone": p["zone"],
+                    "action": p["action"],
+                    "conflict": conflict,
+                    "issues": issues,
+                    "collision": p.get("collision"),
+                    "collisions": p.get("collisions"),
+                })
+            else:
+                # Auto mode: discard the move and mark the candidate blocked.
+                discard = {
+                    "zone": p["zone"],
+                    "action": p["action"],
+                    "conflict": conflict,
+                    "issues": issues,
+                    "collision": p.get("collision"),
+                    "collisions": p.get("collisions"),
+                }
+                m.clear_pending()
+                self.brain.mark_candidate_blocked(p["zone"], p["action"])
+                # Surface the discard in the control-client log window (warning).
+                self.bus.publish(Event.SAFETY_DISCARD, discard)
+                print(f"[engine] auto mode: discarded move to {discard['zone']}/{discard['action']} "
+                      f"(conflict={conflict}, collision={discard.get('collision')})")
+        else:
+            # Safe: commit the move.
+            m.commit_pending()
+
     def _publish(self, curjpos, curpos, target: Optional[list]) -> None:
         moving = not comparelist(curjpos, target if target is not None else curjpos,
                                  margin=0.5, count=5)
@@ -175,7 +263,6 @@ class Engine:
             cart_pose=list(curpos),
             target_pose=list(target) if target is not None else list(curjpos),
             speed=self.machine.speed,
-            flags=dict(self.machine.flags),
             moving=moving,
             hunt=self.brain.hunt_info(),
             servo=dict(self.machine.servo_state),
@@ -187,6 +274,7 @@ class Engine:
             performance_mode=info["performance_mode"],
             autonomy_dwell_remaining=info["dwell_remaining"],
             control_mode=self.machine.control_mode,
+            action_index=self.machine.action_index,
         )
         self.bus.set_snapshot(snap)
         self.bus.publish(Event.SNAPSHOT, snap)
