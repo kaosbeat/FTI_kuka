@@ -23,6 +23,9 @@
   button.small { padding: 2px 7px; font-size: 12px; }
   #saveMsg { color: var(--dim); font-size: 12px; }
   #saveMsg.err { color: #e05d5d; }
+  #statusBar { background: #0d0f13; border: 1px solid var(--border); border-radius: 4px;
+               padding: 3px 8px; font-size: 12px; white-space: nowrap; }
+  #statusBar .sbSep { color: var(--dim); opacity: .55; padding: 0 5px; }
   main { display: grid; gap: 16px; grid-template-columns: 210px 1fr 380px; align-items: start; }
   section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
   h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 0 0 10px; }
@@ -218,6 +221,7 @@
 <header>
   <h1>Exhibiting Intelligence - brain editor</h1>
   <span class="dot" id="dot"></span><span id="status">disconnected</span>
+  <span id="statusBar"></span>
   <input id="host" value="ws://localhost:8765" spellcheck="false">
   <button id="connect">connect</button>
   <button id="tabZones" class="active">zones</button>
@@ -875,6 +879,7 @@ function connect() {
         `<div class="stateRow"><span>speed</span><span>${m.speed}</span></div>` +
         `<div class="stateRow"><span>moving</span><span>${m.moving ? "yes" : "no"}</span></div>`;
       FLOW.live = { zone: m.zone, mode: m.mode, action: m.action };
+      updateStatusBar(m);
       // Safety popup: driven by m.safety (pending safety-gated move).
       if (m.safety && m.safety.phase === "confirm") {
         $("safetyPopup").classList.add("open");
@@ -2369,6 +2374,37 @@ function saveBrain() {
 
 // Live brain state from the state frame (hunt state + lock + camera intent + cam telemetry).
 // "facefocus" is shown as "check out" (the robot is stretching at that human).
+// Header status bar (always on): control mode › zone group › zone › action › behavior › #candidates.
+// The zone group is the group whose `zones` list contains the current zone (derived from
+// the in-memory BRAIN config); the candidate count comes from the camera telemetry.
+function updateStatusBar(m) {
+  const el = $("statusBar");
+  if (!el) return;
+  const cm = m.control_mode || "—";
+  const zone = m.zone || "—";
+  const action = m.action || "—";
+  const behavior = m.behavior || "—";
+  let group = "—";
+  if (BRAIN && BRAIN.zone_groups) {
+    for (const name of Object.keys(BRAIN.zone_groups)) {
+      const g = BRAIN.zone_groups[name];
+      if (g.zones && g.zones.includes(zone)) { group = name; break; }
+    }
+  }
+  const cand = (m.cam_telem && m.cam_telem.candidates) ? m.cam_telem.candidates.candidates : null;
+  const candText = (Array.isArray(cand)) ? String(cand.length) : "—";
+  const cmColor = cm === "manual" ? "#e05d5d" : (cm === "auto" ? "var(--accent)" : "var(--dim)");
+  const seg = (txt, color) => `<span style="color:${color}">${txt}</span>`;
+  const sep = `<span class="sbSep">›</span>`;
+  el.innerHTML =
+    seg(cm, cmColor) + sep +
+    seg(group, "var(--text)") + sep +
+    seg(zone, "var(--text)") + sep +
+    seg(action, "var(--text)") + sep +
+    seg(behavior, "var(--text)") + sep +
+    seg(candText, "var(--text)");
+}
+
 function renderBrainLive(m) {
   const el = $("brainLive");
   const a = BRAIN ? BRAIN.autonomy : { enabled: false };
@@ -5006,9 +5042,10 @@ $("patchCode").oninput = () => {
   }, 300);
 };
 // Load the zone table first (the sound + patches editors seed their lists from the
-// zone table's action names), then the sound mapping, then the patches, then open
+// zone table's action names), then the sound mapping, then the patches, then the brain
+// config (the header status bar derives the current zone group from it), then open
 // the WebSocket.
-loadTable().then(loadSound).then(loadPatches).then(loadMidi).then(loadLimits).then(connect);
+loadTable().then(loadSound).then(loadPatches).then(loadMidi).then(loadLimits).then(loadBrain).then(connect);
 $("connect").onclick = () => { $("host").value = $("host").value.trim(); connect(); };
 $("save").onclick = save;
 $("addZone").onclick = addZone;
