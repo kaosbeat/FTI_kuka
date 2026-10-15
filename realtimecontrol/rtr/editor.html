@@ -64,15 +64,11 @@
   .brainCard a { color: var(--accent); font-size: 12px; }
   .brainSep { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; margin: 16px 0 4px; border-top: 1px solid var(--border); padding-top: 8px; }
   .brainCardDesc { font-size: 12px; color: var(--dim); margin-bottom: 8px; line-height: 1.4; }
-  .grpZoneSel { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
-                border-radius: 4px; padding: 3px 5px; font: inherit; width: 200px; }
-  .grpToggles { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
-  .grpToggle { background: #22262f; color: var(--text); border: 1px solid var(--border);
-               border-radius: 4px; padding: 3px 9px; font-size: 12px; cursor: pointer; }
-  .grpToggle.on { background: var(--accent); color: #0b0d10; border-color: var(--accent); }
-  .grpMgmt { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
-  .grpMgmt h3 { margin: 0 0 6px; }
-  .grpParamRow { margin-bottom: 2px; }
+  .grpCardHead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .grpCardHead h2 { margin: 0; }
+  .grpZoneHead { cursor: pointer; user-select: none; }
+  .grpZoneRow { margin-bottom: 2px; }
+  .grpZoneRow label { font-size: 12px; }
   .warn { color: #e0a030; font-size: 12px; }
   .hwlims { display: flex; flex-wrap: wrap; gap: 3px 10px; font-size: 11px; color: var(--dim); margin-bottom: 8px; }
   #tabZones { font-size: 12px; }
@@ -216,6 +212,18 @@
                 border-radius: 4px; padding: 2px 4px; font: inherit; }
   .midiName { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
               border-radius: 4px; padding: 3px 6px; font: inherit; width: 110px; }
+  /* MIDI intro / help: plain-language orientation for the whole tab. */
+  .midiIntro { grid-column: 1 / -1; }
+  .midiIntro h2 { margin: 0 0 8px; }
+  .midiIntro p { font-size: 12px; color: var(--text); line-height: 1.5; margin: 0 0 8px; }
+  .midiIntro .miSides { margin: 0 0 8px; }
+  .midiIntro .miSide { font-size: 12px; line-height: 1.5; margin-bottom: 4px; }
+  .midiIntro .miSide b { color: var(--accent); }
+  .midiHelp { font-size: 12px; color: var(--dim); line-height: 1.5; margin: 0 0 10px; }
+  .midiExample { font-size: 12px; color: var(--text); background: #0d0f13; border: 1px solid var(--border);
+                 border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; line-height: 1.5; }
+  .midiExample .exLbl { color: var(--accent); font-weight: bold; }
+  .midiFieldHelp { font-size: 11px; color: var(--dim); margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -349,25 +357,42 @@
 </main>
 
 <main id="midiMain" style="display:none">
+  <section class="midiIntro">
+    <h2>how MIDI works</h2>
+    <p>MIDI is a way to connect the robot to <b>music</b> and to <b>external controllers</b>
+       (a MIDI keyboard, a foot pedal, a box of buttons…). There are two sides, pick the one you want:</p>
+    <div class="miSides">
+      <div class="miSide"><b>out</b> — the robot <b>plays</b>: it sends sounds to a MIDI device
+        (speaker, music box, lights) as it moves through zones and actions.</div>
+      <div class="miSide"><b>in</b> — <b>you control</b> the robot: you press a key/button on your
+        MIDI controller and the robot reacts (change zone, change action, etc.).</div>
+    </div>
+    <div class="midiExample"><span class="exLbl">Example:</span> connect a MIDI keyboard, open the
+      <b>in</b> tab, click <b>learn</b> next to <b>next_zone</b>, then press a key on the keyboard.
+      From now on that key moves the robot to the next zone.</div>
+  </section>
   <div class="row" id="midiToggleRow" style="margin-bottom:12px">
-    <button id="midiTabOut" class="small">out</button>
-    <button id="midiTabIn" class="small">in</button>
+    <button id="midiTabOut" class="small" title="The robot PLAYS music: sounds the robot sends to a MIDI device.">out</button>
+    <button id="midiTabIn" class="small" title="You CONTROL the robot: keys on a MIDI controller that make the robot act.">in</button>
   </div>
   <div id="midiOutView">
     <section>
       <h2>global</h2>
+      <p class="midiHelp">The device the robot's sounds go to, and the channel they're sent on.</p>
       <div class="row" id="sndOutPortRow" style="align-items:center">
-        <label>out port</label>
+        <label title="Which MIDI device the robot's sounds go to. 'default (auto)' = the first available device.">out port</label>
         <select id="sndOutPort"></select>
-        <button id="sndRefreshPorts" class="small">refresh</button>
+        <button id="sndRefreshPorts" class="small" title="Rescan for MIDI output devices (plug in a new device, then click this).">refresh</button>
       </div>
       <div id="sndOutPortInfo" style="font-size:12px;color:var(--dim);margin-top:6px"></div>
       <div id="sndChannel" style="margin-top:8px"></div>
     </section>
     <section>
       <h2>zone</h2>
+      <p class="midiHelp">Pick a zone to set the sound the robot plays there. Each action in the
+        zone can also have its own sound (played when the action starts, and at each pose).</p>
       <div class="row" id="sndZoneSelRow" style="align-items:center">
-        <label>zone</label>
+        <label title="Pick which zone's sounds you are editing.">zone</label>
         <select id="sndZoneSel"></select>
       </div>
       <div id="sndZoneDetail"></div>
@@ -376,14 +401,18 @@
   <div id="midiInView" style="display:none">
     <section>
       <h2>global navigation</h2>
+      <p class="midiHelp">Commands that work from anywhere, no matter which zone the robot is in.
+        <b>learn</b> = click it, then press a key on your MIDI controller — the robot remembers that key.</p>
       <div id="midiNav"></div>
     </section>
     <section>
       <h2>zones (per-zone input)</h2>
+      <p class="midiHelp">Keys that activate a specific zone or action. The <b>command</b> key moves the
+        robot to that zone; each action's key triggers just that action.</p>
       <div id="midiZones"></div>
     </section>
     <div class="row" style="margin-top:8px">
-      <button id="midiStopLearn" class="small" style="display:none">stop learn</button>
+      <button id="midiStopLearn" class="small" style="display:none" title="Cancel the current learn.">stop learn</button>
       <span id="midiStatus" style="font-size:12px;color:var(--dim)"></span>
     </div>
   </div>
@@ -399,19 +428,7 @@
 </main>
 
 <main id="groupsMain" style="display:none">
-  <section>
-    <h2>zone groups</h2>
-    <div id="groupList"></div>
-    <div class="row" style="margin-top:8px">
-      <button id="addGroup">+ add group</button>
-      <button id="renameGroup" class="small">rename</button>
-      <button id="removeGroup" class="small">remove</button>
-    </div>
-  </section>
-  <section>
-    <h2>groups — info</h2>
-    <div id="groupsInfo" class="brainInfoText">zone groups = named sets of zones + the behaviors enabled in them. Navigation runs across the union of the enabled groups' zones. Pick a zone in the dropdown and toggle the enabled groups to add/remove it from them. Group settings (enable, behaviors, params) act on the selected group.</div>
-  </section>
+  <div id="groupList" class="brainGrid"></div>
 </main>
 
 <div id="actionEditor">
@@ -533,8 +550,7 @@ let ws = null;
 let flowView = false;
 let brainView = false;
 let groupsView = false;
-let selectedGroup = null;
-let selectedGroupZone = null;  // the zone selected in the groups-tab zone dropdown
+const grpOpen = {};  // group name -> bool (zone-list collapse; default open)
 let validateView = false;
 let valScanTimer = null;   // active scan animation frame id
 // Flow-tab state (session only — node positions are not persisted to zones.json).
@@ -1063,11 +1079,21 @@ function freshMsg(type) {
 
 // Build an inline MIDI-message editor. Field edits mutate ``msg`` in place; a type
 // change calls ``onType(freshMsg)`` so the caller can swap the object and rebuild.
+// Plain-language tooltips for the MIDI message fields (note/cc/program values).
+const MSG_FIELD_HELP = {
+  note: "The note to play (0-127). 60 = middle C; bigger = higher pitch.",
+  velocity: "How loud the note is (0-127). Bigger = louder.",
+  cc: "The controller number (0-127).",
+  value: "The controller value (0-127).",
+  program: "The program/preset number (0-127).",
+};
+
 function msgEditor(msg, onType) {
   const root = document.createElement("div");
   root.className = "msgForm";
   const sel = document.createElement("select");
   sel.className = "msgType";
+  sel.title = "Kind of MIDI message: note (a sound), cc (a controller value), program (a preset number).";
   ["note", "cc", "program"].forEach((t) => {
     const o = document.createElement("option");
     o.value = t; o.textContent = t;
@@ -1086,6 +1112,7 @@ function msgEditor(msg, onType) {
     keys.forEach((k) => {
       const l = document.createElement("label");
       l.textContent = k;
+      l.title = MSG_FIELD_HELP[k] || "";
       const inp = document.createElement("input");
       inp.type = "number"; inp.step = "1";
       inp.value = msg[k] !== undefined ? msg[k] : 0;
@@ -1142,6 +1169,7 @@ function buildMidiOutForm() {
   ch.className = "inline";
   ch.innerHTML = "channel <input type='number' step='1' min='0' max='15' value='" +
                  (SOUND.channel !== undefined ? SOUND.channel : 0) + "'>";
+  ch.querySelector("input").title = "MIDI channel (0-15). The channel your sounds are sent on. Most devices use 0.";
   ch.querySelector("input").oninput = (e) => {
     SOUND.channel = parseInt(e.target.value, 10); if (isNaN(SOUND.channel)) SOUND.channel = 0;
   };
@@ -1179,9 +1207,11 @@ function buildMidiOutForm() {
   row.className = "sndRow";
   const lbl = document.createElement("span");
   lbl.className = "sndName"; lbl.textContent = "out";
+  lbl.title = "Which MIDI device this zone's sounds go to. 'global' = use the global device above.";
   row.appendChild(lbl);
   const sel = document.createElement("select");
   sel.className = "sndOutPort";
+  sel.title = "The sound the robot plays when it enters this zone.";
   const none = document.createElement("option");
   none.value = ""; none.textContent = "global";
   sel.appendChild(none);
@@ -1245,6 +1275,7 @@ function buildMidiOutForm() {
     s.className = "sndRow";
     const sl = document.createElement("span");
     sl.className = "sndName"; sl.textContent = "start";
+    sl.title = "The sound played when this action begins.";
     s.appendChild(sl);
     s.appendChild(msgEditor(act.start, (fresh) => { act.start = fresh; rebuild(); }));
     box.appendChild(s);
@@ -1257,6 +1288,7 @@ function buildMidiOutForm() {
       prow.className = "sndRow";
       const pl = document.createElement("span");
       pl.className = "sndName"; pl.textContent = "pose " + (pi + 1);
+      pl.title = "The sound played when the robot reaches pose " + (pi + 1) + " of this action.";
       prow.appendChild(pl);
       prow.appendChild(msgEditor(pm, (fresh) => { act.poses[pi] = fresh; rebuild(); }));
       const prx = document.createElement("button");
@@ -1447,6 +1479,7 @@ function buildMidiInForm() {
     // in_port picker
     const sel = document.createElement("select");
     sel.className = "midiKey";
+    sel.title = "Which MIDI controller the robot listens to for this zone. 'default' = the first available device.";
     const none = document.createElement("option");
     none.value = ""; none.textContent = "default";
     sel.appendChild(none);
@@ -1462,6 +1495,7 @@ function buildMidiInForm() {
     // enabled checkbox
     const en = document.createElement("label");
     en.style.cssText = "margin-left:12px;font-size:12px";
+    en.title = "Turn MIDI input on/off. Off = the robot ignores all controller keys.";
     const cb = document.createElement("input");
     cb.type = "checkbox"; cb.checked = !!MIDI.enabled;
     cb.onchange = () => { MIDI.enabled = cb.checked; };
@@ -1473,6 +1507,7 @@ function buildMidiInForm() {
     cmdRow.className = "sndRow";
     const cmdLbl = document.createElement("span");
     cmdLbl.className = "sndName"; cmdLbl.textContent = "command";
+    cmdLbl.title = "The key that moves the robot to this zone. Click 'learn', then press a key on your controller.";
     cmdRow.appendChild(cmdLbl);
     const cmdInp = document.createElement("input");
     cmdInp.type = "text"; cmdInp.className = "midiName";
@@ -1481,6 +1516,7 @@ function buildMidiInForm() {
     cmdRow.appendChild(cmdInp);
     const learnCmdBtn = document.createElement("button");
     learnCmdBtn.className = "small"; learnCmdBtn.textContent = "learn";
+    learnCmdBtn.title = "Click, then press the key on your MIDI controller — the robot remembers it.";
     learnCmdBtn.onclick = () => midiLearn(zone, null);
     cmdRow.appendChild(learnCmdBtn);
     box.appendChild(cmdRow);
@@ -1491,6 +1527,7 @@ function buildMidiInForm() {
       aRow.className = "sndRow";
       const aLbl = document.createElement("span");
       aLbl.className = "sndName"; aLbl.textContent = action;
+      aLbl.title = "The key that triggers this specific action (inside zone '" + zone + "'). Click 'learn' to set it.";
       aRow.appendChild(aLbl);
       const aInp = document.createElement("input");
       aInp.type = "text"; aInp.className = "midiName";
@@ -1499,10 +1536,12 @@ function buildMidiInForm() {
       aRow.appendChild(aInp);
       const learnBtn = document.createElement("button");
       learnBtn.className = "small"; learnBtn.textContent = "learn";
+      learnBtn.title = "Click, then press the key on your MIDI controller — the robot remembers it.";
       learnBtn.onclick = () => midiLearn(zone, action);
       aRow.appendChild(learnBtn);
       const rmBtn = document.createElement("button");
       rmBtn.className = "small"; rmBtn.textContent = "×";
+      rmBtn.title = "Remove this action's key.";
       rmBtn.onclick = () => { delete acts[action]; buildMidiInForm(); };
       aRow.appendChild(rmBtn);
       box.appendChild(aRow);
@@ -1510,6 +1549,7 @@ function buildMidiInForm() {
     // add action button
     const addBtn = document.createElement("button");
     addBtn.className = "small"; addBtn.textContent = "+ action";
+    addBtn.title = "Add a key that triggers a specific action in this zone.";
     addBtn.onclick = () => {
       const nm = prompt("action name:");
       if (!nm) return;
@@ -1526,6 +1566,15 @@ function buildMidiInForm() {
 // back / retrigger / next_pose), each with a key editor + learn button. Keys are
 // written to MIDI.nav. "next_pose" drives the "midi" cadence (advance the current
 // action's pose on the learned note).
+// Plain-language descriptions of the global navigation commands.
+const NAV_HELP = {
+  next_action: "Advance to the next action in the current zone.",
+  next_zone: "Move the robot to the next zone.",
+  back: "Go back to the previous zone.",
+  retrigger: "Replay the current action from the start.",
+  next_pose: "Advance to the next pose of the current action.",
+};
+
 function buildMidiNav() {
   const el = $("midiNav");
   el.innerHTML = "";
@@ -1536,6 +1585,7 @@ function buildMidiNav() {
     row.className = "sndRow";
     const lbl = document.createElement("span");
     lbl.className = "sndName"; lbl.textContent = nav;
+    lbl.title = NAV_HELP[nav] || "A robot command triggered by a key on your MIDI controller.";
     row.appendChild(lbl);
     const inp = document.createElement("input");
     inp.type = "text"; inp.className = "midiName";
@@ -1544,6 +1594,7 @@ function buildMidiNav() {
     row.appendChild(inp);
     const btn = document.createElement("button");
     btn.className = "small"; btn.textContent = "learn";
+    btn.title = "Click, then press the key on your MIDI controller — the robot remembers it.";
     btn.onclick = () => midiLearn(null, null, nav);
     row.appendChild(btn);
     el.appendChild(row);
@@ -1559,7 +1610,7 @@ function midiLearn(zone, actionName, navName) {
     body: JSON.stringify({ action: "start", zone, action_name: actionName, nav: navName || null }),
   }).then((r) => r.json().then((b) => ({ ok: r.ok, b }))).then(({ ok, b }) => {
     const label = navName ? navName : (actionName ? `${zone}/${actionName}` : zone);
-    if (ok) $("midiStatus").textContent = `learning "${label}" — send a MIDI message`;
+    if (ok) $("midiStatus").textContent = `learning "${label}" — now press a key on your MIDI controller`;
     else $("midiStatus").textContent = "learn failed: " + (b.error || r.status);
   }).catch((e) => { $("midiStatus").textContent = "learn failed: " + e; });
 }
@@ -2122,174 +2173,175 @@ function buildBrainForm() {
 // are special groups with their own validated params and are edited on the brain
 // tab (candidates / facefocus cards), so they are not shown here.
 // ---------------------------------------------------------------------------
-const _splitList = (inp) => inp.value.split(",").map((s) => s.trim()).filter((s) => s.length);
+const _grpId = (name) => "g" + name.replace(/[^a-zA-Z0-9]/g, "_");
+const _grpNum = (inp, fallback) => { const v = parseFloat(inp.value); return isNaN(v) ? fallback : v; };
 
-// Build the groups card: a zone dropdown (pick the zone whose memberships to
-// edit), a row of toggle buttons — one per ENABLED group — that toggle that
-// zone's membership, and a settings section for the selected group (enabled
-// flag, behaviors, params). Only the enabled groups are shown as toggles.
+// Build the groups tab: an info/add card (group overview + the two params each
+// group supports + a field to add a new group), then one card per existing
+// group. Each group card shows the group name, an enabled toggle, a collapsible
+// list of all zones with a membership toggle each (the group's composition), and
+// the group params (speed, dwell_s). Behaviors are a zone-level setting, not a
+// group setting, so they are not edited here.
 function buildGroupsForm() {
+  _commitGroupsDom();
   const el = $("groupList");
   el.innerHTML = "";
   const groups = BRAIN.zone_groups;
   const names = Object.keys(groups);
-  if (!names.length) {
-    el.innerHTML = '<span style="color:var(--dim);font-size:12px">no zone groups — add one below</span>';
-    return;
-  }
   const zoneNames = Object.keys(TABLE.zones);
 
-  // Zone dropdown: the zone whose group memberships are being edited.
-  const zrow = document.createElement("div"); zrow.className = "row";
-  const zlab = document.createElement("label"); zlab.textContent = "zone";
-  const zsel = document.createElement("select"); zsel.className = "grpZoneSel";
-  zoneNames.forEach((zn) => { const o = document.createElement("option"); o.value = zn; o.textContent = zn; zsel.appendChild(o); });
-  zsel.value = (selectedGroupZone && zoneNames.includes(selectedGroupZone)) ? selectedGroupZone : zoneNames[0];
-  zsel.onchange = () => { selectedGroupZone = zsel.value; buildGroupsForm(); };
-  zrow.appendChild(zlab); zrow.appendChild(zsel);
-  el.appendChild(zrow);
+  // --- Info + add card ---
+  const info = document.createElement("section");
+  info.className = "brainCard";
+  const ih = document.createElement("h2"); ih.textContent = "zone groups";
+  info.appendChild(ih);
+  const idesc = document.createElement("div"); idesc.className = "brainCardDesc";
+  idesc.innerHTML = "A zone group is a named set of zones; navigation runs across the union of all <b>enabled</b> groups' zones. Each group has an <b>enabled</b> flag and two params: <b>speed</b> (base speed) and <b>dwell_s</b> (default dwell, seconds). Toggle the zones in a group's card to edit its composition.";
+  info.appendChild(idesc);
+  const addRow = document.createElement("div"); addRow.className = "row";
+  const addLab = document.createElement("label"); addLab.textContent = "new group";
+  const addInp = document.createElement("input"); addInp.type = "text"; addInp.id = "grpNewName"; addInp.spellcheck = false;
+  const addBtn = document.createElement("button"); addBtn.textContent = "+ add group"; addBtn.onclick = addGroup;
+  addRow.appendChild(addLab); addRow.appendChild(addInp); addRow.appendChild(addBtn);
+  info.appendChild(addRow);
+  el.appendChild(info);
 
-  // Group toggle buttons: only the enabled groups are shown on the card.
-  const trow = document.createElement("div"); trow.className = "grpToggles";
-  const enabled = names.filter((n) => groups[n].enabled);
+  // --- One card per existing group ---
+  for (const name of names) el.appendChild(_buildGroupCard(name, groups[name], zoneNames));
+}
+
+function _buildGroupCard(name, g, zoneNames) {
+  const card = document.createElement("section");
+  card.className = "brainCard";
+  card.dataset.name = name;
+  const idb = _grpId(name);
+
+  // Header: group name + rename/remove (act on this group)
+  const head = document.createElement("div"); head.className = "grpCardHead";
+  const h = document.createElement("h2"); h.textContent = name;
+  const headBtns = document.createElement("div");
+  const rn = document.createElement("button"); rn.className = "small"; rn.textContent = "rename"; rn.onclick = () => renameGroup(name);
+  const rm = document.createElement("button"); rm.className = "small"; rm.textContent = "remove"; rm.onclick = () => removeGroup(name);
+  headBtns.appendChild(rn); headBtns.appendChild(rm);
+  head.appendChild(h); head.appendChild(headBtns);
+  card.appendChild(head);
+
+  // Enabled toggle
+  const enRow = document.createElement("div"); enRow.className = "row"; enRow.style.alignItems = "center";
+  const enLbl = document.createElement("label"); enLbl.className = "inline";
+  const enCb = document.createElement("input"); enCb.type = "checkbox"; enCb.id = "grpEnabled_" + idb;
+  enCb.checked = g.enabled;
+  enCb.onchange = () => { g.enabled = enCb.checked; buildGroupsForm(); };
+  enLbl.appendChild(enCb); enLbl.appendChild(document.createTextNode(" enabled"));
+  enRow.appendChild(enLbl);
+  card.appendChild(enRow);
+
+  // Composition: collapsible list of all zones, each with a membership toggle.
+  const open = grpOpen[name] !== false;
+  const zHead = document.createElement("h3"); zHead.className = "grpZoneHead";
+  zHead.textContent = (open ? "▾" : "▸") + " zones";
+  zHead.onclick = () => { grpOpen[name] = !open; buildGroupsForm(); };
+  card.appendChild(zHead);
+  const zList = document.createElement("div"); zList.style.display = open ? "" : "none";
   if (!zoneNames.length) {
     const hint = document.createElement("span"); hint.style.cssText = "color:var(--dim);font-size:12px";
     hint.textContent = "no zones";
-    trow.appendChild(hint);
-  } else if (!enabled.length) {
-    const hint = document.createElement("span"); hint.style.cssText = "color:var(--dim);font-size:12px";
-    hint.textContent = "no enabled groups — enable one in the settings below";
-    trow.appendChild(hint);
+    zList.appendChild(hint);
   } else {
-    for (const n of enabled) {
-      const g = groups[n];
-      const btn = document.createElement("button");
-      btn.className = "grpToggle" + (g.zones.includes(zsel.value) ? " on" : "");
-      btn.textContent = n;
-      btn.title = "toggle " + zsel.value + " in " + n;
-      btn.onclick = () => {
-        const z = zsel.value;
-        if (g.zones.includes(z)) g.zones = g.zones.filter((x) => x !== z);
-        else g.zones.push(z);
-        buildGroupsForm();
+    for (const zn of zoneNames) {
+      const row = document.createElement("div"); row.className = "row grpZoneRow"; row.style.alignItems = "center";
+      row.dataset.zone = zn;
+      const lbl = document.createElement("label"); lbl.className = "inline";
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = g.zones.includes(zn);
+      cb.onchange = () => {
+        if (cb.checked) { if (!g.zones.includes(zn)) g.zones.push(zn); }
+        else { g.zones = g.zones.filter((z) => z !== zn); }
       };
-      trow.appendChild(btn);
+      lbl.appendChild(cb); lbl.appendChild(document.createTextNode(" " + zn));
+      row.appendChild(lbl);
+      zList.appendChild(row);
     }
   }
-  el.appendChild(trow);
+  card.appendChild(zList);
 
-  // Group settings: pick a group (incl. disabled) and edit its enabled flag,
-  // behaviors, and params. Rename/remove act on the selected group.
-  const mgmt = document.createElement("div"); mgmt.className = "grpMgmt";
-  const msub = document.createElement("h3"); msub.textContent = "group settings";
-  mgmt.appendChild(msub);
-  const grow = document.createElement("div"); grow.className = "row";
-  const glab = document.createElement("label"); glab.textContent = "group";
-  const gsel = document.createElement("select"); gsel.className = "grpZoneSel";
-  names.forEach((n) => { const o = document.createElement("option"); o.value = n; o.textContent = n + (groups[n].enabled ? "" : " (off)"); gsel.appendChild(o); });
-  gsel.value = (selectedGroup && names.includes(selectedGroup)) ? selectedGroup : names[0];
-  selectedGroup = gsel.value;
-  gsel.onchange = () => { selectedGroup = gsel.value; buildGroupsForm(); };
-  grow.appendChild(glab); grow.appendChild(gsel);
-  mgmt.appendChild(grow);
+  // Params: speed + dwell_s
+  const ph = document.createElement("h3"); ph.textContent = "params";
+  card.appendChild(ph);
+  const sp = document.createElement("input"); sp.type = "number"; sp.id = "grpSpeed_" + idb;
+  sp.step = "1"; sp.min = "0"; sp.value = (g.params && g.params.speed !== undefined) ? g.params.speed : "";
+  sp.onchange = () => { g.params = g.params || {}; g.params.speed = _grpNum(sp, g.params.speed); };
+  const dw = document.createElement("input"); dw.type = "number"; dw.id = "grpDwell_" + idb;
+  dw.step = "0.5"; dw.min = "0"; dw.value = (g.params && g.params.dwell_s !== undefined) ? g.params.dwell_s : "";
+  dw.onchange = () => { g.params = g.params || {}; g.params.dwell_s = _grpNum(dw, g.params.dwell_s); };
+  card.appendChild(_grpParamRow("speed", sp));
+  card.appendChild(_grpParamRow("dwell_s", dw));
 
-  const enRow = document.createElement("div"); enRow.className = "row";
-  const enLbl = document.createElement("label"); enLbl.className = "inline";
-  const enCb = document.createElement("input"); enCb.type = "checkbox"; enCb.id = "grpEnabled";
-  enCb.checked = groups[selectedGroup].enabled;
-  enCb.onchange = () => { groups[selectedGroup].enabled = enCb.checked; buildGroupsForm(); };
-  enLbl.appendChild(enCb); enLbl.appendChild(document.createTextNode(" enabled"));
-  enRow.appendChild(enLbl);
-  mgmt.appendChild(enRow);
-
-  const behRow = document.createElement("div"); behRow.className = "row";
-  const behLab = document.createElement("label"); behLab.textContent = "behaviors (comma-separated)";
-  const behInp = document.createElement("input"); behInp.type = "text"; behInp.id = "grpBehaviors";
-  behInp.spellcheck = false; behInp.value = groups[selectedGroup].behaviors.join(", ");
-  behInp.onchange = () => { groups[selectedGroup].behaviors = _splitList(behInp); };
-  behRow.appendChild(behLab); behRow.appendChild(behInp);
-  mgmt.appendChild(behRow);
-
-  const psub = document.createElement("h3"); psub.textContent = "params";
-  mgmt.appendChild(psub);
-  const paramsDiv = document.createElement("div"); paramsDiv.id = "grpParams";
-  const params = groups[selectedGroup].params || {};
-  for (const key of Object.keys(params)) paramsDiv.appendChild(_buildParamRow(key, params[key]));
-  mgmt.appendChild(paramsDiv);
-  const addBtnRow = document.createElement("div"); addBtnRow.className = "row";
-  const addBtn = document.createElement("button"); addBtn.className = "small"; addBtn.textContent = "+ add param";
-  addBtn.onclick = () => paramsDiv.appendChild(_buildParamRow("", ""));
-  addBtnRow.appendChild(addBtn);
-  mgmt.appendChild(addBtnRow);
-
-  el.appendChild(mgmt);
+  return card;
 }
 
-function _buildParamRow(key, value) {
-  const row = document.createElement("div");
-  row.className = "row grpParamRow";
-  const k = document.createElement("input");
-  k.type = "text"; k.className = "grpParamKey"; k.value = key;
-  k.style.width = "90px"; k.spellcheck = false;
-  const v = document.createElement("input");
-  v.type = (typeof value === "number") ? "number" : "text";
-  v.className = "grpParamVal"; v.value = value; v.style.width = "80px";
-  const del = document.createElement("button"); del.className = "small"; del.textContent = "x";
-  del.addEventListener("click", () => row.remove());
-  row.appendChild(k); row.appendChild(v); row.appendChild(del);
+function _grpParamRow(label, input) {
+  const row = document.createElement("div"); row.className = "row"; row.style.alignItems = "center";
+  const lab = document.createElement("label"); lab.textContent = label;
+  row.appendChild(lab); row.appendChild(input);
   return row;
 }
 
-// Read the groups-tab settings back into BRAIN.zone_groups (no POST), so save
-// does not lose unsaved edits to the selected group. Zone memberships are
-// applied live by the toggle buttons, so only the settings (enabled /
-// behaviors / params) need committing here.
+// Read every group card's controls back into BRAIN.zone_groups (no POST), so
+// save does not lose edits. Zone toggles and the enabled flag apply live; this
+// re-reads them plus the number fields as the authoritative save-time values.
+// Groups not yet in the DOM (just added) keep their BRAIN values.
 function _commitGroupsDom() {
-  const groups = BRAIN.zone_groups;
-  if (!groups || !selectedGroup || !groups[selectedGroup]) return;
-  const g = groups[selectedGroup];
-  if ($("grpEnabled")) g.enabled = $("grpEnabled").checked;
-  if ($("grpBehaviors")) g.behaviors = _splitList($("grpBehaviors"));
-  const params = {};
-  const pdiv = $("grpParams");
-  if (pdiv) {
-    for (const row of pdiv.querySelectorAll(".grpParamRow")) {
-      const k = row.querySelector(".grpParamKey").value.trim();
-      const vin = row.querySelector(".grpParamVal");
-      if (k) params[k] = (vin.type === "number") ? parseFloat(vin.value) : vin.value.trim();
+  const el = $("groupList");
+  const cards = {};
+  for (const card of el.querySelectorAll(".brainCard[data-name]")) cards[card.dataset.name] = card;
+  for (const name of Object.keys(BRAIN.zone_groups)) {
+    const card = cards[name];
+    if (!card) continue;
+    const idb = _grpId(name);
+    const en = card.querySelector("#grpEnabled_" + idb);
+    const sp = card.querySelector("#grpSpeed_" + idb);
+    const dw = card.querySelector("#grpDwell_" + idb);
+    const g = BRAIN.zone_groups[name];
+    if (en) g.enabled = en.checked;
+    const zones = [];
+    for (const row of card.querySelectorAll(".grpZoneRow")) {
+      if (row.querySelector("input").checked) zones.push(row.dataset.zone);
     }
+    g.zones = zones;
+    const params = {};
+    if (sp) { const v = parseFloat(sp.value); if (!isNaN(v)) params.speed = v; }
+    if (dw) { const v = parseFloat(dw.value); if (!isNaN(v)) params.dwell_s = v; }
+    g.params = params;
   }
-  g.params = params;
 }
 
 function addGroup() {
-  const name = prompt("new group name:");
-  if (!name) return;
-  const n = name.trim().toLowerCase().replace(/\s+/g, "-");
+  const inp = $("grpNewName");
+  const name = (inp ? inp.value : "").trim();
+  if (!name) { alert("group name missing"); return; }
+  const n = name.toLowerCase().replace(/\s+/g, "-");
   if (!n || BRAIN.zone_groups[n]) { alert("group name missing or already exists"); return; }
-  BRAIN.zone_groups[n] = { zones: [], behaviors: [], enabled: false, params: {} };
-  selectedGroup = n;
+  BRAIN.zone_groups[n] = { zones: [], enabled: false, params: {} };
+  grpOpen[n] = true;
   buildGroupsForm();
 }
 
-function renameGroup() {
-  if (!selectedGroup) { alert("select a group first"); return; }
-  const nn = prompt("rename to:", selectedGroup);
-  if (!nn || nn === selectedGroup) return;
+function renameGroup(name) {
+  const nn = prompt("rename to:", name);
+  if (!nn || nn === name) return;
   const n = nn.trim().toLowerCase().replace(/\s+/g, "-");
   if (!n || BRAIN.zone_groups[n]) { alert("group name missing or already exists"); return; }
-  const g = BRAIN.zone_groups[selectedGroup];
-  delete BRAIN.zone_groups[selectedGroup];
+  const g = BRAIN.zone_groups[name];
+  grpOpen[n] = grpOpen[name];
+  delete BRAIN.zone_groups[name];
   BRAIN.zone_groups[n] = g;
-  selectedGroup = n;
   buildGroupsForm();
 }
 
-function removeGroup() {
-  if (!selectedGroup) { alert("select a group first"); return; }
-  if (!confirm('remove group "' + selectedGroup + '"?')) return;
-  delete BRAIN.zone_groups[selectedGroup];
-  selectedGroup = null;
+function removeGroup(name) {
+  if (!confirm('remove group "' + name + '"?')) return;
+  delete BRAIN.zone_groups[name];
+  delete grpOpen[name];
   buildGroupsForm();
 }
 
@@ -3134,6 +3186,7 @@ function buildActionEditor() {
   srow.className = "sndRow";
   const sl = document.createElement("span");
   sl.className = "sndName"; sl.textContent = "start";
+  sl.title = "The sound played when this action begins.";
   srow.appendChild(sl);
   srow.appendChild(msgEditor(sd.start, (fresh) => { sd.start = fresh; buildActionEditor(); }));
   ssec.appendChild(srow);
@@ -3142,6 +3195,7 @@ function buildActionEditor() {
     prow.className = "sndRow";
     const pl = document.createElement("span");
     pl.className = "sndName"; pl.textContent = "pose " + (pi + 1);
+    pl.title = "The sound played when the robot reaches pose " + (pi + 1) + " of this action.";
     prow.appendChild(pl);
     prow.appendChild(msgEditor(pm, (fresh) => { sd.poses[pi] = fresh; buildActionEditor(); }));
     ssec.appendChild(prow);
@@ -5070,9 +5124,6 @@ $("delZone").onclick = delZone;
   $("tabGroups").onclick = () => switchView("groups");
   $("tabBrain").onclick = () => switchView("brain");
   $("tabValidate").onclick = () => switchView("validate");
-  $("addGroup").onclick = addGroup;
-  $("renameGroup").onclick = renameGroup;
-  $("removeGroup").onclick = removeGroup;
   buildValPoseSetter();
   $("valPoseGo").onclick = applyValPose;
   $("valCopyCollision").onclick = copyValCollisionPose;
