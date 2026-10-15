@@ -323,9 +323,10 @@ class Brain:
         print(f"[brain] engine mode: {mode}")
 
     def _handle_set_cadence(self, p: dict) -> None:
-        """Set the cadence: ``"fixed"`` (every N s) | ``"arrival"`` (when the move ends)."""
+        """Set the cadence: ``"fixed"`` (every N s) | ``"arrival"`` (when the move
+        ends) | ``"midi"`` (on the learned midi note)."""
         mode = p.get("mode", "fixed")
-        if mode not in ("fixed", "arrival"):
+        if mode not in ("fixed", "arrival", "midi"):
             print(f"[brain] invalid cadence mode: {mode}")
             return
         self.machine.cadence = mode
@@ -756,6 +757,17 @@ class Brain:
             return
         if self._autonomy_cfg().get("events", {}).get("midi", False):
             self._autonomy_triggered = True
+
+    def handle_next_pose(self) -> None:
+        """MIDI "next_pose" note: advance the current action's pose (midi cadence).
+
+        Called by the MIDI adapter when the learned global "next_pose" key is
+        received. Pulses the machine's cadence so the next tick advances the current
+        action's anchor. Only meaningful in ``"midi"`` cadence mode (the machine
+        ignores the pulse otherwise). Unlike the autonomy triggers, this is an
+        explicit operator action and works in manual mode too.
+        """
+        self.machine.midi_pulse()
 
     def _handle_proceed(self) -> None:
         """WebSocket PROCEED event: trigger an immediate next-link advance.

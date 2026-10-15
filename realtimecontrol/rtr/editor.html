@@ -64,12 +64,14 @@
   .brainCard a { color: var(--accent); font-size: 12px; }
   .brainSep { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; margin: 16px 0 4px; border-top: 1px solid var(--border); padding-top: 8px; }
   .brainCardDesc { font-size: 12px; color: var(--dim); margin-bottom: 8px; line-height: 1.4; }
-  .grpBlock { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
-  .grpBlock.sel { border-color: var(--accent); }
-  .grpHead { display: flex; gap: 8px; align-items: center; cursor: pointer; }
-  .grpHead .grpName { font-size: 13px; flex: 1; }
-  .grpArrow { color: var(--dim); font-size: 11px; width: 12px; text-align: center; }
-  .grpBody { margin-top: 6px; }
+  .grpZoneSel { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
+                border-radius: 4px; padding: 3px 5px; font: inherit; width: 200px; }
+  .grpToggles { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .grpToggle { background: #22262f; color: var(--text); border: 1px solid var(--border);
+               border-radius: 4px; padding: 3px 9px; font-size: 12px; cursor: pointer; }
+  .grpToggle.on { background: var(--accent); color: #0b0d10; border-color: var(--accent); }
+  .grpMgmt { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
+  .grpMgmt h3 { margin: 0 0 6px; }
   .grpParamRow { margin-bottom: 2px; }
   .warn { color: #e0a030; font-size: 12px; }
   .hwlims { display: flex; flex-wrap: wrap; gap: 3px 10px; font-size: 11px; color: var(--dim); margin-bottom: 8px; }
@@ -152,7 +154,7 @@
   #spIssues li { margin-bottom: 4px; }
   #spActions { display: flex; gap: 8px; justify-content: flex-end; }
   #aePanel { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-             width: 760px; max-width: 94vw; max-height: 92vh; overflow: auto;
+             width: 800px; max-width: 94vw; max-height: 92vh; overflow: auto;
              background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
   .aeHead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 10px; }
   .aeHead h2 { margin: 0; color: var(--text); text-transform: none; letter-spacing: 0; font-size: 15px; }
@@ -184,7 +186,7 @@
   .aePatch { width: 100%; min-height: 120px; resize: vertical; background: #0d0f13;
              color: var(--text); border: 1px solid var(--border); border-radius: 4px;
              padding: 8px; font: inherit; white-space: pre; }
-  .aePreview { width: 100%; height: 180px; border: 1px solid var(--border);
+  .aePreview { width: 768px; height: 768px; border: 1px solid var(--border);
                border-radius: 6px; overflow: hidden; background: #0d0f13; margin-top: 6px; }
   .aePreview canvas { display: block; width: 100%; height: 100%; }
   .aeStatus { font-size: 12px; color: var(--dim); margin-top: 4px; }
@@ -408,7 +410,7 @@
   </section>
   <section>
     <h2>groups — info</h2>
-    <div id="groupsInfo" class="brainInfoText">zone groups = named sets of zones + the behaviors enabled in them. Navigation runs across the union of the enabled groups' zones. Click a group header to expand/collapse and select it (rename/remove act on the selected group).</div>
+    <div id="groupsInfo" class="brainInfoText">zone groups = named sets of zones + the behaviors enabled in them. Navigation runs across the union of the enabled groups' zones. Pick a zone in the dropdown and toggle the enabled groups to add/remove it from them. Group settings (enable, behaviors, params) act on the selected group.</div>
   </section>
 </main>
 
@@ -454,7 +456,7 @@
 
 const AXES = ["A1", "A2", "A3", "A4", "A5", "A6"];
 const BEHAVIORS = ["calm", "restless", "spontaneous", "vigilant", "locked", "intent", "curious", "gentle", "soothing", "drowsy", "agitated", "aggressive", "impatient", "exhilarated", "bridge"];
-const NAV_COMMANDS = ["next_action", "next_zone", "back", "retrigger"];
+const NAV_COMMANDS = ["next_action", "next_zone", "back", "retrigger", "next_pose"];
 const $ = (id) => document.getElementById(id);
 
 // Derive the WebSocket host from the page's own hostname so the page works when
@@ -532,7 +534,7 @@ let flowView = false;
 let brainView = false;
 let groupsView = false;
 let selectedGroup = null;
-const grpOpen = {};  // group name -> bool (default open when absent)
+let selectedGroupZone = null;  // the zone selected in the groups-tab zone dropdown
 let validateView = false;
 let valScanTimer = null;   // active scan animation frame id
 // Flow-tab state (session only — node positions are not persisted to zones.json).
@@ -1520,8 +1522,10 @@ function buildMidiInForm() {
   });
 }
 
-// The global navigation section: four commands (next_action / next_zone / back /
-// retrigger), each with a key editor + learn button. Keys are written to MIDI.nav.
+// The global navigation section: the nav commands (next_action / next_zone /
+// back / retrigger / next_pose), each with a key editor + learn button. Keys are
+// written to MIDI.nav. "next_pose" drives the "midi" cadence (advance the current
+// action's pose on the learned note).
 function buildMidiNav() {
   const el = $("midiNav");
   el.innerHTML = "";
@@ -2118,91 +2122,107 @@ function buildBrainForm() {
 // are special groups with their own validated params and are edited on the brain
 // tab (candidates / facefocus cards), so they are not shown here.
 // ---------------------------------------------------------------------------
-const _grpId = (name) => "g" + name.replace(/[^a-zA-Z0-9]/g, "_");
 const _splitList = (inp) => inp.value.split(",").map((s) => s.trim()).filter((s) => s.length);
 
+// Build the groups card: a zone dropdown (pick the zone whose memberships to
+// edit), a row of toggle buttons — one per ENABLED group — that toggle that
+// zone's membership, and a settings section for the selected group (enabled
+// flag, behaviors, params). Only the enabled groups are shown as toggles.
 function buildGroupsForm() {
   const el = $("groupList");
   el.innerHTML = "";
   const groups = BRAIN.zone_groups;
   const names = Object.keys(groups);
   if (!names.length) {
-    el.innerHTML = '<span style="color:var(--dim);font-size:12px">no zone groups</span>';
+    el.innerHTML = '<span style="color:var(--dim);font-size:12px">no zone groups — add one below</span>';
     return;
   }
-  for (const name of names) el.appendChild(_buildGroupBlock(name, groups[name]));
-}
+  const zoneNames = Object.keys(TABLE.zones);
 
-function _buildGroupBlock(name, g) {
-  const id = _grpId(name);
-  const open = grpOpen[name] !== false;
-  const block = document.createElement("div");
-  block.className = "grpBlock" + (selectedGroup === name ? " sel" : "");
-  block.dataset.name = name;
+  // Zone dropdown: the zone whose group memberships are being edited.
+  const zrow = document.createElement("div"); zrow.className = "row";
+  const zlab = document.createElement("label"); zlab.textContent = "zone";
+  const zsel = document.createElement("select"); zsel.className = "grpZoneSel";
+  zoneNames.forEach((zn) => { const o = document.createElement("option"); o.value = zn; o.textContent = zn; zsel.appendChild(o); });
+  zsel.value = (selectedGroupZone && zoneNames.includes(selectedGroupZone)) ? selectedGroupZone : zoneNames[0];
+  zsel.onchange = () => { selectedGroupZone = zsel.value; buildGroupsForm(); };
+  zrow.appendChild(zlab); zrow.appendChild(zsel);
+  el.appendChild(zrow);
 
-  const head = document.createElement("div");
-  head.className = "grpHead";
-  const en = document.createElement("input");
-  en.type = "checkbox"; en.checked = g.enabled; en.title = "enabled";
-  en.id = id + "Enabled";
-  en.addEventListener("click", (e) => e.stopPropagation());
-  head.appendChild(en);
-  const nm = document.createElement("span");
-  nm.className = "grpName"; nm.textContent = name;
-  head.appendChild(nm);
-  const arrow = document.createElement("span");
-  arrow.className = "grpArrow"; arrow.textContent = open ? "▾" : "▸";
-  arrow.id = id + "Arrow";
-  head.appendChild(arrow);
-  head.addEventListener("click", () => {
-    selectedGroup = name;
-    grpOpen[name] = !open;
-    $(id + "Body").style.display = grpOpen[name] ? "" : "none";
-    $(id + "Arrow").textContent = grpOpen[name] ? "▾" : "▸";
-    for (const b of $("groupList").children)
-      b.className = "grpBlock" + (b.dataset.name === selectedGroup ? " sel" : "");
-  });
-  block.appendChild(head);
+  // Group toggle buttons: only the enabled groups are shown on the card.
+  const trow = document.createElement("div"); trow.className = "grpToggles";
+  const enabled = names.filter((n) => groups[n].enabled);
+  if (!zoneNames.length) {
+    const hint = document.createElement("span"); hint.style.cssText = "color:var(--dim);font-size:12px";
+    hint.textContent = "no zones";
+    trow.appendChild(hint);
+  } else if (!enabled.length) {
+    const hint = document.createElement("span"); hint.style.cssText = "color:var(--dim);font-size:12px";
+    hint.textContent = "no enabled groups — enable one in the settings below";
+    trow.appendChild(hint);
+  } else {
+    for (const n of enabled) {
+      const g = groups[n];
+      const btn = document.createElement("button");
+      btn.className = "grpToggle" + (g.zones.includes(zsel.value) ? " on" : "");
+      btn.textContent = n;
+      btn.title = "toggle " + zsel.value + " in " + n;
+      btn.onclick = () => {
+        const z = zsel.value;
+        if (g.zones.includes(z)) g.zones = g.zones.filter((x) => x !== z);
+        else g.zones.push(z);
+        buildGroupsForm();
+      };
+      trow.appendChild(btn);
+    }
+  }
+  el.appendChild(trow);
 
-  const body = document.createElement("div");
-  body.className = "grpBody";
-  body.style.display = open ? "" : "none";
-  body.id = id + "Body";
+  // Group settings: pick a group (incl. disabled) and edit its enabled flag,
+  // behaviors, and params. Rename/remove act on the selected group.
+  const mgmt = document.createElement("div"); mgmt.className = "grpMgmt";
+  const msub = document.createElement("h3"); msub.textContent = "group settings";
+  mgmt.appendChild(msub);
+  const grow = document.createElement("div"); grow.className = "row";
+  const glab = document.createElement("label"); glab.textContent = "group";
+  const gsel = document.createElement("select"); gsel.className = "grpZoneSel";
+  names.forEach((n) => { const o = document.createElement("option"); o.value = n; o.textContent = n + (groups[n].enabled ? "" : " (off)"); gsel.appendChild(o); });
+  gsel.value = (selectedGroup && names.includes(selectedGroup)) ? selectedGroup : names[0];
+  selectedGroup = gsel.value;
+  gsel.onchange = () => { selectedGroup = gsel.value; buildGroupsForm(); };
+  grow.appendChild(glab); grow.appendChild(gsel);
+  mgmt.appendChild(grow);
 
-  const mkRow = (label, input) => {
-    const row = document.createElement("div");
-    row.className = "row";
-    row.style.alignItems = "center";
-    const lab = document.createElement("label");
-    lab.textContent = label;
-    row.appendChild(lab);
-    row.appendChild(input);
-    return row;
-  };
-  const mkText = (val) => {
-    const inp = document.createElement("input");
-    inp.type = "text"; inp.spellcheck = false; inp.value = val;
-    return inp;
-  };
-  const zonesInp = mkText(g.zones.join(", ")); zonesInp.id = id + "Zones";
-  body.appendChild(mkRow("zones (comma-separated)", zonesInp));
-  const behInp = mkText(g.behaviors.join(", ")); behInp.id = id + "Behaviors";
-  body.appendChild(mkRow("behaviors (comma-separated)", behInp));
+  const enRow = document.createElement("div"); enRow.className = "row";
+  const enLbl = document.createElement("label"); enLbl.className = "inline";
+  const enCb = document.createElement("input"); enCb.type = "checkbox"; enCb.id = "grpEnabled";
+  enCb.checked = groups[selectedGroup].enabled;
+  enCb.onchange = () => { groups[selectedGroup].enabled = enCb.checked; buildGroupsForm(); };
+  enLbl.appendChild(enCb); enLbl.appendChild(document.createTextNode(" enabled"));
+  enRow.appendChild(enLbl);
+  mgmt.appendChild(enRow);
+
+  const behRow = document.createElement("div"); behRow.className = "row";
+  const behLab = document.createElement("label"); behLab.textContent = "behaviors (comma-separated)";
+  const behInp = document.createElement("input"); behInp.type = "text"; behInp.id = "grpBehaviors";
+  behInp.spellcheck = false; behInp.value = groups[selectedGroup].behaviors.join(", ");
+  behInp.onchange = () => { groups[selectedGroup].behaviors = _splitList(behInp); };
+  behRow.appendChild(behLab); behRow.appendChild(behInp);
+  mgmt.appendChild(behRow);
 
   const psub = document.createElement("h3"); psub.textContent = "params";
-  body.appendChild(psub);
-  const paramsDiv = document.createElement("div"); paramsDiv.id = id + "Params";
-  const params = g.params || {};
+  mgmt.appendChild(psub);
+  const paramsDiv = document.createElement("div"); paramsDiv.id = "grpParams";
+  const params = groups[selectedGroup].params || {};
   for (const key of Object.keys(params)) paramsDiv.appendChild(_buildParamRow(key, params[key]));
-  body.appendChild(paramsDiv);
+  mgmt.appendChild(paramsDiv);
   const addBtnRow = document.createElement("div"); addBtnRow.className = "row";
   const addBtn = document.createElement("button"); addBtn.className = "small"; addBtn.textContent = "+ add param";
-  addBtn.addEventListener("click", () => paramsDiv.appendChild(_buildParamRow("", "")));
+  addBtn.onclick = () => paramsDiv.appendChild(_buildParamRow("", ""));
   addBtnRow.appendChild(addBtn);
-  body.appendChild(addBtnRow);
+  mgmt.appendChild(addBtnRow);
 
-  block.appendChild(body);
-  return block;
+  el.appendChild(mgmt);
 }
 
 function _buildParamRow(key, value) {
@@ -2220,29 +2240,26 @@ function _buildParamRow(key, value) {
   return row;
 }
 
-// Read the current groups-tab DOM values back into BRAIN.zone_groups (no POST),
-// so add/rename/remove and save do not lose unsaved edits.
+// Read the groups-tab settings back into BRAIN.zone_groups (no POST), so save
+// does not lose unsaved edits to the selected group. Zone memberships are
+// applied live by the toggle buttons, so only the settings (enabled /
+// behaviors / params) need committing here.
 function _commitGroupsDom() {
-  const groups = {};
-  for (const name of Object.keys(BRAIN.zone_groups)) {
-    const id = _grpId(name);
-    const params = {};
-    const pdiv = $(id + "Params");
-    if (pdiv) {
-      for (const row of pdiv.querySelectorAll(".grpParamRow")) {
-        const k = row.querySelector(".grpParamKey").value.trim();
-        const vin = row.querySelector(".grpParamVal");
-        if (k) params[k] = (vin.type === "number") ? parseFloat(vin.value) : vin.value.trim();
-      }
+  const groups = BRAIN.zone_groups;
+  if (!groups || !selectedGroup || !groups[selectedGroup]) return;
+  const g = groups[selectedGroup];
+  if ($("grpEnabled")) g.enabled = $("grpEnabled").checked;
+  if ($("grpBehaviors")) g.behaviors = _splitList($("grpBehaviors"));
+  const params = {};
+  const pdiv = $("grpParams");
+  if (pdiv) {
+    for (const row of pdiv.querySelectorAll(".grpParamRow")) {
+      const k = row.querySelector(".grpParamKey").value.trim();
+      const vin = row.querySelector(".grpParamVal");
+      if (k) params[k] = (vin.type === "number") ? parseFloat(vin.value) : vin.value.trim();
     }
-    groups[name] = {
-      enabled: $(id + "Enabled").checked,
-      zones: _splitList($(id + "Zones")),
-      behaviors: _splitList($(id + "Behaviors")),
-      params: params,
-    };
   }
-  BRAIN.zone_groups = groups;
+  g.params = params;
 }
 
 function addGroup() {
@@ -2251,7 +2268,6 @@ function addGroup() {
   const n = name.trim().toLowerCase().replace(/\s+/g, "-");
   if (!n || BRAIN.zone_groups[n]) { alert("group name missing or already exists"); return; }
   BRAIN.zone_groups[n] = { zones: [], behaviors: [], enabled: false, params: {} };
-  grpOpen[n] = true;
   selectedGroup = n;
   buildGroupsForm();
 }
@@ -2265,8 +2281,6 @@ function renameGroup() {
   const g = BRAIN.zone_groups[selectedGroup];
   delete BRAIN.zone_groups[selectedGroup];
   BRAIN.zone_groups[n] = g;
-  grpOpen[n] = grpOpen[selectedGroup];
-  delete grpOpen[selectedGroup];
   selectedGroup = n;
   buildGroupsForm();
 }
@@ -2275,7 +2289,6 @@ function removeGroup() {
   if (!selectedGroup) { alert("select a group first"); return; }
   if (!confirm('remove group "' + selectedGroup + '"?')) return;
   delete BRAIN.zone_groups[selectedGroup];
-  delete grpOpen[selectedGroup];
   selectedGroup = null;
   buildGroupsForm();
 }
@@ -2644,8 +2657,7 @@ function ensureAeHydra() {
   }
   const container = $("aePreview");
   const canvas = document.createElement("canvas");
-  const res = typeof Robot3D !== "undefined" ? Robot3D.screenResolution() : [640, 360];
-  canvas.width = res[0]; canvas.height = res[1];
+  canvas.width = 768; canvas.height = 768;
   container.appendChild(canvas);
   AE.hydra = new Hydra({ canvas, detectAudio: false, makeGlobal: true, autoLoop: true });
   return AE.hydra;

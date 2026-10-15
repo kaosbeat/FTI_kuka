@@ -66,8 +66,10 @@ from ..state.zones import LIN_POSES, POSES
 ZONE_BY_CC1 = {1: "init", 2: "rest", 3: "wakeup", 4: "stretch", 5: "wander", 6: "wildwander"}
 
 # The global navigation commands: a relative virtual cursor over the current
-# zone's ``build_items`` rows (mirrors the TUI flow-map navigation).
-NAV_COMMANDS = ("next_action", "next_zone", "back", "retrigger")
+# zone's ``build_items`` rows (mirrors the TUI flow-map navigation), plus the
+# "next_pose" cadence trigger (the operator advances the current action's pose
+# by hand, driving the "midi" cadence mode).
+NAV_COMMANDS = ("next_action", "next_zone", "back", "retrigger", "next_pose")
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +96,7 @@ def builtin_midi_data() -> dict:
     """
     return {"enabled": True, "zones": {},
             "nav": {"next_action": None, "next_zone": None,
-                    "back": None, "retrigger": None}}
+                    "back": None, "retrigger": None, "next_pose": None}}
 
 
 def _key_int(key: str, s: str, lo: int, hi: int) -> int:
@@ -560,7 +562,8 @@ class MidiInput:
                 return
 
     def _nav_command(self, name: str) -> None:
-        """Dispatch one nav command (next_action / next_zone / back / retrigger)."""
+        """Dispatch one nav command (next_action / next_zone / back / retrigger /
+        next_pose)."""
         if name == "next_action":
             self._nav_next("action")
         elif name == "next_zone":
@@ -569,6 +572,17 @@ class MidiInput:
             self._nav_back()
         elif name == "retrigger":
             self._nav_retrigger()
+        elif name == "next_pose":
+            self._cadence_note()
+
+    def _cadence_note(self) -> None:
+        """Fire the midi cadence pulse (advance the current action's pose).
+
+        Only meaningful in ``"midi"`` cadence mode; the brain forwards it to the
+        machine, which ignores the pulse in any other cadence mode.
+        """
+        if self._brain is not None:
+            self._brain.handle_next_pose()
 
     # ------------------------------------------------------------------
     # Incoming messages: per-zone dispatch, nav, legacy protocol on the default port.

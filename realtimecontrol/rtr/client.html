@@ -193,10 +193,11 @@
       </select>
     </div>
     <div class="ctlrow">
-      <label title="When the discrete (fixed-pose) behaviours advance. fixed = every N seconds (the legacy fixed rhythm). arrival = as soon as the robot reaches its current target (advance-when-ends).">cadence</label>
+      <label title="When the discrete (fixed-pose) behaviours advance. fixed = every N seconds (the legacy fixed rhythm). arrival = as soon as the robot reaches its current target (advance-when-ends). midi = on the learned midi note (set the note in the editor's midi-in tab, global navigation: next_pose).">cadence</label>
       <select id="cadenceMode">
         <option value="fixed">fixed</option>
         <option value="arrival">arrival</option>
+        <option value="midi">midi</option>
       </select>
     </div>
     <div class="ctlrow" id="cadenceEveryRow">
@@ -821,6 +822,7 @@ function buildUI() {
     const mode = $("cadenceMode").value;
     // The interval input only applies to the fixed rhythm.
     $("cadenceEveryRow").style.display = (mode === "fixed") ? "" : "none";
+    if (mode === "midi") { send({ cmd: "set_cadence", mode: "midi" }); return; }
     if (mode !== "fixed") { send({ cmd: "set_cadence", mode: "arrival" }); return; }
     const every = parseFloat($("cadenceEvery").value);
     if (isNaN(every) || every < 0.1) { log("cadence: interval must be >= 0.1 s"); return; }

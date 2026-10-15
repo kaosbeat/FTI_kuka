@@ -167,7 +167,8 @@ def test_validate_midi_data_rejects_bad_nav_key():
 def test_builtin_midi_data_is_empty_zones():
     assert builtin_midi_data() == {"enabled": True, "zones": {},
                                     "nav": {"next_action": None, "next_zone": None,
-                                             "back": None, "retrigger": None}}
+                                             "back": None, "retrigger": None,
+                                             "next_pose": None}}
 
 
 def test_load_midi_data_reads_and_validates():

@@ -74,6 +74,8 @@ CADENCE_ITEMS = [
      "cmd": {"cmd": "set_engine_mode", "mode": "stream"}},
     {"kind": "engine", "name": "cadence: arrival",
      "cmd": {"cmd": "set_cadence", "mode": "arrival"}},
+    {"kind": "engine", "name": "cadence: midi",
+     "cmd": {"cmd": "set_cadence", "mode": "midi"}},
     {"kind": "engine", "name": "cadence: fixed 0.5 s",
      "cmd": {"cmd": "set_cadence", "mode": "fixed", "every": 0.5}},
     {"kind": "engine", "name": "cadence: fixed 1.0 s",

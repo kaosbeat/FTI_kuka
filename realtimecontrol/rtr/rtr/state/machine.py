@@ -86,12 +86,16 @@ class StateMachine:
         #   move_mode: "block" (wait for each move to arrive) | "stream" (fire
         #     without waiting, so the 20 Hz loop keeps retargeting the robot).
         #   cadence:   "fixed" (advance every cadence_every ticks) | "arrival"
-        #     (advance when the robot reaches the current target).
+        #     (advance when the robot reaches the current target) | "midi"
+        #     (advance on the learned midi note; see :meth:`midi_pulse`).
         #   cadence_every: the fixed-rhythm interval, in ticks.
         self.move_mode = "block"
         self.cadence = "fixed"
         self.cadence_every = max(1, int(tick_hz))
         self.tick = 0
+        # Midi cadence pulse: armed by :meth:`midi_pulse` (the learned midi note)
+        # and consumed by :meth:`_cadence_due` on the next tick (midi cadence only).
+        self._midi_pulse = False
         # Control mode: "auto" (the brain drives autonomous decisions) or
         # "manual" (only explicit client commands move the robot).
         self.control_mode = "auto"
@@ -302,11 +306,13 @@ class StateMachine:
 
         self.current_action = name
         self.action_index = 0
+        self._midi_pulse = False
         return True
 
     def clear_action(self) -> None:
         self.current_action = None
         self.action_index = 0
+        self._midi_pulse = False
 
     # ------------------------------------------------------------------
     # Pending move API (safety gate).
@@ -337,6 +343,7 @@ class StateMachine:
         if p.get("same_zone"):
             self.current_action = p["action"]
             self.action_index = 0
+            self._midi_pulse = False
         else:
             self._transition = {"zone": p["zone"], "action": p["action"],
                                  "pose": p["entry"]}
@@ -471,11 +478,28 @@ class StateMachine:
         - ``"fixed"``: fire every ``cadence_every`` ticks (the legacy fixed-rhythm).
         - ``"arrival"``: fire when the robot reaches the current target
           (comparelist), i.e. advance-when-ends.
+        - ``"midi"``: fire on the learned midi note (the :meth:`midi_pulse` pulse),
+          i.e. the operator advances the pose by hand.
         """
         if self.cadence == "arrival":
             return self.target is not None \
                 and comparelist(curjpos, self.target, margin=0.1, count=5)
+        if self.cadence == "midi":
+            if self._midi_pulse:
+                self._midi_pulse = False
+                return True
+            return False
         return self.tick % self.cadence_every == 0
+
+    def midi_pulse(self) -> None:
+        """Arm one midi-cadence advance (the learned ``next_pose`` midi note fired).
+
+        Only meaningful in ``"midi"`` cadence mode: the next :meth:`step` tick
+        consumes the pulse and advances the current action's anchor. In any other
+        cadence mode the call is a no-op (the pulse is never set).
+        """
+        if self.cadence == "midi":
+            self._midi_pulse = True
 
     def update(self, curjpos: List[float]) -> Optional[List[float]]:
         """Drive the transition one step. Returns the target pose, or None when idle.
@@ -499,6 +523,7 @@ class StateMachine:
         self.speed = z.speed
         self.current_action = action
         self.action_index = 0
+        self._midi_pulse = False
         self._transition = None
 
     def _current_speed(self) -> float:

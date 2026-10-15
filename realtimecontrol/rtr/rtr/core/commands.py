@@ -103,7 +103,7 @@ class Snapshot:
     hunt: Optional[dict] = None  # brain hunt state: {"state", "lock_id", "feral"}
     servo: Optional[dict] = None  # last servo vector: {"behavior","dx","dy","dq_deg","axes"}
     move_mode: Optional[str] = None  # engine move mode: "block" | "stream"
-    cadence: Optional[str] = None  # cadence mode: "fixed" | "arrival"
+    cadence: Optional[str] = None  # cadence mode: "fixed" | "arrival" | "midi"
     cadence_every: Optional[int] = None  # fixed-rhythm interval, in ticks
     autonomy_enabled: Optional[bool] = None  # brain autonomy master switch
     autonomy_enabled_groups: Optional[List[str]] = None  # sorted enabled group names
