@@ -361,6 +361,84 @@ def test_multi_pose_wiggle_advances_anchor_and_wiggles_var_axis():
     assert len(set(var_values)) >= 2, f"A4 should wiggle to distinct values: {var_values}"
 
 
+# ---------------------------------------------------------------------------
+# Midi cadence: the operator advances the current action's pose on the learned
+# midi note (machine.midi_pulse), consumed once per tick by _cadence_due.
+# ---------------------------------------------------------------------------
+def test_midi_cadence_advances_on_pulse_only():
+    """In "midi" cadence the anchor advances only when a pulse is armed; the pulse
+    is consumed on the next step. No pulse -> no advance."""
+    data = validate_state_data({"zones": {
+        "a": {"safezone": [[0, 10]] * 6, "speed": 1,
+              "actions": {"spin": {"poses": [[1] * 6, [2] * 6, [3] * 6]}}}}})
+    z = Zones(data["zones"])
+    m = StateMachine(z, initial_zone="a", tick_hz=20.0)
+    m.play_action("spin")
+    m.cadence = "midi"
+    m.step([0] * 6)
+    assert m.action_index == 0  # no pulse -> no advance
+    m.midi_pulse()
+    m.step([0] * 6)
+    assert m.action_index == 1  # pulse consumed, advanced once
+    assert m._midi_pulse is False
+    m.step([0] * 6)
+    assert m.action_index == 1  # no new pulse -> holds
+
+
+def test_midi_cadence_spontaneous_advances_on_pulse():
+    """Regression: a spontaneous action also advances on the midi pulse. The pulse is
+    consumed inside _cadence_due, which step() must call exactly once per tick (the
+    old double-call swallowed the pulse for spontaneous actions)."""
+    data = validate_state_data({"zones": {
+        "a": {"safezone": [[0, 10]] * 6, "speed": 1,
+              "actions": {"spin": {"poses": [[1] * 6, [2] * 6, [3] * 6],
+                                  "behavior": "spontaneous"}}}}})
+    z = Zones(data["zones"])
+    m = StateMachine(z, initial_zone="a", tick_hz=20.0)
+    assert z.get("a").action_behavior("spin") == "spontaneous"
+    m.play_action("spin")
+    m.cadence = "midi"
+    m.midi_pulse()
+    m.step([0] * 6)
+    assert m.action_index == 1  # pulse consumed AND anchor advanced on the same tick
+    assert m._midi_pulse is False
+
+
+def test_midi_pulse_is_noop_outside_midi_cadence():
+    """midi_pulse only arms in "midi" cadence; in any other mode it is a no-op."""
+    data = validate_state_data({"zones": {
+        "a": {"safezone": [[0, 10]] * 6, "speed": 1,
+              "actions": {"spin": {"poses": [[1] * 6, [2] * 6]}}}}})
+    z = Zones(data["zones"])
+    m = StateMachine(z, initial_zone="a", tick_hz=20.0)
+    m.play_action("spin")
+    for mode in ("arrival", "fixed"):
+        m.cadence = mode
+        m.midi_pulse()
+        assert m._midi_pulse is False, f"pulse must be a no-op in {mode!r} cadence"
+
+
+def test_action_lifecycle_clears_midi_pulse():
+    """A stale midi pulse is cleared at every action lifecycle boundary so it never
+    carries over into a new action."""
+    data = validate_state_data({"zones": {
+        "a": {"safezone": [[0, 10]] * 6, "speed": 1,
+              "actions": {"spin": {"poses": [[1] * 6, [2] * 6, [3] * 6]}}}}})
+    z = Zones(data["zones"])
+    m = StateMachine(z, initial_zone="a", tick_hz=20.0)
+    m.play_action("spin")
+    m.cadence = "midi"
+    m.midi_pulse()
+    assert m._midi_pulse is True
+    m.clear_action()
+    assert m._midi_pulse is False
+    m.play_action("spin")
+    m.midi_pulse()
+    assert m._midi_pulse is True
+    m.play_action("spin")  # re-playing clears the pulse
+    assert m._midi_pulse is False
+
+
 def main():
     tests = [
         test_play_and_clear_action,
@@ -375,6 +453,10 @@ def main():
         test_auto_mode_still_advances,
         test_manual_mode_allows_explicit_commands,
         test_multi_pose_wiggle_advances_anchor_and_wiggles_var_axis,
+        test_midi_cadence_advances_on_pulse_only,
+        test_midi_cadence_spontaneous_advances_on_pulse,
+        test_midi_pulse_is_noop_outside_midi_cadence,
+        test_action_lifecycle_clears_midi_pulse,
     ]
     # The old zone-mode tests (m.mode / set_mode / request_zone / _commit_zone, zone
     # modes wander/random/track/hold, per-edge exitposes, default-mode adoption) test

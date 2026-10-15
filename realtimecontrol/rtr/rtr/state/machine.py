@@ -461,12 +461,17 @@ class StateMachine:
             poses = action.get("poses")
             if isinstance(poses, list) and poses:
                 spontaneous = zone.action_behavior(self.current_action) == "spontaneous"
-                if not spontaneous or self._cadence_due(curjpos):
+                # Evaluate the cadence once per tick and reuse it: the "midi" cadence
+                # consumes its pulse inside _cadence_due, so calling it twice (once
+                # for the retarget guard, once for the anchor advance) would swallow
+                # the pulse on spontaneous actions.
+                due = self._cadence_due(curjpos)
+                if not spontaneous or due:
                     pose = build_target(self, curjpos)
                     if pose is not None:
                         self.target = clamp(self, pose)
                         self.target_kind = "joint"
-                if self._cadence_due(curjpos):
+                if due:
                     self._advance_anchor(zone, action)
         # No action / no poses: hold the last target.
 
