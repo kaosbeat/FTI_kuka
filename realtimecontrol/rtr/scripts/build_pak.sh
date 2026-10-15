@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Assemble the RTRREMOTE NextUI PAK for the Trimui (tg5050).
+# Assemble the RTRREMOTE NextUI PAK for the Trimui (tg5040).
 #
 # Runs on the dev machine (x86_64) and cross-builds the device PAK:
 #   1. python-build-standalone aarch64  -> dist/RTRREMOTE.pak/python/
@@ -12,7 +12,7 @@
 # slow to scp. The app code is a few hundred KB and is staged separately in
 # dist/repo/, so code updates can be shipped WITHOUT re-sending the PAK.
 #
-# Then copy the finished folder to the SD card:  Tools/tg5050/RTRREMOTE.pak/
+# Then copy the finished folder to the SD card:  Tools/tg5040/RTRREMOTE.pak/
 #
 # Usage:
 #   scripts/build_pak.sh            # assemble static parts (fonts + config + code)
@@ -40,7 +40,7 @@ REPO_STAGE="$PKG_DIR/dist/repo"                        # lean app-code artifact 
 # Device target (no git/rsync on the device; ship over ssh/scp). Overridable.
 DEVICE=${DEVICE:-root@192.168.1.33}
 REPO_PATH=${REPO_PATH:-/storage/rtr-remote}            # matches config.json "repo"
-PAK_DEVICE_PATH=${PAK_DEVICE_PATH:-/mnt/SDCARD/Tools/tg5050/RTRREMOTE.pak}  # where the PAK lives on the device
+PAK_DEVICE_PATH=${PAK_DEVICE_PATH:-/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak}  # where the PAK lives on the device
 
 FULL=0
 SHIP_CODE=0
@@ -184,7 +184,7 @@ if [ "$FULL" -eq 1 ]; then
         --python-version 311 \
         --cache-dir "$WHEEL_TMP/.pipcache" \
         -d "$WHEEL_TMP" \
-        pygame "websockets>=12,<14"
+        pygame websockets
     # Unpack each wheel (a zip) into the site-packages dir.
     for w in "$WHEEL_TMP"/*.whl; do
         [ -e "$w" ] || continue
@@ -264,11 +264,11 @@ echo "==> PAK assembled at:  $DIST_DIR   (~200MB, send once)"
 echo "==> app code staged at: $REPO_STAGE   (tiny, send for updates)"
 echo
 echo "Copy the PAK once (slow over wifi):"
-echo "    scp -r $DIST_DIR $DEVICE:/mnt/SDCARD/Tools/tg5050/"
+echo "    scp -r $DIST_DIR $DEVICE:/mnt/SDCARD/Tools/tg5040/"
 echo
 echo "Ship ONLY the python app code (fast, code updates):"
 echo "    $0 --ship-code"
 echo "    #  =  ssh $DEVICE \"mkdir -p '$REPO_PATH'\" && scp -r $REPO_STAGE/rtr $DEVICE:$REPO_PATH/"
 echo
 echo "Then on-device:"
-echo "    /mnt/SDCARD/Tools/tg5050/RTRREMOTE.pak/launch.sh --selftest"
+echo "    /mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selftest"
