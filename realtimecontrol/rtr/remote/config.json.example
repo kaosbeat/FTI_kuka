@@ -1,0 +1,23 @@
+{
+  "core_host": "localhost",
+  "core_port": 5000,
+  "device": "/dev/input/js0",
+  "height": 24,
+  "colors": {
+    "base": "#000000",
+    "header": "#6963ff",
+    "header_text": "#ffffff",
+    "body": "#ffffff",
+    "body_text": "#000000",
+    "selected": "#6963ff",
+    "selected_text": "#ffffff",
+    "focus": "#6963ff",
+    "focus_text": "#ffffff",
+    "button": "#006600",
+    "button_text": "#ffffff",
+    "error": "#ff0000",
+    "error_text": "#ffffff"
+  },
+  "font": "default",
+  "http_poll_interval": 1.0
+}
