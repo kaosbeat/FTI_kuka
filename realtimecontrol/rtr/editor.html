@@ -1546,18 +1546,30 @@ function buildMidiInForm() {
       aRow.appendChild(rmBtn);
       box.appendChild(aRow);
     });
-    // add action button
-    const addBtn = document.createElement("button");
-    addBtn.className = "small"; addBtn.textContent = "+ action";
-    addBtn.title = "Add a key that triggers a specific action in this zone.";
-    addBtn.onclick = () => {
-      const nm = prompt("action name:");
-      if (!nm) return;
-      if (acts[nm]) return;
-      acts[nm] = null;
+    // add action: pick an action from this zone (TABLE) to assign a MIDI key to.
+    // The dropdown is scoped to the zone, so names always match actions that exist
+    // there (no free-text typos).
+    const addSel = document.createElement("select");
+    addSel.className = "midiKey";
+    addSel.title = "Pick an action from this zone to give it a MIDI key.";
+    const addPh = document.createElement("option");
+    addPh.value = ""; addPh.textContent = "+ add action";
+    addSel.appendChild(addPh);
+    const znActs = (TABLE.zones[zone] && TABLE.zones[zone].actions)
+      ? Object.keys(TABLE.zones[zone].actions) : [];
+    znActs.forEach((an) => {
+      if (acts[an]) return;  // already has a key
+      const o = document.createElement("option");
+      o.value = an; o.textContent = an;
+      addSel.appendChild(o);
+    });
+    addSel.onchange = () => {
+      const an = addSel.value;
+      if (!an || acts[an]) return;
+      acts[an] = null;
       buildMidiInForm();
     };
-    box.appendChild(addBtn);
+    box.appendChild(addSel);
     tbl.appendChild(box);
   });
 }
