@@ -136,8 +136,11 @@
   <section>
     <h2>state</h2>
     <div class="kv"><span>zone</span><span id="zone">&#8211;</span></div>
-    <div class="kv"><span>behavior</span><span id="mode">&#8211;</span></div>
     <div class="kv"><span>action</span><span id="action">&#8211;</span></div>
+    <div class="kv"><span>behavior</span><span id="mode">&#8211;</span></div>
+    <div class="kv"><span>control</span><span id="controlModeVal">&#8211;</span></div>
+    <div class="kv"><span>forced</span><span id="forcedBehavior">&#8211;</span></div>
+    <div class="kv"><span>tracking</span><span id="tracking">&#8211;</span></div>
     <div class="kv"><span>speed</span><span id="speed">&#8211;</span></div>
     <div class="kv"><span>moving</span><span id="moving">&#8211;</span></div>
   </section>
@@ -538,8 +541,15 @@ function renderState(s) {
   }
 
   $("zone").textContent = s.zone;
-  $("mode").textContent = s.mode;
+  $("mode").textContent = s.behavior || s.mode || "—";
   $("action").textContent = s.action === null ? "—" : (s.action || "—");
+  $("controlModeVal").textContent = s.control_mode || "—";
+  $("forcedBehavior").textContent = s.forced_behavior || "—";
+  // Tracking: the camera intent (active/mode) + the live tracked target (from RPI telemetry).
+  const cam = s.camera || null;
+  const trk = (s.cam_telem && s.cam_telem.track) ? s.cam_telem.track : null;
+  const trkPart = (trk && trk.id != null) ? (" #" + trk.id) : "";
+  $("tracking").textContent = cam ? (cam.active + "/" + cam.mode + trkPart) : "—";
   $("speed").textContent = s.speed;
   $("moving").textContent = s.moving ? "yes" : "no";
   $("cart").textContent = s.cart.map(fmt).join(" ");

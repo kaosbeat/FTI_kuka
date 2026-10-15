@@ -118,6 +118,14 @@ class Display:
             "speed": snap.speed,
             "moving": snap.moving,
         }
+        # Current behavior + its tunable params (the editor/TUI show them; a no-op
+        # behavior like calm/bridge carries no params, so the field is absent).
+        if self._machine is not None and self._machine.current_action:
+            beh = self._machine.behavior
+            frame["behavior"] = beh
+            bp = self._machine.behavior_params
+            if beh in bp:
+                frame["behavior_params"] = dict(bp[beh])
         cam = self._camera_field()
         if cam is not None:
             frame["camera"] = cam
@@ -140,6 +148,10 @@ class Display:
             frame["autonomy_dwell_remaining"] = snap.autonomy_dwell_remaining
         if snap.control_mode is not None:
             frame["control_mode"] = snap.control_mode
+        if snap.forced_behavior is not None:
+            frame["forced_behavior"] = snap.forced_behavior
+        elif self._machine is not None and self._machine.forced_behavior is not None:
+            frame["forced_behavior"] = self._machine.forced_behavior
         if snap.safety is not None:
             frame["safety"] = dict(snap.safety)
         elif self._machine is not None and self._machine.pending:

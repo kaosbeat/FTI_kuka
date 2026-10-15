@@ -40,6 +40,8 @@ class Cmd(str, Enum):
     PROCEED = "proceed"
     SAFETY_CONFIRM = "safety_confirm"
     SAFETY_CANCEL = "safety_cancel"
+    ENABLE_BEHAVIOR = "enable_behavior"
+    CLEAR_BEHAVIOR = "clear_behavior"
 
 
 class Event(str, Enum):
@@ -110,6 +112,7 @@ class Snapshot:
     control_mode: Optional[str] = None  # "manual" | "auto"
     action_index: Optional[int] = None  # current anchor index within the action's poses
     safety: Optional[dict] = None  # pending safety-gated move info (None when no pending)
+    forced_behavior: Optional[str] = None  # live test override behavior (None when not forced)
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
@@ -146,4 +149,6 @@ class Snapshot:
             d["action_index"] = self.action_index
         if self.safety is not None:
             d["safety"] = dict(self.safety)
+        if self.forced_behavior is not None:
+            d["forced_behavior"] = self.forced_behavior
         return d

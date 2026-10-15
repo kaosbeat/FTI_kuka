@@ -55,6 +55,19 @@
   .stateRow > span:first-child { color: var(--dim); }
   .brainSec { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; margin: 12px 0 4px; }
   .brainInject { margin-top: 4px; }
+  #brainMain { display: block; }
+  .brainGrid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-items: start; }
+  .brainInfoText { font-size: 12px; color: var(--dim); line-height: 1.5; }
+  .brainCard a { color: var(--accent); font-size: 12px; }
+  .brainSep { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; margin: 16px 0 4px; border-top: 1px solid var(--border); padding-top: 8px; }
+  .brainCardDesc { font-size: 12px; color: var(--dim); margin-bottom: 8px; line-height: 1.4; }
+  .grpBlock { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
+  .grpBlock.sel { border-color: var(--accent); }
+  .grpHead { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+  .grpHead .grpName { font-size: 13px; flex: 1; }
+  .grpArrow { color: var(--dim); font-size: 11px; width: 12px; text-align: center; }
+  .grpBody { margin-top: 6px; }
+  .grpParamRow { margin-bottom: 2px; }
   .warn { color: #e0a030; font-size: 12px; }
   .hwlims { display: flex; flex-wrap: wrap; gap: 3px 10px; font-size: 11px; color: var(--dim); margin-bottom: 8px; }
   #tabZones { font-size: 12px; }
@@ -211,6 +224,7 @@
   <button id="tabPatches">patches</button>
   <button id="tabMidi">midi</button>
   <button id="tabFlow">flow</button>
+  <button id="tabGroups">groups</button>
   <button id="tabBrain">brain</button>
   <button id="tabValidate">validate</button>
   <button id="save">save</button>
@@ -370,11 +384,27 @@
 </main>
 
 <main id="brainMain" style="display:none">
+  <div id="brainCards" class="brainGrid"></div>
   <section>
-    <h2>brain — autonomy</h2>
-    <div id="brainForm"></div>
-    <div id="brainLive" style="font-size:12px;margin-top:8px"></div>
+    <h2>brain — live</h2>
+    <div id="brainLive" style="font-size:12px"></div>
     <div id="brainInfo" style="font-size:12px;color:var(--dim);margin-top:8px"></div>
+  </section>
+</main>
+
+<main id="groupsMain" style="display:none">
+  <section>
+    <h2>zone groups</h2>
+    <div id="groupList"></div>
+    <div class="row" style="margin-top:8px">
+      <button id="addGroup">+ add group</button>
+      <button id="renameGroup" class="small">rename</button>
+      <button id="removeGroup" class="small">remove</button>
+    </div>
+  </section>
+  <section>
+    <h2>groups — info</h2>
+    <div id="groupsInfo" class="brainInfoText">zone groups = named sets of zones + the behaviors enabled in them. Navigation runs across the union of the enabled groups' zones. Click a group header to expand/collapse and select it (rename/remove act on the selected group).</div>
   </section>
 </main>
 
@@ -496,6 +526,9 @@ let ghostIndex = 0;
 let ws = null;
 let flowView = false;
 let brainView = false;
+let groupsView = false;
+let selectedGroup = null;
+const grpOpen = {};  // group name -> bool (default open when absent)
 let validateView = false;
 let valScanTimer = null;   // active scan animation frame id
 // Flow-tab state (session only — node positions are not persisted to zones.json).
@@ -670,19 +703,48 @@ function zoneOverlapGaps(z1, z2) {
   }
   return gaps;
 }
-// The conflict info for an action edge: the two zones' safezone overlap and the
-// shared-position continuity (the source's end pose should equal the target's start
-// pose). Returns {any, issues: [strings]} for the red marker + click-to-show detail.
+// The axes on which a single pose lies OUTSIDE a zone's safezone (the per-axis soft
+// limits). Mirrors the action editor's `.oob` highlight. Empty list = in range.
+function poseOutsideSafezone(pose, z) {
+  if (!pose || !z || !z.safezone) return [];
+  const out = [];
+  for (let i = 0; i < 6; i++) {
+    const [lo, hi] = z.safezone[i];
+    if (pose[i] < lo || pose[i] > hi) out.push(AXES[i]);
+  }
+  return out;
+}
+// The conflict info for an action edge. Returns {any, issues: [strings]} for the red
+// marker + click-to-show detail.
+//
+// INTER-ZONE link: the two zones' safezones must overlap AND the shared position
+// (the source's end pose) must match the target's start pose within 0.5 on every axis.
+//
+// INTRA-ZONE link (both actions in the same zone): no shared-position requirement —
+// the robot moves freely within the zone, so any pose inside the zone's safezone is a
+// valid hand-off. The only conflict is a connection pose (source end / target start)
+// that lies OUTSIDE the zone's safezone (the robot cannot reach it).
 function edgeConflict(e) {
   const issues = [];
   const zA = TABLE.zones[e.from.zone], zB = TABLE.zones[e.to.zone];
-  const gaps = zoneOverlapGaps(zA, zB);
-  if (gaps.length) issues.push(`safezones do not overlap on ${gaps.join(", ")}`);
   const aA = zA.actions[e.from.action], aB = zB.actions[e.to.action];
   const end = actionEndPose(aA), start = actionStartPose(aB);
-  if (end && start && !end.every((v, i) => Math.abs(v - start[i]) < 0.5)) {
-    issues.push(`no shared position: ${e.from.zone}/${e.from.action} ends [${end.join(", ")}] but ` +
-                `${e.to.zone}/${e.to.action} starts [${start.join(", ")}]`);
+  if (e.from.zone === e.to.zone) {
+    const endGaps = poseOutsideSafezone(end, zA);
+    if (endGaps.length) issues.push(
+      `pose outside ${e.from.zone} safezone on ${endGaps.join(", ")}: ` +
+      `${e.from.zone}/${e.from.action} ends [${end.join(", ")}]`);
+    const startGaps = poseOutsideSafezone(start, zB);
+    if (startGaps.length) issues.push(
+      `pose outside ${e.to.zone} safezone on ${startGaps.join(", ")}: ` +
+      `${e.to.zone}/${e.to.action} starts [${start.join(", ")}]`);
+  } else {
+    const gaps = zoneOverlapGaps(zA, zB);
+    if (gaps.length) issues.push(`safezones do not overlap on ${gaps.join(", ")}`);
+    if (end && start && !end.every((v, i) => Math.abs(v - start[i]) < 0.5)) {
+      issues.push(`no shared position: ${e.from.zone}/${e.from.action} ends [${end.join(", ")}] but ` +
+                  `${e.to.zone}/${e.to.action} starts [${start.join(", ")}]`);
+    }
   }
   return { any: issues.length > 0, issues };
 }
@@ -737,6 +799,7 @@ const BRAIN_FALLBACK = {
     params: {
       lost_s: 2.0,
       min_conf: 0.1,
+      centrality_weight: 0.1,
       attention_guard: ["locked", "intent", "curious", "gentle"],
       detect: { zone: "hunting", action: "track" },
       scan: { zone: "hunting", action: "scan" },
@@ -751,6 +814,35 @@ const BRAIN_FALLBACK = {
       action_s: 3.0,
       face_lost_s: 2.5,
     },
+  },
+  cam_control: {
+    resting:    { active: "wide", mode: "idle", lock: "none" },
+    sleeping:   { active: "wide", mode: "idle", lock: "none" },
+    cuddling:   { active: "wide", mode: "idle", lock: "none" },
+    purring:    { active: "wide", mode: "idle", lock: "none" },
+    stretching: { active: "wide", mode: "track", lock: "auto" },
+    hunting:    { active: "wide", mode: "track", lock: "auto" },
+    examining:  { active: "close", mode: "analyze", lock: "auto" },
+    performing: { active: "both", mode: "track", lock: "auto" },
+    roaring:    { active: "wide", mode: "track", lock: "auto" },
+    growling:   { active: "wide", mode: "track", lock: "auto" },
+    clawing:    { active: "close", mode: "analyze", lock: "auto" },
+    leaping:    { active: "wide", mode: "track", lock: "auto" },
+  },
+  behaviors: {
+    locked:      { gain: 0.3 },
+    curious:     { gain: 0.3, look_factor: 0.5 },
+    intent:      { gain: 0.3 },
+    gentle:      { gain: 0.3, face_factor: 0.5 },
+    vigilant:    { freq: 1.0 },
+    restless:    { wander_adj: 5.0 },
+    spontaneous: {},
+    soothing:    { freq: 0.5, amp_scale: 0.1 },
+    agitated:    { freq: 1.0, amp_scale: 0.3 },
+    aggressive:  { freq: 1.0, amp_scale: 0.3 },
+    exhilarated: { freq: 2.0, amp_scale: 0.5 },
+    impatient:   { freq: 1.0, amp_scale: 0.3 },
+    drowsy:      { freq: 0.3, amp_scale: 0.2 },
   },
 };
 
@@ -776,8 +868,10 @@ function connect() {
       if (!validateView) Robot3D.update({ joints: m.joints, target: m.target, patch: m.patch });
       $("liveState").innerHTML =
         `<div class="stateRow"><span>zone</span><span>${m.zone}</span></div>` +
-        `<div class="stateRow"><span>mode</span><span>${m.mode}</span></div>` +
         `<div class="stateRow"><span>action</span><span>${m.action ? m.action : "—"}</span></div>` +
+        `<div class="stateRow"><span>behavior</span><span>${m.behavior || "—"}</span></div>` +
+        `<div class="stateRow"><span>control</span><span>${m.control_mode || "—"}</span></div>` +
+        `<div class="stateRow"><span>forced</span><span>${m.forced_behavior || "—"}</span></div>` +
         `<div class="stateRow"><span>speed</span><span>${m.speed}</span></div>` +
         `<div class="stateRow"><span>moving</span><span>${m.moving ? "yes" : "no"}</span></div>`;
       FLOW.live = { zone: m.zone, mode: m.mode, action: m.action };
@@ -1601,14 +1695,75 @@ const BRAIN_DEFAULT_GROUPS = {
                       params: { speed: 40, dwell_s: 30.0 } },
   "stage-takeover": { zones: ["roaring", "growling", "clawing", "leaping"], behaviors: [], enabled: true,
                       params: { speed: 80, dwell_s: 15.0 } },
-  hunt:      { zones: ["hunting"], behaviors: [], enabled: true,
-                params: { lost_s: 2.0, min_conf: 0.1,
-                          attention_guard: ["locked", "intent", "curious", "gentle"],
-                          detect: { zone: "hunting", action: "track" },
-                          scan: { zone: "hunting", action: "scan" } } },
-  facefocus: { zones: ["stretching"], behaviors: [], enabled: true,
-                params: { actions: ["wink", "inspect", "call"], action_s: 3.0, face_lost_s: 2.5 } },
+   hunt:      { zones: ["hunting"], behaviors: [], enabled: true,
+                 params: { lost_s: 2.0, min_conf: 0.1, centrality_weight: 0.1,
+                           attention_guard: ["locked", "intent", "curious", "gentle"],
+                           detect: { zone: "hunting", action: "track" },
+                           scan: { zone: "hunting", action: "scan" } } },
+   facefocus: { zones: ["stretching"], behaviors: [], enabled: true,
+                 params: { actions: ["wink", "inspect", "call"], action_s: 3.0, face_lost_s: 2.5 } },
 };
+
+// The 15 behavior modes are the existing BEHAVIORS const (top of the script);
+// calm/bridge are no-ops and spontaneous has no tunable knob, the rest carry
+// the motion params in BEHAVIOR_PARAMS.
+// Per-behavior motion params (mirrors rtr/brain/config.py DEFAULT_BEHAVIORS).
+// calm/bridge are not listed (no params); spontaneous is listed empty.
+const BEHAVIOR_PARAMS = {
+  locked:      { gain: 0.3 },
+  curious:     { gain: 0.3, look_factor: 0.5 },
+  intent:      { gain: 0.3 },
+  gentle:      { gain: 0.3, face_factor: 0.5 },
+  vigilant:    { freq: 1.0 },
+  restless:    { wander_adj: 5.0 },
+  spontaneous: {},
+  soothing:    { freq: 0.5, amp_scale: 0.1 },
+  agitated:    { freq: 1.0, amp_scale: 0.3 },
+  aggressive:  { freq: 1.0, amp_scale: 0.3 },
+  exhilarated: { freq: 2.0, amp_scale: 0.5 },
+  impatient:   { freq: 1.0, amp_scale: 0.3 },
+  drowsy:      { freq: 0.3, amp_scale: 0.2 },
+};
+
+// Display metadata for each param key (input step/min).
+const BEHAVIOR_PARAM_META = {
+  gain:        { step: "0.05", min: "0" },
+  look_factor: { step: "0.05", min: "0" },
+  face_factor: { step: "0.05", min: "0" },
+  freq:        { step: "0.1",  min: "0" },
+  amp_scale:   { step: "0.05", min: "0" },
+  wander_adj:  { step: "0.5",  min: "0" },
+};
+
+// Info text for the no-param behaviors (info-only cards).
+const BEHAVIOR_INFO = {
+  calm: "no-op — the idle baseline (no tunable params).",
+  bridge: "no-op — the transition between actions (no tunable params).",
+  spontaneous: "random jumps — no tunable params.",
+};
+
+// Short descriptions for each behavior (shown on the card).
+const BEHAVIOR_DESCRIPTIONS = {
+  calm: "idle baseline — no motion on variable axes.",
+  bridge: "safe transition — holds curated poses between zones.",
+  locked: "tracks a person via the wide camera (visual servoing).",
+  curious: "reduced-motion look toward a person (50% of locked offset).",
+  intent: "strong tracking intent — full servoing gain toward the target.",
+  gentle: "subtle face-driven gesture from the close camera.",
+  vigilant: "sine sweep across variable axes (scanning motion).",
+  restless: "gentle continuous random drift (wander).",
+  spontaneous: "random jumps to random joint positions.",
+  soothing: "slow, low-amplitude oscillation (calm movement).",
+  agitated: "fast, moderate-amplitude oscillation (restless movement).",
+  aggressive: "fast, moderate-amplitude oscillation (aggressive movement).",
+  exhilarated: "very fast, high-amplitude oscillation (excited movement).",
+  impatient: "fast, moderate-amplitude oscillation (impatient tapping).",
+  drowsy: "very slow, low-amplitude oscillation (sleepy swaying).",
+};
+
+// The camera intent vocabulary (mirrors rtr/brain/config.py CAMERA_CHOICES / CAMERA_MODES).
+const CAMERA_CHOICES = ["wide", "close", "both"];
+const CAMERA_MODES = ["idle", "track", "analyze"];
 
 function _brainGroupSuffix(name) {
   return name.charAt(0).toUpperCase() + name.slice(1);
@@ -1630,6 +1785,7 @@ function _brainNormalizeGroup(name, g) {
     out.params = {
       lost_s: typeof p.lost_s === "number" ? p.lost_s : dp.lost_s,
       min_conf: typeof p.min_conf === "number" ? p.min_conf : dp.min_conf,
+      centrality_weight: typeof p.centrality_weight === "number" ? p.centrality_weight : dp.centrality_weight,
       attention_guard: Array.isArray(p.attention_guard) ? p.attention_guard.slice() : dp.attention_guard.slice(),
       detect: Object.assign({}, dp.detect, p.detect || {}),
       scan: Object.assign({}, dp.scan, p.scan || {}),
@@ -1643,6 +1799,28 @@ function _brainNormalizeGroup(name, g) {
     };
   } else if (g.params && typeof g.params === "object") {
     out.params = Object.assign({}, g.params);  // unvalidated passthrough
+  }
+  return out;
+}
+
+// Normalise the per-behavior motion params. Fills the known behaviors (from
+// BEHAVIOR_PARAMS) with their defaults, keeping any present values. Custom
+// behaviors (not in BEHAVIOR_PARAMS) are kept as-is so a hand-edited file is
+// not clobbered.
+function normalizeBehaviors(raw) {
+  const src = (raw && typeof raw === "object") ? raw : {};
+  const out = {};
+  for (const name of Object.keys(BEHAVIOR_PARAMS)) {
+    const defaults = BEHAVIOR_PARAMS[name];
+    const entry = (src[name] && typeof src[name] === "object") ? src[name] : {};
+    const beh = {};
+    for (const key of Object.keys(defaults)) {
+      beh[key] = typeof entry[key] === "number" ? entry[key] : defaults[key];
+    }
+    out[name] = beh;
+  }
+  for (const name of Object.keys(src)) {
+    if (!out[name]) out[name] = (src[name] && typeof src[name] === "object") ? Object.assign({}, src[name]) : {};
   }
   return out;
 }
@@ -1677,7 +1855,8 @@ function normalizeBrain(data) {
   const hunt = _brainNormalizeGroup("hunt", data.hunt || fb.hunt);
   const facefocus = _brainNormalizeGroup("facefocus", data.facefocus || fb.facefocus);
   const cam_control = data.cam_control || fb.cam_control || {};
-  return { autonomy, zone_groups: groups, hunt, facefocus, cam_control };
+  const behaviors = normalizeBehaviors(data.behaviors);
+  return { autonomy, zone_groups: groups, hunt, facefocus, cam_control, behaviors };
 }
 
 async function loadBrain() {
@@ -1695,22 +1874,38 @@ async function loadBrain() {
   if (!data) data = JSON.parse(JSON.stringify(BRAIN_FALLBACK));
   BRAIN = normalizeBrain(data);
   if (brainView) buildBrainForm();
+  if (groupsView) buildGroupsForm();
   return BRAIN;
 }
 
 function buildBrainForm() {
-  const el = $("brainForm");
+  const el = $("brainCards");
   el.innerHTML = "";
   const b = BRAIN;
-  const groups = b.zone_groups;
 
-  const mkSection = (text) => {
-    const h = document.createElement("div");
-    h.className = "brainSec";
-    h.textContent = text;
-    el.appendChild(h);
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+  const mkCard = (title, desc) => {
+    const card = document.createElement("section");
+    card.className = "brainCard";
+    const h = document.createElement("h2");
+    h.textContent = title;
+    card.appendChild(h);
+    if (desc) {
+      const d = document.createElement("div");
+      d.className = "brainCardDesc";
+      d.textContent = desc;
+      card.appendChild(d);
+    }
+    el.appendChild(card);
+    return card;
   };
-  const mkRow = (label, input) => {
+  const mkSub = (card, text) => {
+    const h = document.createElement("h3");
+    h.textContent = text;
+    card.appendChild(h);
+  };
+  const mkRow = (card, label, input) => {
     const row = document.createElement("div");
     row.className = "row";
     row.style.alignItems = "center";
@@ -1719,13 +1914,14 @@ function buildBrainForm() {
     lab.textContent = label;
     row.appendChild(lab);
     row.appendChild(input);
-    el.appendChild(row);
+    card.appendChild(row);
     return row;
   };
-  const mkNum = (id, value, step, min) => {
+  const mkNum = (id, value, step, min, title) => {
     const inp = document.createElement("input");
     inp.type = "number"; inp.step = step || "0.1"; inp.min = min || "0";
     inp.value = value; inp.id = id;
+    if (title) inp.title = title;
     return inp;
   };
   const mkText = (id, value) => {
@@ -1739,149 +1935,350 @@ function buildBrainForm() {
     inp.type = "checkbox"; inp.id = id; inp.checked = !!checked;
     return inp;
   };
+  const mkSelect = (id, value, choices) => {
+    const sel = document.createElement("select");
+    sel.id = id;
+    for (const c of choices) {
+      const opt = document.createElement("option");
+      opt.value = c; opt.textContent = c;
+      sel.appendChild(opt);
+    }
+    sel.value = value;
+    return sel;
+  };
+  const mkInfo = (card, text) => {
+    const d = document.createElement("div");
+    d.className = "brainInfoText";
+    d.textContent = text;
+    card.appendChild(d);
+  };
 
-  // --- autonomy (the master switch for autonomous navigation) ---
-  mkSection("autonomy");
-  const a = b.autonomy;
-  mkRow("autonomy.enabled (master switch)", mkCheck("brainAutEnabled", a.enabled));
-  mkRow("autonomy.dwell_s (s, dwell before a looping action's next link is followed)",
-        mkNum("brainAutDwell", a.dwell_s, "1", "0"));
-  mkRow("events.midi (note-on triggers an immediate next link)", mkCheck("brainEvMidi", a.events.midi));
-  mkRow("events.camera (detect/hunt lock triggers an immediate next link)", mkCheck("brainEvCamera", a.events.camera));
-  mkRow("events.websocket (proceed triggers an immediate next link)", mkCheck("brainEvWs", a.events.websocket));
+  // --- Global card (autonomy + zone groups + cam_control) ---
+  {
+    const card = mkCard("global");
+    const a = b.autonomy;
+    mkSub(card, "autonomy (the master switch for autonomous navigation)");
+    mkRow(card, "autonomy.enabled", mkCheck("brainAutEnabled", a.enabled));
+    mkRow(card, "autonomy.dwell_s (s, dwell before a looping action's next link is followed)",
+          mkNum("brainAutDwell", a.dwell_s, "1", "0", "Seconds to dwell before following a looping action's next link"));
+    mkRow(card, "events.midi (note-on triggers an immediate next link)", mkCheck("brainEvMidi", a.events.midi));
+    mkRow(card, "events.camera (detect/hunt lock triggers an immediate next link)", mkCheck("brainEvCamera", a.events.camera));
+    mkRow(card, "events.websocket (proceed triggers an immediate next link)", mkCheck("brainEvWs", a.events.websocket));
 
-  // --- zone groups (named sets of zones + the behaviors enabled in them) ---
-  mkSection("zone groups");
-  for (const name of Object.keys(groups)) {
-    const g = groups[name];
-    const s = _brainGroupSuffix(name);
-    mkRow(`group.${name}.enabled`, mkCheck("brainGrp" + s + "Enabled", g.enabled));
-    mkRow(`group.${name}.zones (comma-separated)`, mkText("brainGrp" + s + "Zones", g.zones.join(", ")));
-    mkRow(`group.${name}.behaviors (comma-separated)`, mkText("brainGrp" + s + "Behaviors", g.behaviors.join(", ")));
+    mkSub(card, "zone groups");
+    mkInfo(card, "The zone groups (named sets of zones + behaviors) are edited on the groups tab. Navigation runs across the union of the enabled groups' zones.");
+
+    mkSub(card, "cam_control (per-action camera baseline)");
+    mkInfo(card, "The camera baseline is now per-action (zone/action). Set each action's camera intent (active / mode / lock) from the action editor.");
   }
 
-  // --- hunt (top-level, the hunt-loop timing/trigger data) ---
+  // --- Candidates card (the hunt loop: how the brain picks a lock target) ---
   {
-    const h = BRAIN.hunt;
-    const hs = "Hunt";
-    mkSection("hunt");
-    mkRow("hunt.enabled", mkCheck("brainGrp" + hs + "Enabled", h.enabled));
-    mkRow("hunt.zones (comma-separated)", mkText("brainGrp" + hs + "Zones", h.zones.join(", ")));
+    const card = mkCard("candidates (hunt loop)", "How the brain picks a lock target from camera candidates.");
+    const h = b.hunt;
+    mkRow(card, "hunt.enabled", mkCheck("brainGrpHuntEnabled", h.enabled));
+    mkRow(card, "hunt.zones (comma-separated)", mkText("brainGrpHuntZones", h.zones.join(", ")));
     const hp = h.params;
-    mkRow("hunt.lost_s (s, how long a locked target's track may go stale)",
-          mkNum("brainHuntLostS", hp.lost_s, "0.1", "0"));
-    mkRow("hunt.min_conf (lock sensitivity; candidates below it are ignored — lower = more sensitive)",
-          mkNum("brainHuntMinConf", hp.min_conf, "0.05", "0"));
-    mkRow("hunt.attention_guard (behaviors that suppress the detect grab)",
+    mkRow(card, "hunt.lost_s (s, how long a locked target's track may go stale)",
+          mkNum("brainHuntLostS", hp.lost_s, "0.1", "0", "Seconds before a locked target is considered lost"));
+    mkRow(card, "hunt.min_conf (lock sensitivity; candidates below it are ignored — lower = more sensitive)",
+          mkNum("brainHuntMinConf", hp.min_conf, "0.05", "0", "Minimum confidence to lock a candidate (0–1)"));
+    mkRow(card, "hunt.centrality_weight (how much image-center distance is penalised in the lock score)",
+          mkNum("brainHuntCentrality", hp.centrality_weight, "0.05", "0", "Penalty weight for distance from image center"));
+    mkRow(card, "hunt.attention_guard (behaviors that suppress the detect grab)",
           mkText("brainHuntGuard", hp.attention_guard.join(", ")));
-    mkRow("hunt.detect.zone", mkText("brainHuntDetZone", hp.detect.zone));
-    mkRow("hunt.detect.action", mkText("brainHuntDetAct", hp.detect.action));
-    mkRow("hunt.scan.zone", mkText("brainHuntScanZone", hp.scan.zone));
-    mkRow("hunt.scan.action", mkText("brainHuntScanAct", hp.scan.action));
+    mkRow(card, "hunt.detect.zone", mkText("brainHuntDetZone", hp.detect.zone));
+    mkRow(card, "hunt.detect.action", mkText("brainHuntDetAct", hp.detect.action));
+    mkRow(card, "hunt.scan.zone", mkText("brainHuntScanZone", hp.scan.zone));
+    mkRow(card, "hunt.scan.action", mkText("brainHuntScanAct", hp.scan.action));
   }
 
-  // --- facefocus (top-level, the 'check out that human' face actions) ---
+  // --- Facefocus card (the 'check out that human' face actions) ---
   {
-    const ff = BRAIN.facefocus;
-    const ffs = "Facefocus";
-    mkSection("facefocus");
-    mkRow("facefocus.enabled", mkCheck("brainGrp" + ffs + "Enabled", ff.enabled));
-    mkRow("facefocus.zones (comma-separated)", mkText("brainGrp" + ffs + "Zones", ff.zones.join(", ")));
+    const card = mkCard("facefocus (face actions)", "The 'check out that human' face-focus actions.");
+    const ff = b.facefocus;
+    mkRow(card, "facefocus.enabled", mkCheck("brainGrpFacefocusEnabled", ff.enabled));
+    mkRow(card, "facefocus.zones (comma-separated)", mkText("brainGrpFacefocusZones", ff.zones.join(", ")));
     const fp = ff.params;
-    mkRow("facefocus.actions (comma-separated)", mkText("brainFFActions", fp.actions.join(", ")));
-    mkRow("facefocus.action_s (s, per face action)", mkNum("brainFFActionS", fp.action_s, "0.1", "0"));
-    mkRow("facefocus.face_lost_s (s, before the face is lost)", mkNum("brainFFLostS", fp.face_lost_s, "0.1", "0"));
+    mkRow(card, "facefocus.actions (comma-separated)", mkText("brainFFActions", fp.actions.join(", ")));
+    mkRow(card, "facefocus.action_s (s, per face action)", mkNum("brainFFActionS", fp.action_s, "0.1", "0", "Duration of each face action (seconds)"));
+    mkRow(card, "facefocus.face_lost_s (s, before the face is lost)", mkNum("brainFFLostS", fp.face_lost_s, "0.1", "0", "Seconds before a tracked face is considered lost"));
   }
 
-  // --- camera inject (send CAM_* telemetry to the running core) ---
-  mkSection("camera inject (send CAM_* telemetry to the running core)");
-  const injectBtns = document.createElement("div");
-  injectBtns.className = "row brainInject";
-  const mkInjectBtn = (label, payload) => {
+  // --- 15 behavior cards (one per behavior; number inputs or info-only) ---
+  const behParams = b.behaviors || {};
+  const behSep = document.createElement("div");
+  behSep.className = "brainSep";
+  behSep.textContent = "behaviors";
+  el.appendChild(behSep);
+  for (const name of BEHAVIORS) {
+    const card = mkCard(name, BEHAVIOR_DESCRIPTIONS[name]);
+    const defaults = BEHAVIOR_PARAMS[name] || {};
+    const keys = Object.keys(defaults);
+    if (keys.length) {
+      const entry = behParams[name] || {};
+      for (const key of keys) {
+        const meta = BEHAVIOR_PARAM_META[key] || { step: "0.1", min: "0" };
+        const value = (entry && typeof entry[key] === "number") ? entry[key] : defaults[key];
+        mkRow(card, key, mkNum("brainBh" + cap(name) + cap(key), value, meta.step, meta.min));
+      }
+    } else {
+      mkInfo(card, BEHAVIOR_INFO[name] || "no tunable params.");
+    }
+    // Per-behavior enable/test button (live test override).
+    const btnRow = document.createElement("div");
+    btnRow.className = "row";
+    btnRow.style.marginTop = "6px";
     const btn = document.createElement("button");
     btn.className = "small";
-    btn.textContent = label;
-    btn.addEventListener("click", () => send({ cmd: payload.cmd, ...payload.body }));
-    injectBtns.appendChild(btn);
-  };
-  mkInjectBtn("cam_status", { cmd: "cam_status",
-    body: { camera: "wide", mode: "track", active: true, fps: 30, ok: true } });
-  mkInjectBtn("cam_candidates", { cmd: "cam_candidates",
-    body: { camera: "wide", candidates: [
-      { id: 1, x1: 0.35, y1: 0.3, x2: 0.65, y2: 0.8, conf: 0.9 },
-      { id: 2, x1: 0.05, y1: 0.5, x2: 0.2, y2: 0.9, conf: 0.4 },
-    ] } });
-  mkInjectBtn("cam_track", { cmd: "cam_track",
-    body: { camera: "wide", id: 1, cx: 320, cy: 240, dx: 0, dy: 0, w: 80, h: 160 } });
-  mkInjectBtn("cam_face", { cmd: "cam_face",
-    body: { camera: "close", id: 1, bbox: [280, 160, 360, 320], dx: 0, dy: 0,
-            features: { detected: true, emotion: "neutral" } } });
-  el.appendChild(injectBtns);
+    btn.textContent = "enable test";
+    btn.id = "brainBhBtn" + cap(name);
+    btn.title = `Enable ${name} as a live test override (sets control to manual, robot keeps running).`;
+    btn.addEventListener("click", () => {
+      send({ cmd: "enable_behavior", behavior: name });
+    });
+    btnRow.appendChild(btn);
+    const stopBtn = document.createElement("button");
+    stopBtn.className = "small";
+    stopBtn.textContent = "stop";
+    stopBtn.id = "brainBhStop" + cap(name);
+    stopBtn.title = "Stop the forced behavior and return to auto mode.";
+    stopBtn.style.display = "none";
+    stopBtn.addEventListener("click", () => {
+      send({ cmd: "clear_behavior" });
+    });
+    btnRow.appendChild(stopBtn);
+    card.appendChild(btnRow);
+  }
 
-  // --- autonomy triggers (send a proceed/stop to the running core) ---
-  mkSection("autonomy triggers (send to the running core)");
-  const trigBtns = document.createElement("div");
-  trigBtns.className = "row brainInject";
-  const mkTrigBtn = (label, cmd) => {
-    const btn = document.createElement("button");
-    btn.className = "small";
-    btn.textContent = label;
-    btn.addEventListener("click", () => send({ cmd }));
-    trigBtns.appendChild(btn);
-  };
-  mkTrigBtn("proceed (trigger the websocket autonomy event)", "proceed");
-  mkTrigBtn("stop", "stop");
-  el.appendChild(trigBtns);
+  // --- Camera card (link + inject + triggers) ---
+  {
+    const card = mkCard("camera");
+    const link = document.createElement("a");
+    link.href = "/camera_debug.html";
+    link.textContent = "open camera_debug.html →";
+    link.style.display = "block";
+    link.style.marginBottom = "8px";
+    card.appendChild(link);
+
+    const injectBtns = document.createElement("div");
+    injectBtns.className = "row brainInject";
+    const mkInjectBtn = (label, payload) => {
+      const btn = document.createElement("button");
+      btn.className = "small";
+      btn.textContent = label;
+      btn.addEventListener("click", () => send({ cmd: payload.cmd, ...payload.body }));
+      injectBtns.appendChild(btn);
+    };
+    mkInjectBtn("cam_status", { cmd: "cam_status",
+      body: { camera: "wide", mode: "track", active: true, fps: 30, ok: true } });
+    mkInjectBtn("cam_candidates", { cmd: "cam_candidates",
+      body: { camera: "wide", candidates: [
+        { id: 1, x1: 0.35, y1: 0.3, x2: 0.65, y2: 0.8, conf: 0.9 },
+        { id: 2, x1: 0.05, y1: 0.5, x2: 0.2, y2: 0.9, conf: 0.4 },
+      ] } });
+    mkInjectBtn("cam_track", { cmd: "cam_track",
+      body: { camera: "wide", id: 1, cx: 320, cy: 240, dx: 0, dy: 0, w: 80, h: 160 } });
+    mkInjectBtn("cam_face", { cmd: "cam_face",
+      body: { camera: "close", id: 1, bbox: [280, 160, 360, 320], dx: 0, dy: 0,
+              features: { detected: true, emotion: "neutral" } } });
+    card.appendChild(injectBtns);
+
+    const trigBtns = document.createElement("div");
+    trigBtns.className = "row brainInject";
+    const mkTrigBtn = (label, cmd) => {
+      const btn = document.createElement("button");
+      btn.className = "small";
+      btn.textContent = label;
+      btn.addEventListener("click", () => send({ cmd }));
+      trigBtns.appendChild(btn);
+    };
+    mkTrigBtn("proceed (trigger the websocket autonomy event)", "proceed");
+    mkTrigBtn("stop", "stop");
+    card.appendChild(trigBtns);
+  }
 
   $("brainInfo").textContent =
     "autonomy = the master switch for autonomous navigation (follow a looping action's next link once it has dwelt for dwell_s or an event fires). "
-    + "zone groups = named sets of zones + the behaviors enabled in them; navigation runs across the union of the enabled groups' zones. "
-    + "hunt.params = the hunt-loop data (lost_s = how long a locked target's track may go stale; min_conf = the lock sensitivity, candidates below it are ignored; "
+    + "zone groups = named sets of zones + the behaviors enabled in them (edited on the groups tab); navigation runs across the union of the enabled groups' zones. "
+    + "cam_control = the per-action camera baseline (active/mode/lock, keyed by zone/action — set in the action editor), applied on every action change. "
+    + "candidates = the hunt-loop data (min_conf = the lock sensitivity; centrality_weight = how much image-center distance is penalised in the lock score; "
     + "detect/scan = the actions triggered on lock / lock-lost; attention_guard = behaviors that suppress the detect grab). "
-    + "facefocus.params = the 'check out that human' face actions (cycled while a face is visible).";
+    + "facefocus = the 'check out that human' face actions (cycled while a face is visible). "
+    + "behaviors = the per-behavior motion params (the tunable knobs of the motion policies).";
 }
 
-function saveBrain() {
-  const splitList = (id) => $(id).value.split(",").map((s) => s.trim()).filter((s) => s.length);
-  const num = (id, fallback) => { const v = parseFloat($(id).value); return isNaN(v) ? fallback : v; };
-  const grp = (s) => ({
-    enabled: $("brainGrp" + s + "Enabled").checked,
-    zones: splitList("brainGrp" + s + "Zones"),
-    behaviors: splitList("brainGrp" + s + "Behaviors"),
-  });
-  const payload = {
-    autonomy: {
-      enabled: $("brainAutEnabled").checked,
-      dwell_s: num("brainAutDwell", BRAIN.autonomy.dwell_s),
-      events: { midi: $("brainEvMidi").checked, camera: $("brainEvCamera").checked, websocket: $("brainEvWs").checked },
-    },
-    zone_groups: {},
-    hunt: {
-      zones: splitList("brainGrpHuntZones"),
-      enabled: $("brainGrpHuntEnabled").checked,
-      params: {
-        lost_s: num("brainHuntLostS", BRAIN.hunt.params.lost_s),
-        min_conf: num("brainHuntMinConf", BRAIN.hunt.params.min_conf),
-        attention_guard: splitList("brainHuntGuard"),
-        detect: { zone: $("brainHuntDetZone").value.trim(), action: $("brainHuntDetAct").value.trim() },
-        scan: { zone: $("brainHuntScanZone").value.trim(), action: $("brainHuntScanAct").value.trim() },
-      },
-    },
-    facefocus: {
-      zones: splitList("brainGrpFacefocusZones"),
-      enabled: $("brainGrpFacefocusEnabled").checked,
-      params: {
-        actions: splitList("brainFFActions"),
-        action_s: num("brainFFActionS", BRAIN.facefocus.params.action_s),
-        face_lost_s: num("brainFFLostS", BRAIN.facefocus.params.face_lost_s),
-      },
-    },
-  };
-  for (const name of Object.keys(BRAIN.zone_groups)) {
-    if (name === "hunt" || name === "facefocus") continue;
-    const s = _brainGroupSuffix(name);
-    payload.zone_groups[name] = grp(s);
+// ---------------------------------------------------------------------------
+// Zone-groups tab: collapsible list of the (regular) zone groups. hunt / facefocus
+// are special groups with their own validated params and are edited on the brain
+// tab (candidates / facefocus cards), so they are not shown here.
+// ---------------------------------------------------------------------------
+const _grpId = (name) => "g" + name.replace(/[^a-zA-Z0-9]/g, "_");
+const _splitList = (inp) => inp.value.split(",").map((s) => s.trim()).filter((s) => s.length);
+
+function buildGroupsForm() {
+  const el = $("groupList");
+  el.innerHTML = "";
+  const groups = BRAIN.zone_groups;
+  const names = Object.keys(groups);
+  if (!names.length) {
+    el.innerHTML = '<span style="color:var(--dim);font-size:12px">no zone groups</span>';
+    return;
   }
+  for (const name of names) el.appendChild(_buildGroupBlock(name, groups[name]));
+}
+
+function _buildGroupBlock(name, g) {
+  const id = _grpId(name);
+  const open = grpOpen[name] !== false;
+  const block = document.createElement("div");
+  block.className = "grpBlock" + (selectedGroup === name ? " sel" : "");
+  block.dataset.name = name;
+
+  const head = document.createElement("div");
+  head.className = "grpHead";
+  const en = document.createElement("input");
+  en.type = "checkbox"; en.checked = g.enabled; en.title = "enabled";
+  en.id = id + "Enabled";
+  en.addEventListener("click", (e) => e.stopPropagation());
+  head.appendChild(en);
+  const nm = document.createElement("span");
+  nm.className = "grpName"; nm.textContent = name;
+  head.appendChild(nm);
+  const arrow = document.createElement("span");
+  arrow.className = "grpArrow"; arrow.textContent = open ? "▾" : "▸";
+  arrow.id = id + "Arrow";
+  head.appendChild(arrow);
+  head.addEventListener("click", () => {
+    selectedGroup = name;
+    grpOpen[name] = !open;
+    $(id + "Body").style.display = grpOpen[name] ? "" : "none";
+    $(id + "Arrow").textContent = grpOpen[name] ? "▾" : "▸";
+    for (const b of $("groupList").children)
+      b.className = "grpBlock" + (b.dataset.name === selectedGroup ? " sel" : "");
+  });
+  block.appendChild(head);
+
+  const body = document.createElement("div");
+  body.className = "grpBody";
+  body.style.display = open ? "" : "none";
+  body.id = id + "Body";
+
+  const mkRow = (label, input) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.alignItems = "center";
+    const lab = document.createElement("label");
+    lab.textContent = label;
+    row.appendChild(lab);
+    row.appendChild(input);
+    return row;
+  };
+  const mkText = (val) => {
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.spellcheck = false; inp.value = val;
+    return inp;
+  };
+  const zonesInp = mkText(g.zones.join(", ")); zonesInp.id = id + "Zones";
+  body.appendChild(mkRow("zones (comma-separated)", zonesInp));
+  const behInp = mkText(g.behaviors.join(", ")); behInp.id = id + "Behaviors";
+  body.appendChild(mkRow("behaviors (comma-separated)", behInp));
+
+  const psub = document.createElement("h3"); psub.textContent = "params";
+  body.appendChild(psub);
+  const paramsDiv = document.createElement("div"); paramsDiv.id = id + "Params";
+  const params = g.params || {};
+  for (const key of Object.keys(params)) paramsDiv.appendChild(_buildParamRow(key, params[key]));
+  body.appendChild(paramsDiv);
+  const addBtnRow = document.createElement("div"); addBtnRow.className = "row";
+  const addBtn = document.createElement("button"); addBtn.className = "small"; addBtn.textContent = "+ add param";
+  addBtn.addEventListener("click", () => paramsDiv.appendChild(_buildParamRow("", "")));
+  addBtnRow.appendChild(addBtn);
+  body.appendChild(addBtnRow);
+
+  block.appendChild(body);
+  return block;
+}
+
+function _buildParamRow(key, value) {
+  const row = document.createElement("div");
+  row.className = "row grpParamRow";
+  const k = document.createElement("input");
+  k.type = "text"; k.className = "grpParamKey"; k.value = key;
+  k.style.width = "90px"; k.spellcheck = false;
+  const v = document.createElement("input");
+  v.type = (typeof value === "number") ? "number" : "text";
+  v.className = "grpParamVal"; v.value = value; v.style.width = "80px";
+  const del = document.createElement("button"); del.className = "small"; del.textContent = "x";
+  del.addEventListener("click", () => row.remove());
+  row.appendChild(k); row.appendChild(v); row.appendChild(del);
+  return row;
+}
+
+// Read the current groups-tab DOM values back into BRAIN.zone_groups (no POST),
+// so add/rename/remove and save do not lose unsaved edits.
+function _commitGroupsDom() {
+  const groups = {};
+  for (const name of Object.keys(BRAIN.zone_groups)) {
+    const id = _grpId(name);
+    const params = {};
+    const pdiv = $(id + "Params");
+    if (pdiv) {
+      for (const row of pdiv.querySelectorAll(".grpParamRow")) {
+        const k = row.querySelector(".grpParamKey").value.trim();
+        const vin = row.querySelector(".grpParamVal");
+        if (k) params[k] = (vin.type === "number") ? parseFloat(vin.value) : vin.value.trim();
+      }
+    }
+    groups[name] = {
+      enabled: $(id + "Enabled").checked,
+      zones: _splitList($(id + "Zones")),
+      behaviors: _splitList($(id + "Behaviors")),
+      params: params,
+    };
+  }
+  BRAIN.zone_groups = groups;
+}
+
+function addGroup() {
+  const name = prompt("new group name:");
+  if (!name) return;
+  const n = name.trim().toLowerCase().replace(/\s+/g, "-");
+  if (!n || BRAIN.zone_groups[n]) { alert("group name missing or already exists"); return; }
+  BRAIN.zone_groups[n] = { zones: [], behaviors: [], enabled: false, params: {} };
+  grpOpen[n] = true;
+  selectedGroup = n;
+  buildGroupsForm();
+}
+
+function renameGroup() {
+  if (!selectedGroup) { alert("select a group first"); return; }
+  const nn = prompt("rename to:", selectedGroup);
+  if (!nn || nn === selectedGroup) return;
+  const n = nn.trim().toLowerCase().replace(/\s+/g, "-");
+  if (!n || BRAIN.zone_groups[n]) { alert("group name missing or already exists"); return; }
+  const g = BRAIN.zone_groups[selectedGroup];
+  delete BRAIN.zone_groups[selectedGroup];
+  BRAIN.zone_groups[n] = g;
+  grpOpen[n] = grpOpen[selectedGroup];
+  delete grpOpen[selectedGroup];
+  selectedGroup = n;
+  buildGroupsForm();
+}
+
+function removeGroup() {
+  if (!selectedGroup) { alert("select a group first"); return; }
+  if (!confirm('remove group "' + selectedGroup + '"?')) return;
+  delete BRAIN.zone_groups[selectedGroup];
+  delete grpOpen[selectedGroup];
+  selectedGroup = null;
+  buildGroupsForm();
+}
+
+function saveGroups() {
+  if ($("groupList").hasChildNodes()) _commitGroupsDom();
+  if ($("brainCards").hasChildNodes()) _commitBrainDom();
+  const payload = Object.assign({}, BRAIN);
   fetch("/api/brain", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1890,6 +2287,79 @@ function saveBrain() {
     if (ok) {
       $("saveMsg").textContent = "saved";
       $("saveMsg").className = "";
+      buildGroupsForm();
+    } else {
+      $("saveMsg").textContent = "save failed: " + (body.error || r.status);
+      $("saveMsg").className = "err";
+    }
+  }).catch((e) => { $("saveMsg").textContent = "save failed: " + e; $("saveMsg").className = "err"; });
+}
+
+// Read the brain-tab DOM (autonomy / hunt / facefocus / behaviors) back into
+// BRAIN (no POST). cam_control and zone_groups are owned by the action editor
+// and the groups tab respectively, so they are left untouched here.
+function _commitBrainDom() {
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  const splitList = (id) => $(id).value.split(",").map((s) => s.trim()).filter((s) => s.length);
+  const num = (id, fallback) => { const v = parseFloat($(id).value); return isNaN(v) ? fallback : v; };
+  const b = BRAIN;
+  b.autonomy = {
+    enabled: $("brainAutEnabled").checked,
+    dwell_s: num("brainAutDwell", b.autonomy.dwell_s),
+    events: { midi: $("brainEvMidi").checked, camera: $("brainEvCamera").checked, websocket: $("brainEvWs").checked },
+  };
+  b.hunt = {
+    zones: splitList("brainGrpHuntZones"),
+    enabled: $("brainGrpHuntEnabled").checked,
+    params: {
+      lost_s: num("brainHuntLostS", b.hunt.params.lost_s),
+      min_conf: num("brainHuntMinConf", b.hunt.params.min_conf),
+      centrality_weight: num("brainHuntCentrality", b.hunt.params.centrality_weight),
+      attention_guard: splitList("brainHuntGuard"),
+      detect: { zone: $("brainHuntDetZone").value.trim(), action: $("brainHuntDetAct").value.trim() },
+      scan: { zone: $("brainHuntScanZone").value.trim(), action: $("brainHuntScanAct").value.trim() },
+    },
+  };
+  b.facefocus = {
+    zones: splitList("brainGrpFacefocusZones"),
+    enabled: $("brainGrpFacefocusEnabled").checked,
+    params: {
+      actions: splitList("brainFFActions"),
+      action_s: num("brainFFActionS", b.facefocus.params.action_s),
+      face_lost_s: num("brainFFLostS", b.facefocus.params.face_lost_s),
+    },
+  };
+  const behaviors = {};
+  for (const name of Object.keys(BEHAVIOR_PARAMS)) {
+    const defaults = BEHAVIOR_PARAMS[name];
+    const keys = Object.keys(defaults);
+    if (!keys.length) { behaviors[name] = {}; continue; }
+    const entry = {};
+    for (const key of keys) {
+      entry[key] = num("brainBh" + cap(name) + cap(key), defaults[key]);
+    }
+    behaviors[name] = entry;
+  }
+  b.behaviors = behaviors;
+}
+
+// Both brain-related tabs (brain + groups) edit the same config, so each save
+// commits both tabs' DOMs (whichever are built) into BRAIN and POSTs the whole
+// config — the /api/brain handler writes the payload verbatim, so a partial
+// payload would clobber the other tab's section.
+function saveBrain() {
+  if ($("brainCards").hasChildNodes()) _commitBrainDom();
+  if ($("groupList").hasChildNodes()) _commitGroupsDom();
+  const payload = Object.assign({}, BRAIN);
+  fetch("/api/brain", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => r.json().then((body) => ({ ok: r.ok, body }))).then(({ ok, body }) => {
+    if (ok) {
+      $("saveMsg").textContent = "saved";
+      $("saveMsg").className = "";
+      buildBrainForm();
     } else {
       $("saveMsg").textContent = "save failed: " + (body.error || r.status);
       $("saveMsg").className = "err";
@@ -1915,11 +2385,23 @@ function renderBrainLive(m) {
   const telem = m.cam_telem || null;
   const rows = [];
   const add = (label, value) => rows.push(`<div class="stateRow"><span>${label}</span><span>${value}</span></div>`);
-  const state = hunt ? hunt.state : null;
+  // Unified status bar: zone, action, behavior, control mode, forced behavior.
+  add("zone", m.zone || "—");
+  add("action", m.action || "—");
+  add("control", m.control_mode || "—");
+  const forced = m.forced_behavior || null;
+  add("forced", forced || "—");
   add("autonomy", autEnabled ? "on" : ("off" + (perfMode ? " (perf)" : "")));
   add("groups", enabledGroups);
   add("dwell", dwellRem === "—" ? "—" : dwellRem + "s");
-  add("hunt", state === "facefocus" ? "check out" : (state || "—"));
+  const behavior = m.behavior || null;
+  const bp = m.behavior_params || null;
+  add("behavior", behavior || "—");
+  if (bp && Object.keys(bp).length) {
+    add("behavior.params", Object.keys(bp).map((k) => k + "=" + bp[k]).join(", "));
+  }
+  const hs = hunt ? hunt.state : null;
+  add("hunt", hs === "facefocus" ? "check out" : (hs || "—"));
   add("lock", hunt && hunt.lock_id != null ? "#" + hunt.lock_id : "—");
   if (hunt && hunt.feral) add("feral", "yes");
   add("camera", cam ? cam.active + "/" + cam.mode : "—");
@@ -1936,6 +2418,18 @@ function renderBrainLive(m) {
       ? "#" + face.id + " " + (face.features.emotion || "") : "—");
   }
   el.innerHTML = rows.join("");
+  // Highlight the active forced behavior's button.
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  for (const name of BEHAVIORS) {
+    const btn = $("brainBhBtn" + cap(name));
+    const stopBtn = $("brainBhStop" + cap(name));
+    if (btn && stopBtn) {
+      const isActive = (m.forced_behavior === name);
+      btn.style.display = isActive ? "none" : "";
+      stopBtn.style.display = isActive ? "" : "none";
+      btn.className = "small" + (isActive ? " active" : "");
+    }
+  }
 }
 
 // hydra-synth 1.x always evals patch code via a GLOBAL eval (globalThis.eval), so its
@@ -2307,6 +2801,40 @@ function buildActionEditor() {
   sec.appendChild(arow);
   el.appendChild(sec);
 
+  // --- camera section: per-action camera baseline (active / mode / lock) ---
+  const csec = document.createElement("div");
+  csec.className = "aeSec";
+  csec.appendChild(h3("camera"));
+  const ckey = zn + "/" + an;
+  const getCam = () => (BRAIN && BRAIN.cam_control && BRAIN.cam_control[ckey]) || { active: "wide", mode: "idle", lock: "none" };
+  const setCam = (entry) => { BRAIN.cam_control = BRAIN.cam_control || {}; BRAIN.cam_control[ckey] = entry; };
+  const cam = getCam();
+  const crow = document.createElement("div");
+  crow.className = "row";
+  const cal = document.createElement("label");
+  cal.className = "inline";
+  cal.innerHTML = "active <select class='aeCamActive'></select>";
+  const casel = cal.querySelector("select");
+  CAMERA_CHOICES.forEach((c) => { const o = document.createElement("option"); o.value = c; o.textContent = c; casel.appendChild(o); });
+  casel.value = cam.active;
+  casel.onchange = () => { const c = getCam(); setCam({ active: casel.value, mode: c.mode, lock: c.lock }); };
+  crow.appendChild(cal);
+  const cm = document.createElement("label");
+  cm.className = "inline";
+  cm.innerHTML = "mode <select class='aeCamMode'></select>";
+  const cmsel = cm.querySelector("select");
+  CAMERA_MODES.forEach((m) => { const o = document.createElement("option"); o.value = m; o.textContent = m; cmsel.appendChild(o); });
+  cmsel.value = cam.mode;
+  cmsel.onchange = () => { const c = getCam(); setCam({ active: c.active, mode: cmsel.value, lock: c.lock }); };
+  crow.appendChild(cm);
+  const cl = document.createElement("label");
+  cl.className = "inline";
+  cl.innerHTML = "lock <input class='aeCamLock' value='" + cam.lock + "'>";
+  cl.querySelector("input").oninput = (e) => { const c = getCam(); setCam({ active: c.active, mode: c.mode, lock: e.target.value }); };
+  crow.appendChild(cl);
+  csec.appendChild(crow);
+  el.appendChild(csec);
+
   // --- poses section: behavior + speed + variable_axes + one row per anchor pose ---
   const psec = document.createElement("div");
   psec.className = "aeSec";
@@ -2425,6 +2953,30 @@ function buildActionEditor() {
     buildActionEditor();
   };
   plist.appendChild(addR);
+  // Clamp every out-of-zone axis value (the `.oob` inputs) to the zone safezone, so
+  // the action only ever holds reachable poses. Disables when nothing needs clamping.
+  const clampR = document.createElement("button");
+  clampR.className = "small";
+  const oobCount = (() => {
+    let n = 0;
+    if (z.safezone) a.poses.forEach((p) => {
+      for (let i = 0; i < 6; i++) { const [lo, hi] = z.safezone[i]; if (p[i] < lo || p[i] > hi) n++; }
+    });
+    return n;
+  })();
+  clampR.textContent = oobCount ? `clamp ${oobCount} out-of-zone value${oobCount === 1 ? "" : "s"} to safezone` : "clamp poses to safezone";
+  clampR.disabled = !oobCount;
+  clampR.onclick = () => {
+    if (z.safezone) a.poses.forEach((p) => {
+      for (let i = 0; i < 6; i++) {
+        const [lo, hi] = z.safezone[i];
+        if (p[i] < lo) p[i] = lo;
+        else if (p[i] > hi) p[i] = hi;
+      }
+    });
+    buildActionEditor();
+  };
+  plist.appendChild(clampR);
   showPrev(0);  // seed the schematic with the first pose
   el.appendChild(psec);
 
@@ -2680,7 +3232,8 @@ function openActionEditor(zn, an) {
   $("actionEditor").classList.add("open");
   $("aeTitle").textContent = zn + " / " + an;
   $("aePatchCode").value = getPatchCode("actions." + zn + "." + an);
-  buildActionEditor();
+  if (BRAIN) { buildActionEditor(); }
+  else { loadBrain().then(() => buildActionEditor()); }
   evalAePatchPreview($("aePatchCode").value);
 }
 
@@ -2703,6 +3256,7 @@ function switchView(v) {
   midiView = v === "midi";
   flowView = v === "flow";
   brainView = v === "brain";
+  groupsView = v === "groups";
   validateView = v === "validate";
   if (wasPatch && !patchView) commitPatchEditor();  // leaving the patches view: commit
   // While in the validate tab, put the core in manual mode so the brain's
@@ -2710,17 +3264,19 @@ function switchView(v) {
   // Restore to auto (the core default) when leaving the tab.
   if (validateView && !wasValidate) send({ cmd: "set_control_mode", mode: "manual" });
   else if (!validateView && wasValidate) send({ cmd: "set_control_mode", mode: "auto" });
-  const other = patchView || midiView || flowView || brainView || validateView;
+  const other = patchView || midiView || flowView || brainView || groupsView || validateView;
   $("zoneMain").style.display = other ? "none" : "";
   $("patchesMain").style.display = patchView ? "" : "none";
   $("midiMain").style.display = midiView ? "" : "none";
   $("flowMain").style.display = flowView ? "" : "none";
   $("brainMain").style.display = brainView ? "" : "none";
+  $("groupsMain").style.display = groupsView ? "" : "none";
   $("validateMain").style.display = validateView ? "" : "none";
   $("tabZones").className = other ? "" : "active";
   $("tabPatches").className = patchView ? "active" : "";
   $("tabMidi").className = midiView ? "active" : "";
   $("tabFlow").className = flowView ? "active" : "";
+  $("tabGroups").className = groupsView ? "active" : "";
   $("tabBrain").className = brainView ? "active" : "";
   $("tabValidate").className = validateView ? "active" : "";
   // Move the shared 3D singleton between the zones and validate tabs. Leaving
@@ -2742,6 +3298,10 @@ function switchView(v) {
   if (brainView) {
     // Load the brain config on first switch (async); build the form when it's ready.
     if (BRAIN) buildBrainForm();
+    else loadBrain();
+  }
+  if (groupsView) {
+    if (BRAIN) buildGroupsForm();
     else loadBrain();
   }
 }
@@ -3451,6 +4011,7 @@ function save() {
   if (patchView) { savePatches(); return; }
   if (midiView) { saveMidiAll(); return; }
   if (brainView) { saveBrain(); return; }
+  if (groupsView) { saveGroups(); return; }
   saveZones();
 }
 
@@ -3530,6 +4091,7 @@ function saveActionEditor() {
     fetch("/api/zones", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(TABLE) }),
     fetch("/api/sound", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(SOUND) }),
     fetch("/api/patches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(PATCHES) }),
+    fetch("/api/brain", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(BRAIN) }),
   ]).then((rs) => {
     if (rs.every((r) => r.ok)) {
       $("aeSaveStatus").textContent = "saved";
@@ -4163,7 +4725,9 @@ function buildFlowDetail() {
     });
   } else {
     cdiv.style.color = "var(--accent)";
-    cdiv.textContent = "ok — safezones overlap, shared position matches";
+    cdiv.textContent = from.zone === to.zone
+      ? "ok — in-zone link, connection poses within the zone safezone"
+      : "ok — safezones overlap, shared position matches";
   }
   el.appendChild(cdiv);
   const row = document.createElement("div");
@@ -4370,8 +4934,18 @@ function renameZone() {
     if (BRAIN.facefocus && BRAIN.facefocus.zones) {
       BRAIN.facefocus.zones = BRAIN.facefocus.zones.map((x) => x === nm ? clean : x);
     }
-    if (BRAIN.cam_control && BRAIN.cam_control[nm]) {
-      BRAIN.cam_control[clean] = BRAIN.cam_control[nm]; delete BRAIN.cam_control[nm];
+    if (BRAIN.cam_control) {
+      // cam_control is keyed by "zone/action"; re-point every entry whose zone prefix is the renamed zone.
+      for (const key of Object.keys(BRAIN.cam_control)) {
+        const slash = key.indexOf("/");
+        if (slash < 0) continue;
+        const zn = key.slice(0, slash);
+        if (zn === nm) {
+          const newKey = clean + key.slice(slash);  // clean + "/action"
+          BRAIN.cam_control[newKey] = BRAIN.cam_control[key];
+          delete BRAIN.cam_control[key];
+        }
+      }
     }
   }
   // 7. Flow node positions + selection.
@@ -4444,8 +5018,12 @@ $("delZone").onclick = delZone;
   $("tabPatches").onclick = () => switchView("patches");
   $("tabMidi").onclick = () => switchView("midi");
   $("tabFlow").onclick = () => switchView("flow");
+  $("tabGroups").onclick = () => switchView("groups");
   $("tabBrain").onclick = () => switchView("brain");
   $("tabValidate").onclick = () => switchView("validate");
+  $("addGroup").onclick = addGroup;
+  $("renameGroup").onclick = renameGroup;
+  $("removeGroup").onclick = removeGroup;
   buildValPoseSetter();
   $("valPoseGo").onclick = applyValPose;
   $("valCopyCollision").onclick = copyValCollisionPose;

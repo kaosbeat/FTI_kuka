@@ -44,6 +44,21 @@ _LOOK_FACTOR = 0.5
 _FACE_FACTOR = 0.5
 
 
+def _bp(machine, behavior, key, default):
+    """Read a per-behavior param off the machine's ``behavior_params``, else ``default``.
+
+    ``behavior_params`` is a plain dict the brain writes from the config (see
+    ``Brain.reload``); this keeps the behaviour policies pure (no config loading).
+    Missing section / behavior / key all fall back to ``default``.
+    """
+    params = getattr(machine, "behavior_params", None) or {}
+    entry = params.get(behavior)
+    if not isinstance(entry, dict):
+        return default
+    val = entry.get(key)
+    return val if isinstance(val, (int, float)) and not isinstance(val, bool) else default
+
+
 def safezone(machine) -> List:
     """The current zone's safezone (the per-axis soft limits)."""
     return machine.zones.get(machine.current_zone).safezone
@@ -77,8 +92,10 @@ def build_target(machine, curjpos: List[float]):
     Reads the *current* anchor (``poses[action_index]``), applies the action's wiggle
     (variable axes + behaviour) on top, and returns the pose. The non-variable axes
     stay at the current anchor; the variable axes are driven by the action's
-    behaviour. Returns ``None`` if there is no active action or the action has no
-    ``poses``.
+    behaviour. When ``machine.forced_behavior`` is set (live test override), the
+    forced behavior's policy runs on the action's variable axes instead of the
+    action's declared behavior. Returns ``None`` if there is no active action or
+    the action has no ``poses``.
     """
     if not machine.current_action:
         machine.servo_state = {}
@@ -92,8 +109,11 @@ def build_target(machine, curjpos: List[float]):
         return None  # no active action, or the action has no poses
     idx = machine.action_index if 0 <= machine.action_index < len(poses) else 0
     anchor = list(poses[idx])
+    # Forced behavior (live test override): run this behavior's policy on the
+    # action's variable axes regardless of the action's declared behavior.
+    active_behavior = machine.forced_behavior or zone.action_behavior(name)
     _apply_behavior(machine, anchor, zone.action_variable_axes(name),
-                    zone.action_behavior(name), curjpos, action)
+                    active_behavior, curjpos, action)
     return anchor
 
 
@@ -109,8 +129,9 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
 
     limits = effective(machine)
     # Visual-servoing gain: the fraction of the image error corrected per tick
-    # (dimensionless). An action may override it with its own ``gain`` field.
-    image_gain = _DEFAULT_IMAGE_GAIN
+    # (dimensionless). Priority: per-action ``gain`` (zones.json) > per-behavior
+    # ``gain`` (brain config) > built-in default.
+    image_gain = _bp(machine, behavior, "gain", _DEFAULT_IMAGE_GAIN)
     if isinstance(action, dict):
         g = action.get("gain")
         if isinstance(g, (int, float)) and not isinstance(g, bool) and g:
@@ -127,17 +148,29 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
     elif behavior == "spontaneous":
         _apply_random(pose, var_axes, limits)
     elif behavior == "soothing":
-        _apply_oscillation(machine, pose, var_axes, limits, freq=0.5, amp_scale=0.1)
+        _apply_oscillation(machine, pose, var_axes, limits,
+                           freq=_bp(machine, behavior, "freq", 0.5),
+                           amp_scale=_bp(machine, behavior, "amp_scale", 0.1))
     elif behavior == "agitated":
-        _apply_oscillation(machine, pose, var_axes, limits, freq=1.0, amp_scale=0.3)
+        _apply_oscillation(machine, pose, var_axes, limits,
+                           freq=_bp(machine, behavior, "freq", 1.0),
+                           amp_scale=_bp(machine, behavior, "amp_scale", 0.3))
     elif behavior == "aggressive":
-        _apply_oscillation(machine, pose, var_axes, limits, freq=1.0, amp_scale=0.3)
+        _apply_oscillation(machine, pose, var_axes, limits,
+                           freq=_bp(machine, behavior, "freq", 1.0),
+                           amp_scale=_bp(machine, behavior, "amp_scale", 0.3))
     elif behavior == "exhilarated":
-        _apply_oscillation(machine, pose, var_axes, limits, freq=2.0, amp_scale=0.5)
+        _apply_oscillation(machine, pose, var_axes, limits,
+                           freq=_bp(machine, behavior, "freq", 2.0),
+                           amp_scale=_bp(machine, behavior, "amp_scale", 0.5))
     elif behavior == "impatient":
-        _apply_oscillation(machine, pose, var_axes, limits, freq=1.0, amp_scale=0.3)
+        _apply_oscillation(machine, pose, var_axes, limits,
+                           freq=_bp(machine, behavior, "freq", 1.0),
+                           amp_scale=_bp(machine, behavior, "amp_scale", 0.3))
     elif behavior == "drowsy":
-        _apply_oscillation(machine, pose, var_axes, limits, freq=0.3, amp_scale=0.2)
+        _apply_oscillation(machine, pose, var_axes, limits,
+                           freq=_bp(machine, behavior, "freq", 0.3),
+                           amp_scale=_bp(machine, behavior, "amp_scale", 0.2))
 
 
 def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain, action) -> None:
@@ -168,8 +201,9 @@ def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain, action) -> N
     if not isinstance(dy, (int, float)) or isinstance(dy, bool):
         dy = 0.0
     if behavior == "curious":
-        dx *= _LOOK_FACTOR
-        dy *= _LOOK_FACTOR
+        look = _bp(machine, "curious", "look_factor", _LOOK_FACTOR)
+        dx *= look
+        dy *= look
     _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior)
 
 
@@ -188,8 +222,9 @@ def _apply_face(machine, pose, var_axes, curjpos, gain, action, behavior) -> Non
         dx = 0.0
     if not isinstance(dy, (int, float)) or isinstance(dy, bool):
         dy = 0.0
-    dx *= _FACE_FACTOR
-    dy *= _FACE_FACTOR
+    face = _bp(machine, "gentle", "face_factor", _FACE_FACTOR)
+    dx *= face
+    dy *= face
     _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior)
 
 
@@ -250,7 +285,7 @@ def _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior) -> 
 
 def _apply_scan(machine, pose, var_axes, limits) -> None:
     """Sweep variable axes back and forth within the safezone (sine oscillation)."""
-    t = machine.tick * 0.1
+    t = machine.tick * 0.1 * _bp(machine, "vigilant", "freq", 1.0)
     for axis in var_axes:
         lo, hi = limits[axis]
         center = (lo + hi) / 2.0
@@ -261,7 +296,8 @@ def _apply_scan(machine, pose, var_axes, limits) -> None:
 def _apply_wander(machine, pose, var_axes, limits, curjpos) -> None:
     """Gentle continuous drift of variable axes (the legacy wander policy)."""
     for axis in var_axes:
-        adj = machine.limitadjust[axis] if axis < len(machine.limitadjust) else 5.0
+        adj = machine.limitadjust[axis] if axis < len(machine.limitadjust) else \
+            _bp(machine, "restless", "wander_adj", 5.0)
         val = (0.5 - random.random()) * adj * (1.0 / machine.tick_hz)
         pose[axis] = fitlimits(axis, curjpos[axis] + val, limits)
 

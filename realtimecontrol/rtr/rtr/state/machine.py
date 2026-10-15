@@ -64,6 +64,10 @@ class StateMachine:
         # back to the legacy fixed-axis gain).
         self.chain = None
         self.camera_geometry = None
+        # Per-behavior motion params (the tunable knobs of rtr/state/behavior.py),
+        # set by Brain.reload() from the brain config's ``behaviors`` section. Empty
+        # dict when the config has no ``behaviors`` (the behavior defaults apply).
+        self.behavior_params: dict = {}
 
         # Per-axis wander nudge, in degrees per *trigger* (legacy meaning). Scaled by
         # 1/tick_hz so the overall drift rate is independent of the tick rate.
@@ -91,6 +95,11 @@ class StateMachine:
         # Control mode: "auto" (the brain drives autonomous decisions) or
         # "manual" (only explicit client commands move the robot).
         self.control_mode = "auto"
+        # Forced behavior (live test override): when set, the robot runs this
+        # behavior's motion policy regardless of the current action's declared
+        # behavior. Set by the enable_behavior command; cleared by clear_behavior.
+        # The robot keeps running (no freeze) while a behavior is forced.
+        self.forced_behavior: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Requested changes (called by the brain when a command arrives).
@@ -210,6 +219,29 @@ class StateMachine:
                 self.target_kind = "joint"
         self.control_mode = mode
         print(f"[state] control mode: {mode}")
+
+    def enable_behavior(self, behavior: str) -> None:
+        """Enable a forced behavior (live test override).
+
+        Sets ``forced_behavior`` so the behavior policies run this behavior's
+        motion regardless of the current action's declared behavior. Also sets
+        ``control_mode`` to ``"manual"`` to prevent the brain from auto-advancing
+        zones/actions, but does **not** freeze the robot (the action keeps
+        running so the forced behavior has variable axes to drive).
+        """
+        self.forced_behavior = behavior
+        self.control_mode = "manual"
+        print(f"[state] forced behavior: {behavior}")
+
+    def clear_behavior(self) -> None:
+        """Clear the forced behavior and return to auto mode.
+
+        The robot resumes autonomous navigation (``control_mode = "auto"``)
+        and the behavior policies use the current action's declared behavior.
+        """
+        self.forced_behavior = None
+        self.control_mode = "auto"
+        print("[state] forced behavior cleared; control mode: auto")
 
     # ------------------------------------------------------------------
     # Actions.
@@ -486,7 +518,10 @@ class StateMachine:
 
     @property
     def behavior(self) -> str:
-        """The current action's behaviour (the state-frame mode), or ``"calm"``."""
+        """The active behaviour: the forced behavior (if set), else the current
+        action's declared behaviour, else ``"calm"``."""
+        if self.forced_behavior is not None:
+            return self.forced_behavior
         if self.current_action:
             return self.zones.get(self.current_zone).action_behavior(self.current_action)
         return "calm"

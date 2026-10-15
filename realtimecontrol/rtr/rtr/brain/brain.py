@@ -64,7 +64,7 @@ class Brain:
         self._autonomy_action_start_ts = 0.0
         self._autonomy_prev: Optional[tuple] = None  # last (zone, action)
         self._autonomy_triggered = False  # event fired; advance on next tick
-        self._cam_zone = None  # last zone the camera intent was applied to
+        self._cam_action = None  # last (zone, action) the camera intent was applied to
         self._enabled_groups: set = set()
         self._enabled_zones: set = set()
         # Blocked candidates: (zone, action) pairs discarded by the safety gate in
@@ -92,6 +92,10 @@ class Brain:
             return
         self._config = cfg
         self._recompute_enabled()
+        # The behavior policies read these off the machine (behavior.py stays pure);
+        # a config without a ``behaviors`` section leaves the machine's defaults.
+        if self.machine is not None:
+            self.machine.behavior_params = cfg.get("behaviors", {})
         groups = cfg.get("zone_groups", {})
         # Zone-name cross-reference: warn (not reject) on unknown zone names so a
         # construction-time false negative never kills the core.
@@ -127,20 +131,20 @@ class Brain:
         return self._config.get("facefocus", {})
 
     def _cam_control(self) -> dict:
-        """The camera-control map (zone name -> ``{active, mode, lock}``)."""
+        """The camera-control map (``"zone/action"`` -> ``{active, mode, lock}``)."""
         return self._config.get("cam_control", {})
 
-    def _apply_zone_cam(self, zone: str) -> None:
-        """Apply the zone's camera intent (the ``cam_control`` entry).
+    def _apply_action_cam(self, zone: str, action: str) -> None:
+        """Apply the action's camera intent (the ``cam_control["zone/action"]`` entry).
 
-        Called on every zone change (regardless of autonomy): the zone's camera
+        Called on every action change (regardless of autonomy): the action's camera
         baseline is set here, and the hunt/facefocus logic overrides it while a
         person is actively tracked. ``lock: "auto"`` resolves to the current hunt
         lock (or None); ``"none"`` clears any lock; a specific id locks it.
         """
-        if self.camera is None or not zone:
+        if self.camera is None or not zone or not action:
             return
-        entry = self._cam_control().get(zone)
+        entry = self._cam_control().get(f"{zone}/{action}")
         if not isinstance(entry, dict):
             return
         active = entry.get("active")
@@ -285,6 +289,10 @@ class Brain:
             # Pass the current joint position so entering manual mode holds the
             # robot where it is (a freeze), not just stops new autonomous triggers.
             self.machine.set_control_mode(p.get("mode"), curjpos)
+        elif c == Cmd.ENABLE_BEHAVIOR:
+            self.machine.enable_behavior(p.get("behavior"))
+        elif c == Cmd.CLEAR_BEHAVIOR:
+            self.machine.clear_behavior()
         elif c == Cmd.CAM_STATUS:
             self._handle_cam_status(p)
         elif c == Cmd.CAM_CANDIDATES:
@@ -359,7 +367,9 @@ class Brain:
             self._cam_log("cand", "candidates: (none)")
         if not cands:
             return
-        min_conf = self._hunt_group().get("params", {}).get("min_conf", 0.1)
+        params = self._hunt_group().get("params", {})
+        min_conf = params.get("min_conf", 0.1)
+        centrality_weight = params.get("centrality_weight", 0.1)
         best = None
         best_score = -1
         for c in cands:
@@ -370,7 +380,7 @@ class Brain:
             cx = (c.get("x1", 0) + c.get("x2", 0)) / 2
             cy = (c.get("y1", 0) + c.get("y2", 0)) / 2
             dist = (cx - 0.5) ** 2 + (cy - 0.5) ** 2
-            score = conf - dist * 0.1  # confidence dominates, centrality breaks ties
+            score = conf - dist * centrality_weight  # confidence dominates, centrality breaks ties
             if score > best_score:
                 best_score = score
                 best = c
@@ -700,11 +710,12 @@ class Brain:
             # Clear blocked candidates when the state changes (the old blocked
             # targets are no longer relevant).
             self._clear_blocked_if_changed()
-        # The camera intent follows the zone (applied on every zone change,
+        # The camera intent follows the action (applied on every action change,
         # regardless of whether autonomy is on).
-        if self.machine.current_zone != self._cam_zone:
-            self._cam_zone = self.machine.current_zone
-            self._apply_zone_cam(self.machine.current_zone)
+        cur_cam = (self.machine.current_zone, self.machine.current_action)
+        if cur_cam != self._cam_action:
+            self._cam_action = cur_cam
+            self._apply_action_cam(self.machine.current_zone, self.machine.current_action)
         if not self._autonomy_cfg().get("enabled", False):
             return
         if self.machine.transitioning:

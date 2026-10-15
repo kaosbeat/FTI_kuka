@@ -275,6 +275,7 @@ class Engine:
             autonomy_dwell_remaining=info["dwell_remaining"],
             control_mode=self.machine.control_mode,
             action_index=self.machine.action_index,
+            forced_behavior=self.machine.forced_behavior,
         )
         self.bus.set_snapshot(snap)
         self.bus.publish(Event.SNAPSHOT, snap)

@@ -597,7 +597,11 @@ const Robot3D = (() => {
     dir.position.set(3, 4, 5);
     scene.add(dir);
 
-    scene.add(new THREE.GridHelper(8, 16, 0x3a4152, 0x1c2029));
+    // GridHelper lies on the XZ plane by default — a vertical wall in this Z-up scene.
+    // Rotate it 90° about X so it sits on the XY plane as a ground plane.
+    const grid = new THREE.GridHelper(8, 16, 0x3a4152, 0x1c2029);
+    grid.rotation.x = Math.PI / 2;
+    scene.add(grid);
 
     // The ghost (target) arm lives in its own group so the page can hide/show it as a
     // whole (its rotors are chained from this root; the shared base pedestal stays).

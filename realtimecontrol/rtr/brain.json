@@ -1,7 +1,7 @@
 {
   "autonomy": {
     "enabled": true,
-    "dwell_s": 30.0,
+    "dwell_s": 30,
     "events": {
       "midi": true,
       "camera": true,
@@ -10,37 +10,63 @@
   },
   "zone_groups": {
     "museum-closed": {
-      "zones": ["resting", "sleeping", "cuddling", "purring"],
+      "zones": [
+        "resting",
+        "sleeping",
+        "cuddling",
+        "purring"
+      ],
+      "behaviors": [],
       "enabled": true,
       "params": {
         "speed": 10,
-        "dwell_s": 60.0
+        "dwell_s": 60
       }
     },
     "event-sit-back": {
-      "zones": ["stretching", "hunting", "examining", "performing"],
+      "zones": [
+        "stretching",
+        "hunting",
+        "examining",
+        "performing"
+      ],
+      "behaviors": [],
       "enabled": true,
       "params": {
         "speed": 40,
-        "dwell_s": 30.0
+        "dwell_s": 30
       }
     },
     "stage-takeover": {
-      "zones": ["roaring", "growling", "clawing", "leaping"],
+      "zones": [
+        "roaring",
+        "growling",
+        "clawing",
+        "leaping"
+      ],
+      "behaviors": [],
       "enabled": true,
       "params": {
         "speed": 80,
-        "dwell_s": 15.0
+        "dwell_s": 15
       }
     }
   },
   "hunt": {
-    "zones": ["hunting"],
+    "zones": [
+      "hunting"
+    ],
     "enabled": true,
     "params": {
-      "lost_s": 2.0,
+      "lost_s": 2,
       "min_conf": 0.1,
-      "attention_guard": ["locked", "intent", "curious", "gentle"],
+      "centrality_weight": 0.1,
+      "attention_guard": [
+        "locked",
+        "intent",
+        "curious",
+        "gentle"
+      ],
       "detect": {
         "zone": "hunting",
         "action": "track"
@@ -52,74 +78,222 @@
     }
   },
   "facefocus": {
-    "zones": ["stretching"],
+    "zones": [
+      "stretching"
+    ],
     "enabled": true,
     "params": {
-      "actions": ["wink", "inspect", "call"],
-      "action_s": 3.0,
+      "actions": [
+        "wink",
+        "inspect",
+        "call"
+      ],
+      "action_s": 3,
       "face_lost_s": 2.5
     }
   },
   "cam_control": {
-    "resting": {
+    "resting/hold": {
       "active": "wide",
       "mode": "idle",
       "lock": "none"
     },
-    "sleeping": {
+    "resting/wake": {
       "active": "wide",
       "mode": "idle",
       "lock": "none"
     },
-    "cuddling": {
+    "sleeping/breathe": {
       "active": "wide",
       "mode": "idle",
       "lock": "none"
     },
-    "purring": {
+    "sleeping/snore": {
       "active": "wide",
       "mode": "idle",
       "lock": "none"
     },
-    "stretching": {
+    "sleeping/yawn": {
+      "active": "wide",
+      "mode": "idle",
+      "lock": "none"
+    },
+    "cuddling/breathe": {
+      "active": "wide",
+      "mode": "idle",
+      "lock": "none"
+    },
+    "cuddling/purr": {
+      "active": "wide",
+      "mode": "idle",
+      "lock": "none"
+    },
+    "purring/hold": {
+      "active": "wide",
+      "mode": "idle",
+      "lock": "none"
+    },
+    "purring/purr": {
+      "active": "wide",
+      "mode": "idle",
+      "lock": "none"
+    },
+    "stretching/look": {
       "active": "wide",
       "mode": "track",
       "lock": "auto"
     },
-    "hunting": {
+    "stretching/wink": {
       "active": "wide",
       "mode": "track",
       "lock": "auto"
     },
-    "examining": {
+    "stretching/inspect": {
+      "active": "wide",
+      "mode": "track",
+      "lock": "auto"
+    },
+    "stretching/call": {
+      "active": "wide",
+      "mode": "track",
+      "lock": "auto"
+    },
+    "hunting/track": {
+      "active": "wide",
+      "mode": "track",
+      "lock": "auto"
+    },
+    "hunting/track2": {
+      "active": "wide",
+      "mode": "track",
+      "lock": "auto"
+    },
+    "hunting/focus": {
+      "active": "wide",
+      "mode": "track",
+      "lock": "auto"
+    },
+    "hunting/scan": {
+      "active": "wide",
+      "mode": "track",
+      "lock": "auto"
+    },
+    "examining/focus": {
       "active": "close",
       "mode": "analyze",
       "lock": "auto"
     },
-    "performing": {
+    "examining/face": {
+      "active": "close",
+      "mode": "analyze",
+      "lock": "auto"
+    },
+    "performing/trick": {
       "active": "both",
       "mode": "track",
       "lock": "auto"
     },
-    "roaring": {
+    "performing/bow": {
+      "active": "both",
+      "mode": "track",
+      "lock": "auto"
+    },
+    "roaring/roar": {
       "active": "wide",
       "mode": "track",
       "lock": "auto"
     },
-    "growling": {
+    "roaring/snarl": {
       "active": "wide",
       "mode": "track",
       "lock": "auto"
     },
-    "clawing": {
+    "growling/growl": {
+      "active": "wide",
+      "mode": "track",
+      "lock": "auto"
+    },
+    "growling/snarl": {
+      "active": "wide",
+      "mode": "track",
+      "lock": "auto"
+    },
+    "clawing/claw": {
       "active": "close",
       "mode": "analyze",
       "lock": "auto"
     },
-    "leaping": {
+    "clawing/grab": {
+      "active": "close",
+      "mode": "analyze",
+      "lock": "auto"
+    },
+    "leaping/leap": {
       "active": "wide",
       "mode": "track",
       "lock": "auto"
+    },
+    "leaping/pacing": {
+      "active": "wide",
+      "mode": "track",
+      "lock": "auto"
+    },
+    "resting_sleeping_bridge/bridge": {
+      "active": "wide",
+      "mode": "idle",
+      "lock": "none"
+    },
+    "stretching_hunting_bridge/bridge": {
+      "active": "wide",
+      "mode": "idle",
+      "lock": "none"
+    }
+  },
+  "behaviors": {
+    "locked": {
+      "gain": 0.3
+    },
+    "curious": {
+      "gain": 0.3,
+      "look_factor": 0.5
+    },
+    "intent": {
+      "gain": 0.3
+    },
+    "gentle": {
+      "gain": 0.3,
+      "face_factor": 0.5
+    },
+    "vigilant": {
+      "freq": 1
+    },
+    "restless": {
+      "wander_adj": 5
+    },
+    "spontaneous": {},
+    "soothing": {
+      "freq": 0.5,
+      "amp_scale": 0.1
+    },
+    "agitated": {
+      "freq": 1,
+      "amp_scale": 0.5
+    },
+    "aggressive": {
+      "freq": 1,
+      "amp_scale": 0.3
+    },
+    "exhilarated": {
+      "freq": 2,
+      "amp_scale": 0.5
+    },
+    "impatient": {
+      "freq": 1,
+      "amp_scale": 0.3
+    },
+    "drowsy": {
+      "freq": 0.3,
+      "amp_scale": 0.2
     }
   }
 }

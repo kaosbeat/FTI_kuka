@@ -21,7 +21,7 @@ Shape::
       },
       "hunt":      { "zones": [...], "enabled": true, "params": {...} },
       "facefocus": { "zones": [...], "enabled": true, "params": {...} },
-      "cam_control": { "home": { "active": "wide", "mode": "idle", "lock": "none" }, ... }
+      "cam_control": { "home/rest": { "active": "wide", "mode": "idle", "lock": "none" }, ... }
     }
 
 - ``autonomy.enabled`` — master switch for autonomous navigation (following a
@@ -42,9 +42,10 @@ Shape::
 - ``facefocus`` (top-level): the "check out that human" face actions. Its
   ``params`` carry the face-cycling data (``actions``, ``action_s``,
   ``face_lost_s``).
-- ``cam_control`` (top-level): the per-zone camera baseline (``active`` camera,
-  ``mode``, and ``lock`` = ``"none"`` | ``"auto"`` | a specific id). Applied on
-  every zone change; the hunt/facefocus logic overrides it while tracking.
+- ``cam_control`` (top-level): the per-action camera baseline, keyed by
+  ``"zone/action"`` (``active`` camera, ``mode``, and ``lock`` = ``"none"`` |
+  ``"auto"`` | a specific id). Applied on every action change; the hunt/facefocus
+  logic overrides it while tracking.
 """
 
 import copy
@@ -55,6 +56,27 @@ from typing import Any, Dict
 # defined here — rather than imported — to avoid the core↔brain import cycle).
 CAMERA_CHOICES = ("wide", "close", "both")
 CAMERA_MODES = ("idle", "track", "analyze")
+
+# The per-behavior motion parameters (the tunable knobs of the motion policies in
+# ``rtr/state/behavior.py``). Values match the historical hardcoded constants so a
+# ``brain.json`` without a ``behaviors`` section is a no-op. Only the parameterized
+# behaviors carry entries: ``calm`` / ``bridge`` are no-ops and ``spontaneous`` has
+# no tunable knob.
+DEFAULT_BEHAVIORS: Dict[str, dict] = {
+    "locked":      {"gain": 0.3},
+    "curious":     {"gain": 0.3, "look_factor": 0.5},
+    "intent":      {"gain": 0.3},
+    "gentle":      {"gain": 0.3, "face_factor": 0.5},
+    "vigilant":    {"freq": 1.0},
+    "restless":    {"wander_adj": 5.0},
+    "spontaneous": {},
+    "soothing":    {"freq": 0.5, "amp_scale": 0.1},
+    "agitated":    {"freq": 1.0, "amp_scale": 0.3},
+    "aggressive":  {"freq": 1.0, "amp_scale": 0.3},
+    "exhilarated": {"freq": 2.0, "amp_scale": 0.5},
+    "impatient":   {"freq": 1.0, "amp_scale": 0.3},
+    "drowsy":      {"freq": 0.3, "amp_scale": 0.2},
+}
 
 # The autonomy + mode-group + hunt/facefocus + cam_control decision parameters,
 # with their default values. ``builtin_brain_config()`` is a faithful stand-in for
@@ -88,6 +110,7 @@ DEFAULT_BRAIN_CONFIG: Dict[str, Any] = {
         "params": {
             "lost_s": 2.0,
             "min_conf": 0.1,
+            "centrality_weight": 0.1,
             "attention_guard": ["locked", "intent", "curious", "gentle"],
             "detect": {"zone": "hunting", "action": "track"},
             "scan": {"zone": "hunting", "action": "scan"},
@@ -103,19 +126,37 @@ DEFAULT_BRAIN_CONFIG: Dict[str, Any] = {
         },
     },
     "cam_control": {
-        "resting": {"active": "wide", "mode": "idle", "lock": "none"},
-        "sleeping": {"active": "wide", "mode": "idle", "lock": "none"},
-        "cuddling": {"active": "wide", "mode": "idle", "lock": "none"},
-        "purring": {"active": "wide", "mode": "idle", "lock": "none"},
-        "stretching": {"active": "wide", "mode": "track", "lock": "auto"},
-        "hunting": {"active": "wide", "mode": "track", "lock": "auto"},
-        "examining": {"active": "close", "mode": "analyze", "lock": "auto"},
-        "performing": {"active": "both", "mode": "track", "lock": "auto"},
-        "roaring": {"active": "wide", "mode": "track", "lock": "auto"},
-        "growling": {"active": "wide", "mode": "track", "lock": "auto"},
-        "clawing": {"active": "close", "mode": "analyze", "lock": "auto"},
-        "leaping": {"active": "wide", "mode": "track", "lock": "auto"},
+        "resting/hold": {"active": "wide", "mode": "idle", "lock": "none"},
+        "resting/wake": {"active": "wide", "mode": "idle", "lock": "none"},
+        "sleeping/breathe": {"active": "wide", "mode": "idle", "lock": "none"},
+        "sleeping/snore": {"active": "wide", "mode": "idle", "lock": "none"},
+        "sleeping/yawn": {"active": "wide", "mode": "idle", "lock": "none"},
+        "cuddling/breathe": {"active": "wide", "mode": "idle", "lock": "none"},
+        "cuddling/purr": {"active": "wide", "mode": "idle", "lock": "none"},
+        "purring/hold": {"active": "wide", "mode": "idle", "lock": "none"},
+        "purring/purr": {"active": "wide", "mode": "idle", "lock": "none"},
+        "stretching/look": {"active": "wide", "mode": "track", "lock": "auto"},
+        "stretching/wink": {"active": "wide", "mode": "track", "lock": "auto"},
+        "stretching/inspect": {"active": "wide", "mode": "track", "lock": "auto"},
+        "stretching/call": {"active": "wide", "mode": "track", "lock": "auto"},
+        "hunting/track": {"active": "wide", "mode": "track", "lock": "auto"},
+        "hunting/track2": {"active": "wide", "mode": "track", "lock": "auto"},
+        "hunting/focus": {"active": "wide", "mode": "track", "lock": "auto"},
+        "hunting/scan": {"active": "wide", "mode": "track", "lock": "auto"},
+        "examining/focus": {"active": "close", "mode": "analyze", "lock": "auto"},
+        "examining/face": {"active": "close", "mode": "analyze", "lock": "auto"},
+        "performing/trick": {"active": "both", "mode": "track", "lock": "auto"},
+        "performing/bow": {"active": "both", "mode": "track", "lock": "auto"},
+        "roaring/roar": {"active": "wide", "mode": "track", "lock": "auto"},
+        "roaring/snarl": {"active": "wide", "mode": "track", "lock": "auto"},
+        "growling/growl": {"active": "wide", "mode": "track", "lock": "auto"},
+        "growling/snarl": {"active": "wide", "mode": "track", "lock": "auto"},
+        "clawing/claw": {"active": "close", "mode": "analyze", "lock": "auto"},
+        "clawing/grab": {"active": "close", "mode": "analyze", "lock": "auto"},
+        "leaping/leap": {"active": "wide", "mode": "track", "lock": "auto"},
+        "leaping/pacing": {"active": "wide", "mode": "track", "lock": "auto"},
     },
+    "behaviors": DEFAULT_BEHAVIORS,
 }
 
 # The known params shapes (validated); used to fill defaults when a section omits
@@ -123,6 +164,7 @@ DEFAULT_BRAIN_CONFIG: Dict[str, Any] = {
 _HUNT_PARAMS = {
     "lost_s": 2.0,
     "min_conf": 0.1,
+    "centrality_weight": 0.1,
     "attention_guard": ["locked", "intent", "curious", "gentle"],
     "detect": {"zone": "hunting", "action": "track"},
     "scan": {"zone": "hunting", "action": "scan"},
@@ -193,8 +235,10 @@ def _validate_hunt_params(p: dict, where: str) -> dict:
     return {
         "lost_s": _num(p.get("lost_s"), f"{where}.lost_s", d["lost_s"]),
         "min_conf": _num(p.get("min_conf"), f"{where}.min_conf", d["min_conf"]),
+        "centrality_weight": _num(p.get("centrality_weight"), f"{where}.centrality_weight",
+                                   d["centrality_weight"]),
         "attention_guard": _str_list(p.get("attention_guard"), f"{where}.attention_guard",
-                                     d["attention_guard"]),
+                                      d["attention_guard"]),
         "detect": _zone_action(p.get("detect"), f"{where}.detect", d["detect"]),
         "scan": _zone_action(p.get("scan"), f"{where}.scan", d["scan"]),
     }
@@ -208,6 +252,29 @@ def _validate_facefocus_params(p: dict, where: str) -> dict:
         "action_s": _num(p.get("action_s"), f"{where}.action_s", d["action_s"]),
         "face_lost_s": _num(p.get("face_lost_s"), f"{where}.face_lost_s", d["face_lost_s"]),
     }
+
+
+def _validate_behaviors_section(data: Any) -> dict:
+    """Validate the per-behavior motion params (the tunable knobs of behavior.py).
+
+    Known behaviors (see :data:`DEFAULT_BEHAVIORS`) are always present in the result
+    — missing keys are filled from the defaults so the runtime always sees a complete
+    section. Unknown behavior names are ignored (dropped); present params are
+    type-checked as numbers.
+    """
+    if data is not None and not isinstance(data, dict):
+        raise ValueError("'behaviors' must be an object")
+    data = data or {}
+    result: Dict[str, dict] = {}
+    for name, defaults in DEFAULT_BEHAVIORS.items():
+        entry = data.get(name)
+        if not isinstance(entry, dict):
+            entry = {}
+        out: dict = {}
+        for key, default in defaults.items():
+            out[key] = _num(entry.get(key), f"behaviors.{name}.{key}", default)
+        result[name] = out
+    return result
 
 
 def _validate_mode_group(name: str, g: Any) -> dict:
@@ -239,9 +306,9 @@ def _validate_mode_group(name: str, g: Any) -> dict:
     return result
 
 
-def _validate_cam_entry(zone: str, entry: Any) -> dict:
-    """Validate a single ``cam_control`` entry: ``{active, mode, lock}``."""
-    where = f"cam_control.{zone}"
+def _validate_cam_entry(key: str, entry: Any) -> dict:
+    """Validate a single ``cam_control`` entry (keyed by ``"zone/action"``): ``{active, mode, lock}``."""
+    where = f"cam_control.{key}"
     if not isinstance(entry, dict):
         raise ValueError(f"'{where}' must be an object")
     active = entry.get("active", "wide")
@@ -330,13 +397,16 @@ def validate_brain_config(data: Any) -> dict:
             ff_params if isinstance(ff_params, dict) else {}, "facefocus.params"),
     }
 
-    # --- cam_control (top-level) -------------------------------------------
+    # --- cam_control (top-level, keyed by "zone/action") -------------------
     cam = data.get("cam_control")
     if cam is not None and not isinstance(cam, dict):
         raise ValueError("'cam_control' must be an object")
     cam = cam or {}
-    cam_control = {zone: _validate_cam_entry(zone, entry)
-                  for zone, entry in cam.items()}
+    cam_control = {key: _validate_cam_entry(key, entry)
+                  for key, entry in cam.items()}
+
+    # --- behaviors (top-level) ---------------------------------------------
+    behaviors_cfg = _validate_behaviors_section(data.get("behaviors"))
 
     return {
         "autonomy": autonomy_cfg,
@@ -344,6 +414,7 @@ def validate_brain_config(data: Any) -> dict:
         "hunt": hunt_cfg,
         "facefocus": ff_cfg,
         "cam_control": cam_control,
+        "behaviors": behaviors_cfg,
     }
 
 

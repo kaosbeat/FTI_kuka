@@ -163,6 +163,10 @@ def _nav_content(state, zones, items, cursor, current_len, width):
     action = state.get("action", "—")
     rows.append({"pairs": [("ZONE", zone), ("MODE", mode), ("ACTION", action)],
                  "style": "state"})
+    cm = state.get("control_mode") or "—"
+    forced = state.get("forced_behavior")
+    forced_s = forced if forced else "—"
+    rows.append({"pairs": [("CONTROL", cm), ("FORCED", forced_s)], "style": "state"})
     moving = state.get("moving")
     speed = state.get("speed", "—")
     mv = "—" if moving is None else ("yes" if moving else "no")
@@ -232,7 +236,7 @@ def _camera_content(cam_telem, cursor, current_len, width):
 
 
 def _brain_content(state):
-    """Page 2: robot state map (zone, mode, action, heading)."""
+    """Page 2: robot state map (zone, mode, action, behavior, heading)."""
     rows = []
     rows.append({"text": "  BRAIN", "style": "label"})
     rows.append({"style": "divider"})
@@ -241,6 +245,15 @@ def _brain_content(state):
     action = state.get("action", "—")
     rows.append({"pairs": [("ZONE", zone), ("MODE", mode), ("ACTION", action)],
                  "style": "state"})
+    behavior = state.get("behavior") or "—"
+    bp = state.get("behavior_params")
+    params = "—" if not bp else " ".join(f"{k}={v}" for k, v in bp.items())
+    forced = state.get("forced_behavior")
+    forced_s = f" ({forced})" if forced else ""
+    rows.append({"pairs": [("BEHAVIOR", behavior + forced_s), ("PARAMS", params)],
+                 "style": "state"})
+    cm = state.get("control_mode") or "—"
+    rows.append({"pairs": [("CONTROL", cm)], "style": "state"})
     moving = state.get("moving")
     speed = state.get("speed", "—")
     mv = "—" if moving is None else ("yes" if moving else "no")
@@ -257,6 +270,8 @@ def _brain_content(state):
     rows.append({"text": f"  zone: {zone}", "style": "text"})
     rows.append({"text": f"  mode: {mode}", "style": "text"})
     rows.append({"text": f"  action: {action}", "style": "text"})
+    if forced:
+        rows.append({"text": f"  forced: {forced}", "style": "text"})
     return rows
 
 
@@ -389,7 +404,9 @@ class RemoteState:
                data.get("hunt", {}).get("state"),
                data.get("hunt", {}).get("feral"),
                data.get("move_mode"), data.get("cadence"),
-               data.get("cadence_every"))
+               data.get("cadence_every"),
+               data.get("behavior"), data.get("behavior_params"),
+               data.get("forced_behavior"), data.get("control_mode"))
         if key != self.state_key:
             self.state = {
                 "zone": data.get("zone"),
@@ -397,6 +414,10 @@ class RemoteState:
                 "action": data.get("action"),
                 "moving": data.get("moving"),
                 "speed": data.get("speed"),
+                "behavior": data.get("behavior"),
+                "behavior_params": data.get("behavior_params"),
+                "forced_behavior": data.get("forced_behavior"),
+                "control_mode": data.get("control_mode"),
             }
             self.state_key = key
             self.rebuild_items()
