@@ -226,7 +226,7 @@ def test_pak_config_is_valid_and_loads():
         data = json.load(f)
     # Key PAK fields present and sane.
     assert data["repo"] == "/storage/rtr-remote"
-    assert data["width"] == 320 and data["screen_height"] == 240
+    assert data["width"] == 1024 and data["screen_height"] == 768
     assert data["font"].endswith("DejaVuSansMono.ttf")
     assert "310" in data["joy_map"] and "311" in data["joy_map"]
     # Loads into a Config with int-normalised joy_map keys.

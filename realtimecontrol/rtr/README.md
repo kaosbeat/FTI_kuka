@@ -107,7 +107,7 @@ starts folding commands into ticks.
 | `core/engine.py`  | The asyncio tick loop that drives everything (robot I/O in threads).  |
 | `core/bus.py`     | `StateBus`: thread-safe state store + command queue + event pub/sub.  |
 | `core/commands.py`| Command + event + Snapshot type definitions (the core's API).         |
-| `state/machine.py`| `StateMachine`: the single owner of the robot's composite state (zone, mode, action, target, speed, flags, cadence); drives the transition and the behaviour each tick. Deterministic. |
+| `state/machine.py`| `StateMachine`: the single owner of the robot's composite state (zone, mode, action, target, speed, cadence); drives the transition and the behaviour each tick. Deterministic. |
 | `state/behavior.py`| The motion policies (wander / random / track) + clamp helpers, as free functions the machine's `step` dispatches to. |
 | `state/zones.py`  | Zone/pose data (safe areas, start/exit poses, per-edge `exitposes`, per-zone default `mode`, actions, named poses). |
 | `brain/brain.py`  | `Brain`: a thin **command interpreter** — maps `Command` objects onto the machine's operations; holds no robot state. The plug-in seam for the LLM / realtime control. |
@@ -142,9 +142,9 @@ camera.
 
 The `StateMachine` is the **single owner of the robot's composite state** —
 `(zone, mode, action)` plus the in-progress transition, the current target pose, the
-move speed, the informational flags, and the behaviour cadence. It used to be split:
+move speed, and the behaviour cadence. It used to be split:
 the machine owned (zone, transition, action) and the `Brain` owned (mode, target,
-flags, cadence). That split is gone. The `Brain` is now a **thin command interpreter**
+cadence). That split is gone. The `Brain` is now a **thin command interpreter**
 that maps incoming `Command` objects onto the machine's operations and holds no state of
 its own; the per-tick decision is made by the machine's `step` driver, which dispatches
 to the pure motion policies in `state/behavior.py` (wander / random / track + the clamp
@@ -276,7 +276,6 @@ Inputs are **commands** (see `core/commands.py`). They are flat JSON, e.g.
 | `set_joint_pose`  | Move to a specific 6-axis joint pose (then `hold`).|
 | `set_linear_pose` | Move to a cartesian pose (linear). Not simulated.  |
 | `adjust_limit`    | Nudge a wander drift limit A1/A2/A3 (MIDI CC 20/21/22). |
-| `set_flag`        | Toggle an informational flag (`wandermode`, `dynmode`, ...). |
 | `random_wrist`    | Randomise A4/A5 of the current target (then `hold`).|
 | `set_screen_patch`| Push a hydra patch to the screens (sets the `Patches` screen override); `code: null` clears it so the screens follow the live state match. |
 | `stop`            | Defined in the `Cmd` enum but **not handled** (the brain's `on_command` has no case for it) — currently a no-op. |
@@ -286,7 +285,7 @@ Outputs are **events** the `StateBus` publishes: a full `snapshot` each tick, pl
 `(zone, mode, action)` to the previous tick and publishes each that changed (so the
 camera and display handlers, which subscribe to them, fire for real). The `snapshot` is a
 flat JSON structure (`zone`, `mode`, `action`, `joint_pose`, `cart_pose`, `target_pose`,
-`speed`, `flags`, `moving`) — this is what the display and any external client see.
+`speed`, `moving`) — this is what the display and any external client see.
 
 ### The behaviour modes
 
@@ -319,7 +318,7 @@ client. Two directions, one port (default 8765):
 
 `client.html` is a browser page (no build step) that opens a WebSocket to the core and
 is the hand-rolled stand-in for P5live. It shows the current state (zone / mode / action
-/ speed / moving / flags), all six axes with their target and position within the current
+/ speed / moving), all six axes with their target and position within the current
 zone's safezone, and a live log; and it sends commands (zone buttons, mode buttons, action
 buttons, a 6-axis joint-pose editor, wander-limit sliders, random-wrist). It also has a
 **patch chooser** that previews a hydra patch and pushes the selected slot to the screens
@@ -717,11 +716,9 @@ default until `midi.json` supplies one.
 - **CC3 (value `i`)** → plays the `i`-th action (**1-based**) in the current zone; `0` clears.
   The index is resolved against the current zone's action table (in order), so it tracks
   hot-reloaded zone data; a bad index or a zone with no actions is a logged no-op.
-- **CC13** → `set_flag` (`dynvel`); **CC20/21/22** → `adjust_limit`; **CC30 (1/2)** →
-  `set_mode` (`random`/`wander`).
-- **Note ch1** 41/42/73/74 → `set_flag` (`wandermode`/`randomwristmode`/`dynmode`/`reachmode`);
-  **ch1/ch2** 61-64 → `set_joint_pose` (named poses); **ch3** → `random_wrist`; **ch6** →
-  `set_linear_pose`.
+- **CC20/21/22** → `adjust_limit`; **CC30 (1/2)** → `set_mode` (`random`/`wander`).
+- **Note ch1/ch2** 61-64 → `set_joint_pose` (named poses); **ch3** → `random_wrist`;
+  **ch6** → `set_linear_pose`.
 
 **Learn.** The editor captures a live controller message and writes it into the mapping.
 `POST /api/midi/learn` with `{"action": "start"}` arms the capture on the running

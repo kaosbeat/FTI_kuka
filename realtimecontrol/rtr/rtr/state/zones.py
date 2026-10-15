@@ -5,15 +5,25 @@ grouped into mode groups (``museum-closed``, ``event-sit-back``,
 ``stage-takeover``) and linked via zone-level ``exits`` (list of ``[zone, action]``
 pairs) and actions' ``next`` fields.
 
-Each action declares one of two forms:
+Every action uses a single unified form:
 
-- **Variable-axis form**: ``base_pose`` + ``variable_axes`` + ``behavior`` +
-  ``speed`` (+ optional ``loop`` and ``next``). The non-variable axes are held
-  at ``base_pose``; the variable axes are driven by the named behavior policy.
-- **Legacy fixed-pose form**: ``pos`` (list of poses) + ``speed`` (list of
-  speeds) + ``loop`` (+ optional ``next``). Steps through the pose sequence.
+- ``poses``: a non-empty ordered list of full 6-axis *anchor* poses the robot
+  steps through (on the machine's cadence). A single-anchor action (``poses:
+  [[...]]``) is a resting pose; a multi-anchor action steps through them.
+- ``variable_axes``: a list of axis indices (0-5) driven by the behaviour policy
+  (the wiggle). Default ``[]`` (no wiggle — the anchors are held exactly).
+- ``behavior``: one of :data:`BEHAVIORS`. Default ``"calm"``. ``calm`` / ``bridge``
+  are no-op policies (they drive no variable axes).
+- ``speed``: a single move-speed number (absent → the zone speed).
+- ``loop``: bool, default ``true``. ``false`` = run once, then hand off via ``next``.
+- ``next``: a single ``{zone, action}`` dict or an ordered list of them (unchanged).
+- ``enabled``: bool, default true (unchanged).
 
-An action has either ``base_pose`` or ``pos``, not both.
+The wiggle (variable axes + behaviour) is applied on top of the *current* anchor
+every tick; the non-variable axes are pinned to the current anchor. Both the
+former variable-axis form (``base_pose`` + wiggle) and the former legacy
+fixed-pose form (a ``pos`` sequence, no wiggle) are expressible as special cases
+of this unified form.
 """
 
 import json
@@ -87,7 +97,7 @@ ZONES: Dict[str, dict] = {
         "exits": [('sleeping', 'breathe'), ('cuddling', 'breathe'), ('stretching', 'look'), ('hunting', 'track')],
         "actions": {
             "hold": {
-                "base_pose": [-60, -90, 90, 0, 15, 0],
+                "poses": [[-60, -90, 90, 0, 15, 0]],
                 "variable_axes": [],
                 "behavior": 'calm',
                 "speed": 20,
@@ -95,7 +105,7 @@ ZONES: Dict[str, dict] = {
                 "next": {}
             },
             "wake": {
-                "base_pose": [-60, -90, 90, 0, 15, 0],
+                "poses": [[-60, -90, 90, 0, 15, 0]],
                 "variable_axes": [0, 1, 2, 4],
                 "behavior": 'restless',
                 "speed": 20,
@@ -112,19 +122,21 @@ ZONES: Dict[str, dict] = {
         "exits": [('cuddling', 'breathe'), ('purring', 'purr'), ('resting', 'hold'), ('stretching', 'look')],
         "actions": {
             "breathe": {
-                "pos": [[-3, -133, 156, -2, 0, 0], [-5, -130, 155, -2, 0, 0], [0, -134, 157, -2, 0, 0]],
-                "speed": [10, 50, 10],
+                "poses": [[-3, -133, 156, -2, 0, 0], [-5, -130, 155, -2, 0, 0], [0, -134, 157, -2, 0, 0]],
+                "variable_axes": [],
+                "behavior": 'calm',
                 "loop": True,
                 "next": {}
             },
             "snore": {
-                "pos": [[-3, -133, 156, -2, 0, 0], [-3, -133, 156, -2, 5, 0]],
-                "speed": [5, 5],
+                "poses": [[-3, -133, 156, -2, 0, 0], [-3, -133, 156, -2, 5, 0]],
+                "variable_axes": [],
+                "behavior": 'calm',
                 "loop": True,
                 "next": {}
             },
             "yawn": {
-                "base_pose": [-3, -133, 156, -2, 0, 0],
+                "poses": [[-3, -133, 156, -2, 0, 0]],
                 "variable_axes": [4],
                 "behavior": 'vigilant',
                 "speed": 10,
@@ -141,13 +153,14 @@ ZONES: Dict[str, dict] = {
         "exits": [('purring', 'purr'), ('sleeping', 'breathe'), ('resting', 'wake')],
         "actions": {
             "breathe": {
-                "pos": [[-3, -133, 156, -2, 0, 0], [-2, -132, 156, -2, 0, 0], [-4, -134, 156, -2, 0, 0]],
-                "speed": [10, 50, 10],
+                "poses": [[-3, -133, 156, -2, 0, 0], [-2, -132, 156, -2, 0, 0], [-4, -134, 156, -2, 0, 0]],
+                "variable_axes": [],
+                "behavior": 'calm',
                 "loop": True,
                 "next": {}
             },
             "purr": {
-                "base_pose": [-3, -133, 156, -2, 0, 0],
+                "poses": [[-3, -133, 156, -2, 0, 0]],
                 "variable_axes": [0, 2],
                 "behavior": 'soothing',
                 "speed": 10,
@@ -164,7 +177,7 @@ ZONES: Dict[str, dict] = {
         "exits": [('sleeping', 'breathe'), ('resting', 'hold'), ('cuddling', 'breathe')],
         "actions": {
             "hold": {
-                "base_pose": [-3, -133, 156, -2, 0, 0],
+                "poses": [[-3, -133, 156, -2, 0, 0]],
                 "variable_axes": [],
                 "behavior": 'calm',
                 "speed": 20,
@@ -172,7 +185,7 @@ ZONES: Dict[str, dict] = {
                 "next": {}
             },
             "purr": {
-                "base_pose": [-3, -133, 156, -2, 0, 0],
+                "poses": [[-3, -133, 156, -2, 0, 0]],
                 "variable_axes": [0, 2],
                 "behavior": 'soothing',
                 "speed": 10,
@@ -189,13 +202,14 @@ ZONES: Dict[str, dict] = {
         "exits": [('hunting', 'track'), ('examining', 'focus'), ('performing', 'trick'), ('resting', 'hold'), ('roaring', 'roar')],
         "actions": {
             "look": {
-                "pos": [[85, -97, 17, -2, 0.3, 0], [80, -97, 15, -2, 3, 0], [90, -97, 19, -2, -3, 0]],
-                "speed": [100, 50, 100],
+                "poses": [[85, -97, 17, -2, 0.3, 0], [80, -97, 15, -2, 3, 0], [90, -97, 19, -2, -3, 0]],
+                "variable_axes": [],
+                "behavior": 'calm',
                 "loop": True,
                 "next": {}
             },
             "wink": {
-                "base_pose": [85, -97, 17, -2, 0.3, 0],
+                "poses": [[85, -97, 17, -2, 0.3, 0]],
                 "variable_axes": [4, 5],
                 "behavior": 'gentle',
                 "speed": 100,
@@ -203,7 +217,7 @@ ZONES: Dict[str, dict] = {
                 "next": {}
             },
             "inspect": {
-                "base_pose": [85, -97, 17, -2, 0.3, 0],
+                "poses": [[85, -97, 17, -2, 0.3, 0]],
                 "variable_axes": [4, 5],
                 "behavior": 'gentle',
                 "speed": 100,
@@ -211,7 +225,7 @@ ZONES: Dict[str, dict] = {
                 "next": {}
             },
             "call": {
-                "base_pose": [85, -97, 17, -2, 0.3, 0],
+                "poses": [[85, -97, 17, -2, 0.3, 0]],
                 "variable_axes": [4, 5],
                 "behavior": 'gentle',
                 "speed": 100,
@@ -228,7 +242,7 @@ ZONES: Dict[str, dict] = {
         "exits": [('examining', 'focus'), ('stretching', 'look'), ('performing', 'trick'), ('growling', 'growl')],
         "actions": {
             "track": {
-                "base_pose": [-3, -133, 156, -2, 45, 0],
+                "poses": [[-3, -133, 156, -2, 45, 0]],
                 "variable_axes": [3, 4],
                 "behavior": 'locked',
                 "speed": 20,
@@ -236,7 +250,7 @@ ZONES: Dict[str, dict] = {
                 "next": {}
             },
             "focus": {
-                "base_pose": [-3, -133, 156, -2, 45, 0],
+                "poses": [[-3, -133, 156, -2, 45, 0]],
                 "variable_axes": [4],
                 "behavior": 'intent',
                 "speed": 20,
@@ -244,7 +258,7 @@ ZONES: Dict[str, dict] = {
                 "next": {}
             },
             "scan": {
-                "base_pose": [-3, -133, 156, -2, 45, 0],
+                "poses": [[-3, -133, 156, -2, 45, 0]],
                 "variable_axes": [4],
                 "behavior": 'vigilant',
                 "speed": 20,
@@ -261,7 +275,7 @@ ZONES: Dict[str, dict] = {
         "exits": [('hunting', 'track'), ('stretching', 'call'), ('performing', 'trick')],
         "actions": {
             "focus": {
-                "base_pose": [-3, -133, 156, -2, 45, 0],
+                "poses": [[-3, -133, 156, -2, 45, 0]],
                 "variable_axes": [4],
                 "behavior": 'intent',
                 "speed": 20,
@@ -269,7 +283,7 @@ ZONES: Dict[str, dict] = {
                 "next": {}
             },
             "face": {
-                "base_pose": [-3, -133, 156, -2, 45, 0],
+                "poses": [[-3, -133, 156, -2, 45, 0]],
                 "variable_axes": [4, 5],
                 "behavior": 'gentle',
                 "speed": 20,
@@ -286,14 +300,16 @@ ZONES: Dict[str, dict] = {
         "exits": [('hunting', 'track'), ('stretching', 'look'), ('roaring', 'roar')],
         "actions": {
             "trick": {
-                "pos": [[-3, -97, 16, -2, 20, 0], [0, -95, 15, -2, 30, 0], [-5, -90, 17, -2, 10, 0]],
-                "speed": [40, 40, 40],
+                "poses": [[-3, -97, 16, -2, 20, 0], [0, -95, 15, -2, 30, 0], [-5, -90, 17, -2, 10, 0]],
+                "variable_axes": [],
+                "behavior": 'calm',
                 "loop": True,
                 "next": {}
             },
             "bow": {
-                "pos": [[-3, -97, 16, -2, 20, 0], [0, -95, 15, -2, 40, 0], [-3, -90, 16, -2, 50, 0]],
-                "speed": [40, 40, 40],
+                "poses": [[-3, -97, 16, -2, 20, 0], [0, -95, 15, -2, 40, 0], [-3, -90, 16, -2, 50, 0]],
+                "variable_axes": [],
+                "behavior": 'calm',
                 "loop": True,
                 "next": {}
             }
@@ -307,14 +323,16 @@ ZONES: Dict[str, dict] = {
         "exits": [('growling', 'growl'), ('clawing', 'claw'), ('leaping', 'leap'), ('performing', 'trick')],
         "actions": {
             "roar": {
-                "pos": [[-3, -134, 156, -2, 90, 0], [0, -130, 155, -2, 95, 0], [-5, -125, 150, -2, 100, 0]],
-                "speed": [40, 40, 40],
+                "poses": [[-3, -134, 156, -2, 90, 0], [0, -130, 155, -2, 95, 0], [-5, -125, 150, -2, 100, 0]],
+                "variable_axes": [],
+                "behavior": 'calm',
                 "loop": True,
                 "next": {}
             },
             "snarl": {
-                "pos": [[-3, -134, 156, -2, 90, 0], [0, -130, 155, -2, 80, 0]],
-                "speed": [40, 40],
+                "poses": [[-3, -134, 156, -2, 90, 0], [0, -130, 155, -2, 80, 0]],
+                "variable_axes": [],
+                "behavior": 'calm',
                 "loop": True,
                 "next": {}
             }
@@ -328,7 +346,7 @@ ZONES: Dict[str, dict] = {
         "exits": [('roaring', 'roar'), ('clawing', 'claw'), ('leaping', 'leap')],
         "actions": {
             "growl": {
-                "base_pose": [-3, -134, 156, -2, 90, 0],
+                "poses": [[-3, -134, 156, -2, 90, 0]],
                 "variable_axes": [4],
                 "behavior": 'vigilant',
                 "speed": 40,
@@ -336,8 +354,9 @@ ZONES: Dict[str, dict] = {
                 "next": {}
             },
             "snarl": {
-                "pos": [[-3, -134, 156, -2, 90, 0], [0, -130, 155, -2, 85, 0]],
-                "speed": [40, 40],
+                "poses": [[-3, -134, 156, -2, 90, 0], [0, -130, 155, -2, 85, 0]],
+                "variable_axes": [],
+                "behavior": 'calm',
                 "loop": True,
                 "next": {}
             }
@@ -351,7 +370,7 @@ ZONES: Dict[str, dict] = {
         "exits": [('growling', 'snarl'), ('roaring', 'roar'), ('leaping', 'leap'), ('stretching', 'look')],
         "actions": {
             "claw": {
-                "base_pose": [85, -97, 17, -2, 0, 0],
+                "poses": [[85, -97, 17, -2, 0, 0]],
                 "variable_axes": [0, 2],
                 "behavior": 'agitated',
                 "speed": 40,
@@ -359,7 +378,7 @@ ZONES: Dict[str, dict] = {
                 "next": {}
             },
             "grab": {
-                "base_pose": [85, -97, 17, -2, 0, 0],
+                "poses": [[85, -97, 17, -2, 0, 0]],
                 "variable_axes": [0, 2],
                 "behavior": 'aggressive',
                 "speed": 40,
@@ -376,14 +395,16 @@ ZONES: Dict[str, dict] = {
         "exits": [('roaring', 'roar'), ('clawing', 'claw'), ('growling', 'growl'), ('resting', 'hold')],
         "actions": {
             "leap": {
-                "pos": [[-85, -120, 137, 0, 0, 0], [-90, -115, 140, -2, 10, 0], [-80, -110, 145, 0, 20, 0]],
-                "speed": [10, 50, 100],
+                "poses": [[-85, -120, 137, 0, 0, 0], [-90, -115, 140, -2, 10, 0], [-80, -110, 145, 0, 20, 0]],
+                "variable_axes": [],
+                "behavior": 'calm',
                 "loop": True,
                 "next": {}
             },
             "pacing": {
-                "pos": [[-85, -120, 137, 0, 0, 0], [-75, -115, 130, 0, -5, 0], [-90, -124, 140, 0, 5, 0]],
-                "speed": [10, 50, 100],
+                "poses": [[-85, -120, 137, 0, 0, 0], [-75, -115, 130, 0, -5, 0], [-90, -124, 140, 0, 5, 0]],
+                "variable_axes": [],
+                "behavior": 'calm',
                 "loop": True,
                 "next": {}
             }
@@ -424,54 +445,33 @@ def _is_num(v) -> bool:
 
 
 def _validate_action(name: str, a: dict, all_zone_names: set) -> None:
-    """Validate a single action dict (new variable-axis or legacy fixed-pose form)."""
+    """Validate a single action dict (unified ``poses`` form)."""
     if not isinstance(a, dict):
         raise ValueError(f"action {name!r}: must be an object")
     if "enabled" in a and not isinstance(a["enabled"], bool):
         raise ValueError(f"action {name!r}: 'enabled' must be a bool")
 
-    has_base = "base_pose" in a
-    has_pos = "pos" in a
-    if has_base and has_pos:
-        raise ValueError(f"action {name!r}: must have either 'base_pose' or 'pos', not both")
-    if not has_base and not has_pos:
-        raise ValueError(f"action {name!r}: must have either 'base_pose' or 'pos'")
+    poses = a.get("poses")
+    if not (isinstance(poses, list) and poses and all(
+            isinstance(p, list) and len(p) == 6 and all(_is_num(x) for x in p)
+            for p in poses)):
+        raise ValueError(f"action {name!r}: poses must be a non-empty list of 6-number poses")
 
-    if has_base:
-        bp = a["base_pose"]
-        if not (isinstance(bp, list) and len(bp) == 6 and all(_is_num(x) for x in bp)):
-            raise ValueError(f"action {name!r}: base_pose must be a list of 6 numbers")
-        va = a.get("variable_axes", [])
-        if not (isinstance(va, list) and all(
-                isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= 5
-                for x in va)):
-            raise ValueError(f"action {name!r}: variable_axes must be a list of axis indices (0-5)")
-        beh = a.get("behavior", "calm")
-        if not (isinstance(beh, str) and beh in BEHAVIORS):
-            raise ValueError(f"action {name!r}: behavior must be one of {BEHAVIORS}")
-        # ``bridge`` is a no-op policy (like ``calm``): it drives no variable axes. A
-        # variable-axis action may not pair it with a non-empty ``variable_axes`` list.
-        if beh == "bridge" and va:
-            raise ValueError(f"action {name!r}: 'bridge' is a no-op behaviour and must not drive variable axes")
-        spd = a.get("speed")
-        if spd is not None and not _is_num(spd):
-            raise ValueError(f"action {name!r}: speed must be a number (variable-axis form)")
-    else:
-        pos = a["pos"]
-        if not (isinstance(pos, list) and pos and all(
-                isinstance(p, list) and len(p) == 6 and all(_is_num(x) for x in p)
-                for p in pos)):
-            raise ValueError(f"action {name!r}: pos must be a non-empty list of 6-number poses")
-        spd = a.get("speed")
-        if spd is not None and not (
-                isinstance(spd, list) and len(spd) == len(pos) and all(_is_num(x) for x in spd)):
-            raise ValueError(f"action {name!r}: speed must have one value per pose")
-        # Legacy actions are stepped by pose (no variable axes), so ``behavior`` is a
-        # marker/label only — but when present it must still name a known behaviour
-        # (the bridge action is tagged ``behavior: "bridge"`` here).
-        beh = a.get("behavior")
-        if beh is not None and not (isinstance(beh, str) and beh in BEHAVIORS):
-            raise ValueError(f"action {name!r}: behavior must be one of {BEHAVIORS}")
+    va = a.get("variable_axes", [])
+    if not (isinstance(va, list) and all(
+            isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= 5
+            for x in va)):
+        raise ValueError(f"action {name!r}: variable_axes must be a list of axis indices (0-5)")
+    beh = a.get("behavior", "calm")
+    if not (isinstance(beh, str) and beh in BEHAVIORS):
+        raise ValueError(f"action {name!r}: behavior must be one of {BEHAVIORS}")
+    # ``bridge`` is a no-op policy (like ``calm``): it drives no variable axes. An
+    # action may not pair it with a non-empty ``variable_axes`` list.
+    if beh == "bridge" and va:
+        raise ValueError(f"action {name!r}: 'bridge' is a no-op behaviour and must not drive variable axes")
+    spd = a.get("speed")
+    if spd is not None and not _is_num(spd):
+        raise ValueError(f"action {name!r}: speed must be a number")
 
     if "loop" in a and not isinstance(a["loop"], bool):
         raise ValueError(f"action {name!r}: 'loop' must be a bool")
@@ -608,15 +608,19 @@ class Zone:
         return bool(self._action(name).get("loop", True))
 
     def action_base_pose(self, name: str) -> Optional[List[float]]:
-        """The action's ``base_pose`` (variable-axis form), or None for legacy actions."""
+        """The action's first anchor pose (``poses[0]``), or None when absent/malformed.
+
+        Kept for compatibility; the runtime reads the *current* anchor
+        (``poses[action_index]``) directly from the machine each tick.
+        """
         a = self._action(name)
-        bp = a.get("base_pose")
-        if isinstance(bp, list) and len(bp) == 6:
-            return list(bp)
+        poses = a.get("poses")
+        if isinstance(poses, list) and poses and isinstance(poses[0], list) and len(poses[0]) == 6:
+            return list(poses[0])
         return None
 
     def action_variable_axes(self, name: str) -> List[int]:
-        """The action's ``variable_axes`` (list of 0-5 indices), or [] for legacy."""
+        """The action's ``variable_axes`` (list of 0-5 indices), or [] when absent."""
         a = self._action(name)
         va = a.get("variable_axes")
         if isinstance(va, list):
@@ -624,7 +628,7 @@ class Zone:
         return []
 
     def action_behavior(self, name: str) -> str:
-        """The action's behavior name, or ``"calm"`` for legacy/absent."""
+        """The action's behavior name, or ``"calm"`` when absent/unknown."""
         a = self._action(name)
         beh = a.get("behavior")
         if isinstance(beh, str) and beh in BEHAVIORS:
@@ -666,10 +670,9 @@ class Zone:
         return None
 
     def action_speed(self, name: str) -> Optional[float]:
-        """The action's speed as a number (variable-axis form), or None.
+        """The action's speed as a single number, or None.
 
-        Legacy actions use a per-pose speed list; this accessor returns None for
-        those (the machine falls back to the zone speed).
+        When None, the machine falls back to the zone speed.
         """
         a = self._action(name)
         s = a.get("speed")
@@ -700,35 +703,22 @@ class Zone:
     def action_entry_pose(self, name: str) -> Optional[List[float]]:
         """The pose the robot moves to when transitioning into this action.
 
-        For variable-axis actions this is the ``base_pose``. For legacy actions
-        it is the first pose in the ``pos`` sequence. Returns None if the action
+        This is the first anchor (``poses[0]``). Returns None if the action
         is unknown or malformed.
         """
-        a = self._action(name)
-        bp = a.get("base_pose")
-        if isinstance(bp, list) and len(bp) == 6:
-            return list(bp)
-        pos = a.get("pos")
-        if isinstance(pos, list) and pos and isinstance(pos[0], list) and len(pos[0]) == 6:
-            return list(pos[0])
-        return None
+        return self.action_base_pose(name)
 
     def action_end_pose(self, name: str) -> Optional[List[float]]:
-        """The pose the action ends at (its last pose).
+        """The pose the action ends at (its last anchor, ``poses[-1]``).
 
-        For variable-axis actions this is the ``base_pose`` (the resting pose — the
-        action does not step through a sequence). For legacy actions it is the last
-        pose in the ``pos`` sequence. Returns None if the action is unknown or
-        malformed. Used for the shared-position continuity check between connected
-        actions (the source's end pose should match the target's start pose).
+        Returns None if the action is unknown or malformed. Used for the
+        shared-position continuity check between connected actions (the
+        source's end pose should match the target's start pose).
         """
         a = self._action(name)
-        bp = a.get("base_pose")
-        if isinstance(bp, list) and len(bp) == 6:
-            return list(bp)
-        pos = a.get("pos")
-        if isinstance(pos, list) and pos and isinstance(pos[-1], list) and len(pos[-1]) == 6:
-            return list(pos[-1])
+        poses = a.get("poses")
+        if isinstance(poses, list) and poses and isinstance(poses[-1], list) and len(poses[-1]) == 6:
+            return list(poses[-1])
         return None
 
 

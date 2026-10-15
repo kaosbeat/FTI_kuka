@@ -84,6 +84,20 @@
         "note": 66,
         "velocity": 90
       }
+    },
+    "resting_sleeping_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "stretching_hunting_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
     }
   },
   "actions": {
@@ -100,7 +114,12 @@
           "note": 48,
           "velocity": 60
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "sleeping": {
@@ -145,7 +164,12 @@
           "note": 32,
           "velocity": 45
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "cuddling": {
@@ -255,6 +279,13 @@
         "start": {
           "cc": 70,
           "value": 96
+        },
+        "poses": []
+      },
+      "track2": {
+        "start": {
+          "note": 60,
+          "velocity": 60
         },
         "poses": []
       }
@@ -423,6 +454,37 @@
             "velocity": 90
           }
         ]
+      }
+    },
+    "resting_sleeping_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      }
+    },
+    "stretching_hunting_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
       }
     }
   }

@@ -24,6 +24,7 @@ from rtr.camera.geometry import load_camera_geometry
 from rtr.state import StateMachine, Zones
 from rtr.state.zones import LIN_POSES, POSES, ZONES, load_state_data
 from rtr.brain import Brain, builtin_brain_config, load_brain_config
+from rtr.safety import SafetyGate, CollisionChecker
 from rtr.display import make_display
 from rtr.sound import make_sound, load_sound_data, builtin_sound_data
 from rtr.patches import (
@@ -166,6 +167,13 @@ async def run(cfg: Config) -> None:
     # --- core -----------------------------------------------------------
     robot = make_robot(cfg.robot_kind, port=cfg.robot_port, tick_hz=cfg.tick_hz)
     machine = StateMachine(zones, tick_hz=cfg.tick_hz)
+    # Safety gate: pre-movement checks (red-link conflict + self-collision).
+    # The collision worker is a persistent Node process (collide_worker.js) that
+    # loads the KR60 STL world once and answers queries over stdin/stdout.
+    collision = CollisionChecker(worker_path=os.path.join(ROOT, "collide_worker.js"))
+    collision.start()
+    safety_gate = SafetyGate(zones, collision_checker=collision)
+    machine.safety = safety_gate
     # Kinematics + camera geometry (the orientation-aware servo). The chain is the
     # KR60 FK/Jacobian (pure stdlib, works in sim and on the real robot); the
     # geometry is the tool->camera mount. Wired onto the machine so the camera
@@ -248,6 +256,7 @@ async def run(cfg: Config) -> None:
         engine.stop()
         engine_task.cancel()
         await asyncio.gather(engine_task, return_exceptions=True)
+        collision.stop()
         await ws.stop()
         http.stop()
         midi.stop()

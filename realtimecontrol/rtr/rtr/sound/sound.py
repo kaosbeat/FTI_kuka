@@ -235,7 +235,6 @@ class Sound:
         self._last_zone: Optional[str] = None
         self._last_mode: Optional[str] = None
         self._last_action: Optional[str] = None
-        self._last_target: Optional[list] = None
         self._pose_idx = 0
         if enabled:
             self.reload()
@@ -431,18 +430,17 @@ class Sound:
                         if isinstance(poses, list) and poses:
                             self._send_msg(poses[0], snap.zone)
 
-        # 3. per-pose step: while an action is playing, a target-pose change advances
-        #    the internal pose index. (Heuristic: the snapshot has no explicit pose
-        #    index; exact index tracking is a later extension.)
+        # 3. per-pose step: advance the pose index when the machine's anchor index
+        #    advances. Keyed on ``action_index`` (not the target pose) so wiggle
+        #    actions — whose target moves every tick — don't misalign the per-pose MIDI.
         if (snap.action is not None
-                and snap.target_pose != self._last_target):
-            self._pose_idx += 1
+                and snap.action_index is not None
+                and snap.action_index != self._pose_idx):
+            self._pose_idx = snap.action_index
             act = actions.get(snap.zone, {}).get(snap.action)
             poses = act.get("poses") if isinstance(act, dict) else None
             if isinstance(poses, list) and poses:
                 self._send_msg(poses[self._pose_idx % len(poses)], snap.zone)
-
-        self._last_target = list(snap.target_pose)
 
     # ------------------------------------------------------------------
     # MIDI sending (degrades to logging when no device is open).

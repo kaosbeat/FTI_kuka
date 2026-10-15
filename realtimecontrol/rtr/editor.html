@@ -111,6 +111,11 @@
   .fedgeHit { fill: none; stroke: transparent; stroke-width: 18; cursor: pointer; }
   .fedgeLabel { fill: var(--dim); font-size: 10px; pointer-events: none; }
   .fedgeLabel.fedgeLabelCustom { fill: var(--accent); }
+  /* In-zone links (action -> action inside one block): drawn above the node, dashed,
+     with an arrowhead pointing at the target action row. */
+  .fedgeInner { stroke: var(--accent); stroke-dasharray: 5 3; }
+  .fedgeInner.fedgeSel { stroke: #ffffff; }
+  .fedgeInner.fedgeConflict { stroke: #e05d5d; }
   .fgroup { fill: rgba(79,192,141,0.06); stroke: var(--dim); stroke-width: 1; stroke-dasharray: 6 3; pointer-events: none; }
   .fgroupEnabled { fill: rgba(79,192,141,0.1); stroke: var(--accent); stroke-width: 2; stroke-dasharray: none; }
   .fgroupDisabled { fill: rgba(124,132,148,0.04); stroke: var(--dim); stroke-width: 1; opacity: 0.35; }
@@ -120,6 +125,16 @@
   /* Action editor modal (Step 3). */
   #actionEditor { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; z-index: 20; }
   #actionEditor.open { display: block; }
+  /* Safety popup: shown when a safety-gated move is blocked (manual mode). */
+  #safetyPopup { position: fixed; inset: 0; background: rgba(0,0,0,.65); display: none; z-index: 25; }
+  #safetyPopup.open { display: block; }
+  #spPanel { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+             width: 480px; max-width: 90vw; max-height: 80vh; overflow: auto;
+             background: var(--panel); border: 1px solid #e04040; border-radius: 10px; padding: 16px; }
+  #spPanel h2 { margin: 0 0 10px; color: #e04040; text-transform: none; letter-spacing: 0; font-size: 15px; }
+  #spIssues { margin: 0 0 12px; font-size: 13px; line-height: 1.5; }
+  #spIssues li { margin-bottom: 4px; }
+  #spActions { display: flex; gap: 8px; justify-content: flex-end; }
   #aePanel { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
              width: 760px; max-width: 94vw; max-height: 92vh; overflow: auto;
              background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
@@ -133,6 +148,23 @@
   .aePoseRow input.oob { border-color: #e0a030; color: #e0a030; }
   .aePoseCtl { display: flex; gap: 3px; }
   .aePoseCtl button { padding: 1px 5px; font-size: 11px; }
+  /* Hover pose preview: the pose rows sit left, the schematic preview right. */
+  .aePoseWrap { display: flex; gap: 12px; align-items: flex-start; }
+  .aePoseList { flex: 1; min-width: 0; }
+  .aePosePrev { width: 200px; flex-shrink: 0; border: 1px solid var(--border);
+                border-radius: 6px; padding: 8px; background: #0d0f13; }
+  .aePrevSvg { display: block; width: 100%; height: 170px; }
+  .aePrevBar { display: flex; align-items: center; gap: 4px; font-size: 10px; margin-top: 2px; }
+  .aePrevBar .lbl { width: 20px; color: var(--dim); }
+  .aePrevBar .track { flex: 1; height: 6px; background: #20242d; border-radius: 3px; position: relative; }
+  .aePrevBar .mark { position: absolute; top: -1px; width: 4px; height: 8px;
+                     background: var(--accent); border-radius: 2px; }
+  .aePrevBar .mark.oob { background: #e05d5d; }
+  .aePrevBar .val { width: 34px; text-align: right; font-size: 10px; }
+  .aePrevStatus { font-size: 11px; margin-top: 6px; }
+  .aePrevStatus.ok { color: var(--accent); }
+  .aePrevStatus.bad { color: #e05d5d; }
+  .aePrevStatus.dim { color: var(--dim); }
   .aePatch { width: 100%; min-height: 120px; resize: vertical; background: #0d0f13;
              color: var(--text); border: 1px solid var(--border); border-radius: 4px;
              padding: 8px; font: inherit; white-space: pre; }
@@ -364,6 +396,18 @@
   </div>
 </div>
 
+<div id="safetyPopup">
+  <div id="spPanel">
+    <h2 id="spTitle">safety alert</h2>
+    <div id="spTarget"></div>
+    <ul id="spIssues"></ul>
+    <div id="spActions">
+      <button id="spConfirm">confirm move</button>
+      <button id="spCancel" class="small">cancel</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
@@ -392,9 +436,9 @@ const FALLBACK = {
   zones: {
     resting: {safezone: [[-94,122],[-105,-65],[89,115],[-15,15],[-15,45],[-357,357]],
             speed: 20, enabled: true,
-            actions: {wake: {enabled: true, base_pose: [-60,-90,90,0,15,0], variable_axes: [],
-                             behavior: "calm", speed: 20, loop: true,
-                             next: {zone: "sleeping", action: "breathe"}}}},
+            actions: {wake: {enabled: true, poses: [[-60,-90,90,0,15,0]], variable_axes: [],
+                              behavior: "calm", speed: 20, loop: true,
+                              next: {zone: "sleeping", action: "breathe"}}}},
   },
   poses: {}, lin_poses: {},
 };
@@ -484,17 +528,21 @@ function rowY(name, an) {
 }
 // Action editor (Step 3) modal state: the zone/action being edited + its hydra preview.
 const AE = { zone: null, action: null, hydra: null, timer: null };
+// Hover pose preview: the index of the pose currently shown in the schematic, and the
+// preview panel element (recreated each buildActionEditor). The preview is hover-driven
+// on the anchor pose rows; the last hovered pose persists until the next hover.
+let aePrevIdx = 0;
+let aePrevEl = null;
 
 // ---------------------------------------------------------------------------
 // Action helpers (the zone graph is derived from each action's `next` field —
 // there is no zone-level `exits`). Mirrors rtr/flow.py.
 // ---------------------------------------------------------------------------
-// The action's form: "var" (base_pose + variable_axes + behavior) or "pose"
-// (legacy fixed-pose pos + per-pose speed). An action has one, not both.
-function actionForm(a) {
-  if (a && a.base_pose) return "var";
-  if (a && a.pos) return "pose";
-  return "var";  // new actions default to the variable-axis form
+// The action's ordered list of 6-axis anchor poses. Every action has one `poses`
+// list (the robot steps through them; a variable-axis action wiggles its
+// variable_axes on top of the current anchor). Returns [] when absent.
+function actionPoses(a) {
+  return (a && Array.isArray(a.poses)) ? a.poses : [];
 }
 // First enabled action name in a zone (table order), or null. Used for
 // trigger_action (zone rows) — mirrors flow._first_enabled_action.
@@ -574,20 +622,15 @@ function zoneReverse(zn) {
 // target action starts from. Connections are bidirectional (no arrows): A→B and B→A
 // are the same undirected link.
 // ---------------------------------------------------------------------------
-// The pose an action begins at and the pose it ends at. A variable-axis action rests
-// at base_pose (start == end); a legacy fixed-pose action steps through `pos`
-// (start = pos[0], end = pos[-1]).
+// The pose an action begins at and the pose it ends at: the first and last
+// anchors of its `poses` list (start = poses[0], end = poses[-1]).
 function actionStartPose(a) {
-  if (!a) return null;
-  if (a.base_pose) return a.base_pose;
-  if (a.pos && a.pos.length) return a.pos[0];
-  return null;
+  const ps = actionPoses(a);
+  return ps.length ? ps[0] : null;
 }
 function actionEndPose(a) {
-  if (!a) return null;
-  if (a.base_pose) return a.base_pose;
-  if (a.pos && a.pos.length) return a.pos[a.pos.length - 1];
-  return null;
+  const ps = actionPoses(a);
+  return ps.length ? ps[ps.length - 1] : null;
 }
 // The deduplicated, undirected set of action-level edges derived from `next` fields.
 // Each edge is {from: {zone, action}, to: {zone, action}}; the link between A and B is
@@ -738,6 +781,17 @@ function connect() {
         `<div class="stateRow"><span>speed</span><span>${m.speed}</span></div>` +
         `<div class="stateRow"><span>moving</span><span>${m.moving ? "yes" : "no"}</span></div>`;
       FLOW.live = { zone: m.zone, mode: m.mode, action: m.action };
+      // Safety popup: driven by m.safety (pending safety-gated move).
+      if (m.safety && m.safety.phase === "confirm") {
+        $("safetyPopup").classList.add("open");
+        $("spTitle").textContent = "safety alert — move blocked";
+        $("spTarget").textContent = `${m.safety.zone} / ${m.safety.action}`;
+        const issues = m.safety.issues || [];
+        if (m.safety.collision) issues.push("self-collision detected at entry pose");
+        $("spIssues").innerHTML = issues.map((s) => `<li>${s}</li>`).join("");
+      } else {
+        $("safetyPopup").classList.remove("open");
+      }
       if (flowView) applyFlowHighlight();
       if (brainView) renderBrainLive(m);
     } else if (m.type === "sound_changed") {
@@ -1073,9 +1127,9 @@ function buildMidiOutForm() {
     // read-only attributes (behavior / variable axes / loop / next / enabled) from the table
     const attrs = document.createElement("div");
     attrs.style.cssText = "font-size:11px;color:var(--dim)";
-    const beh = tinfo.behavior || (tinfo.pos ? "pose" : "—");
-    let atxt = `behavior ${beh}`;
-    if (tinfo.base_pose && Array.isArray(tinfo.variable_axes) && tinfo.variable_axes.length) {
+    const beh = tinfo.behavior || (tinfo.poses ? "poses" : "—");
+    let atxt = `behavior ${beh} · ${actionPoses(tinfo).length} pose(s)`;
+    if (Array.isArray(tinfo.variable_axes) && tinfo.variable_axes.length) {
       atxt += ` · axes ${tinfo.variable_axes.join(",")}`;
     }
     if (tinfo.loop !== false) atxt += " · loop";
@@ -2079,7 +2133,7 @@ function evalAePatchPreview(code) {
   }
 }
 
-// Swap two poses (and their speed + sound entries) in place, so reordering keeps the
+// Swap two anchor poses (and their sound entries) in place, so reordering keeps the
 // per-pose sound aligned. Mirrors the zones-tab pose handling but also swaps sound.
 function aeSwapPoses(zn, an, i, j) {
   const z = TABLE.zones[zn];
@@ -2090,8 +2144,7 @@ function aeSwapPoses(zn, an, i, j) {
       const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
     }
   };
-  swap(a.pos);
-  swap(a.speed);
+  swap(a.poses);
   const s = SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an];
   if (s && Array.isArray(s.poses)) swap(s.poses);
   buildActionEditor();
@@ -2099,8 +2152,8 @@ function aeSwapPoses(zn, an, i, j) {
 
 // Ensure SOUND.actions[zn][an] exists with a start message and a poses array whose
 // length matches the action's pose count (pad with a default note, truncate extras).
-// Keeps the sound buffer aligned with the poses edited in the modal. A variable-axis
-// action has a single (base) pose; a legacy action has one per `pos` entry.
+// Keeps the sound buffer aligned with the anchor poses edited in the modal
+// (one per `poses` entry).
 function reconcileActionSound(zn, an) {
   if (!SOUND.actions[zn]) SOUND.actions[zn] = {};
   if (!SOUND.actions[zn][an]) SOUND.actions[zn][an] = { start: { note: 60, velocity: 60 }, poses: [] };
@@ -2108,35 +2161,121 @@ function reconcileActionSound(zn, an) {
   if (!s.start) s.start = { note: 60, velocity: 60 };
   if (!Array.isArray(s.poses)) s.poses = [];
   const a = TABLE.zones[zn].actions[an];
-  const n = actionForm(a) === "var" ? 1 : (a.pos || []).length;
+  const n = actionPoses(a).length;
   while (s.poses.length < n) s.poses.push({ note: 60, velocity: 60 });
   if (s.poses.length > n) s.poses.length = n;
   return s;
 }
 
-// Convert an action dict between the two forms, preserving as much data as possible.
-// var<->pose: the base pose is the first pose (pose form) or base_pose (var form);
-// the speed is the first per-pose speed (pose) or the single speed (var).
-function convertActionForm(a, form) {
-  if (form === "var") {
-    a.base_pose = (a.pos && a.pos[0]) ? a.pos[0].slice() : [0,0,0,0,0,0];
-    a.variable_axes = Array.isArray(a.variable_axes) ? a.variable_axes : [];
-    a.behavior = (typeof a.behavior === "string" && BEHAVIORS.includes(a.behavior)) ? a.behavior : "calm";
-    a.speed = (Array.isArray(a.speed) && a.speed[0] != null) ? a.speed[0] : 20;
-    delete a.pos;
-  } else {
-    a.pos = (a.base_pose) ? [a.base_pose.slice()] : [[0,0,0,0,0,0]];
-    a.speed = (typeof a.speed === "number") ? [a.speed] : [20];
-    delete a.base_pose; delete a.variable_axes; delete a.behavior;
-  }
+// Schematic preview of a single pose, drawn in the action editor's right column.
+// The 2D X-Z linkage uses the KR60 joint geometry from rtr3d.js (the A2/A3/A5 hinges
+// swing in-plane; A1/A4/A6 are yaws/rolls shown as dials). The axis bars mirror the
+// pose-row safezone (oob) highlighting, and the status line reports a collision check.
+function renderPosePreview(pose, el, safezone) {
+  el.innerHTML = "";
+  if (!pose || pose.length !== 6) { el.textContent = "no pose"; return; }
+  const [a1, a2, a3, a4, a5, a6] = pose;
+  const rad = (d) => d * Math.PI / 180;
+  // KR60 chain (meters, Z-up): shoulder pivot + the three in-plane link lengths.
+  const S = { x: 0.35, z: 0.815 };
+  const L2 = 0.85, L3 = 0.465, L5 = 0.355;
+  const a2r = rad(a2), a3r = rad(a2 + a3), a5r = rad(a2 + a3 + a5);
+  // In-plane (X-Z) FK: A2/A3/A5 rotate about +Y (kr60ha_macro.xacro), so a link's
+  // world direction is (cos θ, −sin θ) in the Z-up X-Z plane — the same convention
+  // the 3D FK / collision check use. The old +sin inverted the vertical component.
+  const E = { x: S.x + L2 * Math.cos(a2r), z: S.z - L2 * Math.sin(a2r) };
+  const W = { x: E.x + L3 * Math.cos(a3r), z: E.z - L3 * Math.sin(a3r) };
+  const T = { x: W.x + L5 * Math.cos(a5r), z: W.z - L5 * Math.sin(a5r) };
+  const P = (x, z) => ({ x, y: -z });  // meters -> SVG (Y flipped so Z points up)
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "-1.8 -2.7 3.9 3.9");
+  svg.setAttribute("class", "aePrevSvg");
+  const line = (p, q, w, color) => {
+    const a = P(p.x, p.z), b = P(q.x, q.z);
+    const l = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    l.setAttribute("x1", a.x); l.setAttribute("y1", a.y);
+    l.setAttribute("x2", b.x); l.setAttribute("y2", b.y);
+    l.setAttribute("stroke", color); l.setAttribute("stroke-width", w);
+    l.setAttribute("stroke-linecap", "round");
+    svg.appendChild(l);
+  };
+  const dot = (p, r, color) => {
+    const c = P(p.x, p.z);
+    const e = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    e.setAttribute("cx", c.x); e.setAttribute("cy", c.y); e.setAttribute("r", r);
+    e.setAttribute("fill", color);
+    svg.appendChild(e);
+  };
+  const dial = (p, angleDeg, r, color) => {
+    const c = P(p.x, p.z);
+    const e = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    e.setAttribute("cx", c.x); e.setAttribute("cy", c.y); e.setAttribute("r", r);
+    e.setAttribute("fill", "none"); e.setAttribute("stroke", color);
+    e.setAttribute("stroke-width", 0.02);
+    svg.appendChild(e);
+    const a = rad(angleDeg);
+    const l = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    l.setAttribute("x1", c.x); l.setAttribute("y1", c.y);
+    l.setAttribute("x2", c.x + r * Math.cos(a)); l.setAttribute("y2", c.y - r * Math.sin(a));
+    l.setAttribute("stroke", color); l.setAttribute("stroke-width", 0.03);
+    svg.appendChild(l);
+  };
+  // Ground line + base pedestal.
+  line({ x: -1.8, z: 0 }, { x: 2.1, z: 0 }, 0.02, "#3a4152");
+  const ped = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  ped.setAttribute("x", 0.15); ped.setAttribute("y", -0.5);
+  ped.setAttribute("width", 0.4); ped.setAttribute("height", 0.5);
+  ped.setAttribute("fill", "#2a2f3a");
+  svg.appendChild(ped);
+  // Arm segments (shoulder -> elbow -> wrist -> tool) + joints.
+  const arm = "#f67828";
+  line(S, E, 0.09, arm); line(E, W, 0.08, arm); line(W, T, 0.06, arm);
+  dot(S, 0.07, "#0d0f13"); dot(E, 0.06, "#0d0f13"); dot(W, 0.05, "#0d0f13"); dot(T, 0.05, "#0d0f13");
+  // Dials: A1 (base yaw) at the pedestal top, A4 (wrist roll) at the wrist, A6 (tool roll) at the tool.
+  dial({ x: 0.35, z: 0.5 }, a1, 0.12, "#4fc08d");
+  dial(W, a4, 0.1, "#4fc08d");
+  dial(T, a6, 0.08, "#4fc08d");
+  el.appendChild(svg);
+  // Axis bars: each joint's value against the zone safezone (mirrors the oob highlight).
+  AXES.forEach((n, i) => {
+    const v = pose[i];
+    const bar = document.createElement("div");
+    bar.className = "aePrevBar";
+    const lbl = document.createElement("span"); lbl.className = "lbl"; lbl.textContent = n;
+    bar.appendChild(lbl);
+    const track = document.createElement("div"); track.className = "track";
+    const val = document.createElement("span"); val.className = "val";
+    if (safezone && safezone[i]) {
+      const [lo, hi] = safezone[i];
+      const span = hi - lo || 1;
+      const frac = Math.max(0, Math.min(1, (v - lo) / span));
+      const mark = document.createElement("div");
+      mark.className = "mark" + (v < lo || v > hi ? " oob" : "");
+      mark.style.left = (frac * 100) + "%";
+      track.appendChild(mark);
+    }
+    bar.appendChild(track);
+    val.textContent = Math.round(v * 10) / 10;
+    bar.appendChild(val);
+    el.appendChild(bar);
+  });
+  // Collision status (the same scratch-pose check the validate tab uses).
+  const st = document.createElement("div");
+  st.className = "aePrevStatus";
+  if (typeof Robot3D !== "undefined") {
+    const res = Robot3D.checkPoseCollision(pose);
+    if (!res) { st.textContent = "collision engine not ready"; st.classList.add("dim"); }
+    else if (res.bodies.length === 0) { st.textContent = "clear"; st.classList.add("ok"); }
+    else { st.textContent = "COLLIDES: " + res.collisions.map((c) => c.a + "~" + c.b).join(", "); st.classList.add("bad"); }
+  } else { st.textContent = "3d not loaded"; st.classList.add("dim"); }
+  el.appendChild(st);
 }
 
 // Rebuild the modal body (#aeBody) for AE.zone / AE.action. Sections: the **action**
-// header (form switcher + enabled + loop), the form-specific section (base_pose +
-// variable_axes + behavior + speed for the variable-axis form, or the pose rows for
-// the legacy form), the **next** section (the action's successor in the zone graph),
-// and the **sound** section. The static patch section + #aeSaveStatus are siblings of
-// #aeBody, so they are never clobbered here.
+// header (loop + enabled), the **poses** section (the ordered anchor list + the
+// action-level variable_axes + behavior + speed), the **next** section (the action's
+// successor in the zone graph), and the **sound** section. The static patch section
+// + #aeSaveStatus are siblings of #aeBody, so they are never clobbered here.
 function buildActionEditor() {
   const zn = AE.zone, an = AE.action;
   const el = $("aeBody");
@@ -2145,24 +2284,16 @@ function buildActionEditor() {
   const z = TABLE.zones[zn];
   if (!z || !z.actions || !z.actions[an]) return;
   const a = z.actions[an];
-  const form = actionForm(a);
+  if (!Array.isArray(a.poses) || !a.poses.length) a.poses = [[0,0,0,0,0,0]];
+  if (!Array.isArray(a.variable_axes)) a.variable_axes = [];
+  if (!BEHAVIORS.includes(a.behavior)) a.behavior = "calm";
 
-  // --- action section: form switcher + loop + enabled ---
+  // --- action section: loop + enabled ---
   const sec = document.createElement("div");
   sec.className = "aeSec";
   sec.appendChild(h3("action"));
   const arow = document.createElement("div");
   arow.className = "row";
-  const fl = document.createElement("label");
-  fl.className = "inline";
-  fl.innerHTML = "form <select class='aeForm'></select>";
-  const fsel = fl.querySelector("select");
-  [["var", "variable-axis"], ["pose", "fixed sequence"]].forEach(([v, l]) => {
-    const o = document.createElement("option"); o.value = v; o.textContent = l; fsel.appendChild(o);
-  });
-  fsel.value = form;
-  fsel.onchange = () => { convertActionForm(a, fsel.value); buildActionEditor(); };
-  arow.appendChild(fl);
   const lp = document.createElement("label");
   lp.className = "inline";
   lp.innerHTML = `<input type="checkbox" ${a.loop !== false ? "checked" : ""}> loop`;
@@ -2176,158 +2307,126 @@ function buildActionEditor() {
   sec.appendChild(arow);
   el.appendChild(sec);
 
-  if (form === "var") {
-    // --- variable-axis form: base_pose + variable_axes + behavior + speed ---
-    if (!Array.isArray(a.base_pose) || a.base_pose.length !== 6) a.base_pose = [0,0,0,0,0,0];
-    if (!Array.isArray(a.variable_axes)) a.variable_axes = [];
-    const vsec = document.createElement("div");
-    vsec.className = "aeSec";
-    vsec.appendChild(h3("base_pose"));
-    const bp = document.createElement("div");
-    bp.className = "grid6";
-    a.base_pose.forEach((v, i) => {
-      const l = document.createElement("label");
-      l.textContent = AXES[i];
+  // --- poses section: behavior + speed + variable_axes + one row per anchor pose ---
+  const psec = document.createElement("div");
+  psec.className = "aeSec";
+  // behavior + speed (action-level: every anchor shares them)
+  const brow = document.createElement("div");
+  brow.className = "row";
+  const bl = document.createElement("label");
+  bl.className = "inline";
+  bl.innerHTML = "behavior <select class='aeBehavior'></select>";
+  const bsel = bl.querySelector("select");
+  BEHAVIORS.forEach((b) => { const o = document.createElement("option"); o.value = b; o.textContent = b; bsel.appendChild(o); });
+  bsel.value = a.behavior;
+  bsel.onchange = () => { a.behavior = bsel.value; };
+  brow.appendChild(bl);
+  const sp = document.createElement("label");
+  sp.className = "inline";
+  sp.innerHTML = "speed <input type='number' step='1' value='" + (typeof a.speed === "number" ? a.speed : 20) + "'>";
+  sp.querySelector("input").oninput = (e) => { a.speed = parseFloat(e.target.value); };
+  brow.appendChild(sp);
+  psec.appendChild(brow);
+  // variable_axes (checkboxes over the six axes)
+  psec.appendChild(h3("variable_axes"));
+  const va = document.createElement("div");
+  va.className = "row";
+  AXES.forEach((n, i) => {
+    const c = document.createElement("label");
+    c.className = "inline";
+    c.innerHTML = `<input type="checkbox" ${a.variable_axes.includes(i) ? "checked" : ""}> ${n}`;
+    c.querySelector("input").onchange = (e) => {
+      a.variable_axes = e.target.checked ? [...a.variable_axes, i] : a.variable_axes.filter((x) => x !== i);
+      a.variable_axes.sort((x, y) => x - y);
+    };
+    va.appendChild(c);
+  });
+  psec.appendChild(va);
+  psec.appendChild(h3("poses"));
+  // Two-column layout: the pose rows sit left, the hover preview right. The preview
+  // shows the first pose by default and follows the hovered row; the safezone bars
+  // mirror the oob highlight (the zone-limits display stays on the inputs, untouched).
+  const pwrap = document.createElement("div");
+  pwrap.className = "aePoseWrap";
+  const plist = document.createElement("div");
+  plist.className = "aePoseList";
+  const pprev = document.createElement("div");
+  pprev.className = "aePosePrev";
+  aePrevEl = pprev;
+  aePrevIdx = 0;
+  pwrap.appendChild(plist);
+  pwrap.appendChild(pprev);
+  psec.appendChild(pwrap);
+  const showPrev = (idx) => {
+    aePrevIdx = idx;
+    const pp = a.poses[idx];
+    renderPosePreview(Array.isArray(pp) && pp.length === 6 ? pp : [0,0,0,0,0,0], pprev, z.safezone);
+  };
+  a.poses.forEach((pose, pi) => {
+    const p = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
+    const pr = document.createElement("div");
+    pr.className = "aePoseRow";
+    pr.onmouseenter = () => showPrev(pi);
+    for (let i = 0; i < 6; i++) {
       const inp = document.createElement("input");
       inp.type = "number"; inp.step = "0.1";
-      inp.value = v != null ? v : 0;
-      if (z.safezone && (a.base_pose[i] < z.safezone[i][0] || a.base_pose[i] > z.safezone[i][1])) inp.className = "oob";
+      inp.value = p[i] != null ? p[i] : 0;
+      if (z.safezone) {
+        const [lo, hi] = z.safezone[i];
+        if (p[i] < lo || p[i] > hi) inp.className = "oob";
+      }
       inp.oninput = () => {
-        a.base_pose[i] = parseFloat(inp.value);
-        if (z.safezone) inp.className = (a.base_pose[i] < z.safezone[i][0] || a.base_pose[i] > z.safezone[i][1]) ? "oob" : "";
-      };
-      l.appendChild(inp);
-      bp.appendChild(l);
-    });
-    vsec.appendChild(bp);
-    const bpcopy = document.createElement("button");
-    bpcopy.className = "small"; bpcopy.textContent = "copy base_pose";
-    bpcopy.onclick = () => { copyPose(a.base_pose); buildActionEditor(); };
-    vsec.appendChild(bpcopy);
-    // variable_axes (checkboxes over the six axes)
-    vsec.appendChild(h3("variable_axes"));
-    const va = document.createElement("div");
-    va.className = "row";
-    AXES.forEach((n, i) => {
-      const c = document.createElement("label");
-      c.className = "inline";
-      c.innerHTML = `<input type="checkbox" ${a.variable_axes.includes(i) ? "checked" : ""}> ${n}`;
-      c.querySelector("input").onchange = (e) => {
-        a.variable_axes = e.target.checked ? [...a.variable_axes, i] : a.variable_axes.filter((x) => x !== i);
-        a.variable_axes.sort((x, y) => x - y);
-      };
-      va.appendChild(c);
-    });
-    vsec.appendChild(va);
-    // behavior + speed
-    const row = document.createElement("div");
-    row.className = "row";
-    const bl = document.createElement("label");
-    bl.className = "inline";
-    bl.innerHTML = "behavior <select class='aeBehavior'></select>";
-    const bsel = bl.querySelector("select");
-    BEHAVIORS.forEach((b) => { const o = document.createElement("option"); o.value = b; o.textContent = b; bsel.appendChild(o); });
-    bsel.value = (a.behavior && BEHAVIORS.includes(a.behavior)) ? a.behavior : "calm";
-    bsel.onchange = () => { a.behavior = bsel.value; };
-    row.appendChild(bl);
-    const sp = document.createElement("label");
-    sp.className = "inline";
-    sp.innerHTML = "speed <input type='number' step='1' value='" + (typeof a.speed === "number" ? a.speed : 20) + "'>";
-    sp.querySelector("input").oninput = (e) => { a.speed = parseFloat(e.target.value); };
-    row.appendChild(sp);
-    vsec.appendChild(row);
-    el.appendChild(vsec);
-  } else {
-    // --- legacy fixed-pose form: behavior marker + one row per pose (6 values + speed + ▲ ▼ ×) + add ---
-    if (!Array.isArray(a.pos)) a.pos = [[0,0,0,0,0,0]];
-    if (!Array.isArray(a.speed)) a.speed = [10];
-    const psec = document.createElement("div");
-    psec.className = "aeSec";
-    // Behavior marker for the fixed-sequence form. Legacy actions are stepped by pose
-    // (no variable axes), so this is a label + the "bridge" no-op constraint; the
-    // auto-inserted bridge action is tagged "bridge" here.
-    const brow = document.createElement("div");
-    brow.className = "row";
-    const bl = document.createElement("label");
-    bl.className = "inline";
-    bl.innerHTML = "behavior <select class='aeBehavior'></select>";
-    const bsel = bl.querySelector("select");
-    BEHAVIORS.forEach((b) => { const o = document.createElement("option"); o.value = b; o.textContent = b; bsel.appendChild(o); });
-    bsel.value = (a.behavior && BEHAVIORS.includes(a.behavior)) ? a.behavior : "calm";
-    bsel.onchange = () => { a.behavior = bsel.value; };
-    brow.appendChild(bl);
-    psec.appendChild(brow);
-    psec.appendChild(h3("poses"));
-    a.pos.forEach((pose, pi) => {
-      const p = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
-      const pr = document.createElement("div");
-      pr.className = "aePoseRow";
-      for (let i = 0; i < 6; i++) {
-        const inp = document.createElement("input");
-        inp.type = "number"; inp.step = "0.1";
-        inp.value = p[i] != null ? p[i] : 0;
+        a.poses[pi][i] = parseFloat(inp.value);
         if (z.safezone) {
           const [lo, hi] = z.safezone[i];
-          if (p[i] < lo || p[i] > hi) inp.className = "oob";
+          inp.className = (a.poses[pi][i] < lo || a.poses[pi][i] > hi) ? "oob" : "";
         }
-        inp.oninput = () => {
-          a.pos[pi][i] = parseFloat(inp.value);
-          if (z.safezone) {
-            const [lo, hi] = z.safezone[i];
-            inp.className = (a.pos[pi][i] < lo || a.pos[pi][i] > hi) ? "oob" : "";
-          }
-        };
-        pr.appendChild(inp);
-      }
-      const spd = document.createElement("input");
-      spd.type = "number"; spd.step = "1";
-      spd.value = a.speed[pi] != null ? a.speed[pi] : 10;
-      spd.oninput = () => { a.speed[pi] = parseFloat(spd.value); };
-      pr.appendChild(spd);
-      const ctl = document.createElement("div");
-      ctl.className = "aePoseCtl";
-      const up = document.createElement("button");
-      up.textContent = "▲";
-      up.onclick = () => { if (pi > 0) aeSwapPoses(zn, an, pi, pi - 1); };
-      const down = document.createElement("button");
-      down.textContent = "▼";
-      down.onclick = () => { if (pi < a.pos.length - 1) aeSwapPoses(zn, an, pi, pi + 1); };
-      const cp = document.createElement("button");
-      cp.textContent = "copy";
-      cp.onclick = () => { copyPose(a.pos[pi]); buildActionEditor(); };
-      const del = document.createElement("button");
-      del.textContent = "×";
-      del.onclick = () => {
-        a.pos.splice(pi, 1);
-        a.speed.splice(pi, 1);
-        const s = SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an];
-        if (s && Array.isArray(s.poses)) s.poses.splice(pi, 1);
-        buildActionEditor();
+        if (aePrevIdx === pi) showPrev(pi);  // keep the schematic in sync while editing
       };
-      ctl.appendChild(up); ctl.appendChild(down); ctl.appendChild(cp); ctl.appendChild(del);
-      pr.appendChild(ctl);
-      psec.appendChild(pr);
-    });
-    // Paste the clipboard pose into this action's `pos` list (appends; use ▲▼ to
-    // position it). Only pose-sequence actions accept a pasted pose.
-    const pasteR = document.createElement("button");
-    pasteR.className = "small";
-    pasteR.textContent = POSE_CLIP ? "paste pose" : "paste pose (none copied)";
-    pasteR.disabled = !POSE_CLIP;
-    pasteR.onclick = () => { if (pastePose(zn, an)) buildActionEditor(); };
-    psec.appendChild(pasteR);
-    const addR = document.createElement("button");
-    addR.className = "small"; addR.textContent = "+ pose row";
-    addR.onclick = () => {
-      a.pos.push([0,0,0,0,0,0]);
-      a.speed.push(10);
+      pr.appendChild(inp);
+    }
+    const ctl = document.createElement("div");
+    ctl.className = "aePoseCtl";
+    const up = document.createElement("button");
+    up.textContent = "▲";
+    up.onclick = () => { if (pi > 0) aeSwapPoses(zn, an, pi, pi - 1); };
+    const down = document.createElement("button");
+    down.textContent = "▼";
+    down.onclick = () => { if (pi < a.poses.length - 1) aeSwapPoses(zn, an, pi, pi + 1); };
+    const cp = document.createElement("button");
+    cp.textContent = "copy";
+    cp.onclick = () => { copyPose(a.poses[pi]); buildActionEditor(); };
+    const del = document.createElement("button");
+    del.textContent = "×";
+    del.onclick = () => {
+      a.poses.splice(pi, 1);
       const s = SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an];
-      if (s) { s.poses = s.poses || []; s.poses.push({ note: 60, velocity: 60 }); }
+      if (s && Array.isArray(s.poses)) s.poses.splice(pi, 1);
       buildActionEditor();
     };
-    psec.appendChild(addR);
-    el.appendChild(psec);
-  }
+     ctl.appendChild(up); ctl.appendChild(down); ctl.appendChild(cp); ctl.appendChild(del);
+     pr.appendChild(ctl);
+     plist.appendChild(pr);
+  });
+  // Paste the clipboard pose into this action's `poses` list (appends; use ▲▼ to
+  // position it).
+  const pasteR = document.createElement("button");
+  pasteR.className = "small";
+  pasteR.textContent = POSE_CLIP ? "paste pose" : "paste pose (none copied)";
+  pasteR.disabled = !POSE_CLIP;
+  pasteR.onclick = () => { if (pastePose(zn, an)) buildActionEditor(); };
+  plist.appendChild(pasteR);
+  const addR = document.createElement("button");
+  addR.className = "small"; addR.textContent = "+ pose row";
+  addR.onclick = () => {
+    a.poses.push([0,0,0,0,0,0]);
+    const s = SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an];
+    if (s) { s.poses = s.poses || []; s.poses.push({ note: 60, velocity: 60 }); }
+    buildActionEditor();
+  };
+  plist.appendChild(addR);
+  showPrev(0);  // seed the schematic with the first pose
+  el.appendChild(psec);
 
   // --- next section: the action's ordered LIST of successor {zone, action} targets ---
   // The brain walks this list and takes the first usable candidate (loop-vs-advance
@@ -2408,17 +2507,18 @@ function buildActionEditor() {
   addRow.textContent = "+ add next";
   addRow.onclick = () => { targets.push({}); commitNext(targets); };
   nsec.appendChild(addRow);
-  // Pose-continuity hint: a var-form action's base_pose should match each successor's.
-  if (form === "var") {
-    const diffs = targets.filter((t) =>
-      t.zone && t.action && TABLE.zones[t.zone] && TABLE.zones[t.zone].actions[t.action] &&
-      TABLE.zones[t.zone].actions[t.action].base_pose &&
-      !a.base_pose.every((v, i) => Math.abs(v - TABLE.zones[t.zone].actions[t.action].base_pose[i]) < 0.001));
+  // Pose-continuity hint: the action's entry anchor should match each successor's.
+  if (a.poses.length) {
+    const diffs = targets.filter((t) => {
+      const tgt = (t.zone && t.action && TABLE.zones[t.zone] && TABLE.zones[t.zone].actions[t.action])
+        ? actionPoses(TABLE.zones[t.zone].actions[t.action]) : [];
+      return tgt.length && !a.poses[0].every((v, i) => Math.abs(v - tgt[0][i]) < 0.001);
+    });
     if (diffs.length) {
       const hint = document.createElement("div");
       hint.className = "aeHint";
       hint.style.cssText = "font-size:11px;color:#e0a030";
-      hint.textContent = "base_pose differs from next " + diffs.map((t) => `${t.zone}/${t.action} (${TABLE.zones[t.zone].actions[t.action].base_pose.join(", ")})`).join(", ");
+      hint.textContent = "entry pose differs from next " + diffs.map((t) => `${t.zone}/${t.action} (${actionPoses(TABLE.zones[t.zone].actions[t.action])[0].join(", ")})`).join(", ");
       nsec.appendChild(hint);
     }
   }
@@ -2469,7 +2569,7 @@ function copyAction(zn, an) {
 // zones tab, via the shared action list) uses these for per-action ops. Rename
 // re-keys the action and repoints every `next` reference to it; delete clears any
 // `next` that pointed at it; reorder re-keys the zone's actions in place. Poses
-// are copied whole (a 6-value) and pasted into a pose-sequence action's `pos` list.
+// are copied whole (a 6-value) and pasted into an action's `poses` list.
 // ---------------------------------------------------------------------------
 let POSE_CLIP = null;  // a copied 6-value pose, or null
 
@@ -2557,23 +2657,19 @@ function reorderAction(zn, an, dir) {
   z.actions = na;
 }
 
-// Copy a 6-value pose (from a pose row or a base_pose) to the clipboard.
+// Copy a 6-value pose (from a pose row) to the clipboard.
 function copyPose(pose) {
   POSE_CLIP = (Array.isArray(pose) && pose.length === 6) ? pose.slice() : null;
 }
 
-// Paste the clipboard pose into zn/an's `pos` list (pose-form only), at ``index``
-// (default: append). Mirrors the per-row speed default used by "+ pose row".
+// Paste the clipboard pose into zn/an's `poses` list, at ``index`` (default: append).
 function pastePose(zn, an, index) {
   const z = TABLE.zones[zn];
   if (!POSE_CLIP || !z || !z.actions || !z.actions[an]) return false;
   const a = z.actions[an];
-  if (actionForm(a) !== "pose") return false;  // only pose-sequence actions accept a pasted pose
-  if (!Array.isArray(a.pos)) a.pos = [[0,0,0,0,0,0]];
-  if (!Array.isArray(a.speed)) a.speed = [10];
-  const at = (index == null || index < 0 || index > a.pos.length) ? a.pos.length : index;
-  a.pos.splice(at, 0, POSE_CLIP.slice());
-  a.speed.splice(at, 0, 10);
+  if (!Array.isArray(a.poses) || !a.poses.length) a.poses = [[0,0,0,0,0,0]];
+  const at = (index == null || index < 0 || index > a.poses.length) ? a.poses.length : index;
+  a.poses.splice(at, 0, POSE_CLIP.slice());
   return true;
 }
 
@@ -3104,7 +3200,7 @@ function buildZoneForm(containerEl, titleEl, name, onChanged, showPoses) {
   addA.onclick = () => {
     const nm = prompt("action name:", "new");
     if (!nm) return;
-    z.actions[nm] = { enabled: true, base_pose: [0,0,0,0,0,0], variable_axes: [], behavior: "calm", speed: 20, loop: true };
+    z.actions[nm] = { enabled: true, poses: [[0,0,0,0,0,0]], variable_axes: [], behavior: "calm", speed: 20, loop: true };
     selectedAction = nm;
     rebuild(); onChanged();
   };
@@ -3174,76 +3270,60 @@ function buildActionList(container, name, z, rebuild, onChanged, showPoses) {
 
     // Overview rows (hidden in the flow-detail overview; full editing is in the modal).
     if (showPoses) {
-      if (actionForm(a) === "var") {
-        // Variable-axis form: one base_pose row + behavior + speed (axes edited in modal).
-        if (!Array.isArray(a.base_pose) || a.base_pose.length !== 6) a.base_pose = [0,0,0,0,0,0];
+      if (!Array.isArray(a.poses) || !a.poses.length) a.poses = [[0,0,0,0,0,0]];
+      if (!Array.isArray(a.variable_axes)) a.variable_axes = [];
+      if (!BEHAVIORS.includes(a.behavior)) a.behavior = "calm";
+      // Action-level row: behavior + speed (every anchor shares them).
+      const ar = document.createElement("div");
+      ar.className = "poseRow";
+      const beh = document.createElement("select");
+      beh.className = "aeBehavior";
+      BEHAVIORS.forEach((b) => { const o = document.createElement("option"); o.value = b; o.textContent = b; beh.appendChild(o); });
+      beh.value = a.behavior;
+      beh.onchange = () => { a.behavior = beh.value; };
+      ar.appendChild(beh);
+      const spd = document.createElement("input");
+      spd.type = "number"; spd.step = "1";
+      spd.value = typeof a.speed === "number" ? a.speed : 20;
+      spd.oninput = () => { a.speed = parseFloat(spd.value); };
+      ar.appendChild(spd);
+      box.appendChild(ar);
+      const axes = document.createElement("div");
+      axes.className = "poseRow";
+      axes.style.cssText = "font-size:11px;color:var(--dim)";
+      axes.textContent = (a.variable_axes.length)
+        ? "variable axes: " + a.variable_axes.map((i) => AXES[i]).join(", ")
+        : "fixed anchors";
+      box.appendChild(axes);
+      // One row per anchor pose (6 values + ×).
+      a.poses.forEach((pose, pi) => {
         const pr = document.createElement("div");
         pr.className = "poseRow";
+        const p = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
         for (let i = 0; i < 6; i++) {
           const inp = document.createElement("input");
-          inp.type = "number"; inp.step = "0.1"; inp.value = a.base_pose[i] != null ? a.base_pose[i] : 0;
-          inp.oninput = () => { a.base_pose[i] = parseFloat(inp.value); if (an === selectedAction) onChanged(); };
+          inp.type = "number"; inp.step = "0.1"; inp.value = p[i];
+          inp.oninput = () => { a.poses[pi][i] = parseFloat(inp.value); if (an === selectedAction) onChanged(); };
           pr.appendChild(inp);
         }
-        const beh = document.createElement("select");
-        beh.className = "aeBehavior";
-        BEHAVIORS.forEach((b) => { const o = document.createElement("option"); o.value = b; o.textContent = b; beh.appendChild(o); });
-        beh.value = (a.behavior && BEHAVIORS.includes(a.behavior)) ? a.behavior : "calm";
-        beh.onchange = () => { a.behavior = beh.value; };
-        pr.appendChild(beh);
-        const spd = document.createElement("input");
-        spd.type = "number"; spd.step = "1";
-        spd.value = typeof a.speed === "number" ? a.speed : 20;
-        spd.oninput = () => { a.speed = parseFloat(spd.value); };
-        pr.appendChild(spd);
-        box.appendChild(pr);
-        const axes = document.createElement("div");
-        axes.className = "poseRow";
-        axes.style.cssText = "font-size:11px;color:var(--dim)";
-        axes.textContent = (a.variable_axes && a.variable_axes.length)
-          ? "variable axes: " + a.variable_axes.map((i) => AXES[i]).join(", ")
-          : "fixed base_pose";
-        box.appendChild(axes);
-      } else {
-        // Legacy fixed-pose form: one row per pose (6 values + speed + ×).
-        if (!Array.isArray(a.pos)) a.pos = [[0,0,0,0,0,0]];
-        if (!Array.isArray(a.speed)) a.speed = [10];
-        a.pos.forEach((pose, pi) => {
-          const pr = document.createElement("div");
-          pr.className = "poseRow";
-          pose = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
-          for (let i = 0; i < 6; i++) {
-            const inp = document.createElement("input");
-            inp.type = "number"; inp.step = "0.1"; inp.value = pose[i];
-            inp.oninput = () => { a.pos[pi][i] = parseFloat(inp.value); if (an === selectedAction) onChanged(); };
-            pr.appendChild(inp);
-          }
-          const spd = document.createElement("input");
-          spd.type = "number"; spd.step = "1";
-          spd.value = (a.speed && a.speed[pi]) != null ? a.speed[pi] : 10;
-          spd.oninput = () => { a.speed = a.speed || []; a.speed[pi] = parseFloat(spd.value); };
-          pr.appendChild(spd);
-          const rx = document.createElement("button");
-          rx.className = "small"; rx.textContent = "×";
-          rx.onclick = () => {
-            a.pos.splice(pi, 1);
-            a.speed = a.speed || []; a.speed.splice(pi, 1);
-            if (ghostIndex >= a.pos.length) ghostIndex = 0;
-            rebuild(); onChanged();
-          };
-          pr.appendChild(rx);
-          box.appendChild(pr);
-        });
-        const addR = document.createElement("button");
-        addR.className = "small"; addR.textContent = "+ pose row";
-        addR.onclick = () => {
-          a.pos = a.pos || []; a.speed = a.speed || [];
-          a.pos.push([0,0,0,0,0,0]);
-          a.speed.push(10);
-          rebuild();
+        const rx = document.createElement("button");
+        rx.className = "small"; rx.textContent = "×";
+        rx.onclick = () => {
+          a.poses.splice(pi, 1);
+          if (ghostIndex >= a.poses.length) ghostIndex = 0;
+          rebuild(); onChanged();
         };
-        box.appendChild(addR);
-      }
+        pr.appendChild(rx);
+        box.appendChild(pr);
+      });
+      const addR = document.createElement("button");
+      addR.className = "small"; addR.textContent = "+ pose row";
+      addR.onclick = () => {
+        a.poses = a.poses || [];
+        a.poses.push([0,0,0,0,0,0]);
+        rebuild();
+      };
+      box.appendChild(addR);
     }
 
     container.appendChild(box);
@@ -3271,16 +3351,12 @@ function buildBars() {
   updateGhost();
 }
 
-// The steppable poses of an action: a variable-axis action has a single base_pose;
-// a legacy action steps through its `pos` sequence.
+// The steppable anchor poses of an action: its `poses` list.
 function ghostPoses(an) {
   const z = TABLE.zones[selectedZone];
   if (!z || !z.actions || !z.actions[an]) return [];
   const a = z.actions[an];
-  if (actionForm(a) === "var") {
-    return (Array.isArray(a.base_pose) && a.base_pose.length === 6) ? [a.base_pose] : [];
-  }
-  return Array.isArray(a.pos) ? a.pos : [];
+  return Array.isArray(a.poses) ? a.poses : [];
 }
 
 function currentGhostPose() {
@@ -3295,7 +3371,7 @@ function updateGhost() {
   if (pose) Robot3D.setTarget(pose);
   const ps = ghostPoses(selectedAction);
   $("ghostInfo").textContent = pose
-    ? (ps.length > 1 ? `${selectedAction} pose ${ghostIndex % ps.length}` : `${selectedAction} (base)`)
+    ? (ps.length > 1 ? `${selectedAction} anchor ${ghostIndex % ps.length}` : `${selectedAction} (anchor)`)
     : "no action selected";
   // bars marker at the ghost pose
   if (z && z.safezone) {
@@ -3342,26 +3418,18 @@ function validate() {
       if (typeof a !== "object" || a === null || Array.isArray(a)) { errs.push(`${name}/${an}: must be an object`); continue; }
       if (a.enabled !== undefined && typeof a.enabled !== "boolean") errs.push(`${name}/${an}: enabled must be a bool`);
       if (a.loop !== undefined && typeof a.loop !== "boolean") errs.push(`${name}/${an}: loop must be a bool`);
-      // Form: an action has base_pose OR pos, not both.
-      const hasBase = a.base_pose !== undefined, hasPos = a.pos !== undefined;
-      if (hasBase && hasPos) { errs.push(`${name}/${an}: must have either base_pose or pos, not both`); continue; }
-      if (!hasBase && !hasPos) { errs.push(`${name}/${an}: needs base_pose (variable-axis) or pos (fixed sequence)`); continue; }
-      if (hasBase) {
-        if (!Array.isArray(a.base_pose) || a.base_pose.length !== 6 || !a.base_pose.every(isNum))
-          errs.push(`${name}/${an}: base_pose needs 6 numbers`);
-        if (a.variable_axes !== undefined && (!Array.isArray(a.variable_axes) || !a.variable_axes.every((x) => Number.isInteger(x) && x >= 0 && x <= 5)))
-          errs.push(`${name}/${an}: variable_axes must be axis indices 0-5`);
-        if (a.behavior !== undefined && !BEHAVIORS.includes(a.behavior))
-          errs.push(`${name}/${an}: behavior "${a.behavior}" not in ${BEHAVIORS.join("/")}`);
-        if (a.speed !== undefined && !isNum(a.speed)) errs.push(`${name}/${an}: speed must be a number (variable-axis form)`);
-      } else {
-        if (!Array.isArray(a.pos) || !a.pos.length) { errs.push(`${name}/${an}: pos needs at least 1 pose`); continue; }
-        a.pos.forEach((p, i) => { if (!Array.isArray(p) || p.length !== 6 || !p.every(isNum)) errs.push(`${name}/${an}: pose ${i} needs 6 numbers`); });
-        if (a.speed !== undefined && (Array.isArray(a.speed) ? a.speed.length !== a.pos.length || !a.speed.every(isNum) : !isNum(a.speed)))
-          errs.push(`${name}/${an}: speed needs one number per pose`);
-        if (a.behavior !== undefined && !BEHAVIORS.includes(a.behavior))
-          errs.push(`${name}/${an}: behavior "${a.behavior}" not in ${BEHAVIORS.join("/")}`);
+      // Unified form: an action has a `poses` list (ordered 6-axis anchors). Legacy
+      // fields (base_pose / pos) are rejected — the core migrated them to `poses`.
+      if (a.base_pose !== undefined || a.pos !== undefined) {
+        errs.push(`${name}/${an}: legacy base_pose/pos — use the unified poses list`); continue;
       }
+      if (!Array.isArray(a.poses) || !a.poses.length) { errs.push(`${name}/${an}: poses needs at least 1 anchor`); continue; }
+      a.poses.forEach((p, i) => { if (!Array.isArray(p) || p.length !== 6 || !p.every(isNum)) errs.push(`${name}/${an}: pose ${i} needs 6 numbers`); });
+      if (a.variable_axes !== undefined && (!Array.isArray(a.variable_axes) || !a.variable_axes.every((x) => Number.isInteger(x) && x >= 0 && x <= 5)))
+        errs.push(`${name}/${an}: variable_axes must be axis indices 0-5`);
+      if (a.behavior !== undefined && !BEHAVIORS.includes(a.behavior))
+        errs.push(`${name}/${an}: behavior "${a.behavior}" not in ${BEHAVIORS.join("/")}`);
+      if (a.speed !== undefined && !isNum(a.speed)) errs.push(`${name}/${an}: speed must be a number`);
       // next: optional {zone, action} dict OR a list of them (ordered targets).
       if (a.next !== undefined) {
         const items = Array.isArray(a.next) ? a.next : [a.next];
@@ -3393,9 +3461,9 @@ function saveZones() {
     $("saveMsg").className = "err";
     return;
   }
-  // Non-blocking warnings: action poses outside the zone's safezone, outside the
-  // hardware floor, safezones wider than the hardware range, and next base_pose
-  // continuity (a variable-axis action's base_pose should match its successor's).
+  // Non-blocking warnings: action anchor poses outside the zone's safezone, outside
+  // the hardware floor, safezones wider than the hardware range, and entry-pose
+  // continuity (an action's entry anchor should match its successor's).
   // The core clamps to the intersection (safezone ∩ hardware), so these are flags.
   const warns = [];
   for (const name of Object.keys(TABLE.zones)) {
@@ -3407,22 +3475,21 @@ function saveZones() {
     }
     for (const an of Object.keys(z.actions || {})) {
       const a = z.actions[an];
-      // The poses to check: base_pose (var form) or the pos sequence (legacy).
-      const poses = actionForm(a) === "var" ? (a.base_pose ? [a.base_pose] : []) : (a.pos || []);
+      const poses = actionPoses(a);
       poses.forEach((p, i) => {
         for (let ax = 0; ax < 6; ax++) {
           const [lo, hi] = z.safezone[ax];
-          if (p[ax] < lo || p[ax] > hi) warns.push(`${name}/${an} ${actionForm(a) === "var" ? "base_pose" : `pose ${i}`} axis ${AXES[ax]} outside safezone`);
+          if (p[ax] < lo || p[ax] > hi) warns.push(`${name}/${an} pose ${i} axis ${AXES[ax]} outside safezone`);
           const [hlo, hhi] = HW_LIMITS[ax];
-          if (p[ax] < hlo || p[ax] > hhi) warns.push(`${name}/${an} ${actionForm(a) === "var" ? "base_pose" : `pose ${i}`} axis ${AXES[ax]} outside hardware limits`);
+          if (p[ax] < hlo || p[ax] > hhi) warns.push(`${name}/${an} pose ${i} axis ${AXES[ax]} outside hardware limits`);
         }
       });
-      // Pose continuity: the action's base_pose should match each successor's.
+      // Pose continuity: the action's entry anchor should match each successor's.
       for (const t of nextList(a)) {
         if (t.zone && t.action && TABLE.zones[t.zone] && TABLE.zones[t.zone].actions[t.action]) {
-          const tgt = TABLE.zones[t.zone].actions[t.action];
-          if (a.base_pose && tgt.base_pose && !a.base_pose.every((v, i) => Math.abs(v - tgt.base_pose[i]) < 0.001)) {
-            warns.push(`${name}/${an}: base_pose differs from next ${t.zone}/${t.action}`);
+          const tgt = actionPoses(TABLE.zones[t.zone].actions[t.action]);
+          if (poses.length && tgt.length && !poses[0].every((v, i) => Math.abs(v - tgt[0][i]) < 0.001)) {
+            warns.push(`${name}/${an}: entry pose differs from next ${t.zone}/${t.action}`);
           }
         }
       }
@@ -3511,9 +3578,18 @@ function flowBuildDefs() {
   marker.appendChild(svgEl("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "var(--accent)" }));
   defs.appendChild(marker);
   const targetMarker = svgEl("marker", { id: "flowArrowTarget", viewBox: "0 0 10 10", refX: 9, refY: 5,
-                                          markerWidth: 7, markerHeight: 7, orient: "auto" });
+                                           markerWidth: 7, markerHeight: 7, orient: "auto" });
   targetMarker.appendChild(svgEl("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "#e0a030" }));
   defs.appendChild(targetMarker);
+  // Arrowheads for in-zone links, one per state color (a marker's fill cannot
+  // inherit the path's stroke, so the state colors are baked into the marker).
+  [["flowInnerArrow", "#4fc08d"], ["flowInnerArrowSel", "#ffffff"], ["flowInnerArrowConflict", "#e05d5d"]]
+    .forEach(([id, fill]) => {
+      const mk = svgEl("marker", { id: id, viewBox: "0 0 10 10", refX: 8, refY: 5,
+                                   markerWidth: 6, markerHeight: 6, orient: "auto" });
+      mk.appendChild(svgEl("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: fill }));
+      defs.appendChild(mk);
+    });
   return defs;
 }
 
@@ -3644,28 +3720,48 @@ function flowPanStart(e) {
 // arrow (bidirectional); a dot marks each end on the action block. A conflict
 // (safezone gap or no shared position) turns the line red and adds a clickable "!"
 // marker that shows the conflict detail.
+// An IN-ZONE link (both actions in the same block) is drawn differently: the anchors
+// sit inside the block at the right end of each action row, the curve bows right so
+// it stays clear of the row labels, and an arrowhead points at the target action.
+// It renders on the inner edge layer (above the node layer) so the block body does
+// not cover it.
 function flowAddEdge(layer, e) {
   const a = FLOW.pos[e.from.zone], b = FLOW.pos[e.to.zone];
   if (!a || !b) return;
+  const inner = e.from.zone === e.to.zone;
   const ry1 = rowY(e.from.zone, e.from.action), ry2 = rowY(e.to.zone, e.to.action);
-  const bRight = b.x >= a.x;
-  const x1 = a.x + (bRight ? NODE_W : 0), y1 = a.y + ry1;
-  const x2 = b.x + (bRight ? 0 : NODE_W), y2 = b.y + ry2;
-  const d = edgePath(x1, y1, x2, y2);
+  let x1, y1, x2, y2, d;
+  if (inner) {
+    const ax = a.x, ay = a.y;
+    x1 = ax + NODE_W - 14; y1 = ay + ry1;
+    x2 = ax + NODE_W - 14; y2 = ay + ry2;
+    const k = 22;
+    d = `M ${x1} ${y1} C ${x1 + k} ${y1}, ${x2 + k} ${y2}, ${x2} ${y2}`;
+  } else {
+    const bRight = b.x >= a.x;
+    x1 = a.x + (bRight ? NODE_W : 0); y1 = a.y + ry1;
+    x2 = b.x + (bRight ? 0 : NODE_W); y2 = b.y + ry2;
+    d = edgePath(x1, y1, x2, y2);
+  }
   const conflict = edgeConflict(e);
-  const cls = "fedge" + (conflict.any ? " fedgeConflict" : "") + (edgeMatchesSel(e) ? " fedgeSel" : "");
+  const cls = "fedge" + (inner ? " fedgeInner" : "") + (conflict.any ? " fedgeConflict" : "") + (edgeMatchesSel(e) ? " fedgeSel" : "");
   const hit = svgEl("path", { d, class: "fedgeHit" });
   hit.addEventListener("click", (ev) => { ev.stopPropagation(); flowSelect({ type: "edge", from: e.from, to: e.to }); });
   layer.appendChild(hit);
-  layer.appendChild(svgEl("path", { d, class: cls }));
+  const attrs = { d, class: cls };
+  if (inner) {
+    attrs["marker-end"] = "url(#flowInnerArrow" + (conflict.any ? "Conflict" : edgeMatchesSel(e) ? "Sel" : "") + ")";
+  }
+  layer.appendChild(svgEl("path", attrs));
   // Connection dots on the action blocks (both ends — the link is bidirectional).
   const dotCls = "faDot" + (conflict.any ? " faDotConflict" : "");
   layer.appendChild(svgEl("circle", { cx: x1, cy: y1, r: 3.5, class: dotCls }));
   layer.appendChild(svgEl("circle", { cx: x2, cy: y2, r: 3.5, class: dotCls }));
   // Warning marker: a red "!" at the midpoint; clicking it selects the edge and
-  // surfaces the conflict in the detail panel.
+  // surfaces the conflict in the detail panel. For in-zone links the curve bows
+  // right, so the marker follows the curve's true midpoint (bezier t=0.5).
   if (conflict.any) {
-    const wx = (x1 + x2) / 2, wy = (y1 + y2) / 2;
+    const wx = (x1 + x2) / 2 + (inner ? 16.5 : 0), wy = (y1 + y2) / 2;
     const warn = svgEl("g", { class: "fedgeWarn", transform: `translate(${wx},${wy})` });
     warn.appendChild(svgEl("circle", { r: 7, class: "fedgeWarnBg" }));
     const t = svgEl("text", { class: "fedgeWarnTxt", "text-anchor": "middle", y: 3 });
@@ -3678,10 +3774,14 @@ function flowAddEdge(layer, e) {
 
 function flowRenderEdges() {
   const layer = $("flowEdgeLayer");
-  if (!layer) return;
+  const innerLayer = $("flowInnerEdgeLayer");
+  if (!layer || !innerLayer) return;
   layer.innerHTML = "";
+  innerLayer.innerHTML = "";
   // The graph is the deduplicated set of action-level connections (bidirectional).
-  actionEdgeList().forEach((e) => flowAddEdge(layer, e));
+  // In-zone links go to the inner layer (above the nodes) so they stay visible
+  // inside the block; inter-zone links stay on the edge layer (below the nodes).
+  actionEdgeList().forEach((e) => flowAddEdge(e.from.zone === e.to.zone ? innerLayer : layer, e));
 }
 
 // Draw semi-transparent rounded rectangles around each zone group's zones.
@@ -3746,7 +3846,7 @@ function flowAddNode(layer, name) {
       const hit = svgEl("rect", { x: 0, y: ry - FA_ROW / 2, width: NODE_W, height: FA_ROW, fill: "transparent" });
       hit.addEventListener("mousedown", (e) => { e.stopPropagation(); flowDragStart(e, name, an); });
       g.appendChild(hit);
-      const beh = actionForm(act) === "var" ? (act.behavior || "calm") : "pose";
+      const beh = (act.behavior && BEHAVIORS.includes(act.behavior)) ? act.behavior : "calm";
       const txt = svgEl("text", { x: 8, y: ry + 4, class: "faRow", "text-anchor": "start" });
       const lbl = svgEl("tspan", { class: "faLabel" });
       lbl.textContent = an;
@@ -3776,9 +3876,12 @@ function flowRender() {
   const groupLayer = svgEl("g", { id: "flowGroupLayer" });
   const edgeLayer = svgEl("g", { id: "flowEdgeLayer" });
   const nodeLayer = svgEl("g", { id: "flowNodeLayer" });
+  // In-zone links render above the nodes so the block body does not cover them.
+  const innerEdgeLayer = svgEl("g", { id: "flowInnerEdgeLayer" });
   svg.appendChild(groupLayer);
   svg.appendChild(edgeLayer);
   svg.appendChild(nodeLayer);
+  svg.appendChild(innerEdgeLayer);
   // Temporary drag line (no arrow — connections are bidirectional).
   svg.appendChild(svgEl("path", { id: "flowDragArrow", fill: "none", stroke: "var(--accent)",
                                     "stroke-width": 2, "stroke-dasharray": "4 3", style: "display:none" }));
@@ -3912,7 +4015,8 @@ function flowSelect(sel) {
 // Bridge zone: an intermediate zone that resolves a conflicting edge. Its
 // safezone is the per-axis UNION of the two endpoint zones (the smallest box
 // containing both, so it overlaps every axis of each), and its single action is
-// pose-form [A_end, B_start] (loop=false) so each handoff shares a position.
+// a `poses` sequence [A_end, B_start] (loop=false) so each handoff shares a
+// position.
 // ---------------------------------------------------------------------------
 // Compute the bridge plan for the undirected edge {from, to}: returns
 // {name, zone, actionName, action}, or null if either end lacks a concrete pose.
@@ -3941,8 +4045,9 @@ function bridgePlan(from, to) {
         enabled: true,
         loop: false,
         behavior: "bridge",
-        pos: [aEnd.slice(), bStart.slice()],
-        speed: [speed, speed],
+        poses: [aEnd.slice(), bStart.slice()],
+        variable_axes: [],
+        speed: speed,
         next: { zone: to.zone, action: to.action },
       },
     },
@@ -4041,7 +4146,10 @@ function buildFlowDetail() {
   const zf = TABLE.zones[from.zone];
   if (!zf || !zf.actions || !zf.actions[from.action]) return;
   const act = zf.actions[from.action];
-  title.textContent = `link: ${from.zone}/${from.action} ↔ ${to.zone}/${to.action}`;
+  // In-zone links have a direction (the source's `next` points at the target);
+  // inter-zone links are undirectional.
+  const dir = from.zone === to.zone ? "→" : "↔";
+  title.textContent = `link: ${from.zone}/${from.action} ${dir} ${to.zone}/${to.action}`;
   const conflict = edgeConflict({ from, to });
   const cdiv = document.createElement("div");
   cdiv.style.cssText = "font-size:12px;margin-bottom:8px";
@@ -4380,6 +4488,21 @@ $("patchRemove").onclick = removePatchSlot;
 // Action editor (Step 3) modal wiring.
 $("aeClose").onclick = closeActionEditor;
 $("actionEditor").addEventListener("click", (e) => { if (e.target === e.currentTarget) closeActionEditor(); });
+// Safety popup wiring.
+$("spConfirm").onclick = () => {
+  if (ws) ws.send(JSON.stringify({ cmd: "safety_confirm" }));
+  $("safetyPopup").classList.remove("open");
+};
+$("spCancel").onclick = () => {
+  if (ws) ws.send(JSON.stringify({ cmd: "safety_cancel" }));
+  $("safetyPopup").classList.remove("open");
+};
+$("safetyPopup").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) {
+    if (ws) ws.send(JSON.stringify({ cmd: "safety_cancel" }));
+    $("safetyPopup").classList.remove("open");
+  }
+});
 $("aePatchCode").oninput = (e) => {
   if (AE.zone && AE.action) setPatchCode("actions." + AE.zone + "." + AE.action, e.target.value);
   if (AE.timer) clearTimeout(AE.timer);

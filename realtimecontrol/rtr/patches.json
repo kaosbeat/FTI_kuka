@@ -12,7 +12,9 @@
     "roaring": "osc(60, 0.4, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
     "growling": "osc(30, 0.35, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
     "clawing": "osc(45, 0.4, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
-    "leaping": "osc(80, 0.5, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n"
+    "leaping": "osc(80, 0.5, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
+    "resting_sleeping_bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n",
+    "stretching_hunting_bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
   },
   "modes": {
     "calm": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out()",
@@ -28,7 +30,8 @@
     "aggressive": "osc(50, 0.45, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
     "exhilarated": "osc(80, 0.5, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
     "impatient": "osc(70, 0.45, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
-    "drowsy": "osc(1, 0.06, 1.2)\n.posterize(4)\n.out()"
+    "drowsy": "osc(1, 0.06, 1.2)\n.posterize(4)\n.out()",
+    "bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
   },
   "actions": {
     "resting": {
@@ -57,7 +60,8 @@
     "hunting": {
       "track": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).out()\n",
       "focus": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out()\n",
-      "scan": "osc(6, 0.2, 1.2)\n.kaleid(3)\n.out()"
+      "scan": "osc(6, 0.2, 1.2)\n.kaleid(3)\n.out()",
+      "track2": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
     },
     "examining": {
       "focus": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out()\n",
@@ -82,6 +86,12 @@
     "leaping": {
       "leap": "osc(80, 0.5, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
       "pacing": "osc(70, 0.45, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n"
+    },
+    "resting_sleeping_bridge": {
+      "bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
+    },
+    "stretching_hunting_bridge": {
+      "bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
     }
   }
 }

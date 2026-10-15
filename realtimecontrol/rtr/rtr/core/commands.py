@@ -20,7 +20,6 @@ class Cmd(str, Enum):
     SET_JOINT_POSE = "set_joint_pose"
     SET_LINEAR_POSE = "set_linear_pose"
     ADJUST_LIMIT = "adjust_limit"
-    SET_FLAG = "set_flag"
     RANDOM_WRIST = "random_wrist"
     RELOAD_ZONES = "reload_zones"
     RELOAD_SOUND = "reload_sound"
@@ -39,6 +38,8 @@ class Cmd(str, Enum):
     CAM_FACE = "cam_face"
     CAM_FORCE_LOCK = "cam_force_lock"
     PROCEED = "proceed"
+    SAFETY_CONFIRM = "safety_confirm"
+    SAFETY_CANCEL = "safety_cancel"
 
 
 class Event(str, Enum):
@@ -55,6 +56,8 @@ class Event(str, Enum):
     POSE_UPDATED = "pose_updated"
     SNAPSHOT = "snapshot"
     CAM_CONTROL = "cam_control"
+    SAFETY_ALERT = "safety_alert"
+    SAFETY_DISCARD = "safety_discard"
 
 
 @dataclass
@@ -93,7 +96,6 @@ class Snapshot:
     cart_pose: List[float]
     target_pose: List[float]
     speed: float
-    flags: Dict[str, Any]
     moving: bool
     # Additive optional fields (absent from older snapshots; clients ignore unknowns).
     hunt: Optional[dict] = None  # brain hunt state: {"state", "lock_id", "feral"}
@@ -106,6 +108,8 @@ class Snapshot:
     performance_mode: Optional[bool] = None  # perform on, hunt+facefocus off
     autonomy_dwell_remaining: Optional[float] = None  # seconds left in current dwell
     control_mode: Optional[str] = None  # "manual" | "auto"
+    action_index: Optional[int] = None  # current anchor index within the action's poses
+    safety: Optional[dict] = None  # pending safety-gated move info (None when no pending)
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
@@ -116,7 +120,6 @@ class Snapshot:
             "cart_pose": list(self.cart_pose),
             "target_pose": list(self.target_pose),
             "speed": self.speed,
-            "flags": dict(self.flags),
             "moving": self.moving,
         }
         if self.hunt is not None:
@@ -139,4 +142,8 @@ class Snapshot:
             d["autonomy_dwell_remaining"] = self.autonomy_dwell_remaining
         if self.control_mode is not None:
             d["control_mode"] = self.control_mode
+        if self.action_index is not None:
+            d["action_index"] = self.action_index
+        if self.safety is not None:
+            d["safety"] = dict(self.safety)
         return d

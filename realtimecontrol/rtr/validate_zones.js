@@ -193,17 +193,20 @@ function effectiveLimits(sz) {
   ]);
 }
 
-// Poses to validate for one action.
+// Poses to validate for one action (unified ``poses`` form). Each anchor is
+// checked, plus the 2^n corners of the variable-axis safezone box (the max-reach
+// extremes) when the action drives variable axes.
 function actionPoses(zone, action) {
-  if (action.base_pose !== undefined) {
-    const bp = action.base_pose;
-    const va = action.variable_axes || [];
-    const eff = effectiveLimits(zone.safezone);
-    const poses = [bp.slice()];
-    const n = va.length;
+  const anchors = action.poses;
+  const va = action.variable_axes || [];
+  const eff = effectiveLimits(zone.safezone);
+  const n = va.length;
+  const poses = [];
+  for (const anchor of anchors) {
+    poses.push(anchor.slice());
     if (n > 0) {
       for (let mask = 0; mask < (1 << n); mask++) {
-        const p = bp.slice();
+        const p = anchor.slice();
         for (let k = 0; k < n; k++) {
           const axis = va[k];
           p[axis] = (mask & (1 << k)) ? eff[axis][1] : eff[axis][0];
@@ -211,9 +214,8 @@ function actionPoses(zone, action) {
         poses.push(p);
       }
     }
-    return { poses, kind: "variable" };
   }
-  return { poses: action.pos.map((p) => p.slice()), kind: "pos" };
+  return { poses, kind: "poses" };
 }
 
 const fmt = (p) => "[" + p.map((x) => +x.toFixed(1)).join(",") + "]";

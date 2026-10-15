@@ -1,7 +1,7 @@
 """Brain: the command interpreter.
 
 The state machine is the single owner of the robot's state (zone, action, target,
-speed, flags, cadence, camera telemetry). The brain no longer holds any of that — it
+speed, cadence, camera telemetry). The brain no longer holds any of that — it
 is a thin layer that maps incoming :class:`~rtr.core.commands.Command` objects onto
 the machine's operations. It is the seam where "programmed logic, a small LLM, or
 realtime control" can plug in: subclass :class:`Brain` and override :meth:`on_command`
@@ -67,6 +67,10 @@ class Brain:
         self._cam_zone = None  # last zone the camera intent was applied to
         self._enabled_groups: set = set()
         self._enabled_zones: set = set()
+        # Blocked candidates: (zone, action) pairs discarded by the safety gate in
+        # auto mode. The brain skips these on the next autonomy tick. Cleared when
+        # the current (zone, action) changes or a candidate commits.
+        self._blocked_candidates: set = set()
         if self._config is not None:
             self._recompute_enabled()
 
@@ -281,10 +285,6 @@ class Brain:
             # Pass the current joint position so entering manual mode holds the
             # robot where it is (a freeze), not just stops new autonomous triggers.
             self.machine.set_control_mode(p.get("mode"), curjpos)
-        elif c == Cmd.SET_FLAG:
-            name = p.get("flag")
-            if name in self.machine.flags:
-                self.machine.flags[name] = p.get("value")
         elif c == Cmd.CAM_STATUS:
             self._handle_cam_status(p)
         elif c == Cmd.CAM_CANDIDATES:
@@ -297,6 +297,10 @@ class Brain:
             self._handle_cam_force_lock(p)
         elif c == Cmd.PROCEED:
             self._handle_proceed()
+        elif c == Cmd.SAFETY_CONFIRM:
+            self._handle_safety_confirm()
+        elif c == Cmd.SAFETY_CANCEL:
+            self._handle_safety_cancel()
 
     # ------------------------------------------------------------------
     # Engine move mode + cadence.
@@ -408,6 +412,7 @@ class Brain:
                     and self._hunt_state != "facefocus"
                     and self.machine.behavior not in guard
                     and not self.machine.transitioning
+                    and not self.machine.pending
                     and hunt.get("enabled", False)):
                 self.machine.trigger_action(detect.get("zone"), detect.get("action"))
             # Facefocus keeps the facefocus state; otherwise the lock means tracking.
@@ -607,6 +612,8 @@ class Brain:
         """The first valid ``(zone, action)`` candidate from the action's ordered
         ``next`` list: the zone is in the enabled union, and the action is named,
         exists, and is enabled. Returns None when no candidate is usable.
+
+        Skips candidates marked as blocked by the safety gate (auto mode).
         """
         z = self.machine.zones.get(zone)
         if z is None:
@@ -623,6 +630,8 @@ class Brain:
                 continue
             if ta not in tz_zone.actions() or not tz_zone.action_enabled(ta):
                 continue
+            if (tz, ta) in self._blocked_candidates:
+                continue  # blocked by the safety gate on a previous tick
             return (tz, ta)
         return None
 
@@ -678,12 +687,19 @@ class Brain:
         advance. Staying resets the dwell timer so the action keeps looping and the
         brain re-evaluates on the next dwell expiry.
         """
+        # Guard: while a safety-gated pending move is unresolved, do not stack
+        # another autonomy decision on top of it.
+        if self.machine.pending:
+            return
         cur = (self.machine.current_zone, self.machine.current_action)
         if cur != self._autonomy_prev:
             # New (zone, action): reset the dwell timer.
             self._autonomy_prev = cur
             self._autonomy_action_start_ts = time.time()
             self._autonomy_triggered = False
+            # Clear blocked candidates when the state changes (the old blocked
+            # targets are no longer relevant).
+            self._clear_blocked_if_changed()
         # The camera intent follows the zone (applied on every zone change,
         # regardless of whether autonomy is on).
         if self.machine.current_zone != self._cam_zone:
@@ -739,3 +755,44 @@ class Brain:
             return
         if self._autonomy_cfg().get("events", {}).get("websocket", False):
             self._autonomy_triggered = True
+
+    # ------------------------------------------------------------------
+    # Safety gate handlers.
+    # ------------------------------------------------------------------
+    def _handle_safety_cancel(self) -> None:
+        """Operator cancelled a blocked move: discard the pending move and mark the
+        attempted target blocked so the brain does not immediately retry it."""
+        # Capture the target before clearing, so we can mark it blocked.
+        info = self.machine.pending_info()
+        self.machine.cancel_pending()
+        if info is not None:
+            self.mark_candidate_blocked(info["zone"], info["action"])
+
+    def _handle_safety_confirm(self) -> None:
+        """Operator confirmed a blocked move: commit it despite the safety block."""
+        info = self.machine.pending_info()
+        self.machine.confirm_pending()
+        if self.machine._pending is not None:
+            # Still pending (confirm_pending only works in "confirm" phase).
+            return
+        if info is not None:
+            # The move is being committed; clear any blocked mark for it.
+            self._blocked_candidates.discard((info["zone"], info["action"]))
+
+    def mark_candidate_blocked(self, zone: str, action: str) -> None:
+        """Mark a (zone, action) candidate as blocked (discarded by the safety gate)."""
+        self._blocked_candidates.add((zone, action))
+
+    def _clear_blocked_if_changed(self) -> None:
+        """Clear blocked candidates when the current (zone, action) changes.
+
+        Called on every autonomy tick; the blocked set is only meaningful for the
+        current action's next candidates. When the robot moves to a new (zone,
+        action), the old blocked set is stale and is cleared.
+        """
+        cur = (self.machine.current_zone, self.machine.current_action)
+        # The blocked set is keyed by (zone, action) of the *target*, not the
+        # current state. We clear it when the current state changes because the
+        # old blocked targets are no longer relevant.
+        if self._autonomy_prev != cur:
+            self._blocked_candidates.clear()

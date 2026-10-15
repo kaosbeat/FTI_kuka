@@ -14,7 +14,7 @@ This is the client-side link to the core. It speaks the core's real protocol:
 Frames the core sends over the WebSocket (see :class:`rtr.display.display.Display`):
 
 - ``{"type": "state", "zone", "mode", "action", "patch", "joints", "cart",
-  "target", "speed", "moving", "flags"}`` — a full state snapshot, every tick.
+  "target", "speed", "moving"}`` — a full state snapshot, every tick.
   ``mode`` carries the current behavior (wander/track/focus/scan/look/wander/random/hold).
 - ``{"type": "zone", "zone": name}`` — a zone change event.
 - ``{"type": "mode", "mode": name}`` — a behavior change event.
