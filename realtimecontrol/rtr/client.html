@@ -19,6 +19,9 @@
   .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #e05d5d; }
   .dot.on { background: var(--accent); }
   #status { color: var(--dim); }
+  #statusBar { background: #0d0f13; border: 1px solid var(--border); border-radius: 4px;
+               padding: 3px 8px; font-size: 12px; white-space: nowrap; }
+  #statusBar .sbSep { color: var(--dim); opacity: .55; padding: 0 5px; }
   #host { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
           padding: 6px 8px; width: 260px; font: inherit; }
   button {
@@ -114,6 +117,7 @@
 <header>
   <h1>Exhibiting Intelligence - direct brain interface</h1>
   <span class="dot" id="dot"></span><span id="status">disconnected</span>
+  <span id="statusBar"></span>
   <input id="host" value="ws://localhost:8765" spellcheck="false">
   <button id="connect">connect</button>
   <div id="controlMode" class="seg-toggle" title="control mode — click a side to switch">
@@ -275,6 +279,72 @@ async function fetchZones() {
   }
   // The patch chooser's zone slots follow the zone table; rebuild it on every fetch.
   fetchPatches();
+}
+
+// ------------------------------------------------------------------
+// Brain config (for the header status bar's zone-group field). Fetches the same
+// /api/brain the editor uses; only the zone_groups are needed here (to resolve the
+// "current zone group" shown in the always-on header). Mirrors editor.html.
+// ------------------------------------------------------------------
+let BRAIN = null;
+const BRAIN_FALLBACK = {
+  zone_groups: {
+    "museum-closed": { zones: ["resting", "sleeping", "cuddling", "purring"] },
+    "event-sit-back": { zones: ["stretching", "hunting", "examining", "performing"] },
+    "stage-takeover": { zones: ["roaring", "growling", "clawing", "leaping"] },
+  },
+};
+
+async function loadBrain() {
+  let data = null;
+  try {
+    const r = await fetch("/api/brain", { cache: "no-store" });
+    if (r.ok) data = await r.json();
+  } catch (e) {}
+  if (!data) {
+    try {
+      const r = await fetch("/brain.json", { cache: "no-store" });
+      if (r.ok) data = await r.json();
+    } catch (e) {}
+  }
+  if (!data) data = JSON.parse(JSON.stringify(BRAIN_FALLBACK));
+  const groups = {};
+  const src = data.zone_groups || {};
+  for (const name of Object.keys(src)) {
+    if (name !== "hunt" && name !== "facefocus") groups[name] = src[name];
+  }
+  BRAIN = { zone_groups: groups };
+  return BRAIN;
+}
+
+// Header status bar (always on): control mode › zone group › zone › action › behavior › #candidates.
+// Mirrors editor.html's updateStatusBar so both pages show the same unified header.
+function updateStatusBar(m) {
+  const el = $("statusBar");
+  if (!el) return;
+  const cm = m.control_mode || "—";
+  const zone = m.zone || "—";
+  const action = m.action || "—";
+  const behavior = m.behavior || "—";
+  let group = "—";
+  if (BRAIN && BRAIN.zone_groups) {
+    for (const name of Object.keys(BRAIN.zone_groups)) {
+      const g = BRAIN.zone_groups[name];
+      if (g.zones && g.zones.includes(zone)) { group = name; break; }
+    }
+  }
+  const cand = (m.cam_telem && m.cam_telem.candidates) ? m.cam_telem.candidates.candidates : null;
+  const candText = (Array.isArray(cand)) ? String(cand.length) : "—";
+  const cmColor = cm === "manual" ? "#e05d5d" : (cm === "auto" ? "var(--accent)" : "var(--dim)");
+  const seg = (txt, color) => `<span style="color:${color}">${txt}</span>`;
+  const sep = `<span class="sbSep">›</span>`;
+  el.innerHTML =
+    seg(cm, cmColor) + sep +
+    seg(group, "var(--text)") + sep +
+    seg(zone, "var(--text)") + sep +
+    seg(action, "var(--text)") + sep +
+    seg(behavior, "var(--text)") + sep +
+    seg(candText, "var(--text)");
 }
 
 // ------------------------------------------------------------------
@@ -458,7 +528,7 @@ function connect() {
   const url = $("host").value.trim();
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   ws = new WebSocket(url);
-  ws.onopen = () => { setConn(true); log("connected to " + url); ws.send(JSON.stringify({ cmd: "hello", client: "screen" })); fetchZones(); };
+  ws.onopen = () => { setConn(true); log("connected to " + url); ws.send(JSON.stringify({ cmd: "hello", client: "screen" })); fetchZones(); loadBrain(); };
   ws.onclose = () => {
     setConn(false);
     log("disconnected; retrying in 2s");
@@ -469,6 +539,7 @@ function connect() {
     try { m = JSON.parse(e.data); } catch (err) { log("bad message: " + err); return; }
     if (m.type === "state") {
       renderState(m);
+      updateStatusBar(m);
       $("patchAuto").textContent = patchAutoLabel(m);
       if (patchSelValue === "auto") updatePatchPreview();
     }
