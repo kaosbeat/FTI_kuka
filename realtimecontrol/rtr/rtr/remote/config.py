@@ -75,10 +75,18 @@ class Config:
     height: int = 4
 
     # --- SDL screen (device) -------------------------------------------
-    # Screen size in pixels (the Trimui Brick is 320x240).
+    # Render size in pixels. The SDL app renders at the larger of this and the
+    # panel's native size (e.g. the Trimui's 1024x768). Override with
+    # --width / --screen-height to force an exact size.
     width: int = 320
     screen_height: int = 240
-    # Font path (None -> pygame default) and size in px.
+    # Design reference height in px: the canvas the ``font_size`` is sized for.
+    # Kept SEPARATE from the render size (screen_height) so auto-scaling still
+    # works when screen_height is set to the native panel height. The font is
+    # scaled by (render_height / design_height), so this must be the small
+    # design canvas height (240), not the on-screen height.
+    design_height: int = 240
+    # Font path (None -> pygame default) and size in px, at the design canvas.
     font: Optional[str] = None
     font_size: int = 16
     # style key -> hex color overrides for the SDL renderer.

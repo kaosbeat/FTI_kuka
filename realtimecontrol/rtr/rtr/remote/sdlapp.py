@@ -498,33 +498,123 @@ class SdlRemote:
     # ------------------------------------------------------------------
     # Renderer helpers.
     # ------------------------------------------------------------------
+    def _native_size(self) -> Tuple[int, int]:
+        """Probe the panel's native size, or ``(0, 0)`` if unavailable.
+
+        Tries SDL's current video mode first (portable across drivers), then the
+        kernel framebuffer's ``virtual_size`` (the ground truth on Linux). Either
+        can be absent (selftest/offscreen, no fb0), in which case ``(0, 0)`` is
+        returned and the caller falls back to the config canvas.
+        """
+        if self.selftest or pygame is None:
+            return (0, 0)
+        try:
+            info = pygame.display.Info()
+            w = int(getattr(info, "current_w", 0) or 0)
+            h = int(getattr(info, "current_h", 0) or 0)
+            if w > 0 and h > 0:
+                return w, h
+        except Exception:
+            pass
+        try:
+            with open("/sys/class/graphics/fb0/virtual_size") as f:
+                txt = f.read().strip()
+            if "x" in txt:
+                a, b = txt.split("x", 1)
+                w, h = int(a), int(b)
+                if w > 0 and h > 0:
+                    return w, h
+        except Exception:
+            pass
+        return (0, 0)
+
     def _screen_size(self) -> Tuple[int, int]:
-        w = getattr(self.config, "width", 320) or 320
-        h = getattr(self.config, "screen_height", 240) or 240
-        return int(w), int(h)
+        """Render size: the native panel if larger, else the config canvas.
+
+        The layout and ``font_size`` are designed for the small config canvas
+        (``width``/``screen_height``, default 320x240). On a device whose panel
+        is larger (e.g. the Trimui's 1024x768), render at the native size so the
+        layout fills the panel; the font is then scaled to the render height (see
+        :meth:`_font_size_for`). A config dimension larger than the native one
+        wins (an explicit override for a bigger display).
+        """
+        cw = int(getattr(self.config, "width", 320) or 320)
+        ch = int(getattr(self.config, "screen_height", 240) or 240)
+        nw, nh = self._native_size()
+        if nw > 0 and nh > 0:
+            return max(cw, nw), max(ch, nh)
+        return cw, ch
+
+    def _set_mode(self):
+        """Set the display to the render size, falling back to the design size.
+
+        Tries :meth:`_screen_size` first (the native panel when it is larger
+        than the config canvas). If that ``set_mode`` fails, retries at the
+        config design size; if that also fails, the exception propagates.
+        Returns ``(screen, w, h)`` for the size actually in use.
+        """
+        w, h = self._screen_size()
+        cfg_w = int(getattr(self.config, "width", 320) or 320)
+        cfg_h = int(getattr(self.config, "screen_height", 240) or 240)
+        try:
+            screen = pygame.display.set_mode((w, h))
+        except Exception as exc:
+            if (w, h) == (cfg_w, cfg_h):
+                raise
+            print(f"RTR: set_mode {w}x{h} failed ({exc}); retrying "
+                  f"{cfg_w}x{cfg_h}", flush=True)
+            screen = pygame.display.set_mode((cfg_w, cfg_h))
+            w, h = cfg_w, cfg_h
+        return screen, w, h
 
     def _resolve_font(self) -> Optional[str]:
         """Resolve the configured font path.
 
-        A relative path is resolved against the config file's directory (the
-        PAK dir) so ``fonts/DejaVuSansMono.ttf`` works regardless of CWD; the
-        CWD-relative form is a fallback. Returns None if nothing is found.
+        Tries, in order: the literal path (absolute, or CWD-relative), then the
+        path relative to the config file's directory (the PAK dir, so
+        ``fonts/DejaVuSansMono.ttf`` works regardless of CWD), then the path
+        relative to this module's directory (the shipped code dir, where
+        ``--ship-code`` puts fonts shipped with the app, e.g. ``PressStart2P.ttf``).
+        Returns None if nothing is found (the caller falls back to the default).
         """
         path = getattr(self.config, "font", None)
         if not path:
             return None
         if os.path.exists(path):
             return path
+        bases = []
         cfg_path = getattr(self.config, "config", None)
         if cfg_path:
-            base = os.path.dirname(os.path.abspath(cfg_path))
+            bases.append(os.path.dirname(os.path.abspath(cfg_path)))
+        # The module dir (rtr/remote/) is where fonts shipped with the code live.
+        bases.append(os.path.dirname(os.path.abspath(__file__)))
+        for base in bases:
             cand = os.path.join(base, path)
             if os.path.exists(cand):
                 return cand
         return None
 
-    def _load_font(self):
-        size = getattr(self.config, "font_size", 16) or 16
+    def _font_size_for(self, w: int, h: int) -> int:
+        """Scale the base ``font_size`` to the render height.
+
+        The base ``font_size`` (config, default 16) is sized for the design
+        canvas height (config ``design_height``, default 240). On a taller render
+        height the font is scaled proportionally so the same number of rows fills
+        the panel and the text stays legible. The reference is ``design_height``
+        (NOT the render ``screen_height``), so a config that sets ``screen_height``
+        to the native panel height still scales up correctly. A render height at
+        or below the design height keeps the base size.
+        """
+        base = int(getattr(self.config, "font_size", 16) or 16)
+        design_h = int(getattr(self.config, "design_height", 240) or 240)
+        if design_h <= 0 or h <= 0:
+            return max(1, base)
+        return max(1, int(round(base * (h / design_h))))
+
+    def _load_font(self, w: Optional[int] = None, h: Optional[int] = None):
+        if w is None or h is None:
+            w, h = self._screen_size()
+        size = self._font_size_for(w, h)
         path = self._resolve_font()
         if path:
             return pygame.font.Font(path, size)
@@ -605,17 +695,9 @@ class SdlRemote:
             os.environ.pop("SDL_VIDEODRIVER", None)  # let SDL auto-detect
         pygame.init()
         pygame.display.init()
-        w, h = self._screen_size()
-        try:
-            screen = pygame.display.set_mode((w, h))
-        except Exception as exc:
-            import traceback
-            print(f"RTR: display init failed (driver={driver or 'auto'} "
-                  f"size={w}x{h}): {exc}", flush=True)
-            traceback.print_exc()
-            raise
+        screen, w, h = self._set_mode()
         pygame.display.set_caption("RTR REMOTE")
-        font = self._load_font()
+        font = self._load_font(w, h)
         renderer = Renderer(screen, font, self._colors())
 
         if not self.selftest:
@@ -655,8 +737,7 @@ class SdlRemote:
             os.environ.pop("SDL_VIDEODRIVER", None)
         pygame.init()
         pygame.display.init()
-        w, h = self._screen_size()
-        screen = pygame.display.set_mode((w, h))
+        screen, w, h = self._set_mode()
         active = pygame.display.get_driver()
         if active in ("offscreen", "dummy", ""):
             print(f"RTR DIAG-VERDICT: NO FRAMEBUFFER DRIVER (active={active!r}); "
@@ -665,7 +746,7 @@ class SdlRemote:
         else:
             print(f"RTR DIAG-VERDICT: framebuffer driver bound: {active!r}",
                   flush=True)
-        font = self._load_font()
+        font = self._load_font(w, h)
         renderer = Renderer(screen, font, self._colors())
         n_rows = self._render_once(renderer)
         _print_diag(driver, screen, renderer, n_rows)

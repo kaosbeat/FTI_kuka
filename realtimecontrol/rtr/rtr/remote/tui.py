@@ -91,6 +91,8 @@ class RemoteTUI:
         self._mainloop = None
         self._joy = None
         self._joy_thread = None
+        # EV_KEY -> app-key map for the joystick (same table the SDL app uses).
+        self._joy_map = getattr(config, "joy_map", view.DEFAULT_JOY_MAP)
 
     # ------------------------------------------------------------------
     # Connection (asyncio worker thread).
@@ -192,7 +194,7 @@ class RemoteTUI:
                     self._rs.status = str(payload)
                     self._rs.dirty = True
                 elif kind == "joy":
-                    self._rs.on_joystick(payload)
+                    self._on_joystick(payload)
         except queue.Empty:
             pass
         if self._rs.dirty:
@@ -305,6 +307,29 @@ class RemoteTUI:
             cmds, _ = res
             for cmd in cmds:
                 self._send(cmd)
+
+    def _on_joystick(self, ev) -> None:
+        """Map a raw joystick EV_KEY press to an app key and dispatch it.
+
+        The handheld's input *is* the joystick (there is no keyboard on the
+        Trimui), so the d-pad / A / B / H buttons must be mapped here, exactly
+        like the SDL app's :class:`InputController`. Previously only L1/R1 were
+        handled (via :meth:`view.RemoteState.on_joystick`), so the d-pad and A
+        never reached the state machine — the cursor would not move and ``enter``
+        never fired, which also meant no command was ever sent to the core.
+        """
+        event_type, code, value = ev
+        if event_type != 1 or value != 1:  # KEY press edge only
+            return
+        key = self._joy_map.get(code)
+        if key is None:
+            return
+        if key in ("q", "escape"):
+            # ``q``/``escape`` normally quit via the urwid ``input_filter``; the
+            # joystick path bypasses that filter, so stop the MainLoop directly.
+            self.stop()
+            return
+        self._on_unhandled(key)
 
     def _on_unhandled(self, key):
         if key == "up":

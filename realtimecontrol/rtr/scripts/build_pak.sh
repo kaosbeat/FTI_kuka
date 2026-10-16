@@ -218,6 +218,9 @@ CODE_FILES=(
     "rtr/remote/events.py"
     "rtr/remote/tui.py"
     "rtr/remote/clockfix.py"
+    # Fonts shipped with the code (resolved from the module dir by _resolve_font).
+    "rtr/remote/PressStart2P.ttf"
+    "rtr/remote/PressStart2P-Regular.otf"
 )
 for f in "${CODE_FILES[@]}"; do
     src="$PKG_DIR/$f"

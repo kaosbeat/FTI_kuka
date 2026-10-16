@@ -8,6 +8,7 @@
   "height": 4,
   "width": 320,
   "screen_height": 240,
+  "design_height": 240,
   "font": null,
   "font_size": 16,
   "repo": "/storage/rtr-remote",

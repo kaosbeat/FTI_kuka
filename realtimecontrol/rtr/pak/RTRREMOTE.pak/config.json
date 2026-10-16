@@ -9,8 +9,9 @@
   "quit_codes": [172],
   "width": 1024,
   "screen_height": 768,
-  "font": "fonts/DejaVuSansMono.ttf",
-  "font_size": 24,
+  "design_height": 240,
+  "font": "PressStart2P.ttf",
+  "font_size": 8,
   "repo": "/storage/rtr-remote",
   "joy_map": {
     "15": "up",
