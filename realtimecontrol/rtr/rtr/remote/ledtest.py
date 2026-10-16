@@ -284,8 +284,9 @@ class LedApp:
             dpad_map=getattr(config, "dpad_map", None),
             quit_codes=getattr(config, "quit_codes", None))
         self._cursor = 0
+        self._scroll_top = 0
         self._quit = False
-        # Per-LED palette index (14 LEDs); all start black (off).
+        # Per-LED palette index (22 LEDs); all start black (off).
         self._colors: List[int] = [BLACK_IDX] * NUM_LEDS
         # Non-blocking test sweep state: None (idle) or (led, frame_idx).
         self._sweep: Optional[tuple] = None
@@ -397,26 +398,52 @@ class LedApp:
     # Row building.
     # ------------------------------------------------------------------
     def _total_rows(self) -> int:
-        return 2 + NUM_LEDS + 1 + len(ACTIONS) + 1
+        return SCREEN_ROWS
+
+    def _cursor_pos(self, c: int) -> int:
+        """Window position of cursor ``c`` (0..25) within the 27 content rows.
+
+        The divider sits at content index 22 (after the 22 LED rows), so action
+        cursors (22..25) are offset by +1.
+        """
+        return c if c < NUM_LEDS else c + 1
+
+    def _window_content(self) -> List[dict]:
+        """Build the 27 scrollable content rows: 22 LEDs + divider + 4 actions."""
+        content: List[dict] = []
+        for i in range(NUM_LEDS):
+            content.append(self._led_row(i))
+        content.append({"style": "divider"})
+        for j, action in enumerate(ACTIONS):
+            c = NUM_LEDS + j
+            if c == self._cursor:
+                content.append({"text": f"  ▸ {action}", "style": "item_sel"})
+            else:
+                content.append({"text": f"    {action}", "style": "item"})
+        return content
 
     def _build_rows(self) -> List[dict]:
-        """Build the LED rows: bar + 14 LED rows + actions + status + help."""
-        rows: List[dict] = []
+        """Build the 22 screen rows: title + 20-row window slice + help."""
         cols = self._renderer.cols if self._renderer else 80
-        rows.append({"text": _center("LED TEST", cols), "style": "bar"})
-        rows.append({"style": "divider"})
-        for i in range(NUM_LEDS):
-            rows.append(self._led_row(i))
-        rows.append({"style": "divider"})
-        for j, action in enumerate(ACTIONS):
-            idx = NUM_LEDS + j
-            if idx == self._cursor:
-                rows.append({"text": f"  ▸ {action}", "style": "item_sel"})
-            else:
-                rows.append({"text": f"    {action}", "style": "item"})
+        content = self._window_content()
+        top = max(0, min(self._scroll_top, MAX_SCROLL))
+        rows: List[dict] = [{"text": _center("LED TEST", cols), "style": "bar"}]
+        rows.extend(content[top: top + WINDOW_ROWS])
         rows.append({"text": "↑↓ move · ←→ color · A write · home quits",
-                     "style": "help"})
+                      "style": "help"})
         return rows
+
+    def _ensure_visible(self) -> None:
+        """Clamp the scroll so the cursor row stays inside the 20-row window."""
+        pos = self._cursor_pos(self._cursor)
+        if pos < self._scroll_top:
+            self._scroll_top = pos
+        elif pos >= self._scroll_top + WINDOW_ROWS:
+            self._scroll_top = pos - (WINDOW_ROWS - 1)
+        if self._scroll_top < 0:
+            self._scroll_top = 0
+        if self._scroll_top > MAX_SCROLL:
+            self._scroll_top = MAX_SCROLL
 
     def _led_row(self, i: int) -> dict:
         """Build one LED row: a live color swatch + name + current color."""
@@ -424,7 +451,7 @@ class LedApp:
         name = LED_NAMES[i]
         color_name = PALETTE[idx][0]
         swatch = "■" if idx != BLACK_IDX else "·"
-        label = f"  {swatch} {name:<4} {color_name}"
+        label = f"  {swatch} {name:<6} {color_name}"
         if i == self._cursor:
             return {"text": f"▸ {label}", "style": "item_sel"}
         return {"text": f"  {label}", "style": "item"}
@@ -511,8 +538,10 @@ class LedApp:
             return  # single page; no-op
         if key == "up":
             self._cursor = max(0, self._cursor - 1)
+            self._ensure_visible()
         elif key == "down":
-            self._cursor = min(self._total_rows() - 1, self._cursor + 1)
+            self._cursor = min(INTERACTIVE_ROWS - 1, self._cursor + 1)
+            self._ensure_visible()
         elif key in ("left", "right"):
             # On a LED row: cycle that LED's color (live preview). On an
             # action row: cancel the sweep (if running).
@@ -625,7 +654,7 @@ def selftest() -> bool:
     """Run the headless self-test (dummy driver, memory backend, no sysfs).
 
     Builds + renders the LED rows, exercises cursor up/down, verifies
-    ``build_frame`` produces the exact ``frame_hex`` string (14 values,
+    ``build_frame`` produces the exact ``frame_hex`` string (22 values,
     trailing space), verifies the safe-write sequence (``frame_hex`` ->
     ``effect_enable=1`` -> ``effect_enable=0``), and verifies restore writes
     the snapshot values back. Prints ``LED SELFTEST PASS`` (True) or a FAIL
@@ -735,7 +764,7 @@ def selftest() -> bool:
             print(f"LED SELFTEST FAIL: LED 3 not red: {parts[2]}")
             pygame.quit()
             return False
-        if parts[0] != PALETTE_HEX[BLACK_IDX] or parts[13] != PALETTE_HEX[BLACK_IDX]:
+        if parts[0] != PALETTE_HEX[BLACK_IDX] or parts[21] != PALETTE_HEX[BLACK_IDX]:
             print("LED SELFTEST FAIL: other LEDs not black")
             pygame.quit()
             return False

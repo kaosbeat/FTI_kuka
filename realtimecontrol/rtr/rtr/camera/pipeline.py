@@ -436,10 +436,14 @@ class Pipeline:
             "fps": result.fps,
             "ok": result.ok,
         }
-        # Send candidates (all detected persons).
+        # Send candidates (all detected persons). The frame dims (w/h) accompany
+        # the pixel coords so the brain can normalize to 0..1 for the centrality
+        # score (both cameras share W/H; the wide dims are the frame size).
         if result.candidates:
             out["candidates"] = {
                 "camera": result.camera,
+                "w": self.wide.W,
+                "h": self.wide.H,
                 "candidates": result.candidates,
             }
         # Send track (locked person offset).

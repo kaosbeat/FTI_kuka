@@ -4439,8 +4439,9 @@ function flowPanStart(e) {
 // (safezone gap or no shared position) turns the line red and adds a clickable "!"
 // marker that shows the conflict detail.
 // An IN-ZONE link (both actions in the same block) is drawn differently: the anchors
-// sit inside the block at the right end of each action row, the curve bows right so
-// it stays clear of the row labels, and an arrowhead points at the target action.
+// sit inside the block at the right end of each action row, the curve bows LEFT into
+// the block so it stays inside the zone box (clear of the row labels on the left),
+// and an arrowhead points at the target action.
 // It renders on the inner edge layer (above the node layer) so the block body does
 // not cover it.
 function flowAddEdge(layer, e) {
@@ -4454,7 +4455,7 @@ function flowAddEdge(layer, e) {
     x1 = ax + NODE_W - 14; y1 = ay + ry1;
     x2 = ax + NODE_W - 14; y2 = ay + ry2;
     const k = 22;
-    d = `M ${x1} ${y1} C ${x1 + k} ${y1}, ${x2 + k} ${y2}, ${x2} ${y2}`;
+    d = `M ${x1} ${y1} C ${x1 - k} ${y1}, ${x2 - k} ${y2}, ${x2} ${y2}`;
   } else {
     const bRight = b.x >= a.x;
     x1 = a.x + (bRight ? NODE_W : 0); y1 = a.y + ry1;
