@@ -50,6 +50,10 @@ class CameraMock:
         self.fps = fps
         self.video = video
         self.close_video = close_video
+        # Frame dims for the random-walk simulation (the pixel contract the real
+        # pipeline uses; the brain normalizes to 0..1 for the centrality score).
+        self._sim_w = width
+        self._sim_h = height
 
         # Shared bookkeeping.
         self._conn: Optional[Connection] = None
@@ -233,6 +237,9 @@ class CameraMock:
         visible = self._scene_visible()
 
         # Build candidates (all simulated persons, or none when the scene is hidden).
+        # Pixel coords + frame dims, matching the real pipeline's contract (the
+        # brain normalizes to 0..1 for the centrality score).
+        W, H = self._sim_w, self._sim_h
         candidates = []
         if visible:
             for p in self._people:
@@ -240,10 +247,10 @@ class CameraMock:
                 h = random.uniform(0.12, 0.25)
                 candidates.append({
                     "id": p["id"],
-                    "x1": max(0, p["x"] - w / 2),
-                    "y1": max(0, p["y"] - h / 2),
-                    "x2": min(1.0, p["x"] + w / 2),
-                    "y2": min(1.0, p["y"] + h / 2),
+                    "x1": max(0.0, p["x"] - w / 2) * W,
+                    "y1": max(0.0, p["y"] - h / 2) * H,
+                    "x2": min(1.0, p["x"] + w / 2) * W,
+                    "y2": min(1.0, p["y"] + h / 2) * H,
                     "conf": p["conf"],
                 })
 
@@ -257,10 +264,12 @@ class CameraMock:
             "ok": True,
         })
 
-        # Send candidates.
+        # Send candidates (pixel coords + frame dims).
         self._conn.send_command({
             "cmd": Cmd.CAM_CANDIDATES.value,
             "camera": self._active,
+            "w": W,
+            "h": H,
             "candidates": candidates,
         })
 
@@ -268,7 +277,6 @@ class CameraMock:
         if visible and self._lock_id is not None:
             locked = next((p for p in self._people if p["id"] == self._lock_id), None)
             if locked is not None:
-                W, H = 640, 480
                 cx = locked["x"] * W
                 cy = locked["y"] * H
                 dx = cx - W / 2.0

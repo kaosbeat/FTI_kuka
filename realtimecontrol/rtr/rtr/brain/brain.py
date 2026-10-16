@@ -371,15 +371,24 @@ class Brain:
         params = self._hunt_group().get("params", {})
         min_conf = params.get("min_conf", 0.1)
         centrality_weight = params.get("centrality_weight", 0.1)
+        # Frame dims (pixels). Present from the real pipeline and the pixel mock;
+        # absent from a legacy normalized mock (then coords are already 0..1).
+        fw = p.get("w")
+        fh = p.get("h")
         best = None
         best_score = -1
         for c in cands:
             conf = c.get("conf", 0)
             if conf < min_conf:
                 continue  # below the sensitivity threshold: not a valid lock target
-            # Centrality: smaller distance from (0.5, 0.5) is better.
+            # Centrality: smaller distance from (0.5, 0.5) is better. Normalize the
+            # pixel coords to 0..1 first (the score is defined in normalized space);
+            # without w/h the coords are assumed already normalized.
             cx = (c.get("x1", 0) + c.get("x2", 0)) / 2
             cy = (c.get("y1", 0) + c.get("y2", 0)) / 2
+            if fw and fh:
+                cx /= fw
+                cy /= fh
             dist = (cx - 0.5) ** 2 + (cy - 0.5) ** 2
             score = conf - dist * centrality_weight  # confidence dominates, centrality breaks ties
             if score > best_score:

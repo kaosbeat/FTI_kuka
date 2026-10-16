@@ -4476,11 +4476,11 @@ function flowAddEdge(layer, e) {
   const dotCls = "faDot" + (conflict.any ? " faDotConflict" : "");
   layer.appendChild(svgEl("circle", { cx: x1, cy: y1, r: 3.5, class: dotCls }));
   layer.appendChild(svgEl("circle", { cx: x2, cy: y2, r: 3.5, class: dotCls }));
-  // Warning marker: a red "!" at the midpoint; clicking it selects the edge and
-  // surfaces the conflict in the detail panel. For in-zone links the curve bows
-  // right, so the marker follows the curve's true midpoint (bezier t=0.5).
-  if (conflict.any) {
-    const wx = (x1 + x2) / 2 + (inner ? 16.5 : 0), wy = (y1 + y2) / 2;
+   // Warning marker: a red "!" at the midpoint; clicking it selects the edge and
+   // surfaces the conflict in the detail panel. For in-zone links the curve bows
+   // left into the block, so the marker follows the curve's true midpoint (bezier t=0.5).
+   if (conflict.any) {
+     const wx = (x1 + x2) / 2 + (inner ? -16.5 : 0), wy = (y1 + y2) / 2;
     const warn = svgEl("g", { class: "fedgeWarn", transform: `translate(${wx},${wy})` });
     warn.appendChild(svgEl("circle", { r: 7, class: "fedgeWarnBg" }));
     const t = svgEl("text", { class: "fedgeWarnTxt", "text-anchor": "middle", y: 3 });
