@@ -4278,10 +4278,14 @@ function svgPoint(svg, ev) {
   return { x: p.x, y: p.y };
 }
 
-// A smooth cubic between two anchor points (horizontal S-curve).
+// A smooth cubic between two anchor points (horizontal S-curve). The control
+// points point AWAY from each end along the start->end direction, so the curve
+// leaves/approaches from the correct side when the target sits to the left
+// (negative sign) as well as to the right.
 function edgePath(x1, y1, x2, y2) {
   const c = Math.max(30, Math.abs(x2 - x1) * 0.5);
-  return `M ${x1} ${y1} C ${x1 + c} ${y1}, ${x2 - c} ${y2}, ${x2} ${y2}`;
+  const s = x2 >= x1 ? 1 : -1;
+  return `M ${x1} ${y1} C ${x1 + s * c} ${y1}, ${x2 - s * c} ${y2}, ${x2} ${y2}`;
 }
 
 function flowBuildDefs() {

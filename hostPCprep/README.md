@@ -26,3 +26,24 @@ cp files from ./config >> ~/.config
 
 ## enable user service
 systemctl --user daemonreload
+
+## robot-lab network (kuka-net.sh)
+builds the KUKA robot-lab network (fixed Kuka IP + RPi link + AX210 AP + BELA).
+
+```
+sudo ./kuka-net.sh discover          # show iface names, fill in the CONFIG section
+sudo ./kuka-net.sh install           # one-time: hostapd dnsmasq iw etc.
+sudo ./kuka-net.sh enable            # build it — TEMPORARY, reverts on reboot
+sudo ./kuka-net.sh enable --persist  # same, but survives reboot (boot service + sysctl)
+sudo ./kuka-net.sh status            # current state (enabled / persist / runtime)
+sudo ./kuka-net.sh disable           # tear down + restore standard DHCP
+sudo ./kuka-net.sh reset             # force-restore standard config
+```
+
+- default `enable` is temporary — if you lose connectivity, a reboot restores DHCP (no stuck config).
+- `--persist` adds a boot service (`kuka-net.service`) + `ip_forward` sysctl so it rebuilds after reboot; `disable` removes both.
+- save / restore the current setup to a file for easy reverting:
+```
+sudo ./kuka-net.sh save /tmp/lab.conf
+sudo ./kuka-net.sh restore /tmp/lab.conf
+```

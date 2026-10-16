@@ -71,6 +71,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 APPS: List[dict] = [
     {"module": "sdlapp.py", "title": "kukapp", "config_key": "displaytitle"},
+    {"module": "ledtest.py", "title": "ledtest", "config_key": "ledtest_title"},
 ]
 
 

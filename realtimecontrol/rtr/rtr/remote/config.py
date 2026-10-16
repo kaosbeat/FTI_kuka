@@ -109,6 +109,9 @@ class Config:
     # menu. The launcher reads config.displaytitle (falling back to the static
     # title in its APPS registry).
     displaytitle: str = "kukapp"
+    # Title the launcher shows for the LED test app (rtr.remote.ledtest).
+    # Kept separate from displaytitle so the kukapp title is untouched.
+    ledtest_title: str = "ledtest"
 
     def __post_init__(self):
         if self.height < 1:

@@ -240,6 +240,39 @@ apply_runtime(){
   # --- mark enabled ---
   echo "$mgr" > "$MARKER"
   log "APPLIED (runtime). Kuka=$KUKA_IP  RPi=$RPI_IP  Beagle=$belabone  AP=$AP_SSID ($AP_IP)"
+  print_hints
+}
+
+# Human-facing hints: AP creds, RPi config, how to reach BELA.
+print_hints(){
+  local belabone bip bdisp
+  bip=$(cat "$BACKUP_DIR/beagle-ip" 2>/dev/null)
+  belabone="${BEAGLE_IP:-${bip%.*}.1}"
+  bdisp="$belabone"
+  [[ "$belabone" == .* ]] && bdisp="(auto — from the BeagleBone USB-gadget link)"
+  echo
+  echo "================================================================"
+  echo "  ROBOT-LAB NETWORK — how to use it"
+  echo "================================================================"
+  echo "  [1] ACCESS POINT  (your laptop / TB20plus join this wifi)"
+  echo "        SSID : $AP_SSID"
+  echo "        Pass : $AP_PASS"
+  echo "        IP   : you get ${AP_IP%.*}.x   (gateway $AP_IP)"
+  echo
+  echo "  [2] RPi 5  (endpoint $RPI_IP on the RPi link — must be STATIC)"
+  echo "        Cable the RPi's eth port to this SBC's $IF_RPI."
+  echo "        Set a fixed IP on the RPi (no DHCP). Raspberry Pi OS:"
+  echo "          # /etc/dhcpcd.conf"
+  echo "          interface eth0"
+  echo "          static ip_address=$RPI_IP/24"
+  echo "          # sudo systemctl restart dhcpcd"
+  echo "        Verify from this SBC:  ping -c1 $RPI_IP"
+  echo
+  echo "  [3] BELA  (from your laptop, while on the $AP_SSID AP)"
+  echo "        Open  http://${BEAGLE_NAME}.local   (the IDE)"
+  echo "        dnsmasq maps ${BEAGLE_NAME}.local -> ${bdisp};"
+  echo "        the SBC NATs the AP subnet to the BeagleBone USB-gadget link."
+  echo "================================================================"
 }
 
 # ============================================================
@@ -442,6 +475,8 @@ cmd_status(){
   echo "AP daemons:"
   pgrep -af "hostapd.*kuka-net" | sed 's/^/  hostapd: /' || echo "  hostapd: not running"
   pgrep -af "dnsmasq.*kuka-net" | sed 's/^/  dnsmasq: /' || echo "  dnsmasq: not running"
+  echo
+  print_hints
 }
 
 cmd_reset(){
@@ -511,10 +546,11 @@ main(){
     apply)    need_root apply;    apply_runtime ;;   # internal: boot-service target
     disable)  need_root disable;  cmd_disable ;;
     status)   cmd_status ;;
+    hints)    print_hints ;;
     reset)    need_root reset;    cmd_reset ;;
     save)     need_root save;     cmd_save "${rest[1]:-}" ;;
     restore)  need_root restore;  cmd_restore "${rest[1]:-}" ;;
-    *) echo "usage: $0 {discover|install|enable [--persist]|disable|status|reset|save [FILE]|restore [FILE]}"; exit 2 ;;
+    *) echo "usage: $0 {discover|install|enable [--persist]|disable|status|hints|reset|save [FILE]|restore [FILE]}"; exit 2 ;;
   esac
 }
 main "$@"
