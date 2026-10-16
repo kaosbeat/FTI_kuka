@@ -15,12 +15,21 @@
 #   disable -> tears all of that down and restores the standard DHCP config.
 #
 # Usage (as root):
-#   sudo ./kuka-net.sh discover     # show interfaces so you can fill in the CONFIG
-#   sudo ./kuka-net.sh install      # one-time: install hostapd/dnsmasq/etc.
-#   sudo ./kuka-net.sh enable       # build the robot-lab network
-#   sudo ./kuka-net.sh disable      # revert to the standard config
-#   sudo ./kuka-net.sh status       # show current state
-#   sudo ./kuka-net.sh reset        # force-restore the saved standard config
+#   sudo ./kuka-net.sh discover          # show interfaces so you can fill in the CONFIG
+#   sudo ./kuka-net.sh install           # one-time: install hostapd/dnsmasq/etc.
+#   sudo ./kuka-net.sh enable            # build the robot-lab network (TEMPORARY — until reboot)
+#   sudo ./kuka-net.sh enable --persist  # build it AND make it survive reboots (boot service)
+#   sudo ./kuka-net.sh disable           # revert to the standard config
+#   sudo ./kuka-net.sh status            # show current state
+#   sudo ./kuka-net.sh reset             # force-restore the saved standard config
+#   sudo ./kuka-net.sh save [FILE]       # save the current robot-lab setup to a file
+#   sudo ./kuka-net.sh restore [FILE]    # re-apply the robot-lab setup from a saved file
+#
+#   DEFAULT (plain `enable`) is TEMPORARY: the robot-lab network only exists until
+#   you reboot or run `disable`. No persistent config is written, so if you lose
+#   connectivity and can't run `disable`, a reboot restores the standard DHCP setup.
+#   `enable --persist` adds a boot service + sysctl so the network rebuilds itself
+#   after every reboot; `disable` removes those artifacts.
 #
 set -uo pipefail
 
@@ -73,6 +82,8 @@ LOG="$STATE_DIR/kuka-net.log"
 # --- Options ---
 DISABLE_TAILSCALE=1        # 1 = stop tailscale during enable (routing isolation)
 ENABLE_AP=1                # 1 = build the AX210 access point (0 = skip it)
+PERSIST_DEFAULT=0          # 0 = temporary (default, reverts on reboot); 1 = persist
+                           # The CLI flag `--persist` overrides this for a single run.
 
 # ============================================================
 #  Helpers
@@ -174,13 +185,10 @@ snapshot(){
 }
 
 # ============================================================
-#  enable — build the robot-lab network
+#  apply_runtime — build the robot-lab network (runtime only, no snapshot)
+#  Called by `enable` and by the `apply` boot-service target (--persist).
 # ============================================================
-cmd_enable(){
-  is_enabled && { log "already enabled (marker present); re-applying."; }
-  mkdir -p "$STATE_DIR"
-  snapshot
-
+apply_runtime(){
   # --- stop the config manager so it doesn't fight our static config ---
   local mgr; mgr=$(detect_manager)
   case "$mgr" in
@@ -204,7 +212,8 @@ cmd_enable(){
   log "RPi port   $IF_RPI -> $RPI_PORT_IP/24"
 
   # --- BeagleBone USB gadget (keep the existing gadget link alive) ---
-  local bif bip; bif=$(cat "$BACKUP_DIR/beagle-if" 2>/dev/null || echo "${IF_BEAGLE:-$(detect_beagle)}")
+  local bif bip belabone
+  bif=$(cat "$BACKUP_DIR/beagle-if" 2>/dev/null || echo "${IF_BEAGLE:-$(detect_beagle)}")
   bip=$(cat "$BACKUP_DIR/beagle-ip" 2>/dev/null)
   if [[ -n "$bif" && -n "$bip" ]]; then
     ip link set "$bif" up
@@ -225,13 +234,71 @@ cmd_enable(){
   cmd_apply_forward
 
   # --- DNS for the SBC itself (bela.local) ---
-  local bip belabone; bip=$(cat "$BACKUP_DIR/beagle-ip" 2>/dev/null)
   belabone="${BEAGLE_IP:-${bip%.*}.1}"
   grep -q "bela.local" /etc/hosts || echo "$belabone  $BEAGLE_NAME.local" >> /etc/hosts
 
   # --- mark enabled ---
   echo "$mgr" > "$MARKER"
-  log "ENABLED. Kuka=$KUKA_IP  RPi=$RPI_IP  Beagle=$belabone  AP=$AP_SSID ($AP_IP)"
+  log "APPLIED (runtime). Kuka=$KUKA_IP  RPi=$RPI_IP  Beagle=$belabone  AP=$AP_SSID ($AP_IP)"
+}
+
+# ============================================================
+#  enable — snapshot the standard state, then build the network
+# ============================================================
+cmd_enable(){
+  local persist="${1:-$PERSIST_DEFAULT}"
+  is_enabled && { log "already enabled (marker present); re-applying."; }
+  mkdir -p "$STATE_DIR"
+  snapshot
+  apply_runtime
+  if [[ "$persist" == 1 ]]; then
+    make_persistent
+  else
+    log "NOTE: TEMPORARY — this network reverts on reboot (or 'disable'). Add --persist to keep it."
+  fi
+}
+
+# Make the runtime setup survive reboots: boot service + sysctl.
+make_persistent(){
+  local script; script="$(readlink -f "$0")"
+  echo "$script" > "$STATE_DIR/script-path"
+
+  # persist IP forwarding across reboots
+  echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/kuka-net.conf
+
+  # boot service that re-applies the runtime config (no snapshot, no clobber)
+  cat > /etc/systemd/system/kuka-net.service <<EOF
+[Unit]
+Description=KUKA robot-lab network (persistent)
+Wants=network-online.target
+After=network-online.target NetworkManager.service systemd-networkd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart="$script" apply
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable kuka-net
+  echo "1" > "$STATE_DIR/persist"
+  log "PERSISTENT: boot service 'kuka-net' enabled + ip_forward persisted (survives reboot)."
+}
+
+# Remove the persistence artifacts (boot service + sysctl).
+remove_persistent(){
+  if [[ -f /etc/systemd/system/kuka-net.service ]]; then
+    systemctl disable kuka-net 2>/dev/null || true
+    systemctl stop kuka-net 2>/dev/null || true
+    rm -f /etc/systemd/system/kuka-net.service
+    systemctl daemon-reload
+  fi
+  rm -f /etc/sysctl.d/kuka-net.conf
+  rm -f "$STATE_DIR/persist"
+  log "persistent artifacts removed."
 }
 
 # hostapd + dnsmasq for the AP (standalone LAN for your PC + TB20plus)
@@ -315,6 +382,7 @@ cmd_apply_forward(){
 cmd_disable(){
   is_enabled || log "WARN: not marked enabled; cleaning up anyway."
   local mgr; mgr=$(cat "$MARKER" 2>/dev/null || echo "$(detect_manager)")
+  remove_persistent
 
   # --- stop the AP daemons ---
   pkill -f "hostapd.*kuka-net" 2>/dev/null || true
@@ -363,8 +431,10 @@ cmd_disable(){
 #  status / reset
 # ============================================================
 cmd_status(){
-  echo "enabled : $(is_enabled && echo yes || echo no)"
-  echo "manager : $(cat "$MARKER" 2>/dev/null || echo "$(detect_manager)")"
+  echo "enabled (marker) : $(is_enabled && echo yes || echo no)"
+  echo "persist          : $([[ -f "$STATE_DIR/persist" ]] && echo yes || echo no)"
+  echo "runtime active   : $(ip addr show "$IF_KUKA" 2>/dev/null | grep -q "$KUKA_IP" && echo yes || echo no)"
+  echo "manager          : $(cat "$MARKER" 2>/dev/null || echo "$(detect_manager)")"
   echo
   echo "current addresses:"
   ip a | grep -E '^[0-9]+:|inet ' | sed 's/^/  /'
@@ -381,14 +451,70 @@ cmd_reset(){
 }
 
 # ============================================================
+#  save / restore — snapshot the robot-lab setup to a file
+# ============================================================
+cmd_save(){
+  local out="${1:-$STATE_DIR/saved-setup.conf}"
+  local dir; dir="$(dirname "$out")"
+  mkdir -p "$dir" 2>/dev/null || true
+  local v
+  {
+    echo "# kuka-net saved robot-lab setup — $(date)"
+    echo "# Re-apply with:  sudo ./kuka-net.sh restore $out"
+    echo
+    for v in IF_KUKA IF_RPI IF_BEAGLE IF_AP KUKA_IP KUKA_NET KUKA_DEV RPI_PORT_IP RPI_IP BEAGLE_IF BEAGLE_NAME BEAGLE_IP AP_SSID AP_PASS AP_NET AP_IP AP_DHCPRANGE AP_CHANNEL AP_COUNTRY RT_PORTS DISABLE_TAILSCALE ENABLE_AP; do
+      printf '%s=%q\n' "$v" "${!v}"
+    done
+    echo
+    echo "# --- runtime state dump (reference only) ---"
+    echo "# --- ip a ---";           ip a 2>/dev/null               | sed 's/^/# /'
+    echo "# --- ip route ---";       ip route 2>/dev/null           | sed 's/^/# /'
+    echo "# --- KUKA_NET_FWD ---";   iptables -S KUKA_NET_FWD 2>/dev/null | sed 's/^/# /'
+    echo "# --- hostapd.conf ---";   sed 's/^/# /' "$STATE_DIR/hostapd.conf"  2>/dev/null || echo "# (none)"
+    echo "# --- dnsmasq.conf ---";   sed 's/^/# /' "$STATE_DIR/dnsmasq.conf"  2>/dev/null || echo "# (none)"
+    echo "# --- /etc/hosts (bela) ---"; grep -i 'bela' /etc/hosts 2>/dev/null | sed 's/^/# /' || echo "# (none)"
+  } > "$out"
+  echo "saved current robot-lab setup to: $out"
+}
+
+cmd_restore(){
+  local f="${1:-$STATE_DIR/saved-setup.conf}"
+  [[ -f "$f" ]] || die "save file not found: $f  (run 'save' first)"
+  local line
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[A-Z_][A-Z0-9_]+= ]] && eval "$line"
+  done < "$f"
+  mkdir -p "$STATE_DIR"
+  apply_runtime
+  log "RESTORED robot-lab setup from $f"
+}
+
+# ============================================================
 #  main
 # ============================================================
-case "${1:-}" in
-  discover) cmd_discover ;;
-  install)  cmd_install ;;
-  enable)   need_root enable; cmd_enable ;;
-  disable)  need_root disable; cmd_disable ;;
-  status)   cmd_status ;;
-  reset)    need_root reset; cmd_reset ;;
-  *) echo "usage: $0 {discover|install|enable|disable|status|reset}"; exit 2 ;;
-esac
+main(){
+  local persist="$PERSIST_DEFAULT"
+  local cmd="" a
+  local -a rest=()
+  for a in "$@"; do
+    case "$a" in
+      --persist) persist=1 ;;
+      -*) die "unknown option: $a" ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  cmd="${rest[0]:-}"
+  case "$cmd" in
+    discover) cmd_discover ;;
+    install)  cmd_install ;;
+    enable)   need_root enable;   cmd_enable "$persist" ;;
+    apply)    need_root apply;    apply_runtime ;;   # internal: boot-service target
+    disable)  need_root disable;  cmd_disable ;;
+    status)   cmd_status ;;
+    reset)    need_root reset;    cmd_reset ;;
+    save)     need_root save;     cmd_save "${rest[1]:-}" ;;
+    restore)  need_root restore;  cmd_restore "${rest[1]:-}" ;;
+    *) echo "usage: $0 {discover|install|enable [--persist]|disable|status|reset|save [FILE]|restore [FILE]}"; exit 2 ;;
+  esac
+}
+main "$@"
