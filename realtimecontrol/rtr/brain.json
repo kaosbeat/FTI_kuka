@@ -9,20 +9,6 @@
     }
   },
   "zone_groups": {
-    "museum-closed": {
-      "zones": [
-        "resting",
-        "sleeping",
-        "cuddling",
-        "purring"
-      ],
-      "behaviors": [],
-      "enabled": true,
-      "params": {
-        "speed": 10,
-        "dwell_s": 60
-      }
-    },
     "event-sit-back": {
       "zones": [
         "stretching",
@@ -50,12 +36,60 @@
         "speed": 80,
         "dwell_s": 15
       }
+    },
+    "circus-closed": {
+      "zones": [
+        "resting",
+        "sleeping",
+        "cuddling",
+        "purring"
+      ],
+      "behaviors": [],
+      "enabled": true,
+      "params": {
+        "speed": 10,
+        "dwell_s": 60
+      }
+    },
+    "installation-active": {
+      "zones": [
+        "purring",
+        "stretching",
+        "hunting",
+        "examining",
+        "performing",
+        "roaring",
+        "growling",
+        "clawing",
+        "leaping"
+      ],
+      "behaviors": [],
+      "enabled": true,
+      "params": {
+        "speed": 100,
+        "dwell_s": 25
+      }
+    },
+    "museum-closed": {
+      "zones": [
+        "resting",
+        "sleeping",
+        "cuddling",
+        "purring"
+      ],
+      "behaviors": [],
+      "enabled": true,
+      "params": {
+        "speed": 10,
+        "dwell_s": 60
+      }
     }
   },
   "hunt": {
     "zones": [
       "hunting"
     ],
+    "behaviors": [],
     "enabled": true,
     "params": {
       "lost_s": 2,
@@ -81,6 +115,7 @@
     "zones": [
       "stretching"
     ],
+    "behaviors": [],
     "enabled": true,
     "params": {
       "actions": [

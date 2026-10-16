@@ -98,6 +98,13 @@
         "note": 60,
         "velocity": 60
       }
+    },
+    "sleeping_stretching_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
     }
   },
   "actions": {
@@ -107,7 +114,20 @@
           "note": 48,
           "velocity": 50
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       },
       "wake": {
         "start": {
@@ -130,6 +150,10 @@
         },
         "poses": [
           {
+            "note": 60,
+            "velocity": 60
+          },
+          {
             "note": 36,
             "velocity": 50
           },
@@ -140,6 +164,10 @@
           {
             "note": 36,
             "velocity": 50
+          },
+          {
+            "note": 60,
+            "velocity": 60
           }
         ]
       },
@@ -165,6 +193,10 @@
           "velocity": 45
         },
         "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
           {
             "note": 60,
             "velocity": 60
@@ -198,7 +230,16 @@
           "cc": 70,
           "value": 56
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "purring": {
@@ -207,14 +248,28 @@
           "note": 42,
           "velocity": 45
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       },
       "purr": {
         "start": {
           "cc": 70,
           "value": 64
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "stretching": {
@@ -485,6 +540,24 @@
           "velocity": 60
         },
         "poses": []
+      }
+    },
+    "sleeping_stretching_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     }
   }
