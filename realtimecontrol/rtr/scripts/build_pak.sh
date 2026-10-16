@@ -217,6 +217,7 @@ CODE_FILES=(
     "rtr/remote/connection.py"
     "rtr/remote/events.py"
     "rtr/remote/tui.py"
+    "rtr/remote/clockfix.py"
 )
 for f in "${CODE_FILES[@]}"; do
     src="$PKG_DIR/$f"

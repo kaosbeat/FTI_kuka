@@ -554,7 +554,9 @@ let groupsView = false;
 const grpOpen = {};  // group name -> bool (zone-list collapse; default open)
 let validateView = false;
 let valScanTimer = null;   // active scan animation frame id
-// Flow-tab state (session only — node positions are not persisted to zones.json).
+// Flow-tab state. Node positions + the user's viewBox persist to zones.json under
+// ``layout`` (see buildFlowLayout/flowSaveLayout); the layoutKey guards flowEnter so
+// a restored layout is not re-computed while the zone set is unchanged.
 const FLOW = {
   pos: {},        // zone -> {x, y}
   sel: null,       // {type:"node",zone} | {type:"edge",from,to} | null
@@ -565,6 +567,29 @@ const FLOW = {
   view: null,      // {x,y,w,h} viewBox — the user's zoom/pan (null until first fit)
   pan: null,       // {ctm, startScreen, startView} middle-drag pan state
 };
+// The zone-name set the current layout was computed for (the layoutKey value).
+function flowLayoutKey() { return Object.keys(TABLE.zones).sort().join(","); }
+// The persisted layout snapshot: node positions + the user's viewBox + the key.
+function buildFlowLayout() { return { pos: FLOW.pos, view: FLOW.view, key: flowLayoutKey() }; }
+// Write the current layout into TABLE so the next full save (zones) carries it.
+function persistFlowLayout() { TABLE.layout = buildFlowLayout(); return TABLE.layout; }
+// Debounced background save of the flow layout (positions + view). Fired after the
+// user rearranges nodes, auto-lays-out, or adds/renames/deletes a zone, so the
+// arrangement survives a reload without a manual save. It posts ONLY the layout to
+// /api/zones/layout (the zones on disk are preserved; the core is untouched), so a
+// layout edit never leaks unrelated zone edits.
+let flowSaveTimer = null;
+function flowSaveLayout() {
+  if (flowSaveTimer) clearTimeout(flowSaveTimer);
+  flowSaveTimer = setTimeout(() => {
+    flowSaveTimer = null;
+    fetch("/api/zones/layout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildFlowLayout()),
+    }).catch(() => {});
+  }, 800);
+}
 const NODE_W = 140, NODE_H = 70;
 // Flow action rows (Step 4): the first action row sits at FA_Y0 (below the label/sub),
 // each row is FA_ROW tall. nodeH grows the node to fit its action rows (NODE_H is the min).
@@ -966,6 +991,15 @@ async function loadTable() {
   if (!data) data = FALLBACK;
   TABLE = data;
   if (!TABLE.zones) TABLE.zones = {};
+  // Restore the persisted flow layout (node positions + view) so the flow view
+  // survives a reload. layoutKey guards flowEnter: if the zone set is unchanged the
+  // restored positions are used as-is (no re-layout); if it changed, flowEnter
+  // re-lays-out and the new layout is persisted.
+  if (TABLE.layout && typeof TABLE.layout === "object") {
+    if (TABLE.layout.pos && typeof TABLE.layout.pos === "object") FLOW.pos = TABLE.layout.pos;
+    if (TABLE.layout.view && typeof TABLE.layout.view === "object") FLOW.view = TABLE.layout.view;
+    if (typeof TABLE.layout.key === "string") FLOW.layoutKey = TABLE.layout.key;
+  }
   const names = Object.keys(TABLE.zones);
   selectedZone = names[0] || null;
   buildZoneList();
@@ -4172,6 +4206,7 @@ function saveZones() {
     }
   }
   cleanNextLists();  // drop blank draft rows before POST
+  persistFlowLayout();  // carry the current flow layout with the full table save
   fetch("/api/zones", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -4202,6 +4237,7 @@ function saveActionEditor() {
     return;
   }
   cleanNextLists();  // drop blank draft rows before POST
+  persistFlowLayout();  // carry the current flow layout with the zones POST
   Promise.all([
     fetch("/api/zones", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(TABLE) }),
     fetch("/api/sound", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(SOUND) }),
@@ -4677,8 +4713,10 @@ function flowDragEnd(ev) {
       setNext(a, list);
     }
     FLOW.pos[name] = d.startNode;
+  } else {
+    // Repositioned the node (no connection drawn): persist the new arrangement.
+    flowSaveLayout();
   }
-  // else: reposition — keep the new position (already set during the drag).
   flowRender();
 }
 
@@ -4766,6 +4804,7 @@ function flowBridge(from, to) {
   FLOW.pos[plan.name] = { x: x, y: y };
   FLOW.sel = { type: "node", zone: plan.name };
   FLOW.layoutKey = Object.keys(TABLE.zones).sort().join(",");
+  flowSaveLayout();
   flowRender();
   buildFlowDetail();
 }
@@ -4895,7 +4934,12 @@ function buildFlowDetail() {
 // Loads the brain config if not yet loaded (for zone group outlines).
 function flowEnter() {
   const key = Object.keys(TABLE.zones).sort().join(",");
-  if (FLOW.layoutKey !== key) { flowAutoLayout(); flowFitView(); }
+  // Re-layout only when the zone set changed since the current layout was computed
+  // (or a zone is missing a position — a restored layout that predates a zone). This
+  // is what keeps a manually arranged flow stable: editing zones/groups/actions/
+  // behaviors elsewhere does not change the zone-name set, so it never re-lays-out.
+  const missing = Object.keys(TABLE.zones).some((n) => !FLOW.pos[n]);
+  if (FLOW.layoutKey !== key || missing) { flowAutoLayout(); flowFitView(); flowSaveLayout(); }
   flowRender();
   buildFlowDetail();
   if (!BRAIN) {
@@ -4922,6 +4966,7 @@ function addZone() {
     FLOW.sel = { type: "node", zone: nm };
     FLOW.layoutKey = Object.keys(TABLE.zones).sort().join(",");
     flowFitView();
+    flowSaveLayout();
     flowRender();
     buildFlowDetail();
     return;

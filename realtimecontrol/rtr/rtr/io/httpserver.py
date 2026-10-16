@@ -202,6 +202,8 @@ def _make_handler(server: HttpServer):
             path = self.path.split("?", 1)[0]
             if path == "/api/zones":
                 self._post_zones()
+            elif path == "/api/zones/layout":
+                self._post_zones_layout()
             elif path == "/api/sound":
                 self._post_sound()
             elif path == "/api/patches":
@@ -261,6 +263,41 @@ def _make_handler(server: HttpServer):
             # Ask the running core to hot-reload the new table.
             server.bus.submit(Command(cmd=Cmd.RELOAD_ZONES, payload={}))
             self._send_json(200, {"ok": True})
+
+        # The editor's flow layout (node positions + view + the zone-name set it was
+        # computed for). Editor-only data: the core never reads it, so this updates
+        # just the ``layout`` field on disk and does NOT hot-reload the running table
+        # (the zones are unchanged). A missing/invalid zones file means offline mode,
+        # where there is nothing to attach the layout to, so it is a no-op.
+        def _post_zones_layout(self):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                length = 0
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                layout = json.loads(body)
+            except (ValueError, json.JSONDecodeError):
+                self._send_json(400, {"error": "invalid layout json"})
+                return
+            try:
+                with open(server.zones_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, ValueError):
+                self._send_json(200, {"ok": False, "error": "no zones file"})
+                return
+            if not isinstance(data, dict) or not (isinstance(data.get("zones"), dict) and data.get("zones")):
+                self._send_json(200, {"ok": False, "error": "no zones on disk"})
+                return
+            data["layout"] = layout
+            tmp = server.zones_path + ".tmp"
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(tmp, server.zones_path)
+                self._send_json(200, {"ok": True})
+            except OSError as exc:
+                self._send_json(500, {"error": f"could not write layout: {exc}"})
 
         # ------------------------------------------------------------------
         # Sound API.

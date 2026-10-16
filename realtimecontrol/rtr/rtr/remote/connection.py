@@ -47,6 +47,28 @@ _WS_RETRY_S = 2.0
 _HTTP_TIMEOUT_S = 5.0
 
 
+def _ws_proxy_kwargs() -> Dict[str, Any]:
+    """Force a direct WebSocket connection, ignoring proxy env vars.
+
+    websockets >= 13 auto-detects a proxy from the environment (``http_proxy``
+    / ``https_proxy`` / ``all_proxy`` / ...) and routes through it by default.
+    The Trimui OS (R36S) sets such a var, so the client stalls in the opening
+    handshake ("timed out during opening handshake") because the proxy is
+    unreachable. Passing ``proxy=None`` bypasses the auto-detected proxy and
+    connects straight to the core. Older websockets has no ``proxy`` kwarg, so
+    only pass it when the installed version supports it.
+    """
+    if websockets is None:
+        return {}
+    try:
+        import inspect
+        if "proxy" in inspect.signature(websockets.connect).parameters:
+            return {"proxy": None}
+    except (TypeError, ValueError):
+        pass
+    return {}
+
+
 class Connection:
     """WebSocket/HTTP client to the core.
 
@@ -165,7 +187,8 @@ class Connection:
             try:
                 async with websockets.connect(
                         f"ws://{self.ws_host}:{self.ws_port}",
-                        ping_interval=5, ping_timeout=2) as ws:
+                        ping_interval=5, ping_timeout=2,
+                        **_ws_proxy_kwargs()) as ws:
                     self._ws = ws
                     self.connected = True
                     self._reconnects += 1

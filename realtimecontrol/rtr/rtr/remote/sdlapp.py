@@ -30,6 +30,14 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
+    from . import clockfix  # noqa: F401 - patches time.get_clock_info at import
+except ImportError:  # pragma: no cover - running the file directly, not as a pkg
+    _pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if _pkg_root not in sys.path:
+        sys.path.insert(0, _pkg_root)
+    from rtr.remote import clockfix  # noqa: F401
+
+try:
     from . import view
 except ImportError:  # pragma: no cover - running the file directly, not as a pkg
     _pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -832,7 +840,8 @@ def ws_test(config) -> int:
         # Step 2: the WebSocket handshake (open_timeout caps the upgrade).
         t1 = time.monotonic()
         ws = await asyncio.wait_for(
-            websockets.connect(url, ping_interval=None, ping_timeout=None),
+            websockets.connect(url, ping_interval=None, ping_timeout=None,
+                               proxy=None),
             timeout=5)
         print(f"WS-TEST [2] WS handshake OK in {time.monotonic()-t1:.3f}s",
               flush=True)

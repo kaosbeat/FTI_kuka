@@ -37,6 +37,7 @@ try:
 except ImportError:
     urwid = None
 
+from . import clockfix  # noqa: F401 - patches time.get_clock_info at import
 from . import view
 
 logger = logging.getLogger(__name__)
