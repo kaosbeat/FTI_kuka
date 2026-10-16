@@ -305,6 +305,11 @@ class RemoteTUI:
         res = self._rs.activate()
         if res is not None:
             cmds, _ = res
+            if cmds is None:
+                # SETUP-page UI rows (kind="ui") produce no core command; the
+                # SDL app handles them locally. The desktop TUI has no local
+                # SETTINGS handler, so a None command set is a no-op here.
+                return
             for cmd in cmds:
                 self._send(cmd)
 

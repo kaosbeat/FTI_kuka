@@ -11,7 +11,7 @@ and the terminal size).
 
 import argparse
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -63,9 +63,19 @@ class Config:
     device: str = "/dev/input/event3"
     # Optional list of devices to auto-scan when ``device`` is "auto".
     devices: Optional[List[str]] = None
-    # EV_KEY -> app-key map (override for a different gamepad).
+    # EV_KEY -> app-key map for the digital buttons (override for a different
+    # gamepad). L1/R1 are reserved for page navigation and are not mappable.
     joy_map: Dict[int, str] = field(default_factory=lambda: dict(view.DEFAULT_JOY_MAP))
-    # L1+R1 quit-chord window (ms): second press within this fires quit.
+    # D-pad map: app_key -> [axis_code, sign] (the d-pad is an ANALOG axis,
+    # EV_ABS). sign is -1 (negative) or +1 (positive); center = 0.
+    dpad_map: Dict[str, List[int]] = field(
+        default_factory=lambda: dict(view.DEFAULT_DPAD_MAP))
+    # Whether the calibration wizard has been completed (persisted). On the
+    # first launch (calibrated is False) the wizard runs automatically; the
+    # SETUP "calibrate" row re-runs it regardless of this flag.
+    calibrated: bool = False
+    # Legacy: the L1+R1 quit chord is gone (home is the only quit). Kept so
+    # existing config files that still carry it load without error.
     chord_window_ms: int = 200
     # Single-button quit codes (e.g. 172 = BTN_MODE/home on the Trimui).
     quit_codes: List[int] = field(default_factory=lambda: [172])
@@ -95,6 +105,10 @@ class Config:
     # --- PAK -------------------------------------------------------------
     # Fixed repo path on the device (PAK default; harmless elsewhere).
     repo: str = "/storage/rtr-remote"
+    # Title the launcher (:mod:`rtr.remote.mainmenu`) shows for this app in its
+    # menu. The launcher reads config.displaytitle (falling back to the static
+    # title in its APPS registry).
+    displaytitle: str = "kukapp"
 
     def __post_init__(self):
         if self.height < 1:
@@ -114,7 +128,12 @@ class Config:
         path = Path(path)
         with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        return cls(**data)
+        # Tolerate unknown keys (forward/backward compat): the persisted file
+        # may carry non-field attributes written by ``to_json`` (e.g. the
+        # resolved ``config`` path, the ``daemon`` flag) or fields from other
+        # versions. Only pass known dataclass fields to the constructor.
+        field_names = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in field_names})
 
 
 def _add_flags(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:

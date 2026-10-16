@@ -4,16 +4,17 @@ A terminal-style app rendered with pygame's SDL2 text renderer. It reuses the
 shared pure view layer (:mod:`rtr.remote.view`) for all row content and the
 state machine, the asyncio connection on a worker thread, and the raw
 ``/dev/input`` joystick reader. Input (keyboard + joystick) is unified to a
-small set of app keys; quitting is an **L1+R1 shoulder chord** (or ``q``/``escape``).
+small set of app keys; the d-pad is an analog axis (EV_ABS), the face buttons
+are digital (EV_KEY), L1/R1 page globally, and the home button quits.
 
 This module is the device renderer; the desktop urwid TUI is
 :mod:`rtr.remote.tui`. Both consume the same view layer.
 
 Components:
 
-- :class:`ChordDetector` -- pure, testable L1+R1 quit-chord logic.
+- :func:`_abs_sign` -- decodes a raw ABS value to its sign (the d-pad axis).
 - :class:`Renderer` -- draws view rows to a pygame surface (styles -> colors).
-- :class:`InputController` -- maps joystick events to app keys + the quit chord.
+- :class:`InputController` -- maps joystick events to app keys (d-pad + face).
 - :class:`SdlRemote` -- the app: connection thread, main loop, input dispatch.
 - :func:`selftest` -- headless self-test (no core, mock state, dummy driver).
 """
@@ -68,37 +69,23 @@ if pygame is not None:
 
 
 # ---------------------------------------------------------------------------
-# L1+R1 quit chord (pure, testable).
+# ABS value decoding (the d-pad is an analog axis).
 # ---------------------------------------------------------------------------
-class ChordDetector:
-    """Detects the L1+R1 shoulder-quit chord.
+def _abs_sign(value: int) -> int:
+    """Return the sign of a raw ABS value as -1 / 0 / +1.
 
-    Tracks which shoulder buttons are currently pressed and when each was
-    first pressed. On a press of L1 or R1, if the *other* shoulder is already
-    pressed and its press is within ``window_ms`` -> the chord fires (quit).
-
-    Holding L1 to page, then pressing R1 later than the window, pages (does
-    not quit). Releases clear the tracking state.
+    The ``events.Joystick`` reader unpacks the value as an unsigned 32-bit
+    integer (struct ``I``), so a negative axis position comes back as a large
+    unsigned number (e.g. ``4294967295`` = -1, ``4294901759`` = -40801). The
+    sign is recovered by treating the value as a signed 32-bit int: if the high
+    bit is set it is negative. Only the sign matters for the d-pad (center = 0).
     """
-
-    def __init__(self, window_ms: int = 200):
-        self.window_ms = window_ms
-        self.pressed: Dict[int, float] = {}  # code -> press time (ms)
-
-    def press(self, code: int, now_ms: float) -> bool:
-        """Record a shoulder press; return True if this press completes the chord."""
-        other = view.JOY_R1 if code == view.JOY_L1 else (
-            view.JOY_L1 if code == view.JOY_R1 else None)
-        if other is None:
-            return False
-        if other in self.pressed:
-            if (now_ms - self.pressed[other]) <= self.window_ms:
-                return True  # chord: the other shoulder is within the window
-        self.pressed[code] = now_ms
-        return False
-
-    def release(self, code: int) -> None:
-        self.pressed.pop(code, None)
+    signed = value - 0x100000000 if value >= 0x80000000 else value
+    if signed < 0:
+        return -1
+    if signed > 0:
+        return 1
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -216,45 +203,270 @@ class Renderer:
 
 
 # ---------------------------------------------------------------------------
-# Input (joystick -> app keys + quit chord).
+# Input (joystick -> app keys + page nav).
 # ---------------------------------------------------------------------------
 class InputController:
-    """Maps joystick events to app keys and detects the L1+R1 quit chord.
+    """Maps joystick events to app keys (digital keys + the analog d-pad).
 
     The keyboard is mapped directly in :class:`SdlRemote` (SDL2 ``KEYDOWN``);
-    this controller handles the raw ``/dev/input`` joystick events.
+    this controller handles the raw ``/dev/input`` joystick events:
+
+    - **EV_KEY** (type 1): the digital face buttons (A/B/X), the single-button
+      quit (home), and the L1/R1 shoulders (reserved for GLOBAL page nav).
+    - **EV_ABS** (type 3): the d-pad, an analog axis. A press edge (the axis
+      leaving center in a mapped direction) emits that direction.
+
+    There is no quit chord: L1/R1 are pure page navigation and the home button
+    (``quit_codes``) is the only quit.
     """
 
     def __init__(self, joy_map: Optional[Dict[int, str]] = None,
-                 chord_window_ms: int = 200,
+                 dpad_map: Optional[Dict[str, List[int]]] = None,
                  quit_codes: Optional[List[int]] = None):
         self.joy_map = dict(joy_map or view.DEFAULT_JOY_MAP)
-        self.chord = ChordDetector(chord_window_ms)
+        self.dpad_map = dict(dpad_map or view.DEFAULT_DPAD_MAP)
         # Single-button quit (e.g. 172 = home/mode button on the Trimui).
         self.quit_codes = set(quit_codes or ())
+        # Per-axis d-pad state for press-edge detection: axis_code -> app_key
+        # (the currently-active direction) or None (at rest / center).
+        self._abs_state: Dict[int, Optional[str]] = {}
 
     def on_joystick_event(self, ev, now_ms: float):
         """Process a raw joystick event ``(type, code, value)``.
 
-        Returns ``("quit",)`` if the L1+R1 chord fired, ``("key", app_key)`` for a
-        mapped press, else ``None``.
+        Returns ``("quit",)`` for a quit button, ``("key", app_key)`` for a
+        mapped press (digital or d-pad), else ``None``.
         """
         event_type, code, value = ev
-        if event_type != 1:  # KEY events only (EV_KEY)
+        if event_type == 3:  # EV_ABS: the analog d-pad
+            return self._on_abs(code, value)
+        if event_type != 1:  # other events ignored
             return None
-        if value == 1:  # press edge
+        if value == 1:  # KEY press edge
             if code in self.quit_codes:
                 return ("quit",)
             if code in (view.JOY_L1, view.JOY_R1):
-                if self.chord.press(code, now_ms):
-                    return ("quit",)
+                # L1/R1 are reserved for GLOBAL page navigation: a single
+                # shoulder press always pages (never a mappable button).
+                # Handled here, before the joy_map lookup, so the SETTINGS
+                # page can't swallow it for a local action (font size) and
+                # trap the user -- the shoulders are the reliable way out.
+                return ("key", "page_left" if code == view.JOY_L1 else "page_right")
             app_key = self.joy_map.get(code)
             if app_key is not None:
                 return ("key", app_key)
-        elif value == 0:  # release edge
-            if code in (view.JOY_L1, view.JOY_R1):
-                self.chord.release(code)
         return None
+
+    def _on_abs(self, code: int, value: int):
+        """Map an EV_ABS d-pad event to a direction on a press edge.
+
+        The d-pad is an analog axis: at rest the value is 0 (center); pressing a
+        direction moves the axis to a non-zero value. Only the sign of the value
+        matters (see :func:`_abs_sign`). We emit a direction when the axis leaves
+        center in a mapped direction (a press edge); holding it does not repeat,
+        and returning to center (release) emits nothing.
+        """
+        sign = _abs_sign(value)
+        if sign == 0:  # center: the axis is released
+            self._abs_state[code] = None
+            return None
+        # Find the direction mapped to (code, sign), if any.
+        direction = None
+        for ak, entry in self.dpad_map.items():
+            if isinstance(entry, (list, tuple)) and len(entry) == 2 \
+               and entry[0] == code and entry[1] == sign:
+                direction = ak
+                break
+        prev = self._abs_state.get(code)
+        self._abs_state[code] = direction
+        if direction is not None and prev != direction:
+            return ("key", direction)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# SDL display/font helpers (module-level). Shared by :class:`SdlRemote` and the
+# launcher (:mod:`rtr.remote.mainmenu`); kept at module level so the launcher
+# reuses the exact same driver/font/size probing.
+# ---------------------------------------------------------------------------
+def native_size(selftest: bool) -> Tuple[int, int]:
+    """Probe the panel's native size, or ``(0, 0)`` if unavailable.
+
+    Tries SDL's current video mode first (portable across drivers), then the
+    kernel framebuffer's ``virtual_size`` (the ground truth on Linux). Either
+    can be absent (selftest/offscreen, no fb0), in which case ``(0, 0)`` is
+    returned and the caller falls back to the config canvas.
+    """
+    if selftest or pygame is None:
+        return (0, 0)
+    try:
+        info = pygame.display.Info()
+        w = int(getattr(info, "current_w", 0) or 0)
+        h = int(getattr(info, "current_h", 0) or 0)
+        if w > 0 and h > 0:
+            return w, h
+    except Exception:
+        pass
+    try:
+        with open("/sys/class/graphics/fb0/virtual_size") as f:
+            txt = f.read().strip()
+        if "x" in txt:
+            a, b = txt.split("x", 1)
+            w, h = int(a), int(b)
+            if w > 0 and h > 0:
+                return w, h
+    except Exception:
+        pass
+    return (0, 0)
+
+
+def screen_size(config, selftest: bool) -> Tuple[int, int]:
+    """Render size: the native panel if larger, else the config canvas.
+
+    The layout and ``font_size`` are designed for the small config canvas
+    (``width``/``screen_height``, default 320x240). On a device whose panel is
+    larger (e.g. the Trimui's 1024x768), render at the native size so the layout
+    fills the panel; the font is then scaled to the render height (see
+    :func:`font_size_for`). A config dimension larger than the native one wins
+    (an explicit override for a bigger display).
+    """
+    cw = int(getattr(config, "width", 320) or 320)
+    ch = int(getattr(config, "screen_height", 240) or 240)
+    nw, nh = native_size(selftest)
+    if nw > 0 and nh > 0:
+        return max(cw, nw), max(ch, nh)
+    return cw, ch
+
+
+def set_mode(config, selftest: bool):
+    """Set the display to the render size, falling back to the design size.
+
+    Tries :func:`screen_size` first (the native panel when it is larger than the
+    config canvas). If that ``set_mode`` fails, retries at the config design
+    size; if that also fails, the exception propagates. Returns ``(screen, w, h)``
+    for the size actually in use.
+    """
+    w, h = screen_size(config, selftest)
+    cfg_w = int(getattr(config, "width", 320) or 320)
+    cfg_h = int(getattr(config, "screen_height", 240) or 240)
+    try:
+        screen = pygame.display.set_mode((w, h))
+    except Exception as exc:
+        if (w, h) == (cfg_w, cfg_h):
+            raise
+        print(f"RTR: set_mode {w}x{h} failed ({exc}); retrying "
+              f"{cfg_w}x{cfg_h}", flush=True)
+        screen = pygame.display.set_mode((cfg_w, cfg_h))
+        w, h = cfg_w, cfg_h
+    return screen, w, h
+
+
+def resolve_font(config) -> Optional[str]:
+    """Resolve the configured font path.
+
+    Tries, in order: the literal path (absolute, or CWD-relative), then the path
+    relative to the config file's directory (the PAK dir, so
+    ``fonts/DejaVuSansMono.ttf`` works regardless of CWD), then the path relative
+    to this module's directory (the shipped code dir, where ``--ship-code`` puts
+    fonts shipped with the app, e.g. ``PressStart2P.ttf``). Returns None if
+    nothing is found (the caller falls back to the default).
+    """
+    path = getattr(config, "font", None)
+    if not path:
+        return None
+    if os.path.exists(path):
+        return path
+    bases = []
+    cfg_path = getattr(config, "config", None)
+    if cfg_path:
+        bases.append(os.path.dirname(os.path.abspath(cfg_path)))
+    # The module dir (rtr/remote/) is where fonts shipped with the code live.
+    bases.append(os.path.dirname(os.path.abspath(__file__)))
+    for base in bases:
+        cand = os.path.join(base, path)
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+def font_size_for(config, w: int, h: int) -> int:
+    """Scale the base ``font_size`` to the render height.
+
+    The base ``font_size`` (config, default 16) is sized for the design canvas
+    height (config ``design_height``, default 240). On a taller render height the
+    font is scaled proportionally so the same number of rows fills the panel and
+    the text stays legible. The reference is ``design_height`` (NOT the render
+    ``screen_height``), so a config that sets ``screen_height`` to the native
+    panel height still scales up correctly. A render height at or below the
+    design height keeps the base size.
+    """
+    base = int(getattr(config, "font_size", 16) or 16)
+    design_h = int(getattr(config, "design_height", 240) or 240)
+    if design_h <= 0 or h <= 0:
+        return max(1, base)
+    return max(1, int(round(base * (h / design_h))))
+
+
+def load_font(config, selftest: bool, w: Optional[int] = None,
+              h: Optional[int] = None):
+    """Build the pygame font at the configured path + scaled size."""
+    if w is None or h is None:
+        w, h = screen_size(config, selftest)
+    size = font_size_for(config, w, h)
+    path = resolve_font(config)
+    if path:
+        return pygame.font.Font(path, size)
+    return pygame.font.Font(None, size)
+
+
+def colors(config) -> Dict[str, str]:
+    """Merge the config ``theme`` over :data:`DEFAULT_COLORS` (style -> hex)."""
+    cols = dict(DEFAULT_COLORS)
+    theme = getattr(config, "theme", None) or {}
+    if isinstance(theme, dict):
+        for k, v in theme.items():
+            if k in cols and isinstance(v, str):
+                cols[k] = v
+    return cols
+
+
+def video_driver(selftest: bool) -> str:
+    """Return the SDL video driver to force, probing for a real one.
+
+    SDL auto-detect on this device selects the ``offscreen`` driver, which
+    renders into an in-memory surface and never touches ``/dev/fb0`` -> the panel
+    stays black. So we probe the candidate framebuffer drivers in order and
+    return the first whose ``set_mode`` succeeds with a real (non-offscreen/dummy)
+    driver. An explicit ``SDL_VIDEODRIVER`` env override always wins (manual
+    debugging).
+    """
+    if selftest:
+        return "dummy"
+    forced = os.environ.get("SDL_VIDEODRIVER", "").strip()
+    if forced:
+        return forced
+    if pygame is None:
+        return ""
+    for cand in ("fbcm", "kmsdrm", "kms"):
+        try:
+            os.environ["SDL_VIDEODRIVER"] = cand
+            pygame.display.init()
+            pygame.display.set_mode((32, 32))
+            drv = pygame.display.get_driver()
+            pygame.display.quit()
+            if drv and drv not in ("offscreen", "dummy"):
+                print(f"RTR: using video driver {drv!r} (tried {cand!r})",
+                      flush=True)
+                return cand
+        except Exception:
+            try:
+                pygame.display.quit()
+            except Exception:
+                pass
+    os.environ.pop("SDL_VIDEODRIVER", None)  # fall back to auto-detect
+    print("RTR: WARN no fb driver bound; falling back to auto-detect",
+          flush=True)
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -280,9 +492,25 @@ class SdlRemote:
         self._joy_thread = None
         self._input = InputController(
             joy_map=getattr(config, "joy_map", None),
-            chord_window_ms=getattr(config, "chord_window_ms", 200),
+            dpad_map=getattr(config, "dpad_map", None),
             quit_codes=getattr(config, "quit_codes", None))
         self._quit = False
+        # Renderer objects (set in run()/diag(); None until then so the
+        # SETTINGS font adjuster is a no-op headless/selftest).
+        self._screen = None
+        self._font = None
+        self._renderer = None
+        # SETTINGS button-mapper capture state. ``_capture_seq`` is a list of
+        # (app_key, kind) pairs; kind is "abs" (d-pad axis) or "key" (face btn).
+        self._capture_active = False
+        self._capture_seq: List[Tuple[str, str]] = []
+        self._capture_idx = 0
+        # The (axis, sign) last captured by the d-pad wizard; a repeat of the
+        # same axis/sign is ignored until the axis returns to center and a new
+        # direction is pressed (prevents a held axis from filling two steps).
+        self._capture_last_abs: Optional[Tuple[int, int]] = None
+        self._calibrated = False
+        self._auto_calib_done = False
 
     # ------------------------------------------------------------------
     # Connection (asyncio worker thread). Mirrors RemoteTUI.
@@ -448,6 +676,9 @@ class SdlRemote:
                     self._rs.status = str(payload)
                     self._rs.dirty = True
                 elif kind == "joy":
+                    if self._capture_active:
+                        self._on_capture(payload, now_ms)
+                        continue
                     res = self._input.on_joystick_event(payload, now_ms)
                     if res is not None:
                         self._dispatch(res)
@@ -461,11 +692,210 @@ class SdlRemote:
             self._handle_key(res[1])
 
     # ------------------------------------------------------------------
+    # SETTINGS (page 5): THEME font size + BUTTONS mapper.
+    # ------------------------------------------------------------------
+    def _build_settings(self) -> None:
+        """Seed the shared SETTINGS state from the config (font + both maps)."""
+        self._rs.settings = {
+            "font_size": int(getattr(self.config, "font_size", 16) or 16),
+            "joy_map": dict(self._input.joy_map),
+            "dpad_map": dict(self._input.dpad_map),
+        }
+
+    def _is_setup_page(self) -> bool:
+        return (0 <= self._rs.page < len(view.PAGES)
+                and view.PAGES[self._rs.page] == "SETUP")
+
+    def _persist_settings(self) -> None:
+        """Write the current config (font_size + joy_map) back to disk."""
+        cfg_path = getattr(self.config, "config", None)
+        if not cfg_path:
+            return
+        try:
+            self.config.to_json(cfg_path)
+        except Exception as exc:  # noqa: BLE001
+            print(f"RTR: persist failed: {exc}", flush=True)
+
+    def _apply_font_size(self) -> None:
+        """Rebuild the font/renderer at the current ``font_size`` (no-op headless)."""
+        if pygame is None or self._screen is None:
+            return
+        w, h = self._screen.get_size()
+        self._font = self._load_font(w, h)
+        self._renderer = Renderer(self._screen, self._font, self._colors())
+
+    def _adjust_font_size(self, delta: int) -> None:
+        fs = int(getattr(self.config, "font_size", 16) or 16)
+        fs = max(4, min(32, fs + delta))
+        self.config.font_size = fs
+        self._rs.settings["font_size"] = fs
+        self._apply_font_size()
+        self._rs.status = f"font size: {fs}"
+        self._rs.dirty = True
+
+    def _handle_settings_key(self, key: str) -> None:
+        """Input handling on the SETUP page (font adjust + mapper + cursor)."""
+        if key == "up":
+            self._rs.move_cursor(-1)
+        elif key == "down":
+            self._rs.move_cursor(1)
+        elif key == "enter":
+            self._activate()
+        elif key in ("left", "right"):
+            items = self._rs.current_items()
+            item = items[self._rs.cursor] if 0 <= self._rs.cursor < len(items) else None
+            if item is not None and item.get("ui") == "font_size":
+                self._adjust_font_size(-2 if key == "left" else 2)
+            else:
+                self._rs.set_page(self._rs.page + (-1 if key == "left" else 1))
+        elif key in ("h", "?"):
+            self._rs.status = "L1/R1 pages · ↑↓ move · ←→ font · enter select"
+            self._rs.dirty = True
+
+    def _handle_ui(self, item: dict) -> None:
+        """Act on a ``kind="ui"`` SETTINGS row (font save, calibrate, or capture)."""
+        ui = item.get("ui")
+        if ui == "font_size":
+            self._persist_settings()
+            self._rs.status = f"font size: {int(getattr(self.config, 'font_size', 16))} saved"
+            self._rs.dirty = True
+        elif ui == "calibrate":
+            self._start_calibration()
+        elif ui == "map":
+            ak = item.get("app_key")
+            kind = item.get("input", "key")
+            if ak:
+                self._start_capture_for([(ak, kind)])
+
+    def _start_capture_for(self, seq) -> None:
+        """Begin capturing ``seq``, a list of ``(app_key, kind)`` pairs.
+
+        ``kind`` is ``"abs"`` (the d-pad axis) or ``"key"`` (a face button).
+        """
+        self._capture_active = True
+        self._capture_seq = list(seq)
+        self._capture_idx = 0
+        self._capture_last_abs = None
+        self._update_capture_status()
+
+    def _start_calibration(self) -> None:
+        """Run the calibration wizard: capture the d-pad + face buttons in order.
+
+        Prompts the user to press each control ("press UP now", …), captures the
+        mapping, and persists it (the SETUP "calibrate" row re-runs this).
+        """
+        self._auto_calib_done = True
+        self._start_capture_for(list(view.CALIB_SEQUENCE))
+
+    def _update_capture_status(self) -> None:
+        if 0 <= self._capture_idx < len(self._capture_seq):
+            ak, kind = self._capture_seq[self._capture_idx]
+        else:
+            ak, kind = "?", "key"
+        if kind == "abs":
+            # The d-pad: the user presses that direction on the d-pad now.
+            prompt = f"press {ak.upper()} now"
+        else:
+            names = {"enter": "A (enter)", "q": "B (q)", "h": "X (h)"}
+            prompt = f"press {names.get(ak, ak)}"
+        self._rs.status = (f"CAPTURE {self._capture_idx + 1}/{len(self._capture_seq)}: "
+                            f"{prompt}")
+        self._rs.dirty = True
+
+    def _on_capture(self, ev, now_ms: float) -> None:
+        """Consume a raw joystick event while a capture is active.
+
+        A press of L1/R1 aborts the capture (but still pages as normal). The next
+        event matching the current step's kind assigns the mapping: an ``"abs"``
+        step captures the d-pad axis + sign on a press edge; a ``"key"`` step
+        captures the face-button code on a press edge.
+        """
+        event_type, code, value = ev
+        if event_type == 1 and value == 1 and code in (view.JOY_L1, view.JOY_R1):
+            self._abort_capture()
+            res = self._input.on_joystick_event(ev, now_ms)
+            if res is not None:
+                self._dispatch(res)
+            return
+        if not 0 <= self._capture_idx < len(self._capture_seq):
+            return
+        ak, kind = self._capture_seq[self._capture_idx]
+        if kind == "abs":
+            if event_type != 3:  # EV_ABS only
+                return
+            sign = _abs_sign(value)
+            if sign == 0:  # center: not a press
+                return
+            if (code, sign) == self._capture_last_abs:
+                return  # repeat of the same axis/sign; wait for a new press
+            self._set_dpad_map(ak, code, sign)
+            self._capture_last_abs = (code, sign)
+        else:
+            if event_type != 1 or value != 1:  # KEY press edge only
+                return
+            self._set_joy_map(code, ak)
+        self._capture_idx += 1
+        if self._capture_idx >= len(self._capture_seq):
+            self._capture_active = False
+            self._calibrated = True
+            self.config.calibrated = True
+            self._persist_settings()
+            self._rs.status = "mapped"
+            self._rs.dirty = True
+        else:
+            self._update_capture_status()
+
+    def _abort_capture(self) -> None:
+        """Stop the capture (L1/R1 press); the user is back in normal control."""
+        self._capture_active = False
+        self._capture_seq = []
+        self._capture_idx = 0
+        self._capture_last_abs = None
+        self._rs.status = "capture aborted (L1/R1)"
+        self._rs.dirty = True
+
+    def _set_joy_map(self, code: int, app_key: str) -> None:
+        """Map ``code`` to ``app_key`` (replacing any prior non-L1/R1 mapping)."""
+        for c in list(self._input.joy_map):
+            if self._input.joy_map[c] == app_key and c not in (view.JOY_L1, view.JOY_R1):
+                del self._input.joy_map[c]
+        self._input.joy_map[code] = app_key
+        cmap = getattr(self.config, "joy_map", None)
+        if isinstance(cmap, dict):
+            for c in list(cmap):
+                if cmap[c] == app_key and c not in (view.JOY_L1, view.JOY_R1):
+                    del cmap[c]
+            cmap[code] = app_key
+        self._rs.settings["joy_map"] = dict(self._input.joy_map)
+        self._persist_settings()
+
+    def _set_dpad_map(self, app_key: str, axis: int, sign: int) -> None:
+        """Map a d-pad direction to an ``(axis, sign)`` entry (the analog d-pad)."""
+        self._input.dpad_map[app_key] = [axis, sign]
+        dmap = getattr(self.config, "dpad_map", None)
+        if isinstance(dmap, dict):
+            dmap[app_key] = [axis, sign]
+        self._rs.settings["dpad_map"] = dict(self._input.dpad_map)
+
+    # ------------------------------------------------------------------
     # Input (app keys).
     # ------------------------------------------------------------------
     def _handle_key(self, key: str) -> None:
         if key in ("q", "escape"):
             self._quit = True
+            return
+        # L1/R1 arrive as page_left / page_right (see InputController): GLOBAL
+        # page navigation that works on every page, including SETUP, so the
+        # SETTINGS page can never trap the user. The d-pad left/right is the
+        # local key (font adjust on the font row; page nav elsewhere).
+        if key == "page_left":
+            self._rs.set_page(self._rs.page - 1)
+            return
+        if key == "page_right":
+            self._rs.set_page(self._rs.page + 1)
+            return
+        if self._is_setup_page():
+            self._handle_settings_key(key)
             return
         if key == "up":
             self._rs.move_cursor(-1)
@@ -484,9 +914,16 @@ class SdlRemote:
     def _activate(self) -> None:
         res = self._rs.activate()
         if res is not None:
-            cmds, _ = res
-            for cmd in cmds:
-                self._send(cmd)
+            cmds, _status = res
+            if cmds is None:
+                # A ``kind="ui"`` SETTINGS row: act locally, send nothing.
+                items = self._rs.current_items()
+                item = items[self._rs.cursor] if 0 <= self._rs.cursor < len(items) else None
+                if item is not None:
+                    self._handle_ui(item)
+            else:
+                for cmd in cmds:
+                    self._send(cmd)
 
     def _send(self, cmd: Dict[str, Any]) -> None:
         if self._loop is not None and self._conn is not None:
@@ -499,135 +936,25 @@ class SdlRemote:
     # Renderer helpers.
     # ------------------------------------------------------------------
     def _native_size(self) -> Tuple[int, int]:
-        """Probe the panel's native size, or ``(0, 0)`` if unavailable.
-
-        Tries SDL's current video mode first (portable across drivers), then the
-        kernel framebuffer's ``virtual_size`` (the ground truth on Linux). Either
-        can be absent (selftest/offscreen, no fb0), in which case ``(0, 0)`` is
-        returned and the caller falls back to the config canvas.
-        """
-        if self.selftest or pygame is None:
-            return (0, 0)
-        try:
-            info = pygame.display.Info()
-            w = int(getattr(info, "current_w", 0) or 0)
-            h = int(getattr(info, "current_h", 0) or 0)
-            if w > 0 and h > 0:
-                return w, h
-        except Exception:
-            pass
-        try:
-            with open("/sys/class/graphics/fb0/virtual_size") as f:
-                txt = f.read().strip()
-            if "x" in txt:
-                a, b = txt.split("x", 1)
-                w, h = int(a), int(b)
-                if w > 0 and h > 0:
-                    return w, h
-        except Exception:
-            pass
-        return (0, 0)
+        return native_size(self.selftest)
 
     def _screen_size(self) -> Tuple[int, int]:
-        """Render size: the native panel if larger, else the config canvas.
-
-        The layout and ``font_size`` are designed for the small config canvas
-        (``width``/``screen_height``, default 320x240). On a device whose panel
-        is larger (e.g. the Trimui's 1024x768), render at the native size so the
-        layout fills the panel; the font is then scaled to the render height (see
-        :meth:`_font_size_for`). A config dimension larger than the native one
-        wins (an explicit override for a bigger display).
-        """
-        cw = int(getattr(self.config, "width", 320) or 320)
-        ch = int(getattr(self.config, "screen_height", 240) or 240)
-        nw, nh = self._native_size()
-        if nw > 0 and nh > 0:
-            return max(cw, nw), max(ch, nh)
-        return cw, ch
+        return screen_size(self.config, self.selftest)
 
     def _set_mode(self):
-        """Set the display to the render size, falling back to the design size.
-
-        Tries :meth:`_screen_size` first (the native panel when it is larger
-        than the config canvas). If that ``set_mode`` fails, retries at the
-        config design size; if that also fails, the exception propagates.
-        Returns ``(screen, w, h)`` for the size actually in use.
-        """
-        w, h = self._screen_size()
-        cfg_w = int(getattr(self.config, "width", 320) or 320)
-        cfg_h = int(getattr(self.config, "screen_height", 240) or 240)
-        try:
-            screen = pygame.display.set_mode((w, h))
-        except Exception as exc:
-            if (w, h) == (cfg_w, cfg_h):
-                raise
-            print(f"RTR: set_mode {w}x{h} failed ({exc}); retrying "
-                  f"{cfg_w}x{cfg_h}", flush=True)
-            screen = pygame.display.set_mode((cfg_w, cfg_h))
-            w, h = cfg_w, cfg_h
-        return screen, w, h
+        return set_mode(self.config, self.selftest)
 
     def _resolve_font(self) -> Optional[str]:
-        """Resolve the configured font path.
-
-        Tries, in order: the literal path (absolute, or CWD-relative), then the
-        path relative to the config file's directory (the PAK dir, so
-        ``fonts/DejaVuSansMono.ttf`` works regardless of CWD), then the path
-        relative to this module's directory (the shipped code dir, where
-        ``--ship-code`` puts fonts shipped with the app, e.g. ``PressStart2P.ttf``).
-        Returns None if nothing is found (the caller falls back to the default).
-        """
-        path = getattr(self.config, "font", None)
-        if not path:
-            return None
-        if os.path.exists(path):
-            return path
-        bases = []
-        cfg_path = getattr(self.config, "config", None)
-        if cfg_path:
-            bases.append(os.path.dirname(os.path.abspath(cfg_path)))
-        # The module dir (rtr/remote/) is where fonts shipped with the code live.
-        bases.append(os.path.dirname(os.path.abspath(__file__)))
-        for base in bases:
-            cand = os.path.join(base, path)
-            if os.path.exists(cand):
-                return cand
-        return None
+        return resolve_font(self.config)
 
     def _font_size_for(self, w: int, h: int) -> int:
-        """Scale the base ``font_size`` to the render height.
-
-        The base ``font_size`` (config, default 16) is sized for the design
-        canvas height (config ``design_height``, default 240). On a taller render
-        height the font is scaled proportionally so the same number of rows fills
-        the panel and the text stays legible. The reference is ``design_height``
-        (NOT the render ``screen_height``), so a config that sets ``screen_height``
-        to the native panel height still scales up correctly. A render height at
-        or below the design height keeps the base size.
-        """
-        base = int(getattr(self.config, "font_size", 16) or 16)
-        design_h = int(getattr(self.config, "design_height", 240) or 240)
-        if design_h <= 0 or h <= 0:
-            return max(1, base)
-        return max(1, int(round(base * (h / design_h))))
+        return font_size_for(self.config, w, h)
 
     def _load_font(self, w: Optional[int] = None, h: Optional[int] = None):
-        if w is None or h is None:
-            w, h = self._screen_size()
-        size = self._font_size_for(w, h)
-        path = self._resolve_font()
-        if path:
-            return pygame.font.Font(path, size)
-        return pygame.font.Font(None, size)
+        return load_font(self.config, self.selftest, w, h)
 
     def _colors(self) -> Dict[str, str]:
-        colors = dict(DEFAULT_COLORS)
-        theme = getattr(self.config, "theme", None) or {}
-        if isinstance(theme, dict):
-            for k, v in theme.items():
-                if k in colors and isinstance(v, str):
-                    colors[k] = v
-        return colors
+        return colors(self.config)
 
     def _render_once(self, renderer) -> int:
         up = self._conn is not None and self._conn.connected
@@ -637,42 +964,7 @@ class SdlRemote:
         return len(rows)
 
     def _video_driver(self) -> str:
-        """Return the SDL video driver to force, probing for a real one.
-
-        SDL auto-detect on this device selects the ``offscreen`` driver, which
-        renders into an in-memory surface and never touches ``/dev/fb0`` -> the
-        panel stays black. So we probe the candidate framebuffer drivers in
-        order and return the first whose ``set_mode`` succeeds with a real
-        (non-offscreen/dummy) driver. An explicit ``SDL_VIDEODRIVER`` env
-        override always wins (manual debugging).
-        """
-        if self.selftest:
-            return "dummy"
-        forced = os.environ.get("SDL_VIDEODRIVER", "").strip()
-        if forced:
-            return forced
-        if pygame is None:
-            return ""
-        for cand in ("fbcm", "kmsdrm", "kms"):
-            try:
-                os.environ["SDL_VIDEODRIVER"] = cand
-                pygame.display.init()
-                pygame.display.set_mode((32, 32))
-                drv = pygame.display.get_driver()
-                pygame.display.quit()
-                if drv and drv not in ("offscreen", "dummy"):
-                    print(f"RTR: using video driver {drv!r} (tried {cand!r})",
-                          flush=True)
-                    return cand
-            except Exception:
-                try:
-                    pygame.display.quit()
-                except Exception:
-                    pass
-        os.environ.pop("SDL_VIDEODRIVER", None)  # fall back to auto-detect
-        print("RTR: WARN no fb driver bound; falling back to auto-detect",
-              flush=True)
-        return ""
+        return video_driver(self.selftest)
 
     # ------------------------------------------------------------------
     # Lifecycle.
@@ -699,10 +991,20 @@ class SdlRemote:
         pygame.display.set_caption("RTR REMOTE")
         font = self._load_font(w, h)
         renderer = Renderer(screen, font, self._colors())
+        self._screen = screen
+        self._font = font
+        self._renderer = renderer
+        self._build_settings()
 
         if not self.selftest:
             self._start_conn()
             self._start_joy()
+            # First launch (calibrated is False): run the calibration wizard. It
+            # prompts "press UP now", captures the d-pad + face buttons, and
+            # persists the map (calibrated=True). The SETUP "calibrate" row
+            # re-runs it on demand.
+            if not self.config.calibrated:
+                self._start_calibration()
 
         n_rows = self._render_once(renderer)
         if not self.selftest:
@@ -959,7 +1261,8 @@ def selftest() -> bool:
     """Run the headless self-test (no core, mock state, dummy driver).
 
     Renders mock state across all pages, exercises the app keys, and verifies
-    the L1+R1 quit chord. Prints ``SELFTEST PASS`` (True) or a FAIL line (False).
+    L1/R1 page navigation and the d-pad ABS edge/no-repeat/center checks.
+    Prints ``SELFTEST PASS`` (True) or a FAIL line (False).
     """
     if pygame is None:
         print("SELFTEST FAIL: pygame not installed")
@@ -1006,21 +1309,27 @@ def selftest() -> bool:
         for key in ("up", "down", "left", "right", "enter"):
             app._handle_key(key)
 
-        # L1+R1 chord (within the window) must report quit.
+        # L1/R1 page globally (no quit chord): a single press pages.
         ctrl = InputController()
         t0 = time.monotonic() * 1000.0
-        first = ctrl.on_joystick_event((1, view.JOY_L1, 1), t0)
-        second = ctrl.on_joystick_event((1, view.JOY_R1, 1), t0 + 50)
-        if second != ("quit",):
-            print(f"SELFTEST FAIL: L1+R1 chord not detected: {second}")
+        l1 = ctrl.on_joystick_event((1, view.JOY_L1, 1), t0)
+        r1 = ctrl.on_joystick_event((1, view.JOY_R1, 1), t0 + 50)
+        if l1 != ("key", "page_left") or r1 != ("key", "page_right"):
+            print(f"SELFTEST FAIL: L1/R1 page nav wrong: {l1} {r1}")
             pygame.quit()
             return False
-        # A second press far outside the window must NOT quit (page nav only).
-        ctrl2 = InputController()
-        slow = ctrl2.on_joystick_event((1, view.JOY_L1, 1), t0)
-        slow2 = ctrl2.on_joystick_event((1, view.JOY_R1, 1), t0 + 500)
-        if slow2 == ("quit",):
-            print(f"SELFTEST FAIL: slow L1+R1 wrongly quit: {slow2}")
+        # The d-pad is an analog axis: a press edge emits the direction.
+        dpad = InputController()
+        up = dpad.on_joystick_event((3, 17, 4294967295), t0)  # axis 17 negative
+        if up != ("key", "up"):
+            print(f"SELFTEST FAIL: d-pad UP not mapped: {up}")
+            pygame.quit()
+            return False
+        # Holding it does not repeat; returning to center emits nothing.
+        held = dpad.on_joystick_event((3, 17, 4294967295), t0 + 10)
+        center = dpad.on_joystick_event((3, 17, 0), t0 + 20)
+        if held is not None or center is not None:
+            print(f"SELFTEST FAIL: d-pad repeat/center wrong: {held} {center}")
             pygame.quit()
             return False
 

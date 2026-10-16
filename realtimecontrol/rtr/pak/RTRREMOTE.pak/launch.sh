@@ -62,4 +62,4 @@ echo "1" > /tmp/stay_awake 2>/dev/null || true
 cleanup() { rm -f /tmp/stay_awake 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
-"$PY" "$REPO/rtr/remote/sdlapp.py" --config "$PakDir/config.json" "$@"
+"$PY" "$REPO/rtr/remote/mainmenu.py" --config "$PakDir/config.json" "$@"

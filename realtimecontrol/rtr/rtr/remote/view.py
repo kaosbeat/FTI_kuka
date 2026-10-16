@@ -34,9 +34,11 @@ from ..flow import (
 SECTION_LABELS = {
     "action": "ACTIONS",
     "zones": "GO TO",
+    "theme": "THEME / LAYOUT",
+    "buttons": "BUTTONS",
 }
 
-PAGES = ("NAV", "CAMERA", "BRAIN", "HUNT", "CADENCE")
+PAGES = ("NAV", "CAMERA", "BRAIN", "HUNT", "CADENCE", "SETUP")
 
 # Joystick button codes (Linux EV_KEY) for page navigation. L1 = previous page,
 # R1 = next page (mirrors the keyboard left/right). The device is configured via
@@ -85,6 +87,112 @@ CADENCE_ITEMS = [
 ]
 
 
+# The d-pad is an ANALOG axis (EV_ABS, type 3), not a digital key. On the
+# Trimui the d-pad maps to:
+#   axis 17 (TRACKBALL): negative = UP, positive = DOWN
+#   axis 16 (WHEEL):     negative = LEFT, positive = RIGHT
+# Encoded as {app_key: [axis_code, sign]} where sign is -1 (negative) or +1
+# (positive). The sign is read from the raw ABS value (see sdlapp._abs_sign);
+# only the sign matters (center = 0).
+DEFAULT_DPAD_MAP = {
+    "up": [17, -1],
+    "down": [17, 1],
+    "left": [16, -1],
+    "right": [16, 1],
+}
+
+# The d-pad (analog ABS) app keys, in wizard order.
+DPAD_MAP_KEYS = ("up", "down", "left", "right")
+# The face buttons (digital EV_KEY) app keys, in wizard order.
+FACE_MAP_KEYS = ("enter", "q", "h")
+# The full calibration wizard sequence: (app_key, input_kind) where input_kind
+# is "abs" (d-pad axis) or "key" (face button). The d-pad is captured as an
+# ABS press edge; the face buttons as a KEY press edge.
+CALIB_SEQUENCE = (
+    ("up", "abs"),
+    ("down", "abs"),
+    ("left", "abs"),
+    ("right", "abs"),
+    ("enter", "key"),
+    ("q", "key"),
+    ("h", "key"),
+)
+# The app keys the SETTINGS button mapper offers (the D-pad, A/enter, B/q, X/h).
+# The order here is the order of the mapper rows and of the calibration wizard.
+SETTINGS_MAP_KEYS = DPAD_MAP_KEYS + FACE_MAP_KEYS
+
+
+# ---------------------------------------------------------------------------
+# SETTINGS page (page 5): THEME/LAYOUT font size + BUTTONS mapper.
+# ---------------------------------------------------------------------------
+def _code_for(jm: Optional[dict], app_key: str) -> str:
+    """The joystick code currently mapped to ``app_key`` (L1/R1 excluded).
+
+    L1/R1 are reserved for page navigation and are never offered as a mappable
+    button, so they are skipped here. Returns ``"?"`` when no code is mapped.
+    """
+    for code in sorted(jm or {}):
+        if jm[code] == app_key and code not in (JOY_L1, JOY_R1):
+            return str(code)
+    return "?"
+
+
+def _dpad_for(dmap: Optional[dict], app_key: str) -> str:
+    """The d-pad ``axis/sign`` currently mapped to ``app_key``, or ``"?"``."""
+    entry = (dmap or {}).get(app_key)
+    if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+        return "?"
+    axis, sign = entry
+    return f"{axis}/{sign}"
+
+
+def build_settings_items(settings: Optional[dict]) -> List[dict]:
+    """The selectable rows for the SETUP page (font size + button mapper).
+
+    ``settings`` carries the live values (``font_size`` + ``joy_map`` +
+    ``dpad_map``); the rows are rebuilt on every render so the mapper shows the
+    current code for each app key. Each row is a ``kind="ui"`` item the renderer
+    acts on locally. The d-pad rows are ``input="abs"`` (analog axis); the face
+    rows are ``input="key"`` (digital button).
+    """
+    settings = settings or {}
+    fs = settings.get("font_size", 16)
+    jm = settings.get("joy_map") or {}
+    dmap = settings.get("dpad_map") or {}
+    items = [{
+        "kind": "ui",
+        "section": "theme",
+        "ui": "font_size",
+        "name": f"font size: {fs}",
+    }]
+    # The full calibration wizard (re-runnable from SETUP).
+    items.append({
+        "kind": "ui",
+        "section": "buttons",
+        "ui": "calibrate",
+        "name": "calibrate controller",
+    })
+    for ak in DPAD_MAP_KEYS:
+        items.append({
+            "kind": "ui",
+            "section": "buttons",
+            "ui": "map",
+            "app_key": ak,
+            "input": "abs",
+            "name": f"map {ak}: {_dpad_for(dmap, ak)}",
+        })
+    for ak in FACE_MAP_KEYS:
+        items.append({
+            "kind": "ui",
+            "section": "buttons",
+            "ui": "map",
+            "app_key": ak,
+            "input": "key",
+            "name": f"map {ak}: {_code_for(jm, ak)}",
+        })
+    return items
+
+
 # ---------------------------------------------------------------------------
 # Row shaping helpers (framework-free).
 # ---------------------------------------------------------------------------
@@ -123,18 +231,41 @@ def item_label(item: dict) -> str:
     return s
 
 
-def current_items(page: int, items: List[dict]) -> List[dict]:
-    """The selectable rows for the current page (NAV items vs. CADENCE options)."""
+def current_items(page: int, items: List[dict],
+                  settings: Optional[dict] = None) -> List[dict]:
+    """The selectable rows for the current page.
+
+    The SETUP page (index 5) uses the SETTINGS rows (font size + mapper) built
+    from ``settings``; page 4 uses the fixed CADENCE options; every other page
+    uses the zone/action ``items``.
+    """
+    if 0 <= page < len(PAGES) and PAGES[page] == "SETUP":
+        return build_settings_items(settings)
     return CADENCE_ITEMS if page == 4 else items
 
 
-def activate_commands(item: dict) -> Tuple[List[dict], str]:
+def _ui_status(item: dict) -> str:
+    """The status line for activating a ``kind="ui"`` SETTINGS row."""
+    ui = item.get("ui")
+    if ui == "font_size":
+        return "font size saved"
+    if ui == "calibrate":
+        return "calibrate: press UP now"
+    if ui == "map":
+        return f"map {item.get('app_key', '')}: capture next press"
+    return "→ " + item.get("name", "")
+
+
+def activate_commands(item: dict) -> Tuple[Optional[List[dict]], str]:
     """The core command(s) to send and the status message for activating an item.
 
     An engine row sends its single ``cmd``; an action row sends ``play_action``;
     a zone row sends ``trigger_action`` (see :func:`rtr.flow.activation_commands`).
-    Returns ``(commands, status)``.
+    A ``ui`` row (SETUP page) is a local action, not a core command: it sends
+    nothing (``None``) and the renderer acts on it. Returns ``(commands, status)``.
     """
+    if item.get("kind") == "ui":
+        return None, _ui_status(item)
     if item.get("kind") == "engine":
         return [item["cmd"]], f"→ {item['name']}"
     cmds = activation_commands(item)
@@ -321,8 +452,25 @@ def _cadence_content(engine, cursor, current_len, width):
     return rows
 
 
+def _settings_content(settings, cursor, current_len, width):
+    """Page 5: SETTINGS (THEME/LAYOUT font size + BUTTONS mapper rows)."""
+    rows = []
+    rows.append({"text": "  SETUP", "style": "label"})
+    rows.append({"style": "divider"})
+    items = build_settings_items(settings)
+    current_section = None
+    for i, item in enumerate(items):
+        sec = item["section"]
+        if sec != current_section:
+            rows.append({"text": f"  {SECTION_LABELS.get(sec, sec.upper())}", "style": "label"})
+            current_section = sec
+        rows.append(_item_row(i, item, cursor, current_len, width))
+    return rows
+
+
 def build_rows(state, zones, page, cursor, engine, hunt, cam_telem, width,
-               *, connected=False, endpoint="", status="") -> List[dict]:
+               *, connected=False, endpoint="", status="",
+               settings: Optional[dict] = None) -> List[dict]:
     """Build the full screen as a list of rows for the current state.
 
     Args:
@@ -337,9 +485,10 @@ def build_rows(state, zones, page, cursor, engine, hunt, cam_telem, width,
         connected: whether the core link is up (drives the connection line).
         endpoint: the core endpoint string for the connection line.
         status: the status line text.
+        settings: the live SETTINGS values (font_size + joy_map) for the SETUP page.
     """
     items = build_items(zones, state.get("zone"))
-    current = current_items(page, items)
+    current = current_items(page, items, settings)
     current_len = len(current)
     rows: List[dict] = []
     rows.append({"text": _center("RTR REMOTE", width), "style": "bar"})
@@ -361,10 +510,15 @@ def build_rows(state, zones, page, cursor, engine, hunt, cam_telem, width,
         rows.extend(_hunt_content(hunt, cam_telem, cursor, current_len, width))
     elif page == 4:
         rows.extend(_cadence_content(engine, cursor, current_len, width))
+    elif page == 5:
+        rows.extend(_settings_content(settings, cursor, current_len, width))
     rows.append({"style": "divider"})
     rows.append({"text": _clip(status, width), "style": "status"})
-    rows.append({"text": _clip("←→ pages · ↑↓ move · enter select · home/q quits", width),
-                 "style": "help"})
+    if 0 <= page < len(PAGES) and PAGES[page] == "SETUP":
+        help_txt = "←→ font · ↑↓ move · enter select · L1/R1 pages"
+    else:
+        help_txt = "←→ pages · ↑↓ move · enter select · home/q quits"
+    rows.append({"text": _clip(help_txt, width), "style": "help"})
     return rows
 
 
@@ -392,6 +546,9 @@ class RemoteState:
         self.hunt: Dict[str, Any] = {}
         self.cam_telem: Dict[str, Any] = {}
         self.engine: Dict[str, Any] = {}
+        # Live SETTINGS values (font_size + joy_map) for the SETUP page; the SDL
+        # app populates this from its config. Empty by default (desktop TUI).
+        self.settings: Dict[str, Any] = {}
 
     def apply_state(self, data) -> None:
         self.hunt = data.get("hunt", {})
@@ -438,7 +595,7 @@ class RemoteState:
             self.cursor = 0
 
     def current_items(self) -> List[dict]:
-        return current_items(self.page, self.items)
+        return current_items(self.page, self.items, self.settings)
 
     def page_item_count(self) -> int:
         return len(self.current_items())
@@ -466,8 +623,12 @@ class RemoteState:
         elif code == JOY_R1:
             self.set_page(self.page + 1)
 
-    def activate(self) -> Optional[Tuple[List[dict], str]]:
-        """Activate the selected item; returns ``(commands, status)`` or None."""
+    def activate(self) -> Optional[Tuple[Optional[List[dict]], str]]:
+        """Activate the selected item; returns ``(commands, status)`` or None.
+
+        A ``kind="ui"`` SETTINGS row returns ``(None, status)``: the renderer
+        acts on it locally (font size / capture) and sends no core command.
+        """
         items = self.current_items()
         if 0 <= self.cursor < len(items):
             item = items[self.cursor]
@@ -482,4 +643,4 @@ class RemoteState:
         return build_rows(self.state, self.zones, self.page, self.cursor,
                            self.engine, self.hunt, self.cam_telem, width,
                            connected=connected, endpoint=endpoint,
-                           status=self.status)
+                           status=self.status, settings=self.settings)

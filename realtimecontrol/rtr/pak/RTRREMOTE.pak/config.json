@@ -7,12 +7,20 @@
   "devices": ["/dev/input/event0", "/dev/input/event1", "/dev/input/event2", "/dev/input/event3", "/dev/input/js0"],
   "chord_window_ms": 200,
   "quit_codes": [172],
+  "dpad_map": {
+    "up": [17, -1],
+    "down": [17, 1],
+    "left": [16, -1],
+    "right": [16, 1]
+  },
+  "calibrated": false,
   "width": 1024,
   "screen_height": 768,
   "design_height": 240,
   "font": "PressStart2P.ttf",
   "font_size": 8,
   "repo": "/storage/rtr-remote",
+  "displaytitle": "kukapp",
   "joy_map": {
     "15": "up",
     "16": "down",

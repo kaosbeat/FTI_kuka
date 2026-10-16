@@ -211,6 +211,7 @@ CODE_FILES=(
     "rtr/__init__.py"
     "rtr/flow.py"
     "rtr/remote/__init__.py"
+    "rtr/remote/mainmenu.py"
     "rtr/remote/sdlapp.py"
     "rtr/remote/view.py"
     "rtr/remote/config.py"
