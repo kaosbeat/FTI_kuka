@@ -14,7 +14,8 @@
     "clawing": "osc(45, 0.4, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
     "leaping": "osc(80, 0.5, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
     "resting_sleeping_bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n",
-    "stretching_hunting_bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
+    "stretching_hunting_bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n",
+    "sleeping_stretching_bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
   },
   "modes": {
     "calm": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out()",
@@ -91,6 +92,9 @@
       "bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
     },
     "stretching_hunting_bridge": {
+      "bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
+    },
+    "sleeping_stretching_bridge": {
       "bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
     }
   }
