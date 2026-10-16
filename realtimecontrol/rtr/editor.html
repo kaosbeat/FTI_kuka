@@ -4404,6 +4404,7 @@ function flowZoomAt(e) {
   v.y = pt.y - (pt.y - v.y) / f;
   v.w /= f; v.h /= f;
   flowApplyView();
+  flowSaveLayout();
 }
 
 function flowPanStart(e) {
@@ -4422,7 +4423,7 @@ function flowPanStart(e) {
     FLOW.view.y = f.startView.y - (cur.y - f.startScreen.y) * scale;
     flowApplyView();
   };
-  const up = () => { FLOW.pan = null; window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  const up = () => { FLOW.pan = null; window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); flowSaveLayout(); };
   window.addEventListener("mousemove", move);
   window.addEventListener("mouseup", up);
 }
@@ -5208,9 +5209,10 @@ $("flowAutoLayout").onclick = () => {
   else if (!confirm("no selection — layout ALL zones (moves every node)?")) return;
   else flowAutoLayout();
   flowFitView();
+  flowSaveLayout();
   flowRender();
 };
-$("flowFit").onclick = () => { flowFitView(); flowRender(); };
+$("flowFit").onclick = () => { flowFitView(); flowSaveLayout(); flowRender(); };
 // View controls: wheel = zoom (around the cursor), middle-drag = pan.
 $("flowSvg").addEventListener("wheel", (e) => { e.preventDefault(); flowZoomAt(e); }, { passive: false });
 $("flowSvg").addEventListener("mousedown", (e) => { if (e.button === 1) { e.preventDefault(); flowPanStart(e); } });
