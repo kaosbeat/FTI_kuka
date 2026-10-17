@@ -45,6 +45,7 @@ const Robot3D = (() => {
   // The Blender-editable tool GLB (authored Y-up like environment.glb). Replaces the
   // old white placeholder box at the $FLANGE; see assets/make_tool.py for the starter.
   const TOOL_ASSET_URL = "assets/tool.glb";
+  const CAMERA_MOUNT_URL = "camera_mount.json";
   const HOME = [0, -90, 90, 0, 90, 0];
 
   // Real KUKA colors: base + wrist black (RAL 9005), links orange (RAL 2003).
@@ -95,6 +96,9 @@ const Robot3D = (() => {
   // Collision STOP: debounced, fires once per collision event (rising edge).
   let onCollision = null, collStreak = 0, stopSent = false, lastTarget = null;
   const COLLISION_STOP_THRESHOLD = 3;
+  // Camera rig (tool-mounted wide + close lenses, visualization only).
+  let cameraRig = null, cameraFovGroup = null;
+  let cameraFovVisible = true, cameraRigVisible = true;
 
   function rotFromRpy(r) {
     const Rx = new THREE.Matrix4().makeRotationX(r[0]);
@@ -253,6 +257,102 @@ const Robot3D = (() => {
       logFn("tool asset not loaded: " + (err && err.message ? err.message : err));
       onDone(null);
     });
+  }
+
+  // ------------------------------------------------------------------
+  // Camera rig (tool-mounted wide + close lenses, visualization only).
+  // The rig is a child of the tool node, positioned by the tool_cam transform
+  // from camera_mount.json. Each lens GLB (Blender Y-up) is rotated +90 deg X
+  // (Y-up to Z-up) then -90 deg Y (orient optical axis to rig +z forward).
+  // ------------------------------------------------------------------
+
+  function loadCameraMount(onDone) {
+    fetch(CAMERA_MOUNT_URL)
+      .then((r) => {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then((data) => onDone(data))
+      .catch((err) => {
+        logFn("camera mount not loaded: " + (err && err.message ? err.message : err));
+        onDone(null);
+      });
+  }
+
+  function loadLensGLB(url, onDone) {
+    new THREE.GLTFLoader().load(url, (gltf) => {
+      onDone(gltf.scene);
+    }, undefined, (err) => {
+      logFn("lens GLB not loaded: " + (err && err.message ? err.message : err));
+      onDone(null);
+    });
+  }
+
+  function buildFovCone(halfAngleRad, length) {
+    const radius = length * Math.tan(halfAngleRad);
+    const coneGeo = new THREE.ConeGeometry(radius, length, 24, 1, true);
+    const coneMat = new THREE.MeshBasicMaterial({
+      color: 0x66ccff, wireframe: true, transparent: true, opacity: 0.35,
+      side: THREE.DoubleSide,
+    });
+    const cone = new THREE.Mesh(coneGeo, coneMat);
+    cone.rotation.x = Math.PI / 2;
+    cone.position.z = length / 2;
+    const arrow = new THREE.ArrowHelper(
+      new THREE.Vector3(0, 0, 1),
+      new THREE.Vector3(0, 0, 0),
+      Math.min(length * 0.6, 0.3),
+      0x66ccff, 0.03, 0.02,
+    );
+    const group = new THREE.Group();
+    group.add(cone);
+    group.add(arrow);
+    return group;
+  }
+
+  function buildCameraRig(toolNode) {
+    if (cameraRig || !toolNode) return;
+    loadCameraMount((data) => {
+      if (!data) return;
+      cameraRig = new THREE.Group();
+      const tc = data.tool_cam;
+      cameraRig.position.set(tc.xyz[0], tc.xyz[1], tc.xyz[2]);
+      cameraRig.quaternion.setFromRotationMatrix(rotFromRpy(tc.rpy));
+      toolNode.add(cameraRig);
+      cameraRig.visible = cameraRigVisible;
+      cameraFovGroup = new THREE.Group();
+      cameraFovGroup.visible = cameraFovVisible;
+      cameraRig.add(cameraFovGroup);
+      if (data.lenses) {
+        data.lenses.forEach((lens) => {
+          const halfAngle = (lens.fov_h_deg / 2) * Math.PI / 180;
+          const length = lens.cone_len_m || 0.5;
+          const offx = lens.offset_x_m || 0;
+          loadLensGLB(lens.url, (gltfScene) => {
+            if (!gltfScene) return;
+            const lensGroup = new THREE.Group();
+            lensGroup.position.set(offx, 0, 0);
+            gltfScene.rotation.x = Math.PI / 2;
+            gltfScene.rotation.y = -Math.PI / 2;
+            lensGroup.add(gltfScene);
+            cameraRig.add(lensGroup);
+            const coneGroup = buildFovCone(halfAngle, length);
+            coneGroup.position.set(offx, 0, 0);
+            cameraFovGroup.add(coneGroup);
+          });
+        });
+      }
+    });
+  }
+
+  function setCameraFovVisible(v) {
+    cameraFovVisible = !!v;
+    if (cameraFovGroup) cameraFovGroup.visible = cameraFovVisible;
+  }
+
+  function setCameraRigVisible(v) {
+    cameraRigVisible = !!v;
+    if (cameraRig) cameraRig.visible = cameraRigVisible;
   }
 
   // ------------------------------------------------------------------
@@ -687,6 +787,7 @@ const Robot3D = (() => {
             ensureToolBody();
             if (collisionEnabled) buildToolCollisionHighlight(curClone);
           }
+          buildCameraRig(cur.tool);
           setupToolScreen(cur.tool);  // render the hydra screen onto the tool's red mesh
         } catch (e) {
           logFn("tool setup failed: " + (e && e.message ? e.message : e));
@@ -904,5 +1005,5 @@ const Robot3D = (() => {
     console.log("[collision] " + (collisionOn ? "enabled" : "disabled") + " (runtime)");
   }
 
-  return { init, update, setTarget, screenResolution, setGhostVisible, setRobotRealVisible, setRobotCollisionVisible, setToolCollisionVisible, setEnvRealVisible, setEnvCollisionVisible, collisions, checkPoseCollision, reloadEnv, diagCollision, diagEnv, setCollisionEnabled };
+  return { init, update, setTarget, screenResolution, setGhostVisible, setRobotRealVisible, setRobotCollisionVisible, setToolCollisionVisible, setEnvRealVisible, setEnvCollisionVisible, setCameraFovVisible, setCameraRigVisible, collisions, checkPoseCollision, reloadEnv, diagCollision, diagEnv, setCollisionEnabled };
 })();

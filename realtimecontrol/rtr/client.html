@@ -132,7 +132,7 @@
     <div id="robot3d"></div>
     <div class="legend"><span class="sw" style="background:#f67828"></span>current
       &nbsp;<span class="sw" style="background:#4fc08d"></span>target</div>
-    <div class="btnrow" style="margin-top:6px"><button id="ghostToggle" class="active">ghost arm</button><button id="fillToggle">fill window</button><button id="fsToggle">fullscreen</button></div>
+    <div class="btnrow" style="margin-top:6px"><button id="ghostToggle" class="active">ghost arm</button><button id="camFovToggle" class="active">camera fov</button><button id="fillToggle">fill window</button><button id="fsToggle">fullscreen</button></div>
     <div class="kv" style="margin-top:8px"><span>tool (x, y, z)</span><span id="toolPos">&#8211;</span></div>
     <div class="kv"><span>collision</span><span id="collStatus">&#8211;</span></div>
   </section>
@@ -868,6 +868,12 @@ $("ghostToggle").onclick = () => {
   ghostVisible = !ghostVisible;
   Robot3D.setGhostVisible(ghostVisible);
   $("ghostToggle").className = ghostVisible ? "active" : "";
+};
+let camFovVisible = true;
+$("camFovToggle").onclick = () => {
+  camFovVisible = !camFovVisible;
+  Robot3D.setCameraFovVisible(camFovVisible);
+  $("camFovToggle").className = camFovVisible ? "active" : "";
 };
 
 // Fill-window mode: the 3D section takes over the whole window (the other cards are
