@@ -99,6 +99,12 @@ const Robot3D = (() => {
   // Camera rig (tool-mounted wide + close lenses, visualization only).
   let cameraRig = null, cameraFovGroup = null;
   let cameraFovVisible = true, cameraRigVisible = true;
+  // Camera view (the editor's cam tab): a second renderer + perspective camera that
+  // renders the whole scene from the selected lens (camera_mount.json).
+  let cameraMountData = null;
+  let camViewRenderer = null, camViewCamera = null, camViewContainer = null;
+  let camViewLensName = null, camViewDims = { w: 0, h: 0 };
+  let _camViewPos = null, _camViewQuat = null, _camViewOrientMat = null, _camViewScale = null;
 
   function rotFromRpy(r) {
     const Rx = new THREE.Matrix4().makeRotationX(r[0]);
@@ -314,6 +320,7 @@ const Robot3D = (() => {
     if (cameraRig || !toolNode) return;
     loadCameraMount((data) => {
       if (!data) return;
+      cameraMountData = data;
       cameraRig = new THREE.Group();
       const tc = data.tool_cam;
       cameraRig.position.set(tc.xyz[0], tc.xyz[1], tc.xyz[2]);
@@ -353,6 +360,116 @@ const Robot3D = (() => {
   function setCameraRigVisible(v) {
     cameraRigVisible = !!v;
     if (cameraRig) cameraRig.visible = cameraRigVisible;
+  }
+
+  // ------------------------------------------------------------------
+  // Camera view (the editor's cam tab): a second renderer + perspective
+  // camera that renders the whole scene from the selected lens.
+  // ------------------------------------------------------------------
+
+  // Look up a lens by name from camera_mount.json; falls back to the first lens.
+  function getCamViewLens(name) {
+    if (!cameraMountData || !cameraMountData.lenses) return null;
+    const ls = cameraMountData.lenses;
+    for (let i = 0; i < ls.length; i++) {
+      if (ls[i].name === name) return ls[i];
+    }
+    return ls[0] || null;
+  }
+
+  // Set the cam-view camera's projection from a lens's horizontal FOV, adjusted
+  // for the current aspect ratio.
+  function applyCamViewLensProjection(lens, aspect) {
+    const hFov = (lens.fov_h_deg || 90) * Math.PI / 180;
+    const vFov = 2 * Math.atan(Math.tan(hFov / 2) / aspect);
+    camViewCamera.fov = vFov * 180 / Math.PI;
+    camViewCamera.near = 0.005;
+    camViewCamera.far = 100;
+    camViewCamera.updateProjectionMatrix();
+  }
+
+  // Attach the cam-view renderer to a container element (idempotent). Creates a
+  // second WebGL renderer + perspective camera; the per-frame render pass is
+  // driven from the main loop via renderCameraView().
+  function setCameraView(containerEl) {
+    if (camViewContainer === containerEl) return;
+    if (camViewContainer) {
+      const oldCanvas = camViewContainer.querySelector("canvas");
+      if (oldCanvas) camViewContainer.removeChild(oldCanvas);
+    }
+    if (camViewRenderer) {
+      camViewRenderer.dispose();
+      camViewRenderer = null;
+    }
+    camViewContainer = containerEl;
+    if (!containerEl || typeof THREE === "undefined") return;
+    const w = containerEl.clientWidth || 600, h = containerEl.clientHeight || 320;
+    camViewRenderer = new THREE.WebGLRenderer({ antialias: true });
+    camViewRenderer.setPixelRatio(window.devicePixelRatio);
+    camViewRenderer.setSize(w, h);
+    containerEl.appendChild(camViewRenderer.domElement);
+    camViewCamera = new THREE.PerspectiveCamera(60, w / h, 0.005, 100);
+    camViewDims = { w: w, h: h };
+    // Pre-allocate per-frame temporaries (once).
+    if (!_camViewPos) {
+      _camViewPos = new THREE.Vector3();
+      _camViewQuat = new THREE.Quaternion();
+      _camViewOrientMat = new THREE.Matrix4();
+      _camViewScale = new THREE.Matrix4().makeScale(1, -1, -1);
+    }
+    if (camViewLensName) {
+      const lens = getCamViewLens(camViewLensName);
+      if (lens) applyCamViewLensProjection(lens, w / h);
+    }
+  }
+
+  // Switch the active lens for the cam view; updates the projection immediately.
+  function setCameraViewLens(name) {
+    camViewLensName = name || null;
+    if (camViewCamera && camViewContainer) {
+      const lens = getCamViewLens(camViewLensName);
+      if (lens) {
+        const aspect = camViewContainer.clientWidth / Math.max(1, camViewContainer.clientHeight);
+        applyCamViewLensProjection(lens, aspect);
+      }
+    }
+  }
+
+  // Per-frame: render the scene from the selected lens's viewpoint.
+  // Position = rig world position + offset_x_m along the rig's world x-axis.
+  // Orientation = rig world rotation × diag(1,-1,-1) (the rig frame is
+  // x=right, y=down, z=forward; the camera looks along +z with mirrored y/z).
+  function renderCameraView() {
+    if (!camViewRenderer || !camViewContainer) return;
+    const cw = camViewContainer.clientWidth, ch = camViewContainer.clientHeight;
+    if (!cw || !ch) return;
+    if (cw !== camViewDims.w || ch !== camViewDims.h) {
+      camViewDims = { w: cw, h: ch };
+      camViewRenderer.setSize(cw, ch);
+      camViewCamera.aspect = cw / ch;
+      if (camViewLensName) {
+        const lens = getCamViewLens(camViewLensName);
+        if (lens) applyCamViewLensProjection(lens, cw / ch);
+        else camViewCamera.updateProjectionMatrix();
+      } else {
+        camViewCamera.updateProjectionMatrix();
+      }
+    }
+    if (!cameraRig) return;
+    cameraRig.updateWorldMatrix(true, false);
+    const rigMat = cameraRig.matrixWorld;
+    const lens = getCamViewLens(camViewLensName);
+    const offx = lens ? (lens.offset_x_m || 0) : 0;
+    _camViewPos.set(
+      rigMat.elements[12] + offx * rigMat.elements[0],
+      rigMat.elements[13] + offx * rigMat.elements[4],
+      rigMat.elements[14] + offx * rigMat.elements[8]
+    );
+    camViewCamera.position.copy(_camViewPos);
+    _camViewOrientMat.copy(rigMat).multiply(_camViewScale);
+    _camViewQuat.setFromRotationMatrix(_camViewOrientMat);
+    camViewCamera.quaternion.copy(_camViewQuat);
+    camViewRenderer.render(scene, camViewCamera);
   }
 
   // ------------------------------------------------------------------
@@ -737,6 +854,7 @@ const Robot3D = (() => {
       if (screenTex) screenTex.needsUpdate = true;  // re-upload the hydra canvas
       runCollisionCheck();
       renderer.render(scene, camera);
+      renderCameraView();
       if (toolNode && toolEl) {
         const p = toolNode.getWorldPosition(new THREE.Vector3());
         toolEl.textContent = p.x.toFixed(2) + ", " + p.y.toFixed(2) + ", " + p.z.toFixed(2);
@@ -1005,5 +1123,5 @@ const Robot3D = (() => {
     console.log("[collision] " + (collisionOn ? "enabled" : "disabled") + " (runtime)");
   }
 
-  return { init, update, setTarget, screenResolution, setGhostVisible, setRobotRealVisible, setRobotCollisionVisible, setToolCollisionVisible, setEnvRealVisible, setEnvCollisionVisible, setCameraFovVisible, setCameraRigVisible, collisions, checkPoseCollision, reloadEnv, diagCollision, diagEnv, setCollisionEnabled };
+  return { init, update, setTarget, screenResolution, setGhostVisible, setRobotRealVisible, setRobotCollisionVisible, setToolCollisionVisible, setEnvRealVisible, setEnvCollisionVisible, setCameraFovVisible, setCameraRigVisible, setCameraView, setCameraViewLens, getCamViewLens, collisions, checkPoseCollision, reloadEnv, diagCollision, diagEnv, setCollisionEnabled };
 })();

@@ -49,6 +49,14 @@
   #robot3d { width: 100%; height: 320px; border: 1px solid var(--border); border-radius: 6px;
              overflow: hidden; background: #0d0f13; }
   #robot3d canvas { display: block; }
+  #camMain { display: block; }
+  .camCols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  #camView3d { width: 100%; height: 320px; border: 1px solid var(--border); border-radius: 6px;
+               overflow: hidden; background: #0d0f13; }
+  #camView3d canvas { display: block; }
+  #camSnapshot { width: 100%; display: block; border: 1px solid var(--border); border-radius: 6px;
+                 background: #0d0f13; min-height: 200px; }
+  #camSnapUrl { width: 100%; }
   .axis { margin-bottom: 8px; }
   .axis .row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 0; }
   .bar { height: 6px; background: #0d0f13; border-radius: 3px; margin-top: 3px; position: relative; overflow: hidden; }
@@ -241,6 +249,7 @@
   <button id="tabFlow">flow</button>
   <button id="tabGroups">groups</button>
   <button id="tabBrain">brain</button>
+  <button id="tabCam">cam</button>
   <button id="tabValidate">validate</button>
   <button id="save">save</button>
   <span id="saveMsg"></span>
@@ -428,6 +437,29 @@
   </section>
 </main>
 
+<main id="camMain" style="display:none">
+  <div class="camCols">
+    <section>
+      <h2>virtual camera</h2>
+      <div id="camView3d"></div>
+      <div class="row" style="margin-top:8px">
+        <label>lens</label>
+        <select id="camLensSel"></select>
+      </div>
+    </section>
+    <section>
+      <h2>real camera</h2>
+      <div class="row" style="margin-top:8px">
+        <label>snapshot url</label>
+        <input type="text" id="camSnapUrl" value="http://192.168.1.185:8080/?action=snapshot" spellcheck="false">
+        <button id="camSnapBtn" class="small">capture</button>
+      </div>
+      <img id="camSnapshot" alt="camera snapshot">
+    </section>
+  </div>
+  <div id="camBrainCards" class="brainGrid" style="margin-top:16px"></div>
+</main>
+
 <main id="groupsMain" style="display:none">
   <div id="groupList" class="brainGrid"></div>
 </main>
@@ -551,6 +583,7 @@ let ws = null;
 let flowView = false;
 let brainView = false;
 let groupsView = false;
+let camView = false;
 const grpOpen = {};  // group name -> bool (zone-list collapse; default open)
 let validateView = false;
 let valScanTimer = null;   // active scan animation frame id
@@ -1992,6 +2025,7 @@ async function loadBrain() {
   BRAIN = normalizeBrain(data);
   if (brainView) buildBrainForm();
   if (groupsView) buildGroupsForm();
+  if (camView) buildCamForm();
   return BRAIN;
 }
 
@@ -2087,39 +2121,6 @@ function buildBrainForm() {
 
     mkSub(card, "cam_control (per-action camera baseline)");
     mkInfo(card, "The camera baseline is now per-action (zone/action). Set each action's camera intent (active / mode / lock) from the action editor.");
-  }
-
-  // --- Candidates card (the hunt loop: how the brain picks a lock target) ---
-  {
-    const card = mkCard("candidates (hunt loop)", "How the brain picks a lock target from camera candidates.");
-    const h = b.hunt;
-    mkRow(card, "hunt.enabled", mkCheck("brainGrpHuntEnabled", h.enabled));
-    mkRow(card, "hunt.zones (comma-separated)", mkText("brainGrpHuntZones", h.zones.join(", ")));
-    const hp = h.params;
-    mkRow(card, "hunt.lost_s (s, how long a locked target's track may go stale)",
-          mkNum("brainHuntLostS", hp.lost_s, "0.1", "0", "Seconds before a locked target is considered lost"));
-    mkRow(card, "hunt.min_conf (lock sensitivity; candidates below it are ignored — lower = more sensitive)",
-          mkNum("brainHuntMinConf", hp.min_conf, "0.05", "0", "Minimum confidence to lock a candidate (0–1)"));
-    mkRow(card, "hunt.centrality_weight (how much image-center distance is penalised in the lock score)",
-          mkNum("brainHuntCentrality", hp.centrality_weight, "0.05", "0", "Penalty weight for distance from image center"));
-    mkRow(card, "hunt.attention_guard (behaviors that suppress the detect grab)",
-          mkText("brainHuntGuard", hp.attention_guard.join(", ")));
-    mkRow(card, "hunt.detect.zone", mkText("brainHuntDetZone", hp.detect.zone));
-    mkRow(card, "hunt.detect.action", mkText("brainHuntDetAct", hp.detect.action));
-    mkRow(card, "hunt.scan.zone", mkText("brainHuntScanZone", hp.scan.zone));
-    mkRow(card, "hunt.scan.action", mkText("brainHuntScanAct", hp.scan.action));
-  }
-
-  // --- Facefocus card (the 'check out that human' face actions) ---
-  {
-    const card = mkCard("facefocus (face actions)", "The 'check out that human' face-focus actions.");
-    const ff = b.facefocus;
-    mkRow(card, "facefocus.enabled", mkCheck("brainGrpFacefocusEnabled", ff.enabled));
-    mkRow(card, "facefocus.zones (comma-separated)", mkText("brainGrpFacefocusZones", ff.zones.join(", ")));
-    const fp = ff.params;
-    mkRow(card, "facefocus.actions (comma-separated)", mkText("brainFFActions", fp.actions.join(", ")));
-    mkRow(card, "facefocus.action_s (s, per face action)", mkNum("brainFFActionS", fp.action_s, "0.1", "0", "Duration of each face action (seconds)"));
-    mkRow(card, "facefocus.face_lost_s (s, before the face is lost)", mkNum("brainFFLostS", fp.face_lost_s, "0.1", "0", "Seconds before a tracked face is considered lost"));
   }
 
   // --- Zone classes card (the engagement ladder) ---
@@ -2339,12 +2340,102 @@ function buildBrainForm() {
     + "candidates = the hunt-loop data (min_conf = the lock sensitivity; centrality_weight = how much image-center distance is penalised in the lock score; "
     + "detect/scan = the actions triggered on lock / lock-lost; attention_guard = behaviors that suppress the detect grab). "
     + "facefocus = the 'check out that human' face actions (cycled while a face is visible). "
-    + "behaviors = the per-behavior motion params (the tunable knobs of the motion policies).";
+     + "behaviors = the per-behavior motion params (the tunable knobs of the motion policies).";
+}
+
+// Build the cam tab's brain cards (Candidates + facefocus) into #camBrainCards.
+// These were moved from buildBrainForm() so the brain tab stays focused on
+// autonomy / zone groups / behaviors / zone classes.
+function buildCamForm() {
+  const el = $("camBrainCards");
+  if (!el) return;
+  el.innerHTML = "";
+  const b = BRAIN;
+  if (!b) return;
+
+  const mkCard = (title, desc) => {
+    const card = document.createElement("section");
+    card.className = "brainCard";
+    const h = document.createElement("h2");
+    h.textContent = title;
+    card.appendChild(h);
+    if (desc) {
+      const d = document.createElement("div");
+      d.className = "brainCardDesc";
+      d.textContent = desc;
+      card.appendChild(d);
+    }
+    el.appendChild(card);
+    return card;
+  };
+  const mkRow = (card, label, input) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.alignItems = "center";
+    row.style.marginBottom = "6px";
+    const lab = document.createElement("label");
+    lab.textContent = label;
+    row.appendChild(lab);
+    row.appendChild(input);
+    card.appendChild(row);
+    return row;
+  };
+  const mkNum = (id, value, step, min, title) => {
+    const inp = document.createElement("input");
+    inp.type = "number"; inp.step = step || "0.1"; inp.min = min || "0";
+    inp.value = value; inp.id = id;
+    if (title) inp.title = title;
+    return inp;
+  };
+  const mkText = (id, value) => {
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.spellcheck = false; inp.id = id;
+    inp.value = value;
+    return inp;
+  };
+  const mkCheck = (id, checked) => {
+    const inp = document.createElement("input");
+    inp.type = "checkbox"; inp.id = id; inp.checked = !!checked;
+    return inp;
+  };
+
+  // --- Candidates card (the hunt loop: how the brain picks a lock target) ---
+  {
+    const card = mkCard("candidates (hunt loop)", "How the brain picks a lock target from camera candidates.");
+    const h = b.hunt;
+    mkRow(card, "hunt.enabled", mkCheck("brainGrpHuntEnabled", h.enabled));
+    mkRow(card, "hunt.zones (comma-separated)", mkText("brainGrpHuntZones", h.zones.join(", ")));
+    const hp = h.params;
+    mkRow(card, "hunt.lost_s (s, how long a locked target's track may go stale)",
+          mkNum("brainHuntLostS", hp.lost_s, "0.1", "0", "Seconds before a locked target is considered lost"));
+    mkRow(card, "hunt.min_conf (lock sensitivity; candidates below it are ignored — lower = more sensitive)",
+          mkNum("brainHuntMinConf", hp.min_conf, "0.05", "0", "Minimum confidence to lock a candidate (0–1)"));
+    mkRow(card, "hunt.centrality_weight (how much image-center distance is penalised in the lock score)",
+          mkNum("brainHuntCentrality", hp.centrality_weight, "0.05", "0", "Penalty weight for distance from image center"));
+    mkRow(card, "hunt.attention_guard (behaviors that suppress the detect grab)",
+          mkText("brainHuntGuard", hp.attention_guard.join(", ")));
+    mkRow(card, "hunt.detect.zone", mkText("brainHuntDetZone", hp.detect.zone));
+    mkRow(card, "hunt.detect.action", mkText("brainHuntDetAct", hp.detect.action));
+    mkRow(card, "hunt.scan.zone", mkText("brainHuntScanZone", hp.scan.zone));
+    mkRow(card, "hunt.scan.action", mkText("brainHuntScanAct", hp.scan.action));
+  }
+
+  // --- Facefocus card (the 'check out that human' face actions) ---
+  {
+    const card = mkCard("facefocus (face actions)", "The 'check out that human' face-focus actions.");
+    const ff = b.facefocus;
+    mkRow(card, "facefocus.enabled", mkCheck("brainGrpFacefocusEnabled", ff.enabled));
+    mkRow(card, "facefocus.zones (comma-separated)", mkText("brainGrpFacefocusZones", ff.zones.join(", ")));
+    const fp = ff.params;
+    mkRow(card, "facefocus.actions (comma-separated)", mkText("brainFFActions", fp.actions.join(", ")));
+    mkRow(card, "facefocus.action_s (s, per face action)", mkNum("brainFFActionS", fp.action_s, "0.1", "0", "Duration of each face action (seconds)"));
+    mkRow(card, "facefocus.face_lost_s (s, before the face is lost)", mkNum("brainFFLostS", fp.face_lost_s, "0.1", "0", "Seconds before a tracked face is considered lost"));
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Zone-groups tab: collapsible list of the (regular) zone groups. hunt / facefocus
-// are special groups with their own validated params and are edited on the brain
+// are special groups with their own validated params and are edited on the cam
 // tab (candidates / facefocus cards), so they are not shown here.
 // ---------------------------------------------------------------------------
 const _grpId = (name) => "g" + name.replace(/[^a-zA-Z0-9]/g, "_");
@@ -2522,6 +2613,7 @@ function removeGroup(name) {
 function saveGroups() {
   if ($("groupList").hasChildNodes()) _commitGroupsDom();
   if ($("brainCards").hasChildNodes()) _commitBrainDom();
+  if ($("camBrainCards").hasChildNodes()) _commitCamDom();
   const payload = Object.assign({}, BRAIN);
   fetch("/api/brain", {
     method: "POST",
@@ -2539,12 +2631,11 @@ function saveGroups() {
   }).catch((e) => { $("saveMsg").textContent = "save failed: " + e; $("saveMsg").className = "err"; });
 }
 
-// Read the brain-tab DOM (autonomy / hunt / facefocus / behaviors) back into
-// BRAIN (no POST). cam_control and zone_groups are owned by the action editor
-// and the groups tab respectively, so they are left untouched here.
+// Read the brain-tab DOM (autonomy / behaviors) back into BRAIN (no POST).
+// cam_control is owned by the action editor; zone_groups by the groups tab;
+// hunt + facefocus by the cam tab (committed via _commitCamDom).
 function _commitBrainDom() {
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-  const splitList = (id) => $(id).value.split(",").map((s) => s.trim()).filter((s) => s.length);
   const num = (id, fallback) => { const v = parseFloat($(id).value); return isNaN(v) ? fallback : v; };
   const b = BRAIN;
   b.autonomy = {
@@ -2552,6 +2643,27 @@ function _commitBrainDom() {
     dwell_s: num("brainAutDwell", b.autonomy.dwell_s),
     events: { midi: $("brainEvMidi").checked, camera: $("brainEvCamera").checked, websocket: $("brainEvWs").checked },
   };
+  const behaviors = {};
+  for (const name of Object.keys(BEHAVIOR_PARAMS)) {
+    const defaults = BEHAVIOR_PARAMS[name];
+    const keys = Object.keys(defaults);
+    if (!keys.length) { behaviors[name] = {}; continue; }
+    const entry = {};
+    for (const key of keys) {
+      entry[key] = num("brainBh" + cap(name) + cap(key), defaults[key]);
+    }
+    behaviors[name] = entry;
+  }
+  b.behaviors = behaviors;
+}
+
+// Read the cam-tab DOM (hunt / facefocus) back into BRAIN (no POST).
+// The input IDs are the same as before the move; only the container changed
+// from #brainCards to #camBrainCards.
+function _commitCamDom() {
+  const splitList = (id) => $(id).value.split(",").map((s) => s.trim()).filter((s) => s.length);
+  const num = (id, fallback) => { const v = parseFloat($(id).value); return isNaN(v) ? fallback : v; };
+  const b = BRAIN;
   b.hunt = {
     zones: splitList("brainGrpHuntZones"),
     enabled: $("brainGrpHuntEnabled").checked,
@@ -2573,27 +2685,16 @@ function _commitBrainDom() {
       face_lost_s: num("brainFFLostS", b.facefocus.params.face_lost_s),
     },
   };
-  const behaviors = {};
-  for (const name of Object.keys(BEHAVIOR_PARAMS)) {
-    const defaults = BEHAVIOR_PARAMS[name];
-    const keys = Object.keys(defaults);
-    if (!keys.length) { behaviors[name] = {}; continue; }
-    const entry = {};
-    for (const key of keys) {
-      entry[key] = num("brainBh" + cap(name) + cap(key), defaults[key]);
-    }
-    behaviors[name] = entry;
-  }
-  b.behaviors = behaviors;
 }
 
-// Both brain-related tabs (brain + groups) edit the same config, so each save
-// commits both tabs' DOMs (whichever are built) into BRAIN and POSTs the whole
-// config — the /api/brain handler writes the payload verbatim, so a partial
-// payload would clobber the other tab's section.
+// All brain-related tabs (brain + groups + cam) edit the same config, so each save
+// commits all built DOMs into BRAIN and POSTs the whole config — the /api/brain
+// handler writes the payload verbatim, so a partial payload would clobber the
+// other tab's section.
 function saveBrain() {
   if ($("brainCards").hasChildNodes()) _commitBrainDom();
   if ($("groupList").hasChildNodes()) _commitGroupsDom();
+  if ($("camBrainCards").hasChildNodes()) _commitCamDom();
   const payload = Object.assign({}, BRAIN);
   fetch("/api/brain", {
     method: "POST",
@@ -2603,7 +2704,8 @@ function saveBrain() {
     if (ok) {
       $("saveMsg").textContent = "saved";
       $("saveMsg").className = "";
-      buildBrainForm();
+      if (brainView) buildBrainForm();
+      if (camView) buildCamForm();
     } else {
       $("saveMsg").textContent = "save failed: " + (body.error || r.status);
       $("saveMsg").className = "err";
@@ -3535,6 +3637,7 @@ function switchView(v) {
   flowView = v === "flow";
   brainView = v === "brain";
   groupsView = v === "groups";
+  camView = v === "cam";
   validateView = v === "validate";
   if (wasPatch && !patchView) commitPatchEditor();  // leaving the patches view: commit
   // While in the validate tab, put the core in manual mode so the brain's
@@ -3542,13 +3645,14 @@ function switchView(v) {
   // Restore to auto (the core default) when leaving the tab.
   if (validateView && !wasValidate) send({ cmd: "set_control_mode", mode: "manual" });
   else if (!validateView && wasValidate) send({ cmd: "set_control_mode", mode: "auto" });
-  const other = patchView || midiView || flowView || brainView || groupsView || validateView;
+  const other = patchView || midiView || flowView || brainView || groupsView || camView || validateView;
   $("zoneMain").style.display = other ? "none" : "";
   $("patchesMain").style.display = patchView ? "" : "none";
   $("midiMain").style.display = midiView ? "" : "none";
   $("flowMain").style.display = flowView ? "" : "none";
   $("brainMain").style.display = brainView ? "" : "none";
   $("groupsMain").style.display = groupsView ? "" : "none";
+  $("camMain").style.display = camView ? "" : "none";
   $("validateMain").style.display = validateView ? "" : "none";
   $("tabZones").className = other ? "" : "active";
   $("tabPatches").className = patchView ? "active" : "";
@@ -3556,6 +3660,7 @@ function switchView(v) {
   $("tabFlow").className = flowView ? "active" : "";
   $("tabGroups").className = groupsView ? "active" : "";
   $("tabBrain").className = brainView ? "active" : "";
+  $("tabCam").className = camView ? "active" : "";
   $("tabValidate").className = validateView ? "active" : "";
   // Move the shared 3D singleton between the zones and validate tabs. Leaving
   // the tab stops any running scan so it does not keep driving the (now
@@ -3580,6 +3685,10 @@ function switchView(v) {
   }
   if (groupsView) {
     if (BRAIN) buildGroupsForm();
+    else loadBrain();
+  }
+  if (camView) {
+    if (BRAIN) buildCamForm();
     else loadBrain();
   }
 }
@@ -4315,6 +4424,7 @@ function save() {
   if (midiView) { saveMidiAll(); return; }
   if (brainView) { saveBrain(); return; }
   if (groupsView) { saveGroups(); return; }
+  if (camView) { saveBrain(); return; }
   saveZones();
 }
 
@@ -5303,6 +5413,38 @@ function unmountRobot3dValidate() {
   else home.appendChild(el);
   _triggerResize();
 }
+// --- Cam tab: virtual-camera 3D preview + real-camera snapshot ---
+// The virtual camera renders the shared scene from a second renderer mounted at the
+// camera rig; the lens selector picks wide/close (drives the projection fov + offset).
+Robot3D.setCameraView($("camView3d"));
+async function setupCamLensSel() {
+  const sel = $("camLensSel");
+  let lenses = [];
+  try {
+    const r = await fetch("camera_mount.json", { cache: "no-store" });
+    if (r.ok) { const d = await r.json(); lenses = d.lenses || []; }
+  } catch (e) {}
+  sel.innerHTML = "";
+  for (const l of lenses) {
+    const o = document.createElement("option");
+    o.value = l.name; o.textContent = l.name;
+    sel.appendChild(o);
+  }
+  sel.value = "wide";
+  sel.onchange = () => Robot3D.setCameraViewLens(sel.value);
+  Robot3D.setCameraViewLens(sel.value);
+}
+setupCamLensSel();
+// Capture a real-camera snapshot: the URL is user-configurable; a timestamp cache-buster
+// forces a fresh image on every click (no HTTP snapshot endpoint in the core).
+function camSnapUpdate() {
+  const url = $("camSnapUrl").value.trim();
+  if (!url) return;
+  const sep = url.includes("?") ? "&" : "?";
+  $("camSnapshot").src = url + sep + "_=" + Date.now();
+}
+$("camSnapBtn").onclick = camSnapUpdate;
+$("camSnapshot").onclick = camSnapUpdate;
 // Toggle the green ghost (target) arm in the 3D preview.
 let ghostVisible = true;
 $("ghostToggle").onclick = () => {
@@ -5343,6 +5485,7 @@ $("delZone").onclick = delZone;
   $("tabFlow").onclick = () => switchView("flow");
   $("tabGroups").onclick = () => switchView("groups");
   $("tabBrain").onclick = () => switchView("brain");
+  $("tabCam").onclick = () => switchView("cam");
   $("tabValidate").onclick = () => switchView("validate");
   buildValPoseSetter();
   $("valPoseGo").onclick = applyValPose;
