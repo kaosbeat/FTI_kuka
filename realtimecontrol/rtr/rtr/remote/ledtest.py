@@ -133,14 +133,17 @@ LED_SYSFS_BASE = "/sys/class/led_anim/"
 # Action rows shown below the LED rows (scrollable, like the LED rows).
 ACTIONS = ["all white", "all off", "test all", "restore"]
 
-# Screen geometry. The device shows exactly 22 rows (h // char_h). The screen
-# is a fixed title row + a scrollable window + a fixed help row. The window
-# scrolls over the 22 LED rows + a divider + the 4 action rows (27 content
-# rows), so the cursor can reach every LED and action.
-SCREEN_ROWS = 22
-WINDOW_ROWS = SCREEN_ROWS - 2  # title + help are fixed -> 20-row window
-WINDOW_CONTENT_ROWS = NUM_LEDS + 1 + len(ACTIONS)  # 22 LEDs + divider + 4
-MAX_SCROLL = WINDOW_CONTENT_ROWS - WINDOW_ROWS  # 7
+# Screen geometry. The screen is a fixed title row + a scrollable window + a
+# fixed help row. The window scrolls over the 22 LED rows + a divider + the 4
+# action rows (WINDOW_CONTENT_ROWS = 27 content rows), so the cursor can reach
+# every LED and action. The number of *visible* rows is the renderer's
+# ``rows`` (screen height // char_h), which depends on the font size; the layout
+# reads it at runtime (see :meth:`LedApp._screen_rows`) so it adapts. At the
+# current config (font_size 6 -> size 19 -> char_h 19) the panel shows ~40 rows,
+# so all 27 content rows fit with no scrolling; if the font is enlarged the
+# window shrinks and the same scroll logic kicks in.
+DEFAULT_SCREEN_ROWS = 22  # fallback before the renderer exists (selftest/diag)
+WINDOW_CONTENT_ROWS = NUM_LEDS + 1 + len(ACTIONS)  # 27 (22 LEDs + divider + 4)
 INTERACTIVE_ROWS = NUM_LEDS + len(ACTIONS)  # 26 (cursor range 0..25)
 
 # The test sweep: how many frames to emit per LED (white then black) before
@@ -397,8 +400,21 @@ class LedApp:
     # ------------------------------------------------------------------
     # Row building.
     # ------------------------------------------------------------------
+    def _screen_rows(self) -> int:
+        """Visible rows = the renderer's ``rows`` (h // char_h), or the fallback
+        before the renderer exists (selftest / diag before display init)."""
+        return self._renderer.rows if self._renderer else DEFAULT_SCREEN_ROWS
+
+    def _window_rows(self) -> int:
+        """Rows available to the scrollable window (screen minus title + help)."""
+        return max(1, self._screen_rows() - 2)
+
+    def _max_scroll(self) -> int:
+        """Largest scroll offset: 0 when all content fits (no scrolling)."""
+        return max(0, WINDOW_CONTENT_ROWS - self._window_rows())
+
     def _total_rows(self) -> int:
-        return SCREEN_ROWS
+        return self._screen_rows()
 
     def _cursor_pos(self, c: int) -> int:
         """Window position of cursor ``c`` (0..25) within the 27 content rows.
@@ -423,27 +439,37 @@ class LedApp:
         return content
 
     def _build_rows(self) -> List[dict]:
-        """Build the 22 screen rows: title + 20-row window slice + help."""
+        """Build the screen rows: title + window slice (+ blank pad) + help.
+
+        The window shows up to :meth:`_window_rows` content rows; when the
+        content is shorter than the window (the normal ~40-row case) the gap is
+        padded with blank rows so the help row stays pinned to the bottom.
+        """
         cols = self._renderer.cols if self._renderer else 80
         content = self._window_content()
-        top = max(0, min(self._scroll_top, MAX_SCROLL))
+        wr = self._window_rows()
+        top = max(0, min(self._scroll_top, self._max_scroll()))
+        window = content[top: top + wr]
+        for _ in range(wr - len(window)):
+            window.append({"style": "item", "text": ""})
         rows: List[dict] = [{"text": _center("LED TEST", cols), "style": "bar"}]
-        rows.extend(content[top: top + WINDOW_ROWS])
+        rows.extend(window)
         rows.append({"text": "↑↓ move · ←→ color · A write · home quits",
                       "style": "help"})
         return rows
 
     def _ensure_visible(self) -> None:
-        """Clamp the scroll so the cursor row stays inside the 20-row window."""
+        """Clamp the scroll so the cursor row stays inside the window."""
+        wr = self._window_rows()
         pos = self._cursor_pos(self._cursor)
         if pos < self._scroll_top:
             self._scroll_top = pos
-        elif pos >= self._scroll_top + WINDOW_ROWS:
-            self._scroll_top = pos - (WINDOW_ROWS - 1)
+        elif pos >= self._scroll_top + wr:
+            self._scroll_top = pos - (wr - 1)
         if self._scroll_top < 0:
             self._scroll_top = 0
-        if self._scroll_top > MAX_SCROLL:
-            self._scroll_top = MAX_SCROLL
+        if self._scroll_top > self._max_scroll():
+            self._scroll_top = self._max_scroll()
 
     def _led_row(self, i: int) -> dict:
         """Build one LED row: a live color swatch + name + current color."""

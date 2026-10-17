@@ -46,7 +46,22 @@
   .cand { padding: 3px 0; border-bottom: 1px solid #20242d; word-break: break-all; }
   .cand.locked { color: #e05d5d; }
   #wire { font-size: 11px; color: var(--dim); white-space: pre-wrap; word-break: break-all;
-          max-width: 640px; margin-top: 6px; min-height: 14px; }
+           max-width: 640px; margin-top: 6px; min-height: 14px; }
+  .score { font-size: 12px; padding: 4px 0; border-bottom: 1px solid #20242d; }
+  .score .id { color: var(--text); }
+  .score .win { color: var(--accent); font-weight: bold; }
+  .score .fail { color: #7c8494; }
+  .score .num { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .params { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; }
+  .params label { color: var(--dim); font-size: 12px; }
+  .params input {
+    background: #0d0f13; color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 6px; font: inherit; width: 120px; text-align: right;
+  }
+  .params input:focus { border-color: var(--accent); outline: none; }
+  #save-status { font-size: 12px; color: var(--dim); min-height: 16px; margin-top: 8px; }
+  #save-status.ok { color: var(--accent); }
+  #save-status.err { color: #e0a55d; }
 </style>
 </head>
 <body>
@@ -89,8 +104,27 @@
   </section>
 
   <section>
-    <h2>candidates</h2>
+    <h2>candidates (lock score)</h2>
     <div id="cand-list"></div>
+  </section>
+
+  <section>
+    <h2>hunt state</h2>
+    <div id="hunt-panel"></div>
+  </section>
+
+  <section>
+    <h2>hunt params (live)</h2>
+    <div class="params">
+      <label for="p-minconf">min_conf</label>
+      <input id="p-minconf" type="number" step="0.01" min="0" max="1">
+      <label for="p-cw">centrality_weight</label>
+      <input id="p-cw" type="number" step="0.01" min="0">
+      <label for="p-lost">lost_s</label>
+      <input id="p-lost" type="number" step="0.1" min="0">
+    </div>
+    <div style="margin-top:8px"><button id="save-params">save (hot-reload)</button></div>
+    <div id="save-status"></div>
   </section>
 
   <section>
@@ -118,8 +152,37 @@ let lastStateTime = 0;
 let lastTelem = null;   // cam_telem payload
 let lastIntent = null;  // camera intent payload
 let lastState = null;   // {servo, hunt, target, joints, moving} from the state frame
+let lastHunt = null;    // {state, lock_id, feral} from the state frame's hunt
+let brainCfg = null;    // full brain config from GET /api/brain (for the live-params save)
+let huntParams = { min_conf: 0.1, centrality_weight: 0.1, lost_s: 2.0 };
 let lastCandBoxes = []; // candidate boxes in canvas coords, for click hit-testing
 let stale = false;
+
+// The core's HTTP server (the API) runs on a fixed port (8766), separate from the
+// WS port in the host field. Derive the base from the host's hostname.
+function httpBase() {
+  const u = $("host").value.trim();
+  let host;
+  try { host = new URL(u).hostname; } catch (e) { host = location.hostname || "localhost"; }
+  return "http://" + host + ":8766";
+}
+
+function loadBrainConfig() {
+  fetch(httpBase() + "/api/brain")
+    .then((r) => r.json())
+    .then((cfg) => {
+      brainCfg = cfg;
+      const hp = (cfg.hunt && cfg.hunt.params) || {};
+      huntParams.min_conf = hp.min_conf != null ? hp.min_conf : 0.1;
+      huntParams.centrality_weight = hp.centrality_weight != null ? hp.centrality_weight : 0.1;
+      huntParams.lost_s = hp.lost_s != null ? hp.lost_s : 2.0;
+      $("p-minconf").value = huntParams.min_conf;
+      $("p-cw").value = huntParams.centrality_weight;
+      $("p-lost").value = huntParams.lost_s;
+      render();
+    })
+    .catch(() => { /* core HTTP not reachable; keep the built-in defaults */ });
+}
 
 function wsSend(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
@@ -134,7 +197,11 @@ function connect() {
   const url = $("host").value.trim();
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   ws = new WebSocket(url);
-  ws.onopen = () => { setConn(true); ws.send(JSON.stringify({ cmd: "hello", client: "camdebug" })); };
+  ws.onopen = () => {
+    setConn(true);
+    ws.send(JSON.stringify({ cmd: "hello", client: "camdebug" }));
+    loadBrainConfig();
+  };
   ws.onclose = () => {
     setConn(false);
     setTimeout(connect, 2000);
@@ -153,6 +220,7 @@ function connect() {
         joints: m.joints || null,
         moving: m.moving || null,
       };
+      lastHunt = m.hunt || null;
       render();
     }
   };
@@ -165,12 +233,13 @@ function connect() {
 // ------------------------------------------------------------------
 function isNum(v) { return typeof v === "number" && !isNaN(v); }
 
-function detectScale(coords) {
+function detectScale(coords, frameW, frameH) {
   const c = $("frame");
   const cw = c.width, ch = c.height;
+  if (frameW && frameH) return [cw / frameW, ch / frameH];  // pixels, explicit frame dims
   const m = Math.max(...coords);
-  if (m <= 2) return [cw, ch];              // normalized 0..1 -> canvas size
-  return [cw / FRAME_W, ch / FRAME_H];      // pixels -> canvas/frame
+  if (m <= 2) return [cw, ch];              // normalized 0..1 -> canvas size (legacy mock)
+  return [cw / FRAME_W, ch / FRAME_H];      // pixels, default frame size
 }
 
 // ------------------------------------------------------------------
@@ -222,6 +291,8 @@ function drawFrame() {
   }
 
   const cands = (t.candidates && t.candidates.candidates) || [];
+  // Frame dims (pixels) accompany the candidate coords; absent on the legacy mock.
+  const candW = t.candidates && t.candidates.w, candH = t.candidates && t.candidates.h;
   // Locked id: the track payload, falling back to the camera intent's lock (the
   // brain's current lock) when the track lags after a camera switch.
   const lockedId = t.track?.id ?? lastIntent?.lock_id ?? null;
@@ -230,7 +301,7 @@ function drawFrame() {
   // candidate boxes
   for (const cd of cands) {
     if (!isNum(cd.x1) || !isNum(cd.y1) || !isNum(cd.x2) || !isNum(cd.y2)) continue;
-    const [sx, sy] = detectScale([cd.x1, cd.y1, cd.x2, cd.y2]);
+    const [sx, sy] = detectScale([cd.x1, cd.y1, cd.x2, cd.y2], candW, candH);
     const x1 = cd.x1 * sx, y1 = cd.y1 * sy, x2 = cd.x2 * sx, y2 = cd.y2 * sy;
     const locked = lockedId != null && cd.id === lockedId;
     ctx.strokeStyle = locked ? "#e05d5d" : "#ff9f40";
@@ -328,15 +399,47 @@ function renderCandidates(t) {
   const cands = (t && t.candidates && t.candidates.candidates) || [];
   if (!cands.length) { el.innerHTML = '<div class="empty">no candidates</div>'; return; }
   const lockedId = t?.track?.id ?? lastIntent?.lock_id ?? null;
+  const cw = t.candidates && t.candidates.w, ch = t.candidates && t.candidates.h;
+  const minConf = huntParams.min_conf, cwgt = huntParams.centrality_weight;
+  // Recompute the brain's lock score per candidate (the direct "why did/didn't it
+  // lock?" answer). The brain picks the highest-scoring candidate above min_conf.
+  let winnerId = null, bestScore = -1;  // mirrors the brain's initial best_score = -1
+  const scored = cands.map((c) => {
+    const conf = isNum(c.conf) ? c.conf : 0;
+    const pass = conf >= minConf;
+    let cx = ((isNum(c.x1) ? c.x1 : 0) + (isNum(c.x2) ? c.x2 : 0)) / 2;
+    let cy = ((isNum(c.y1) ? c.y1 : 0) + (isNum(c.y2) ? c.y2 : 0)) / 2;
+    if (cw && ch) { cx /= cw; cy /= ch; }
+    const dist = (cx - 0.5) ** 2 + (cy - 0.5) ** 2;
+    const score = conf - dist * cwgt;
+    if (pass && score > bestScore) { bestScore = score; winnerId = c.id; }
+    return { c, conf, pass, dist, score };
+  });
   let h = "";
-  for (const c of cands) {
+  for (const s of scored) {
+    const c = s.c;
     const locked = lockedId != null && c.id === lockedId;
-    const conf = isNum(c.conf) ? c.conf.toFixed(2) : "\u2014";
-    const box = [c.x1, c.y1, c.x2, c.y2].map((v) => isNum(v) ? v.toFixed(2) : "?").join(", ");
-    h += '<div class="cand' + (locked ? " locked" : "") + '">#' + c.id +
-         '  conf=' + conf + '  [' + box + ']' +
+    const win = winnerId != null && c.id === winnerId;
+    const cls = win ? "win" : (s.pass ? "" : "fail");
+    h += '<div class="score"><span class="id">#' + c.id + '</span>  ' +
+         '<span class="' + cls + '">score=' + s.score.toFixed(3) +
+         '  conf=' + s.conf.toFixed(2) +
+         (s.pass ? '' : ' (below min_conf)') +
+         '  dist=' + s.dist.toFixed(3) + '</span>' +
+         (win ? ' <span class="win">\u2190 wins</span>' : '') +
          (locked ? ' <span>LOCK</span>' : '') + '</div>';
   }
+  el.innerHTML = h;
+}
+
+function renderHunt() {
+  const el = $("hunt-panel");
+  const hs = lastHunt;
+  if (!hs) { el.innerHTML = kvRow("hunt", "\u2014"); return; }
+  let h = "";
+  h += kvRow("state", hs.state || "\u2014");
+  h += kvRow("lock_id", hs.lock_id != null ? hs.lock_id : "\u2014");
+  h += kvRow("feral", hs.feral ? "yes" : "no");
   el.innerHTML = h;
 }
 
@@ -394,6 +497,7 @@ function render() {
   renderIntent();
   renderTrack(t);
   renderCandidates(t);
+  renderHunt();
   renderFace(t);
   renderMotion();
   renderWire();
@@ -411,6 +515,56 @@ setInterval(() => {
 }, 500);
 
 $("connect").onclick = () => { const u = $("host").value.trim(); $("host").value = u; connect(); };
+
+// Save the hunt params: merge into the current brain config and POST /api/brain.
+// The core hot-reloads (RELOAD_BRAIN) so the change takes effect with no restart.
+$("save-params").onclick = () => {
+  const status = $("save-status");
+  const minConf = parseFloat($("p-minconf").value);
+  const cw = parseFloat($("p-cw").value);
+  const lost = parseFloat($("p-lost").value);
+  if (!isNum(minConf) || !isNum(cw) || !isNum(lost)) {
+    status.textContent = "enter valid numbers";
+    status.className = "err";
+    return;
+  }
+  if (!brainCfg) {
+    status.textContent = "brain config not loaded (core HTTP unreachable?)";
+    status.className = "err";
+    return;
+  }
+  const cfg = JSON.parse(JSON.stringify(brainCfg));
+  if (!cfg.hunt) cfg.hunt = {};
+  if (!cfg.hunt.params) cfg.hunt.params = {};
+  cfg.hunt.params.min_conf = minConf;
+  cfg.hunt.params.centrality_weight = cw;
+  cfg.hunt.params.lost_s = lost;
+  status.textContent = "saving\u2026";
+  status.className = "";
+  fetch(httpBase() + "/api/brain", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(cfg),
+  })
+    .then((r) => r.json())
+    .then((res) => {
+      if (res.ok) {
+        status.textContent = "saved (hot-reloaded)";
+        status.className = "ok";
+        huntParams.min_conf = minConf;
+        huntParams.centrality_weight = cw;
+        huntParams.lost_s = lost;
+        render();
+      } else {
+        status.textContent = "save failed: " + (res.error || "unknown");
+        status.className = "err";
+      }
+    })
+    .catch((e) => {
+      status.textContent = "save failed: " + e;
+      status.className = "err";
+    });
+};
 
 // Click a candidate box to force-lock that person (the brain applies it, bypassing
 // min_conf). Useful when the automatic lock never fires (real detections below the

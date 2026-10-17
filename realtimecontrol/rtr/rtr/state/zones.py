@@ -72,6 +72,21 @@ MODE_GROUPS = ("museum-closed", "event-sit-back", "stage-takeover")
 MODES = ("wander", "random", "action", "track", "hold")
 
 
+def find_shared_pose(poses_a: List[List[float]], poses_b: List[List[float]],
+                     margin: float = 0.5) -> Optional[Tuple[List[float], int, int]]:
+    """Find a pose that appears in both pose lists.
+
+    Returns ``(pose, index_in_a, index_in_b)`` for the first pair of poses
+    (scanning A in order, B in order) that match within ``margin`` on every
+    axis, or ``None`` when no shared pose exists.
+    """
+    for i, pa in enumerate(poses_a):
+        for j, pb in enumerate(poses_b):
+            if all(abs(pa[k] - pb[k]) <= margin for k in range(len(pa))):
+                return (list(pa), i, j)
+    return None
+
+
 def effective_limits(zone_safezone: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
     """Per-axis intersection of a zone's safezone and the hardware limits.
 

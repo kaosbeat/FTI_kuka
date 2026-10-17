@@ -26,7 +26,7 @@ from typing import List, Optional
 
 from ..robot.helpers import comparelist
 from .behavior import build_target, clamp, hardware_clamp
-from .zones import Zones
+from .zones import Zones, find_shared_pose
 
 
 class StateMachine:
@@ -44,6 +44,11 @@ class StateMachine:
         self.current_action: Optional[str] = None
         self.action_index = 0
         self._transition: Optional[dict] = None
+        # Pending switch (shared-pose handoff): when a shared pose is found between
+        # the current action and a target action, the robot continues playing the
+        # current action until it reaches the shared pose, then switches to the
+        # target action starting from the index after the shared pose.
+        self._pending_switch: Optional[dict] = None
 
         # Camera telemetry (the brain stashes the latest CAM_TRACK payload here; the
         # behaviour policies read it). Empty dict until the first frame arrives.
