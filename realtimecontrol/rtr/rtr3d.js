@@ -45,6 +45,10 @@ const Robot3D = (() => {
   // The Blender-editable tool GLB (authored Y-up like environment.glb). Replaces the
   // old white placeholder box at the $FLANGE; see assets/make_tool.py for the starter.
   const TOOL_ASSET_URL = "assets/tool.glb";
+  // Low-res collision proxy for the tool (a couple of boxes, ~24 tris) authored in the
+  // same Y-up local frame as the visual model. Used for collision only so the per-frame
+  // check stays cheap; the full tool.glb (60k tris) is visuals only.
+  const TOOL_COLLISION_ASSET_URL = "assets/toolcollision.glb";
   const CAMERA_MOUNT_URL = "camera_mount.json";
   const HOME = [0, -90, 90, 0, 90, 0];
 
@@ -255,13 +259,27 @@ const Robot3D = (() => {
   // scene, then handed to buildArm to attach to the tool node. Failures are logged and
   // ``onDone(null)`` is called, so the white box placeholder is used instead.
   function loadToolAsset(url, onDone) {
+    // Load the visual tool model and the low-res collision proxy in parallel. Both are
+    // authored Y-up and rotated +90 deg X to sit in the Z-up robot frame. onDone gets
+    // [visualScene, collisionScene]; either may be null if its own load failed.
+    let visualScene = null, collisionScene = null;
+    let pending = 2;
+    const finish = () => { if (--pending === 0) onDone(visualScene, collisionScene); };
     new THREE.GLTFLoader().load(url, (gltf) => {
-      const t = gltf.scene;
-      t.rotation.x = Math.PI / 2;
-      onDone(t);
+      visualScene = gltf.scene;
+      visualScene.rotation.x = Math.PI / 2;
+      finish();
     }, undefined, (err) => {
       logFn("tool asset not loaded: " + (err && err.message ? err.message : err));
-      onDone(null);
+      finish();
+    });
+    new THREE.GLTFLoader().load(TOOL_COLLISION_ASSET_URL, (gltf) => {
+      collisionScene = gltf.scene;
+      collisionScene.rotation.x = Math.PI / 2;
+      finish();
+    }, undefined, (err) => {
+      logFn("tool collision proxy not loaded: " + (err && err.message ? err.message : err));
+      finish();
     });
   }
 
@@ -902,16 +920,31 @@ const Robot3D = (() => {
       setJoints(rotorsT, HOME);
       running = true;
       if (collisionEnabled) setupCollision();
-      const attach = (toolObj) => {
+      const attach = (toolObj, toolCollisionObj) => {
         try {
+          let visualClone = null;
           if (toolObj) {
-            const curClone = attachTool(cur.tool, toolObj, curMat, false);
+            visualClone = attachTool(cur.tool, toolObj, curMat, false);
             attachTool(tgt.tool, toolObj, ghostMat, true);
-            // Extract collision triangles from the current arm's tool clone.
+          }
+          // Collision body: use the low-res proxy (a couple of boxes, ~24 tris) instead
+          // of the full 60k-tri visual model, so the per-frame check stays cheap. The
+          // proxy is attached invisibly to the current arm's tool node so its world
+          // matrix tracks the tool; fall back to the visual model if the proxy failed.
+          let collisionSource = null;
+          if (toolCollisionObj) {
+            const colClone = toolCollisionObj.clone();
+            colClone.visible = false;
+            cur.tool.add(colClone);
+            collisionSource = colClone;
+          } else if (visualClone) {
+            collisionSource = visualClone;
+          }
+          if (collisionSource) {
             cur.tool.updateMatrixWorld(true);
-            toolTris = extractToolTris(curClone);
+            toolTris = extractToolTris(collisionSource);
             ensureToolBody();
-            if (collisionEnabled) buildToolCollisionHighlight(curClone);
+            if (collisionEnabled) buildToolCollisionHighlight(collisionSource);
           }
           buildCameraRig(cur.tool);
           setupToolScreen(cur.tool);  // render the hydra screen onto the tool's red mesh
