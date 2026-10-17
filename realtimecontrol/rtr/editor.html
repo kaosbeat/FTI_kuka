@@ -863,6 +863,15 @@ const BRAIN_FALLBACK = {
       face_lost_s: 2.5,
     },
   },
+  zone_classes: {
+    ignore:    { camera: { active: "none",  mode: "idle",    lock: "none" },  params: {},                                    color: "#8a8a8a" },
+    scan:      { camera: { active: "wide",  mode: "idle",    lock: "none" },  params: { scan_s: 2.0 },                       color: "#5b9bd5" },
+    track:     { camera: { active: "wide",  mode: "track",   lock: "auto" },  params: { lost_s: 2.0, min_conf: 0.1, centrality_weight: 0.1, attention_guard: ["locked","intent","curious","gentle"], detect: {zone:"hunting",action:"track"}, scan: {zone:"hunting",action:"scan"} }, color: "#2e6fd0" },
+    farfocus:  { camera: { active: "wide",  mode: "track",   lock: "auto" },  params: { lost_s: 2.0, min_conf: 0.1, centrality_weight: 0.1, attention_guard: ["locked","intent","curious","gentle"], detect: {zone:"hunting",action:"track"}, scan: {zone:"hunting",action:"scan"} }, color: "#00b0c8" },
+    approach:  { camera: { active: "wide",  mode: "track",   lock: "auto" },  params: { lost_s: 2.0, min_conf: 0.1, centrality_weight: 0.1, attention_guard: ["locked","intent","curious","gentle"], detect: {zone:"hunting",action:"track"}, scan: {zone:"hunting",action:"scan"}, approach_speed: 100, keep_in_sight: 120, engage_dist: 250 }, color: "#f0862c" },
+    facefocus: { camera: { active: "close", mode: "analyze", lock: "auto" },  params: { actions: ["wink","inspect","call"], action_s: 3.0, face_lost_s: 2.5 }, color: "#d9489a" },
+    retreat:   { camera: { active: "wide",  mode: "idle",    lock: "none" },  params: { retreat_speed: 40, break_off_s: 3.0 }, color: "#4caf50" },
+  },
   cam_control: {
     resting:    { active: "wide", mode: "idle", lock: "none" },
     sleeping:   { active: "wide", mode: "idle", lock: "none" },
@@ -1961,9 +1970,10 @@ function normalizeBrain(data) {
   }
   const hunt = _brainNormalizeGroup("hunt", data.hunt || fb.hunt);
   const facefocus = _brainNormalizeGroup("facefocus", data.facefocus || fb.facefocus);
+  const zone_classes = data.zone_classes || fb.zone_classes || {};
   const cam_control = data.cam_control || fb.cam_control || {};
   const behaviors = normalizeBehaviors(data.behaviors);
-  return { autonomy, zone_groups: groups, hunt, facefocus, cam_control, behaviors };
+  return { autonomy, zone_groups: groups, hunt, facefocus, zone_classes, cam_control, behaviors };
 }
 
 async function loadBrain() {
@@ -2110,6 +2120,123 @@ function buildBrainForm() {
     mkRow(card, "facefocus.actions (comma-separated)", mkText("brainFFActions", fp.actions.join(", ")));
     mkRow(card, "facefocus.action_s (s, per face action)", mkNum("brainFFActionS", fp.action_s, "0.1", "0", "Duration of each face action (seconds)"));
     mkRow(card, "facefocus.face_lost_s (s, before the face is lost)", mkNum("brainFFLostS", fp.face_lost_s, "0.1", "0", "Seconds before a tracked face is considered lost"));
+  }
+
+  // --- Zone classes card (the engagement ladder) ---
+  {
+    const card = mkCard("zone_classes (engagement ladder)", "The per-zone engagement classes. Each class has a camera preset, params, and an editor color.");
+    const zc = b.zone_classes || {};
+    const clsNames = ["ignore", "scan", "track", "farfocus", "approach", "facefocus", "retreat"];
+    for (const cls of clsNames) {
+      const entry = zc[cls] || {};
+      const cam = entry.camera || { active: "wide", mode: "idle", lock: "none" };
+      const color = entry.color || "#888";
+      const params = entry.params || {};
+      // Color swatch + class name
+      const clsRow = document.createElement("div");
+      clsRow.className = "row";
+      clsRow.style.marginBottom = "4px";
+      const swatch = document.createElement("span");
+      swatch.style.cssText = `display:inline-block;width:12px;height:12px;border-radius:2px;background:${color};margin-right:4px;vertical-align:middle`;
+      clsRow.appendChild(swatch);
+      const clsLabel = document.createElement("label");
+      clsLabel.textContent = cls;
+      clsRow.appendChild(clsLabel);
+      card.appendChild(clsRow);
+      // Camera preset
+      const camRow = document.createElement("div");
+      camRow.className = "row";
+      camRow.style.marginLeft = "16px";
+      const camLab = document.createElement("label");
+      camLab.innerHTML = `camera: <select id="zcCam_${cls}">`;
+      const actSel = document.createElement("select");
+      actSel.id = "zcCamActive_" + cls;
+      for (const a of ["none", "wide", "close", "both"]) {
+        const o = document.createElement("option"); o.value = a; o.textContent = a;
+        actSel.appendChild(o);
+      }
+      actSel.value = cam.active || "wide";
+      actSel.onchange = () => { zc[cls] = zc[cls] || {}; zc[cls].camera = zc[cls].camera || {}; zc[cls].camera.active = actSel.value; };
+      const modeSel = document.createElement("select");
+      modeSel.id = "zcCamMode_" + cls;
+      for (const m of ["idle", "track", "analyze"]) {
+        const o = document.createElement("option"); o.value = m; o.textContent = m;
+        modeSel.appendChild(o);
+      }
+      modeSel.value = cam.mode || "idle";
+      modeSel.onchange = () => { zc[cls] = zc[cls] || {}; zc[cls].camera = zc[cls].camera || {}; zc[cls].camera.mode = modeSel.value; };
+      const lockSel = document.createElement("select");
+      lockSel.id = "zcCamLock_" + cls;
+      for (const l of ["none", "auto"]) {
+        const o = document.createElement("option"); o.value = l; o.textContent = l;
+        lockSel.appendChild(o);
+      }
+      lockSel.value = cam.lock || "none";
+      lockSel.onchange = () => { zc[cls] = zc[cls] || {}; zc[cls].camera = zc[cls].camera || {}; zc[cls].camera.lock = lockSel.value; };
+      camLab.appendChild(actSel); camLab.appendChild(document.createTextNode(" "));
+      camLab.appendChild(modeSel); camLab.appendChild(document.createTextNode(" "));
+      camLab.appendChild(lockSel);
+      camRow.appendChild(camLab);
+      card.appendChild(camRow);
+      // Color picker
+      const colorRow = document.createElement("div");
+      colorRow.className = "row";
+      colorRow.style.marginLeft = "16px";
+      const colorLab = document.createElement("label");
+      colorLab.innerHTML = `color `;
+      const colorInp = document.createElement("input");
+      colorInp.type = "color"; colorInp.value = color;
+      colorInp.style.width = "40px"; colorInp.style.height = "24px"; colorInp.style.border = "none"; colorInp.style.padding = "0";
+      colorInp.oninput = () => { zc[cls] = zc[cls] || {}; zc[cls].color = colorInp.value; swatch.style.background = colorInp.value; };
+      colorLab.appendChild(colorInp);
+      colorRow.appendChild(colorLab);
+      card.appendChild(colorRow);
+      // Key params (class-specific)
+      if (cls === "scan" && params.scan_s !== undefined) {
+        const pRow = document.createElement("div"); pRow.className = "row"; pRow.style.marginLeft = "16px";
+        const pLab = document.createElement("label");
+        pLab.innerHTML = `scan_s `;
+        const pInp = document.createElement("input"); pInp.type = "number"; pInp.step = "0.1"; pInp.value = params.scan_s;
+        pInp.oninput = () => { zc[cls] = zc[cls] || {}; zc[cls].params = zc[cls].params || {}; zc[cls].params.scan_s = parseFloat(pInp.value); };
+        pLab.appendChild(pInp); pRow.appendChild(pLab); card.appendChild(pRow);
+      }
+      if (cls === "approach") {
+        const pRow = document.createElement("div"); pRow.className = "row"; pRow.style.marginLeft = "16px";
+        const pLab = document.createElement("label");
+        pLab.innerHTML = `approach_speed `;
+        const pInp = document.createElement("input"); pInp.type = "number"; pInp.step = "1"; pInp.value = params.approach_speed || 100;
+        pInp.oninput = () => { zc[cls] = zc[cls] || {}; zc[cls].params = zc[cls].params || {}; zc[cls].params.approach_speed = parseFloat(pInp.value); };
+        pLab.appendChild(pInp); pRow.appendChild(pLab); card.appendChild(pRow);
+        const eRow = document.createElement("div"); eRow.className = "row"; eRow.style.marginLeft = "16px";
+        const eLab = document.createElement("label");
+        eLab.innerHTML = `engage_dist `;
+        const eInp = document.createElement("input"); eInp.type = "number"; eInp.step = "1"; eInp.value = params.engage_dist || 250;
+        eInp.oninput = () => { zc[cls] = zc[cls] || {}; zc[cls].params = zc[cls].params || {}; zc[cls].params.engage_dist = parseFloat(eInp.value); };
+        eLab.appendChild(eInp); eRow.appendChild(eLab); card.appendChild(eRow);
+      }
+      if (cls === "facefocus") {
+        const aRow = document.createElement("div"); aRow.className = "row"; aRow.style.marginLeft = "16px";
+        const aLab = document.createElement("label");
+        aLab.innerHTML = `actions `;
+        const aInp = document.createElement("input"); aInp.type = "text"; aInp.value = (params.actions || []).join(", ");
+        aInp.oninput = () => { zc[cls] = zc[cls] || {}; zc[cls].params = zc[cls].params || {}; zc[cls].params.actions = aInp.value.split(",").map((s) => s.trim()).filter(Boolean); };
+        aLab.appendChild(aInp); aRow.appendChild(aLab); card.appendChild(aRow);
+        const flRow = document.createElement("div"); flRow.className = "row"; flRow.style.marginLeft = "16px";
+        const flLab = document.createElement("label");
+        flLab.innerHTML = `face_lost_s `;
+        const flInp = document.createElement("input"); flInp.type = "number"; flInp.step = "0.1"; flInp.value = params.face_lost_s || 2.5;
+        flInp.oninput = () => { zc[cls] = zc[cls] || {}; zc[cls].params = zc[cls].params || {}; zc[cls].params.face_lost_s = parseFloat(flInp.value); };
+        flLab.appendChild(flInp); flRow.appendChild(flLab); card.appendChild(flRow);
+      }
+      if (cls === "retreat") {
+        const bRow = document.createElement("div"); bRow.className = "row"; bRow.style.marginLeft = "16px";
+        const bLab = document.createElement("label");
+        bLab.innerHTML = `break_off_s `;
+        const bInp = document.createElement("input"); bInp.type = "number"; bInp.step = "0.1"; bInp.value = params.break_off_s || 3.0;
+        bInp.oninput = () => { zc[cls] = zc[cls] || {}; zc[cls].params = zc[cls].params || {}; zc[cls].params.break_off_s = parseFloat(bInp.value); };
+        bLab.appendChild(bInp); bRow.appendChild(bLab); card.appendChild(bRow);
+      }
+    }
   }
 
   // --- 15 behavior cards (one per behavior; number inputs or info-only) ---
@@ -2549,7 +2676,9 @@ function renderBrainLive(m) {
     add("behavior.params", Object.keys(bp).map((k) => k + "=" + bp[k]).join(", "));
   }
   const hs = hunt ? hunt.state : null;
-  add("hunt", hs === "facefocus" ? "check out" : (hs || "—"));
+  const zc = BRAIN ? BRAIN.zone_classes : {};
+  const clsColor = hs && zc[hs] && zc[hs].color ? zc[hs].color : null;
+  add("class", hs ? `<span style="color:${clsColor || 'inherit'}">${hs}</span>` : "—");
   add("lock", hunt && hunt.lock_id != null ? "#" + hunt.lock_id : "—");
   if (hunt && hunt.feral) add("feral", "yes");
   add("camera", cam ? cam.active + "/" + cam.mode : "—");
@@ -3795,9 +3924,13 @@ function copyValCollisionPose() {
 function buildZoneList() {
   const el = $("zoneList");
   el.innerHTML = "";
+  const zc = BRAIN ? BRAIN.zone_classes : {};
   Object.keys(TABLE.zones).forEach((name) => {
+    const z = TABLE.zones[name];
     const b = document.createElement("button");
-    b.textContent = name + (TABLE.zones[name].enabled === false ? " (off)" : "");
+    const cls = z.class || "scan";
+    const color = zc[cls] && zc[cls].color ? zc[cls].color : "#888";
+    b.innerHTML = `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${color};margin-right:4px"></span>` + name + (z.enabled === false ? " (off)" : "");
     b.className = name === selectedZone ? "active" : "";
     b.onclick = () => selectZone(name);
     el.appendChild(b);
@@ -3856,7 +3989,7 @@ function buildZoneForm(containerEl, titleEl, name, onChanged, showPoses) {
   if (!z.actions) z.actions = {};
   titleEl.textContent = "zone: " + name;
 
-  // enabled + speed
+  // enabled + speed + class
   const row = document.createElement("div");
   row.className = "row";
   const en = document.createElement("label");
@@ -3870,6 +4003,27 @@ function buildZoneForm(containerEl, titleEl, name, onChanged, showPoses) {
   sp.querySelector("input").oninput = (e) => { z.speed = parseFloat(e.target.value); };
   row.appendChild(sp);
   el.appendChild(row);
+
+  // engagement class (the zone's baseline class on the engagement ladder)
+  const clsRow = document.createElement("div");
+  clsRow.className = "row";
+  const clsLab = document.createElement("label");
+  clsLab.className = "inline";
+  clsLab.innerHTML = "class <select>";
+  const clsSel = clsLab.querySelector("select");
+  const zc = BRAIN ? BRAIN.zone_classes : {};
+  const clsNames = ["ignore", "scan", "track", "farfocus", "approach", "facefocus", "retreat"];
+  for (const c of clsNames) {
+    const o = document.createElement("option");
+    o.value = c; o.textContent = c;
+    const color = zc[c] && zc[c].color ? zc[c].color : null;
+    if (color) o.style.color = color;
+    clsSel.appendChild(o);
+  }
+  clsSel.value = z.class || "scan";
+  clsSel.onchange = (e) => { z.class = e.target.value; onChanged(); };
+  clsRow.appendChild(clsLab);
+  el.appendChild(clsRow);
 
   // safezone (lo / hi per axis)
   el.appendChild(h3("safezone (lo / hi)"));

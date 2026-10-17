@@ -67,6 +67,10 @@ BEHAVIORS = (
 # Mode groups: the three thematic clusters of zones.
 MODE_GROUPS = ("museum-closed", "event-sit-back", "stage-takeover")
 
+# Engagement-ladder class vocabulary (kept in sync with ``rtr.brain.config.ZONE_CLASSES``;
+# defined here rather than imported to avoid the state↔brain import cycle).
+ZONE_CLASSES = ("ignore", "scan", "track", "farfocus", "approach", "facefocus", "retreat")
+
 # Kept for backward compat (MIDI legacy dispatch, display patches); no longer
 # used by zones or the state machine.
 MODES = ("wander", "random", "action", "track", "hold")
@@ -517,6 +521,8 @@ def _validate_zone(name: str, z: dict, all_names: set) -> None:
         raise ValueError(f"zone {name!r}: 'enabled' must be a bool")
     if "mode_group" in z and not (isinstance(z["mode_group"], str) and z["mode_group"] in MODE_GROUPS):
         raise ValueError(f"zone {name!r}: mode_group must be one of {MODE_GROUPS}")
+    if "class" in z and not (isinstance(z["class"], str) and z["class"] in ZONE_CLASSES):
+        raise ValueError(f"zone {name!r}: class must be one of {ZONE_CLASSES}")
     sz = z.get("safezone")
     if not (isinstance(sz, list) and len(sz) == 6):
         raise ValueError(f"zone {name!r}: safezone must be a list of 6 [lo, hi] pairs")
@@ -586,6 +592,11 @@ class Zone:
     @property
     def speed(self) -> float:
         return self.data["speed"]
+
+    @property
+    def cls(self) -> str:
+        """The zone's engagement-ladder class (default ``"scan"`` when absent)."""
+        return self.data.get("class", "scan")
 
     @property
     def enabled(self) -> bool:

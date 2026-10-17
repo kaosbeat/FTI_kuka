@@ -2,6 +2,7 @@
   "zones": {
     "resting": {
       "enabled": true,
+      "class": "scan",
       "mode_group": "museum-closed",
       "safezone": [
         [
@@ -114,6 +115,7 @@
     },
     "sleeping": {
       "enabled": true,
+      "class": "scan",
       "mode_group": "museum-closed",
       "safezone": [
         [
@@ -289,6 +291,7 @@
     },
     "cuddling": {
       "enabled": true,
+      "class": "scan",
       "mode_group": "museum-closed",
       "safezone": [
         [
@@ -404,6 +407,7 @@
     },
     "purring": {
       "enabled": true,
+      "class": "scan",
       "mode_group": "museum-closed",
       "safezone": [
         [
@@ -508,6 +512,7 @@
     },
     "stretching": {
       "enabled": true,
+      "class": "facefocus",
       "mode_group": "event-sit-back",
       "safezone": [
         [
@@ -671,6 +676,7 @@
     },
     "hunting": {
       "enabled": true,
+      "class": "track",
       "mode_group": "event-sit-back",
       "safezone": [
         [
@@ -830,6 +836,7 @@
     },
     "examining": {
       "enabled": true,
+      "class": "facefocus",
       "mode_group": "event-sit-back",
       "safezone": [
         [
@@ -924,6 +931,7 @@
     },
     "performing": {
       "enabled": true,
+      "class": "approach",
       "mode_group": "event-sit-back",
       "safezone": [
         [
@@ -1043,6 +1051,7 @@
     },
     "roaring": {
       "enabled": true,
+      "class": "approach",
       "mode_group": "stage-takeover",
       "safezone": [
         [
@@ -1158,6 +1167,7 @@
     },
     "growling": {
       "enabled": true,
+      "class": "approach",
       "mode_group": "stage-takeover",
       "safezone": [
         [
@@ -1256,6 +1266,7 @@
     },
     "clawing": {
       "enabled": true,
+      "class": "facefocus",
       "mode_group": "stage-takeover",
       "safezone": [
         [
@@ -1355,6 +1366,7 @@
     },
     "leaping": {
       "enabled": true,
+      "class": "approach",
       "mode_group": "stage-takeover",
       "safezone": [
         [
@@ -1474,6 +1486,7 @@
     },
     "resting_sleeping_bridge": {
       "enabled": true,
+      "class": "scan",
       "safezone": [
         [
           -94,
@@ -1542,6 +1555,7 @@
     },
     "stretching_hunting_bridge": {
       "enabled": true,
+      "class": "scan",
       "safezone": [
         [
           -94,
@@ -1602,6 +1616,7 @@
     },
     "sleeping_stretching_bridge": {
       "enabled": true,
+      "class": "scan",
       "safezone": [
         [
           -94,

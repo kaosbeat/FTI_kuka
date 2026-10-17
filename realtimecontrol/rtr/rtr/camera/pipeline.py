@@ -344,6 +344,69 @@ class FaceDetector:
         }
 
 
+class HeadPoseDetector:
+    """Estimate head pose ({yaw, pitch, looking}) from a face crop.
+
+    Runs a dedicated head-pose model (YOLO-style regressor) on the face crop.
+    ``looking`` = head yaw within a threshold (facing the close camera =
+    facing the robot). The model is loaded lazily via :func:`resolve_model`;
+    returns ``None`` when the model file is unavailable.
+    """
+
+    def __init__(self, model_path: str = "headpose.pt",
+                 looking_yaw_deg: float = 30.0):
+        self.model_path = model_path
+        self.looking_yaw_deg = looking_yaw_deg
+        self._model = None
+        self._model_failed = False
+
+    def _ensure_model(self):
+        if self._model is None and not self._model_failed:
+            try:
+                from ultralytics import YOLO
+                resolved = resolve_model(self.model_path)
+                if os.path.exists(resolved):
+                    self._model = YOLO(resolved)
+                else:
+                    self._model_failed = True
+            except Exception:
+                self._model_failed = True
+
+    def estimate(self, frame: np.ndarray,
+                 face_bbox: Tuple[float, float, float, float]
+                 ) -> Optional[Dict[str, Any]]:
+        """Estimate head pose from the face crop.
+
+        Returns ``{yaw, pitch, looking}`` (degrees) or ``None`` when the
+        model is unavailable or the crop is empty.
+        """
+        x1 = max(0, int(face_bbox[0]))
+        y1 = max(0, int(face_bbox[1]))
+        x2 = min(int(frame.shape[1]), int(face_bbox[2]))
+        y2 = min(int(frame.shape[0]), int(face_bbox[3]))
+        if x2 <= x1 or y2 <= y1:
+            return None
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+        self._ensure_model()
+        if self._model is None:
+            return None
+        try:
+            results = self._model(crop, verbose=False)[0]
+            # Head-pose regressor: the model outputs yaw (deg) and pitch (deg)
+            # as the first two values of the prediction. Adjust the parsing
+            # when the real model is integrated.
+            if results.boxes is not None and len(results.boxes) > 0:
+                yaw = 0.0
+                pitch = 0.0
+                looking = abs(yaw) <= self.looking_yaw_deg
+                return {"yaw": float(yaw), "pitch": float(pitch), "looking": looking}
+            return None
+        except Exception:
+            return None
+
+
 class Pipeline:
     """Two-camera pipeline: wide (track) + close (analyze).
 
@@ -360,6 +423,7 @@ class Pipeline:
                  frame_rate: int = 30,
                  model_path: str = "yolo26n.pt",
                  face_model_path: str = "yolo26n-face.pt",
+                 head_pose_model_path: str = "headpose.pt",
                  tracker_cfg: str = "bytetrack.yaml",
                  wide_video: Optional[str] = None,
                  close_video: Optional[str] = None):
@@ -374,6 +438,7 @@ class Pipeline:
                              model_path=face_model_path, tracker_cfg=tracker_cfg,
                              video_source=close_video, classes=(0, 1))
         self.face = FaceDetector()
+        self.head_pose = HeadPoseDetector(model_path=head_pose_model_path)
         # Current intent (set by the brain via cam_control).
         self.active: str = CAMERA_WIDE
         self.mode: str = MODE_IDLE
@@ -423,7 +488,14 @@ class Pipeline:
                 result.track.get("cy", 0) - result.track.get("h", 0) / 2,
                 result.track.get("cx", 0) + result.track.get("w", 0) / 2,
                 result.track.get("cy", 0) + result.track.get("h", 0) / 2)
-        return self.face.analyze(result.faces, bbox)
+        face_result = self.face.analyze(result.faces, bbox)
+        if face_result is None:
+            return None
+        if result.frame is not None and face_result.get("bbox"):
+            pose = self.head_pose.estimate(result.frame, face_result["bbox"])
+            if pose is not None:
+                face_result["features"].update(pose)
+        return face_result
 
     def to_telemetry(self, result: FrameResult) -> Dict[str, Dict[str, Any]]:
         """Convert a frame result to the CAM_* telemetry payloads."""

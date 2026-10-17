@@ -18,7 +18,7 @@ from ..core.bus import StateBus
 from ..core.commands import Cmd, Event
 
 
-CAMERA_CHOICES = ("wide", "close", "both")
+CAMERA_CHOICES = ("wide", "close", "both", "none")
 CAMERA_MODES = ("idle", "track", "analyze")
 
 

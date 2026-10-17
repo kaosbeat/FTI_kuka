@@ -83,6 +83,7 @@ class CameraMock:
             self._active = "wide"
             self._mode = "idle"
             self._lock_id: Optional[int] = None
+            self._looking = True
             # Visibility cycle: the whole scene is hidden periodically so the locked
             # target is lost (no candidates, no track) and the hunt loop
             # (detect -> track -> lost -> scan -> re-detect) is observable.
@@ -299,6 +300,11 @@ class CameraMock:
                 # offset (dx, dy) is the face centroid minus the image center (pixels).
                 if self._mode == "analyze" and time.time() - self._last_face_sent > 0.5:
                     self._last_face_sent = time.time()
+                    # Occasionally toggle the looking state (simulates head turning).
+                    if random.random() < 0.02:
+                        self._looking = not self._looking
+                    yaw = random.uniform(-10, 10) if self._looking else random.uniform(45, 90)
+                    pitch = random.uniform(-5, 5)
                     self._conn.send_command({
                         "cmd": Cmd.CAM_FACE.value,
                         "camera": self._active,
@@ -306,7 +312,13 @@ class CameraMock:
                         "bbox": [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2],
                         "dx": cx - W / 2.0,
                         "dy": cy - H / 2.0,
-                        "features": {"detected": True, "emotion": "neutral"},
+                        "features": {
+                            "detected": True,
+                            "emotion": "neutral",
+                            "yaw": yaw,
+                            "pitch": pitch,
+                            "looking": self._looking,
+                        },
                     })
 
     async def _mock_loop(self) -> None:

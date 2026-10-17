@@ -54,8 +54,15 @@ from typing import Any, Dict
 
 # The camera intent vocabulary (kept in sync with ``rtr.camera.camera``;
 # defined here — rather than imported — to avoid the core↔brain import cycle).
-CAMERA_CHOICES = ("wide", "close", "both")
+CAMERA_CHOICES = ("wide", "close", "both", "none")
 CAMERA_MODES = ("idle", "track", "analyze")
+
+# The engagement-ladder class vocabulary (the rungs of the per-zone ladder).
+# ``ignore`` → ``scan`` → ``track`` → ``farfocus`` → ``approach`` → ``facefocus``
+# is the escalation order; ``retreat`` de-escalates back down. Defined here (not
+# imported) to avoid the core↔brain import cycle; kept in sync with the
+# ``zone_classes`` section of ``brain.json``.
+ZONE_CLASSES = ("ignore", "scan", "track", "farfocus", "approach", "facefocus", "retreat")
 
 # The per-behavior motion parameters (the tunable knobs of the motion policies in
 # ``rtr/state/behavior.py``). Values match the historical hardcoded constants so a
@@ -123,6 +130,71 @@ DEFAULT_BRAIN_CONFIG: Dict[str, Any] = {
             "actions": ["wink", "inspect", "call"],
             "action_s": 3.0,
             "face_lost_s": 2.5,
+        },
+    },
+    "zone_classes": {
+        "ignore": {
+            "camera": {"active": "none", "mode": "idle", "lock": "none"},
+            "params": {},
+            "color": "#8a8a8a",
+        },
+        "scan": {
+            "camera": {"active": "wide", "mode": "idle", "lock": "none"},
+            "params": {"scan_s": 2.0},
+            "color": "#5b9bd5",
+        },
+        "track": {
+            "camera": {"active": "wide", "mode": "track", "lock": "auto"},
+            "params": {
+                "lost_s": 2.0,
+                "min_conf": 0.1,
+                "centrality_weight": 0.1,
+                "attention_guard": ["locked", "intent", "curious", "gentle"],
+                "detect": {"zone": "hunting", "action": "track"},
+                "scan": {"zone": "hunting", "action": "scan"},
+            },
+            "color": "#2e6fd0",
+        },
+        "farfocus": {
+            "camera": {"active": "wide", "mode": "track", "lock": "auto"},
+            "params": {
+                "lost_s": 2.0,
+                "min_conf": 0.1,
+                "centrality_weight": 0.1,
+                "attention_guard": ["locked", "intent", "curious", "gentle"],
+                "detect": {"zone": "hunting", "action": "track"},
+                "scan": {"zone": "hunting", "action": "scan"},
+            },
+            "color": "#00b0c8",
+        },
+        "approach": {
+            "camera": {"active": "wide", "mode": "track", "lock": "auto"},
+            "params": {
+                "lost_s": 2.0,
+                "min_conf": 0.1,
+                "centrality_weight": 0.1,
+                "attention_guard": ["locked", "intent", "curious", "gentle"],
+                "detect": {"zone": "hunting", "action": "track"},
+                "scan": {"zone": "hunting", "action": "scan"},
+                "approach_speed": 100,
+                "keep_in_sight": 120,
+                "engage_dist": 250,
+            },
+            "color": "#f0862c",
+        },
+        "facefocus": {
+            "camera": {"active": "close", "mode": "analyze", "lock": "auto"},
+            "params": {
+                "actions": ["wink", "inspect", "call"],
+                "action_s": 3.0,
+                "face_lost_s": 2.5,
+            },
+            "color": "#d9489a",
+        },
+        "retreat": {
+            "camera": {"active": "wide", "mode": "idle", "lock": "none"},
+            "params": {"retreat_speed": 40, "break_off_s": 3.0},
+            "color": "#4caf50",
         },
     },
     "cam_control": {
@@ -306,9 +378,8 @@ def _validate_mode_group(name: str, g: Any) -> dict:
     return result
 
 
-def _validate_cam_entry(key: str, entry: Any) -> dict:
-    """Validate a single ``cam_control`` entry (keyed by ``"zone/action"``): ``{active, mode, lock}``."""
-    where = f"cam_control.{key}"
+def _validate_cam_entry(where: str, entry: Any) -> dict:
+    """Validate a camera intent entry: ``{active, mode, lock}``."""
     if not isinstance(entry, dict):
         raise ValueError(f"'{where}' must be an object")
     active = entry.get("active", "wide")
@@ -321,6 +392,40 @@ def _validate_cam_entry(key: str, entry: Any) -> dict:
     if not (isinstance(lock, str) and lock):
         raise ValueError(f"'{where}.lock' must be a non-empty string")
     return {"active": active, "mode": mode, "lock": lock}
+
+
+def _validate_zone_classes(data: Any) -> dict:
+    """Validate the zone_classes section (per-class camera/params/color).
+
+    Each entry must be one of :data:`ZONE_CLASSES` and carries a ``camera`` intent
+    (``{active, mode, lock}``), a ``params`` dict (class-specific tuning data),
+    and a ``color`` hex string for the editor UI.
+    """
+    if data is not None and not isinstance(data, dict):
+        raise ValueError("'zone_classes' must be an object")
+    result: Dict[str, dict] = {}
+    for name, entry in (data or {}).items():
+        if name not in ZONE_CLASSES:
+            raise ValueError(f"'zone_classes' key {name!r} must be one of {ZONE_CLASSES}")
+        if not isinstance(entry, dict):
+            raise ValueError(f"'zone_classes.{name}' must be an object")
+        where = f"zone_classes.{name}"
+        cam = entry.get("camera")
+        if cam is not None and not isinstance(cam, dict):
+            raise ValueError(f"'{where}.camera' must be an object")
+        cam_cfg = _validate_cam_entry(where + ".camera", cam) if cam is not None else {}
+        params = entry.get("params")
+        if params is not None and not isinstance(params, dict):
+            raise ValueError(f"'{where}.params' must be an object")
+        color = entry.get("color")
+        if color is not None and not (isinstance(color, str) and color):
+            raise ValueError(f"'{where}.color' must be a non-empty string")
+        result[name] = {
+            "camera": cam_cfg,
+            "params": params or {},
+            "color": color or "",
+        }
+    return result
 
 
 def validate_brain_config(data: Any) -> dict:
@@ -397,12 +502,18 @@ def validate_brain_config(data: Any) -> dict:
             ff_params if isinstance(ff_params, dict) else {}, "facefocus.params"),
     }
 
+    # --- zone_classes (top-level) -------------------------------------------
+    zc = data.get("zone_classes")
+    if zc is not None and not isinstance(zc, dict):
+        raise ValueError("'zone_classes' must be an object")
+    zone_classes_cfg = _validate_zone_classes(zc)
+
     # --- cam_control (top-level, keyed by "zone/action") -------------------
     cam = data.get("cam_control")
     if cam is not None and not isinstance(cam, dict):
         raise ValueError("'cam_control' must be an object")
     cam = cam or {}
-    cam_control = {key: _validate_cam_entry(key, entry)
+    cam_control = {key: _validate_cam_entry(f"cam_control.{key}", entry)
                   for key, entry in cam.items()}
 
     # --- behaviors (top-level) ---------------------------------------------
@@ -413,6 +524,7 @@ def validate_brain_config(data: Any) -> dict:
         "zone_groups": zone_groups,
         "hunt": hunt_cfg,
         "facefocus": ff_cfg,
+        "zone_classes": zone_classes_cfg,
         "cam_control": cam_control,
         "behaviors": behaviors_cfg,
     }

@@ -7,3 +7,4 @@ realtimecontrol/rtr/rtr/core/__pycache__/*
 realtimecontrol/rtr/rtr/camera/models/
 .venv/
 realtimecontrol/rtr/dist/
+rtr-venv/
