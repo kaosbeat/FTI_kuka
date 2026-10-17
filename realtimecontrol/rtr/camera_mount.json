@@ -6,20 +6,20 @@
   "fy": 500.0,
   "z_cam_default": 500.0,
   "target_depth": 2.0,
-  "lenses_note": "Two lenses mounted side-by-side on the toolhead (assets/CLOSELENS.glb + assets/WIDELENS.glb). GLBs are Blender-authored (Y-up); the rig applies +90 deg X (Y-up to Z-up) then -90 deg Y (orient optical axis to rig +z forward). Long axis is mesh-local X (front at x=0, body at x<0); scene-frame long axis = X after the node's 180 deg X rotation.",
+  "lenses_note": "Two lenses mounted side-by-side on the toolhead (assets/CLOSELENS.glb + assets/WIDELENS.glb). GLBs are Blender-authored (Y-up); the rig applies +90 deg X (Y-up to Z-up) then +90 deg Y (orient optical axis to rig +z forward). Long axis is mesh-local X (front at x=0, body at x<0); scene-frame long axis = X after the node's 180 deg X rotation. cone_len_m is the FOV cone length in metres (the cone opens forward from the lens).",
   "lenses": [
     {
       "name": "wide",
       "url": "assets/WIDELENS.glb",
       "fov_h_deg": 125.0,
-      "cone_len_m": 0.5,
+      "cone_len_m": 5.0,
       "offset_x_m": -0.02125
     },
     {
       "name": "close",
       "url": "assets/CLOSELENS.glb",
       "fov_h_deg": 21.8,
-      "cone_len_m": 0.5,
+      "cone_len_m": 5.0,
       "offset_x_m": 0.02125
     }
   ]

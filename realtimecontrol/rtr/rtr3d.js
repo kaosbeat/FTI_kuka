@@ -262,8 +262,8 @@ const Robot3D = (() => {
   // ------------------------------------------------------------------
   // Camera rig (tool-mounted wide + close lenses, visualization only).
   // The rig is a child of the tool node, positioned by the tool_cam transform
-  // from camera_mount.json. Each lens GLB (Blender Y-up) is rotated +90 deg X
-  // (Y-up to Z-up) then -90 deg Y (orient optical axis to rig +z forward).
+   // from camera_mount.json. Each lens GLB (Blender Y-up) is rotated +90 deg X
+   // (Y-up to Z-up) then +90 deg Y (orient optical axis to rig +z forward).
   // ------------------------------------------------------------------
 
   function loadCameraMount(onDone) {
@@ -296,7 +296,7 @@ const Robot3D = (() => {
       side: THREE.DoubleSide,
     });
     const cone = new THREE.Mesh(coneGeo, coneMat);
-    cone.rotation.x = Math.PI / 2;
+    cone.rotation.x = -Math.PI / 2;
     cone.position.z = length / 2;
     const arrow = new THREE.ArrowHelper(
       new THREE.Vector3(0, 0, 1),
@@ -333,7 +333,7 @@ const Robot3D = (() => {
             const lensGroup = new THREE.Group();
             lensGroup.position.set(offx, 0, 0);
             gltfScene.rotation.x = Math.PI / 2;
-            gltfScene.rotation.y = -Math.PI / 2;
+            gltfScene.rotation.y = Math.PI / 2;
             lensGroup.add(gltfScene);
             cameraRig.add(lensGroup);
             const coneGroup = buildFovCone(halfAngle, length);
