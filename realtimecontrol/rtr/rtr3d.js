@@ -94,7 +94,7 @@ const Robot3D = (() => {
   // the A6 rotor so it tracks the tool but is independent of the "robot real" toggle).
   let toolCollisionVisible = false, toolCollRoot = null;
   // Collision STOP: debounced, fires once per collision event (rising edge).
-  let onCollision = null, collStreak = 0, stopSent = false, lastTarget = null;
+  let onCollision = null, collStreak = 0, stopSent = false, lastTarget = null, lastTargetChecked = null, lastTargetHit = false;
   const COLLISION_STOP_THRESHOLD = 3;
   // Camera rig (tool-mounted wide + close lenses, visualization only).
   let cameraRig = null, cameraFovGroup = null;
@@ -577,8 +577,16 @@ const Robot3D = (() => {
       const curHit = res.bodies.size > 0;
       let tgtHit = false;
       if (lastTarget) {
-        const tRes = checkPoseCollision(lastTarget);
-        if (tRes && tRes.bodies.length > 0) tgtHit = true;
+        // Skip re-running the (expensive) target-pose FK + collision check while the
+        // target holds a constant pose; reuse the last result instead. This is the
+        // WS-gated cost: lastTarget is only set from state frames, and while the arm
+        // holds it does not change, so the check now runs only on real target motion.
+        if (!poseEqual(lastTarget, lastTargetChecked)) {
+          const tRes = checkPoseCollision(lastTarget);
+          lastTargetChecked = lastTarget.slice();
+          lastTargetHit = !!(tRes && tRes.bodies.length > 0);
+        }
+        tgtHit = lastTargetHit;
       }
       const anyHit = curHit || tgtHit;
       if (anyHit) {
@@ -992,6 +1000,18 @@ const Robot3D = (() => {
     if (!collWorld) return null;
     const res = collWorld.check();
     return { collisions: res.collisions, bodies: Array.from(res.bodies) };
+  }
+
+  // True when two joint-angle arrays are equal within ``eps`` (radians). Used to skip
+  // re-running an expensive collision check for a target pose that has not moved.
+  function poseEqual(a, b, eps) {
+    if (!a || !b) return false;
+    if (a.length !== b.length) return false;
+    const e = (typeof eps === "number") ? eps : 1e-6;
+    for (let i = 0; i < a.length; i++) {
+      if (Math.abs(a[i] - b[i]) > e) return false;
+    }
+    return true;
   }
 
   // Check a scratch pose for collision (zone-path warnings). Returns the same

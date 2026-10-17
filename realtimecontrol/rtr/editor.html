@@ -580,6 +580,10 @@ let patchHydra = null;      // the live-preview hydra instance
 let patchTimer = null;      // debounce timer for the live preview
 let ghostIndex = 0;
 let ws = null;
+// Per-frame DOM change-detect caches: the 20 Hz state frames rebuild these readouts
+// only when the rendered output actually changes, so the per-message cost no longer
+// fights the rAF render loop (the 3D arm still tracks every frame via Robot3D.update).
+let _liveStateFp = "", _safetyFp = "", _flowFp = "", _brainLiveFp = "", _statusBarFp = "";
 let flowView = false;
 let brainView = false;
 let groupsView = false;
@@ -956,7 +960,10 @@ function connect() {
       // The core is in manual mode (holding its pose) while the tab is open, so
       // skipping its drive here keeps the inspected pose stable.
       if (!validateView) Robot3D.update({ joints: m.joints, target: m.target, patch: m.patch });
-      $("liveState").innerHTML =
+      // The 3D arm tracks every frame (20 Hz joints), but the discrete readouts below
+      // rarely change; rebuild their DOM only when the rendered output changes so the
+      // per-frame cost does not fight the rAF render loop.
+      const lsHtml =
         `<div class="stateRow"><span>zone</span><span>${m.zone}</span></div>` +
         `<div class="stateRow"><span>action</span><span>${m.action ? m.action : "—"}</span></div>` +
         `<div class="stateRow"><span>behavior</span><span>${m.behavior || "—"}</span></div>` +
@@ -964,20 +971,30 @@ function connect() {
         `<div class="stateRow"><span>forced</span><span>${m.forced_behavior || "—"}</span></div>` +
         `<div class="stateRow"><span>speed</span><span>${m.speed}</span></div>` +
         `<div class="stateRow"><span>moving</span><span>${m.moving ? "yes" : "no"}</span></div>`;
+      if (lsHtml !== _liveStateFp) { _liveStateFp = lsHtml; $("liveState").innerHTML = lsHtml; }
       FLOW.live = { zone: m.zone, mode: m.mode, action: m.action };
       updateStatusBar(m);
-      // Safety popup: driven by m.safety (pending safety-gated move).
-      if (m.safety && m.safety.phase === "confirm") {
-        $("safetyPopup").classList.add("open");
-        $("spTitle").textContent = "safety alert — move blocked";
-        $("spTarget").textContent = `${m.safety.zone} / ${m.safety.action}`;
-        const issues = m.safety.issues || [];
-        if (m.safety.collision) issues.push("self-collision detected at entry pose");
-        $("spIssues").innerHTML = issues.map((s) => `<li>${s}</li>`).join("");
-      } else {
-        $("safetyPopup").classList.remove("open");
+      // Safety popup: driven by m.safety (pending safety-gated move). Rebuild only on change.
+      const spFp = (m.safety && m.safety.phase === "confirm")
+        ? "confirm|" + m.safety.zone + "|" + m.safety.action + "|" + (m.safety.issues || []).join(",") + "|" + (m.safety.collision ? 1 : 0)
+        : "clear";
+      if (spFp !== _safetyFp) {
+        _safetyFp = spFp;
+        if (m.safety && m.safety.phase === "confirm") {
+          $("safetyPopup").classList.add("open");
+          $("spTitle").textContent = "safety alert — move blocked";
+          $("spTarget").textContent = `${m.safety.zone} / ${m.safety.action}`;
+          const issues = m.safety.issues || [];
+          if (m.safety.collision) issues.push("self-collision detected at entry pose");
+          $("spIssues").innerHTML = issues.map((s) => `<li>${s}</li>`).join("");
+        } else {
+          $("safetyPopup").classList.remove("open");
+        }
       }
-      if (flowView) applyFlowHighlight();
+      if (flowView) {
+        const fhFp = (FLOW.live.zone || "") + "|" + (FLOW.sel && FLOW.sel.type === "node" ? FLOW.sel.zone : "");
+        if (fhFp !== _flowFp) { _flowFp = fhFp; applyFlowHighlight(); }
+      }
       if (brainView) renderBrainLive(m);
     } else if (m.type === "sound_changed") {
       // The running core reloaded the sound mapping; re-fetch it.
@@ -2737,13 +2754,16 @@ function updateStatusBar(m) {
   const cmColor = cm === "manual" ? "#e05d5d" : (cm === "auto" ? "var(--accent)" : "var(--dim)");
   const seg = (txt, color) => `<span style="color:${color}">${txt}</span>`;
   const sep = `<span class="sbSep">›</span>`;
-  el.innerHTML =
+  // The status bar is a discrete readout (control/group/zone/action/behavior/candidates);
+  // it does not change 20×/sec, so rebuild its DOM only when the rendered string changes.
+  const html =
     seg(cm, cmColor) + sep +
     seg(group, "var(--text)") + sep +
     seg(zone, "var(--text)") + sep +
     seg(action, "var(--text)") + sep +
     seg(behavior, "var(--text)") + sep +
     seg(candText, "var(--text)");
+  if (html !== _statusBarFp) { _statusBarFp = html; el.innerHTML = html; }
 }
 
 function renderBrainLive(m) {
@@ -2796,7 +2816,10 @@ function renderBrainLive(m) {
     add("cam.face", face && face.features && face.features.detected
       ? "#" + face.id + " " + (face.features.emotion || "") : "—");
   }
-  el.innerHTML = rows.join("");
+  // The brain live panel is a discrete readout; rebuild its DOM only when the rendered
+  // string changes (the telemetry/camera fields it shows are the only things that move).
+  const blHtml = rows.join("");
+  if (blHtml !== _brainLiveFp) { _brainLiveFp = blHtml; el.innerHTML = blHtml; }
   // Highlight the active forced behavior's button.
   const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
   for (const name of BEHAVIORS) {

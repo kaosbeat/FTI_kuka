@@ -339,13 +339,16 @@ function updateStatusBar(m) {
   const cmColor = cm === "manual" ? "#e05d5d" : (cm === "auto" ? "var(--accent)" : "var(--dim)");
   const seg = (txt, color) => `<span style="color:${color}">${txt}</span>`;
   const sep = `<span class="sbSep">›</span>`;
-  el.innerHTML =
+  // The status bar is a discrete readout (control/group/zone/action/behavior/candidates);
+  // it does not change 20×/sec, so rebuild its DOM only when the rendered string changes.
+  const html =
     seg(cm, cmColor) + sep +
     seg(group, "var(--text)") + sep +
     seg(zone, "var(--text)") + sep +
     seg(action, "var(--text)") + sep +
     seg(behavior, "var(--text)") + sep +
     seg(candText, "var(--text)");
+  if (html !== _statusBarFp) { _statusBarFp = html; el.innerHTML = html; }
 }
 
 // ------------------------------------------------------------------
@@ -519,6 +522,10 @@ function log(line, level) {
 // WebSocket.
 // ------------------------------------------------------------------
 let ws = null;
+// Per-frame DOM change-detect caches: the 20 Hz state frames rebuild the discrete
+// readouts only when the rendered output changes, so the per-message cost no longer
+// fights the rAF render loop (the 3D arm still tracks every frame via Robot3D.update).
+let _statusBarFp = "", _safetyFp = "";
 
 function setConn(on) {
   $("dot").className = "dot" + (on ? " on" : "");
@@ -665,16 +672,22 @@ function renderState(s) {
     actionBtns[a].className = cls;
   }
 
-  // Safety popup: driven by s.safety (pending safety-gated move).
-  if (s.safety && s.safety.phase === "confirm") {
-    $("safetyPopup").classList.add("open");
-    $("spTitle").textContent = "safety alert — move blocked";
-    $("spTarget").textContent = s.safety.zone + " / " + s.safety.action;
-    const issues = (s.safety.issues || []).slice();
-    if (s.safety.collision) issues.push("self-collision detected at entry pose");
-    $("spIssues").innerHTML = issues.map((str) => "<li>" + str + "</li>").join("");
-  } else {
-    $("safetyPopup").classList.remove("open");
+  // Safety popup: driven by s.safety (pending safety-gated move). Rebuild only on change.
+  const spFp = (s.safety && s.safety.phase === "confirm")
+    ? "confirm|" + s.safety.zone + "|" + s.safety.action + "|" + (s.safety.issues || []).join(",") + "|" + (s.safety.collision ? 1 : 0)
+    : "clear";
+  if (spFp !== _safetyFp) {
+    _safetyFp = spFp;
+    if (s.safety && s.safety.phase === "confirm") {
+      $("safetyPopup").classList.add("open");
+      $("spTitle").textContent = "safety alert — move blocked";
+      $("spTarget").textContent = s.safety.zone + " / " + s.safety.action;
+      const issues = (s.safety.issues || []).slice();
+      if (s.safety.collision) issues.push("self-collision detected at entry pose");
+      $("spIssues").innerHTML = issues.map((str) => "<li>" + str + "</li>").join("");
+    } else {
+      $("safetyPopup").classList.remove("open");
+    }
   }
 }
 
