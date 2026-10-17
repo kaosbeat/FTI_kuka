@@ -12,7 +12,7 @@ KR60 link models.
 
 from typing import List, Optional, Tuple
 
-from ..state.zones import Zones
+from ..state.zones import Zones, find_shared_pose
 
 
 AXES = ["A1", "A2", "A3", "A4", "A5", "A6"]
@@ -53,11 +53,12 @@ class SafetyGate:
            axes. For each axis, the overlap gap is reported when
            ``max(lo_a, lo_b) >= min(hi_a, hi_b)``. When either zone has no
            safezone data, the issue is ``"no safezone"``.
-        2. **Shared-position continuity**: the source action's end pose
-           (``poses[-1]``) must match the target action's entry pose
-           (``poses[0]``) within 0.5 degrees on every axis. When the source
-           action is None (no current action), this check is skipped but the
-           safezone overlap still applies.
+        2. **Shared-position continuity**: the source and target actions must share
+           at least one pose (any anchor appearing in both pose lists, within 0.5
+           degrees on every axis) so the robot can hand off at that pose. When the
+           source action is None (no current action) or the two actions share no
+           pose, this check is skipped / flagged accordingly, but the safezone
+           overlap still applies.
 
         **Intra-zone** (``from_zone == to_zone``): the shared-position check does
         NOT apply — the robot moves freely within the zone, so any pose inside the
@@ -93,17 +94,17 @@ class SafetyGate:
             if gaps:
                 issues.append(f"safezones do not overlap on {', '.join(gaps)}")
 
-            # Shared-position continuity (mirrors edgeConflict, line 655-658).
+            # Shared-position continuity: the two actions must share at least one
+            # pose (any anchor appearing in both lists) so the robot can hand off
+            # there. When they share no pose, flag it (the robot cannot cross).
             if from_action is not None:
-                end = zA.action_end_pose(from_action)
-                start = zB.action_entry_pose(to_action)
-                if end is not None and start is not None:
-                    if any(abs(end[i] - start[i]) >= 0.5 for i in range(6)):
+                src = zA._action(from_action).get("poses")
+                tgt = zB._action(to_action).get("poses")
+                if isinstance(src, list) and isinstance(tgt, list) and src and tgt:
+                    if find_shared_pose(src, tgt) is None:
                         issues.append(
-                            f"no shared position: {from_zone}/{from_action} ends "
-                            f"[{', '.join(str(v) for v in end)}] but "
-                            f"{to_zone}/{to_action} starts "
-                            f"[{', '.join(str(v) for v in start)}]"
+                            f"no shared position: {from_zone}/{from_action} shares "
+                            f"no pose with {to_zone}/{to_action}"
                         )
 
         return (len(issues) > 0), issues

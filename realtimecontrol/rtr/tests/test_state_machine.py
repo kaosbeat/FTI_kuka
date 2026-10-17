@@ -230,7 +230,7 @@ def test_single_run_exit_triggers_transition_and_entry():
     # A transition is a single target pose: the entry pose (poses[0]) of the target action.
     assert m._transition["pose"] == [2] * 6
     # Committing arrival plays the entry action.
-    m._commit("b", "enter")
+    m._commit({"zone": "b", "action": "enter", "pose": [2] * 6, "resume_index": 0})
     assert m.current_zone == "b"
     assert m.current_action == "enter"
     assert m.action_index == 0
@@ -318,7 +318,7 @@ def test_manual_mode_allows_explicit_commands():
     assert m.trigger_action("b", "y") is True
     assert m.transitioning
     # Commit the transition (simulating arrival).
-    m._commit("b", "y")
+    m._commit({"zone": "b", "action": "y", "pose": [2] * 6, "resume_index": 0})
     assert m.current_zone == "b"
     assert m.current_action == "y"
     # play_action still works in manual mode (same zone).

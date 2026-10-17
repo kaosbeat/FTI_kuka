@@ -136,11 +136,162 @@ def test_transition_target_is_not_safezone_clamped():
     assert committed, "transition did not commit (stalled) — the target must be hardware-clamped"
 
 
+# ---------------------------------------------------------------------------
+# Shared-pose handoff: the switch happens at ANY pose shared by the current and
+# target actions (not just the entry/exit anchors), and the target resumes from
+# the index *after* the shared pose.
+# ---------------------------------------------------------------------------
+def _shared_pose_zones():
+    """A zone with two actions that share a middle pose.
+
+    A = [p1, p2, p3]  poses [[1,0,0,0,0,0], [2,0,0,0,0,0], [3,0,0,0,0,0]]
+    B = [p4, p5, p2, p6]  poses [[4,0,0,0,0,0], [5,0,0,0,0,0], [2,0,0,0,0,0], [6,0,0,0,0,0]]
+
+    The shared pose is p2 = [2,0,0,0,0,0] (index 1 in A, index 2 in B), so the
+    handoff resumes B at index 3 (p6).
+    """
+    return validate_state_data({"zones": {
+        "z": {"safezone": [[-10, 10]] * 6, "speed": 1, "actions": {
+            "a": {"poses": [[1, 0, 0, 0, 0, 0], [2, 0, 0, 0, 0, 0], [3, 0, 0, 0, 0, 0]],
+                  "loop": False},
+            "b": {"poses": [[4, 0, 0, 0, 0, 0], [5, 0, 0, 0, 0, 0],
+                             [2, 0, 0, 0, 0, 0], [6, 0, 0, 0, 0, 0]],
+                  "loop": False},
+        }}}
+    })["zones"]
+
+
+def test_compute_handoff_returns_shared_pose_and_resume_index():
+    """_compute_handoff finds the shared (non-entry) pose and the index after it."""
+    z = Zones(_shared_pose_zones())
+    m = StateMachine(z, initial_zone="z", tick_hz=20.0)
+    m.play_action("a")  # current action = a (legacy immediate commit)
+    handoff, resume = m._compute_handoff("z", "b")
+    assert handoff == [2, 0, 0, 0, 0, 0], handoff
+    assert resume == 3, resume  # index after the shared pose (index 2) in b
+
+
+def test_same_zone_shared_pose_transition_resumes_after_shared_pose():
+    """Same-zone play_action transitions to the shared pose; arrival resumes the
+    target at the index after the shared pose (not at the entry)."""
+    z = Zones(_shared_pose_zones())
+    m = StateMachine(z, initial_zone="z", tick_hz=20.0)
+    m.play_action("a")
+    assert m.play_action("b") is True
+    # A shared-pose handoff creates a transition (not an immediate commit).
+    assert m.transitioning
+    assert m._transition["pose"] == [2, 0, 0, 0, 0, 0]
+    assert m._transition["resume_index"] == 3
+    # Simulate arrival at the shared pose -> the transition commits.
+    assert m.update([2, 0, 0, 0, 0, 0]) is None
+    assert m.current_action == "b"
+    assert m.action_index == 3  # resumed after the shared pose, not at index 0
+
+
+def test_cross_zone_shared_pose_transition_uses_shared_pose():
+    """Cross-zone trigger_action transitions to the shared pose (not the entry pose)."""
+    data = validate_state_data({"zones": {
+        "a": {"safezone": [[-10, 10]] * 6, "speed": 1, "actions": {
+            "x": {"poses": [[1, 0, 0, 0, 0, 0], [2, 0, 0, 0, 0, 0]], "loop": False}}},
+        "b": {"safezone": [[-10, 10]] * 6, "speed": 1, "actions": {
+            "y": {"poses": [[3, 0, 0, 0, 0, 0], [2, 0, 0, 0, 0, 0], [7, 0, 0, 0, 0, 0]],
+                  "loop": False}}},
+    }})
+    z = Zones(data["zones"])
+    m = StateMachine(z, initial_zone="a", tick_hz=20.0)
+    m.play_action("x")
+    assert m.trigger_action("b", "y") is True
+    # Shared pose [2,0,0,0,0,0] (index 1 in x, index 1 in y) -> resume y at index 2.
+    assert m._transition["pose"] == [2, 0, 0, 0, 0, 0]
+    assert m._transition["resume_index"] == 2
+    assert m.update([2, 0, 0, 0, 0, 0]) is None
+    assert m.current_zone == "b"
+    assert m.current_action == "y"
+    assert m.action_index == 2
+
+
+def test_no_shared_pose_falls_back_to_entry_pose():
+    """When the actions share no pose, the handoff is the target's entry pose at index 0."""
+    data = validate_state_data({"zones": {
+        "z": {"safezone": [[-10, 10]] * 6, "speed": 1, "actions": {
+            "a": {"poses": [[1, 0, 0, 0, 0, 0]], "loop": False},
+            "b": {"poses": [[8, 0, 0, 0, 0, 0], [9, 0, 0, 0, 0, 0]], "loop": False},
+        }}}
+    })
+    z = Zones(data["zones"])
+    m = StateMachine(z, initial_zone="z", tick_hz=20.0)
+    m.play_action("a")
+    handoff, resume = m._compute_handoff("z", "b")
+    assert handoff == [8, 0, 0, 0, 0, 0]  # entry pose (poses[0])
+    assert resume == 0
+    # No shared pose -> no transition (legacy immediate commit).
+    assert m.play_action("b") is True
+    assert not m.transitioning
+    assert m.current_action == "b"
+    assert m.action_index == 0
+
+
+def test_same_action_restart_is_immediate_not_a_handoff():
+    """Re-triggering the current action is a restart (entry pose, index 0), not a
+    shared-pose handoff — even though the action trivially shares poses with itself."""
+    z = Zones(_shared_pose_zones())
+    m = StateMachine(z, initial_zone="z", tick_hz=20.0)
+    m.play_action("a")
+    handoff, resume = m._compute_handoff("z", "a")
+    assert handoff == [1, 0, 0, 0, 0, 0]  # entry pose (poses[0])
+    assert resume == 0
+    assert m.play_action("a") is True
+    assert not m.transitioning
+    assert m.current_action == "a"
+    assert m.action_index == 0
+
+
+def test_shared_pose_is_last_anchor_non_looping_hands_off():
+    """When the shared pose is the target's LAST anchor and the target is non-looping,
+    the target has nothing left to play, so it hands off via ``next`` (the transition
+    is not left dangling)."""
+    data = validate_state_data({"zones": {
+        "a": {"safezone": [[-10, 10]] * 6, "speed": 1, "actions": {
+            "x": {"poses": [[1, 0, 0, 0, 0, 0], [2, 0, 0, 0, 0, 0]], "loop": False},
+            # "fin" holds the shared pose [2,0,0,0,0,0] as its only (last) anchor and
+            # is non-looping; after the handoff there is nothing left to play.
+            "fin": {"poses": [[2, 0, 0, 0, 0, 0]], "loop": False,
+                    "next": [{"zone": "a", "action": "end"}]},
+            "end": {"poses": [[3, 0, 0, 0, 0, 0]], "loop": True},
+        }}}
+    })
+    z = Zones(data["zones"])
+    m = StateMachine(z, initial_zone="a", tick_hz=20.0)
+    m.play_action("x")
+    # The shared pose [2,0,0,0,0,0] is the last (and only) anchor of "fin".
+    assert m.play_action("fin") is True
+    assert m.transitioning
+    assert m._transition["pose"] == [2, 0, 0, 0, 0, 0]
+    assert m._transition["resume_index"] == 1  # index after the last anchor
+    assert m.update([2, 0, 0, 0, 0, 0]) is None
+    # "fin" has no further poses; it hands off via its ``next`` -> "end" (in auto
+    # mode) and the just-completed transition is cleared (no dangling transition).
+    assert not m.transitioning
+    assert m.current_action == "end"
+
+
 def main():
     failures = 0
     for name, fn in [
         ("test_all_reachable_transitions_complete", test_all_reachable_transitions_complete),
         ("test_transition_target_is_not_safezone_clamped", test_transition_target_is_not_safezone_clamped),
+        ("test_compute_handoff_returns_shared_pose_and_resume_index",
+         test_compute_handoff_returns_shared_pose_and_resume_index),
+        ("test_same_zone_shared_pose_transition_resumes_after_shared_pose",
+         test_same_zone_shared_pose_transition_resumes_after_shared_pose),
+        ("test_cross_zone_shared_pose_transition_uses_shared_pose",
+         test_cross_zone_shared_pose_transition_uses_shared_pose),
+        ("test_no_shared_pose_falls_back_to_entry_pose",
+         test_no_shared_pose_falls_back_to_entry_pose),
+        ("test_same_action_restart_is_immediate_not_a_handoff",
+         test_same_action_restart_is_immediate_not_a_handoff),
+        ("test_shared_pose_is_last_anchor_non_looping_hands_off",
+         test_shared_pose_is_last_anchor_non_looping_hands_off),
     ]:
         try:
             fn()

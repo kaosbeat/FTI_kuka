@@ -44,11 +44,6 @@ class StateMachine:
         self.current_action: Optional[str] = None
         self.action_index = 0
         self._transition: Optional[dict] = None
-        # Pending switch (shared-pose handoff): when a shared pose is found between
-        # the current action and a target action, the robot continues playing the
-        # current action until it reaches the shared pose, then switches to the
-        # target action starting from the index after the shared pose.
-        self._pending_switch: Optional[dict] = None
 
         # Camera telemetry (the brain stashes the latest CAM_TRACK payload here; the
         # behaviour policies read it). Empty dict until the first frame arrives.
@@ -141,8 +136,12 @@ class StateMachine:
         # Never start a transition while one is already in progress.
         if self._transition is not None:
             return False
-        entry = z.action_entry_pose(action)
-        if entry is None:
+        # Shared-pose handoff: the robot moves to a pose shared by the current and
+        # target actions (any anchor appearing in both), then resumes the target
+        # action from the index *after* the shared pose. When no shared pose
+        # exists, fall back to the target's entry pose (``poses[0]``, index 0).
+        handoff, resume_index = self._compute_handoff(zone, action)
+        if handoff is None:
             print(f"[state] no entry pose for {zone}/{action}")
             return False
 
@@ -152,10 +151,12 @@ class StateMachine:
             self._pending = {
                 "zone": zone,
                 "action": action,
-                "entry": list(entry),
+                "entry": list(handoff),
+                "resume_index": resume_index,
                 "from_zone": self.current_zone,
                 "from_action": self.current_action,
                 "same_zone": False,
+                "handoff": True,
                 "phase": "check",
                 "conflict": None,
                 "issues": None,
@@ -164,21 +165,41 @@ class StateMachine:
             }
             return True
 
-        # No safety gate: old immediate-commit behavior.
-        # Shared-position continuity: the connection moves the robot to the target's
-        # entry pose (the shared position where the handoff happens). If the current
-        # action's end pose does not match it, the robot must cross a gap — warn. The
-        # editor flags the same conflict on the connection (red "!" marker).
-        if self.current_action:
-            cz = self.zones.get(self.current_zone)
-            end = cz.action_end_pose(self.current_action)
-            if end is not None and any(abs(end[i] - entry[i]) > 0.5 for i in range(6)):
-                print(f"[state] no shared position: {self.current_zone}/{self.current_action} "
-                      f"ends at {end} but {zone}/{action} starts at {entry}")
-        self._transition = {"zone": zone, "action": action, "pose": entry}
-        # Move toward the entry pose at the target zone's speed.
+        # No safety gate: transition to the handoff pose at the target zone's speed.
+        # The robot reaches the shared pose (or the entry pose when there is no
+        # shared pose) and the transition commits there.
+        self._transition = {"zone": zone, "action": action, "pose": handoff,
+                             "resume_index": resume_index}
         self.speed = z.speed
         return True
+
+    def _compute_handoff(self, target_zone: str, target_action: str):
+        """Compute the handoff pose + resume index for switching to a target action.
+
+        Returns ``(handoff_pose, resume_index)``. When the current action and the
+        target action share a pose (any anchor appearing in both lists), the handoff
+        pose is that shared pose and ``resume_index`` is the index *after* it in the
+        target action (the robot resumes the target from there). When no shared pose
+        exists (or the target is the current action — a restart), the handoff pose is
+        the target's entry pose (``poses[0]``) and ``resume_index`` is 0.
+        """
+        tz = self.zones.get(target_zone)
+        target_poses = tz._action(target_action).get("poses")
+        entry = tz.action_entry_pose(target_action)
+        if not (isinstance(target_poses, list) and target_poses):
+            return entry, 0
+        # Same action in the same zone: a restart, not a handoff (entry pose, index 0).
+        if target_zone == self.current_zone and target_action == self.current_action:
+            return entry, 0
+        if self.current_action is not None:
+            cz = self.zones.get(self.current_zone)
+            current_poses = cz._action(self.current_action).get("poses")
+            if isinstance(current_poses, list) and current_poses:
+                shared = find_shared_pose(current_poses, target_poses)
+                if shared is not None:
+                    pose, _idx_cur, idx_tgt = shared
+                    return pose, idx_tgt + 1
+        return entry, 0
 
     def set_target(self, pose: List[float], kind: str = "joint") -> None:
         """Set the current target pose and its kind (``"joint"`` | ``"linear"``).
@@ -287,20 +308,28 @@ class StateMachine:
             print(f"[state] action disabled in {self.current_zone}: {name}")
             return False
 
+        # Shared-pose handoff (same zone): when the current action and ``name`` share
+        # a pose, transition to that shared pose and resume ``name`` from after it.
+        # When no shared pose exists (or it is a restart), keep the legacy immediate
+        # commit (entry pose, index 0).
+        handoff, resume_index = self._compute_handoff(self.current_zone, name)
+        is_handoff = (handoff is not None and resume_index != 0)
+        if handoff is None:
+            print(f"[state] no entry pose for {self.current_zone}/{name}")
+            return False
+
         # Safety gate: when wired, store the move as pending (the engine resolves
         # it) instead of committing immediately.
         if self.safety is not None:
-            entry = zone.action_entry_pose(name)
-            if entry is None:
-                print(f"[state] no entry pose for {self.current_zone}/{name}")
-                return False
             self._pending = {
                 "zone": self.current_zone,
                 "action": name,
-                "entry": list(entry),
+                "entry": list(handoff),
+                "resume_index": resume_index,
                 "from_zone": self.current_zone,
                 "from_action": self.current_action,
                 "same_zone": True,
+                "handoff": is_handoff,
                 "phase": "check",
                 "conflict": None,
                 "issues": None,
@@ -309,9 +338,16 @@ class StateMachine:
             }
             return True
 
-        self.current_action = name
-        self.action_index = 0
-        self._midi_pulse = False
+        if is_handoff:
+            # Shared-pose handoff: transition to the shared pose, then resume after it.
+            self._transition = {"zone": self.current_zone, "action": name,
+                                 "pose": handoff, "resume_index": resume_index}
+            self.speed = zone.speed
+        else:
+            # Restart / no shared pose: legacy immediate commit.
+            self.current_action = name
+            self.action_index = 0
+            self._midi_pulse = False
         return True
 
     def clear_action(self) -> None:
@@ -336,8 +372,10 @@ class StateMachine:
     def commit_pending(self) -> None:
         """Commit the pending move (the engine has verified it is safe).
 
-        Cross-zone: set ``_transition`` + speed; do not change ``current_action``
-        until arrival. Same-zone: set ``current_action`` + reset ``action_index``.
+        Cross-zone, or a same-zone shared-pose handoff: set ``_transition`` + speed;
+        do not change ``current_action`` until arrival (the transition carries the
+        resume index). Same-zone with no shared pose (restart): set ``current_action``
+        + reset ``action_index`` immediately.
         """
         if self._pending is None:
             return
@@ -345,13 +383,14 @@ class StateMachine:
         self._pending = None
         z = self.zones.get(p["zone"])
         self.speed = z.speed
-        if p.get("same_zone"):
+        if p.get("handoff") or not p.get("same_zone"):
+            self._transition = {"zone": p["zone"], "action": p["action"],
+                                 "pose": p["entry"],
+                                 "resume_index": p.get("resume_index", 0)}
+        else:
             self.current_action = p["action"]
             self.action_index = 0
             self._midi_pulse = False
-        else:
-            self._transition = {"zone": p["zone"], "action": p["action"],
-                                 "pose": p["entry"]}
 
     def clear_pending(self) -> None:
         """Discard the pending move (blocked or cancelled)."""
@@ -514,7 +553,7 @@ class StateMachine:
     def update(self, curjpos: List[float]) -> Optional[List[float]]:
         """Drive the transition one step. Returns the target pose, or None when idle.
 
-        When the robot reaches the entry pose (comparelist), the transition commits
+        When the robot reaches the handoff pose (comparelist), the transition commits
         and returns None for that tick.
         """
         if self._transition is None:
@@ -522,18 +561,41 @@ class StateMachine:
         t = self._transition
         pose = t["pose"]
         if comparelist(curjpos, pose, margin=0.1, count=5):
-            self._commit(t["zone"], t["action"])
+            self._commit(t)
             return None
         return pose
 
-    def _commit(self, zone: str, action: str) -> None:
-        """Commit arrival at ``action`` in ``zone`` and begin it."""
+    def _commit(self, t: dict) -> None:
+        """Commit arrival at the transition pose and begin the target action.
+
+        ``t`` is the transition dict (zone, action, pose, resume_index). The action
+        begins at ``resume_index`` (the index after the shared pose). When that index
+        is past the last anchor, the loop rules apply: a looping action wraps to the
+        start; a single-run action has no further poses, so it hands off via ``next``.
+        """
+        zone = t["zone"]
+        action = t["action"]
         z = self.zones.get(zone)
         self.current_zone = zone
         self.speed = z.speed
         self.current_action = action
-        self.action_index = 0
         self._midi_pulse = False
+        resume = t.get("resume_index", 0)
+        poses = z._action(action).get("poses")
+        n = len(poses) if isinstance(poses, list) else 0
+        if n and resume >= n:
+            if z.action_loops(action):
+                resume = 0  # looping: wrap to the start
+            else:
+                # The shared pose was the last anchor: the action has no further
+                # poses to play, so hand off via ``next`` (clears the action and may
+                # start the next move). Keep a newly started transition; otherwise
+                # clear the just-completed one so it is not re-driven next tick.
+                self._advance_after_action(action)
+                if self._transition is t:
+                    self._transition = None
+                return
+        self.action_index = resume
         self._transition = None
 
     def _current_speed(self) -> float:
