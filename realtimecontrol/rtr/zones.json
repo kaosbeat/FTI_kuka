@@ -744,8 +744,16 @@
               0
             ]
           ],
-          "variable_axes": [],
-          "behavior": "restless",
+          "variable_axes": [
+            0,
+            1,
+            4
+          ],
+          "behavior": "locked",
+          "engine": {
+            "cadence": "arrival",
+            "move_mode": "stream"
+          },
           "loop": false,
           "next": {
             "zone": "hunting",

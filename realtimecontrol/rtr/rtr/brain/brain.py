@@ -171,6 +171,42 @@ class Brain:
         else:
             self.camera.set_intent(active=active, mode=mode, lock_id=lock)
 
+    def _apply_action_engine(self, zone: str, action: str) -> None:
+        """Apply the action's engine config (``zones[zone].actions[action]["engine"]``).
+
+        Called on every action change, alongside :meth:`_apply_action_cam`. An action
+        may declare an ``engine`` field (``{cadence, move_mode}``) to switch the
+        machine's movement cadence and retargeting mode for that action.
+
+        The hunting ``track`` action uses this to run the recentering loop
+        responsively: ``cadence: "arrival"`` advances the anchor only when the move
+        ends (so the servo keeps retargeting the locked person until centered) and
+        ``move_mode: "stream"`` retargets every tick instead of blocking per move.
+        Actions without an ``engine`` field leave the machine settings untouched
+        (they inherit whatever the previous action set).
+        """
+        z = self.machine.zones.get(zone)
+        if z is None:
+            return
+        a = z.actions().get(action)
+        if not isinstance(a, dict):
+            return
+        eng = a.get("engine")
+        if not isinstance(eng, dict):
+            return
+        cadence = eng.get("cadence")
+        if cadence in ("fixed", "arrival", "midi"):
+            self.machine.cadence = cadence
+            if cadence == "fixed":
+                try:
+                    every_s = float(eng.get("every", 1.0))
+                except (TypeError, ValueError):
+                    every_s = 1.0
+                self.machine.cadence_every = max(1, int(every_s * self.machine.tick_hz))
+        mode = eng.get("move_mode")
+        if mode in ("block", "stream"):
+            self.machine.move_mode = mode
+
     def _recompute_enabled(self) -> None:
         """Recompute the set of enabled groups and their zone union.
 
@@ -797,6 +833,7 @@ class Brain:
         if cur_cam != self._cam_action:
             self._cam_action = cur_cam
             self._apply_action_cam(self.machine.current_zone, self.machine.current_action)
+            self._apply_action_engine(self.machine.current_zone, self.machine.current_action)
         if not self._autonomy_cfg().get("enabled", False):
             return
         if self.machine.transitioning:

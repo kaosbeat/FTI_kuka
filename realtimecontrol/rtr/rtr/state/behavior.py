@@ -245,11 +245,42 @@ def _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior) -> 
 
     Records the servo state (``machine.servo_state``) on every call — including the
     zero-offset case — so the display always reflects the last tick's vector.
+
+    **Recentering (the hunting ``track`` action).** When a person is locked and the
+    robot is in the hunting zone's ``track`` action (behavior ``locked``), this is the
+    recentering loop: the camera's track offset ``(dx, dy)`` is driven to zero so the
+    locked person stays at the image center. The conditions for it to run are:
+
+    1. The action declares ``variable_axes`` (the joints the servo may move) and a
+       camera-servo behavior (``locked`` / ``intent`` / ``curious``) — the hunting
+       ``track`` action uses ``variable_axes: [0, 1, 4]`` and behavior ``locked``.
+    2. The brain stashes a fresh track offset on ``machine.camera_state`` (the
+       ``CAM_TRACK`` telemetry for the locked id; a stale/absent offset is 0).
+    3. The kinematics are wired (``machine.camera_geometry`` is not ``None``), so the
+       image Jacobian (which carries the camera-rotation compensation) is available.
+
+    The image Jacobian is derived from the camera's *current* pose (position *and*
+    orientation), so the joint deltas already compensate for how the camera is
+    mounted/rotated — no separate rotation term is needed.
+
+    **Safezone clamp.** The resulting variable-axis pose is clamped to the effective
+    floor (the current zone's safezone ∩ the hardware limits) before it is recorded,
+    so a recentering command can never leave the zone's safe bounds. This matches the
+    clamping in :func:`_apply_wander` / :func:`_apply_oscillation`; the
+    ``StateMachine.step`` driver clamps the final target again (idempotent). When the
+    clamp truncates a delta, ``dq_deg`` still reports the requested (Jacobian) delta
+    and ``proposed`` reports the clamped pose, so the debug UI shows the difference.
+
+    **Proposed movement.** ``machine.servo_state["proposed"]`` is the full 6-axis
+    target pose after the servo deltas are applied and clamped — the exact pose the
+    robot is about to be commanded to. The debug UI renders it alongside the
+    compensated vector.
     """
     if dx == 0.0 and dy == 0.0:
         machine.servo_state = {
             "behavior": behavior, "dx": 0.0, "dy": 0.0,
             "dq_deg": [0.0] * len(var_axes), "axes": list(var_axes),
+            "proposed": list(pose),
         }
         return
     geo = getattr(machine, "camera_geometry", None)
@@ -277,9 +308,15 @@ def _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior) -> 
         dq_deg = [q * _DEG_PER_RAD for q in dq_rad]
         for k, ax in enumerate(var_axes):
             pose[ax] = pose[ax] + dq_rad[k] * _DEG_PER_RAD
+    # Safezone clamp: keep the recentering command inside the current zone's safe
+    # bounds (safezone ∩ hardware), matching _apply_wander / _apply_oscillation.
+    limits = effective(machine)
+    for axis in var_axes:
+        pose[axis] = fitlimits(axis, pose[axis], limits)
     machine.servo_state = {
         "behavior": behavior, "dx": dx, "dy": dy,
         "dq_deg": dq_deg, "axes": list(var_axes),
+        "proposed": list(pose),
     }
 
 

@@ -81,7 +81,8 @@
     <div class="legend">
       <span class="sw" style="background:#ff9f40"></span>candidate
       &nbsp;<span class="sw" style="background:#e05d5d"></span>locked
-      &nbsp;<span class="sw" style="background:#4fc08d"></span>track offset
+      &nbsp;<span class="sw" style="background:#4fc08d"></span>track offset (raw)
+      &nbsp;<span class="sw" style="background:#40a0ff"></span>compensated (dq)
       &nbsp;<span class="sw" style="background:#d7dbe2"></span>image center
       &nbsp;· click a candidate to force-lock it
     </div>
@@ -335,6 +336,29 @@ function drawFrame() {
     }
   }
 
+  // compensated: the Jacobian-mapped joint command (dq_deg) the servo will drive.
+  // Green (above) = the raw pixel offset the camera sees; blue = the compensated
+  // joint motion the robot proposes this tick. Same closure direction, but its
+  // length encodes the magnitude of the joint deltas (the recentering command).
+  const sv = lastState && lastState.servo ? lastState.servo : null;
+  if (sv && Array.isArray(sv.dq_deg) && sv.dq_deg.length) {
+    const nrm = Math.sqrt(sv.dq_deg.reduce((a, b) => a + (isNum(b) ? b * b : 0), 0));
+    if (nrm > 1e-3) {
+      const len = Math.min(160, nrm * 6); // 6 px/degree, capped
+      const ox = isNum(sv.dx) ? sv.dx : 0, oy = isNum(sv.dy) ? sv.dy : 0;
+      const omag = Math.sqrt(ox * ox + oy * oy) || 1;
+      const ex = cx + (ox / omag) * len, ey = cy + (oy / omag) * len;
+      ctx.strokeStyle = "#40a0ff";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex, ey); ctx.stroke();
+      drawArrowHead(ctx, cx, cy, ex, ey, "#40a0ff");
+      ctx.fillStyle = "#40a0ff";
+      ctx.font = "12px monospace";
+      const dqTxt = "dq=" + sv.dq_deg.map((v) => isNum(v) ? v.toFixed(1) : "?").join(",");
+      ctx.fillText(dqTxt, ex + 10, ey - 6);
+    }
+  }
+
   // status overlay top-left
   const st = t.status || {};
   const n = cands.length;
@@ -472,6 +496,7 @@ function renderMotion() {
   const st = lastState;
   const s = (st && st.servo) || null;
   const num = (v) => isNum(v) ? v.toFixed(2) : "\u2014";
+  const pose = (p) => Array.isArray(p) ? p.map((v) => isNum(v) ? v.toFixed(1) : "?").join(", ") : "\u2014";
   let h = "";
   if (!s) {
     h += kvRow("servo", "\u2014 (no servo this tick)");
@@ -483,8 +508,10 @@ function renderMotion() {
     const dq = Array.isArray(s.dq_deg) ? s.dq_deg : [];
     const vec = axes.map((ax, i) => "A" + (ax + 1) + "=" + num(dq[i])).join(", ");
     h += kvRow("dq (deg)", vec || "\u2014");
+    // The servo's proposed (safezone-clamped) target pose — the exact pose the
+    // robot is about to be commanded to this tick.
+    h += kvRow("proposed", pose(s.proposed));
   }
-  const pose = (p) => Array.isArray(p) ? p.map((v) => isNum(v) ? v.toFixed(1) : "?").join(", ") : "\u2014";
   h += kvRow("target", st ? pose(st.target) : "\u2014");
   h += kvRow("joints", st ? pose(st.joints) : "\u2014");
   h += kvRow("moving", st && st.moving ? "yes" : "no");

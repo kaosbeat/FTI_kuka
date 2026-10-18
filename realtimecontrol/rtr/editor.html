@@ -253,6 +253,9 @@
   <button id="tabValidate">validate</button>
   <button id="save">save</button>
   <span id="saveMsg"></span>
+  <button id="backup" title="Download the current config (zones, sound, patches, brain, midi) as one JSON file — a snapshot of the config files on disk.">backup</button>
+  <button id="restore" title="Load a config backup (JSON) and restore it: overwrites zones, sound, patches, brain and midi and hot-reloads the running core.">restore</button>
+  <input id="restoreFile" type="file" accept=".json,application/json" style="display:none">
 </header>
 
 <main id="zoneMain">
@@ -4574,6 +4577,118 @@ function saveActionEditor() {
     $("aeSaveStatus").className = "aeStatus err";
   });
 }
+
+// ---------------------------------------------------------------------------
+// Global config backup / restore. Bundles every config the editor can change
+// (zones, sound, patches, brain, midi — the editable fields of the core config)
+// into one downloadable JSON, and restores it by POSTing each section back to
+// its API endpoint (server-side validation runs on each POST).
+//
+// The backup is a snapshot of the config files: each section is fetched fresh
+// (API -> static file -> the in-memory copy loaded at startup), so the bundle
+// matches what is on disk / running, not unsaved editor edits.
+// ---------------------------------------------------------------------------
+const BACKUP_SECTIONS = [
+  { name: "zones",   api: "/api/zones",   file: "/zones.json",   mem: () => TABLE },
+  { name: "sound",   api: "/api/sound",   file: "/sound.json",   mem: () => SOUND },
+  { name: "patches", api: "/api/patches", file: "/patches.json", mem: () => PATCHES },
+  { name: "brain",   api: "/api/brain",   file: "/brain.json",   mem: () => BRAIN },
+  { name: "midi",    api: "/api/midi",    file: "/midi.json",    mem: () => MIDI },
+];
+// Fetch one section fresh: API (reads the file on disk) -> static file -> the
+// in-memory copy (already loaded at startup; the offline backstop).
+async function backupFetchSection(s) {
+  try {
+    const r = await fetch(s.api, { cache: "no-store" });
+    if (r.ok) return await r.json();
+  } catch (e) {}
+  try {
+    const r = await fetch(s.file, { cache: "no-store" });
+    if (r.ok) return await r.json();
+  } catch (e) {}
+  return s.mem();
+}
+// Compose the bundle from every section and trigger a browser download.
+async function backupConfig() {
+  const bundle = { backup: "rtr-config", created: new Date().toISOString() };
+  for (const s of BACKUP_SECTIONS) bundle[s.name] = await backupFetchSection(s);
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "rtr-config-" + ts + ".json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  $("saveMsg").textContent = "backup downloaded: " + a.download;
+  $("saveMsg").className = "";
+}
+// Restore a bundle: POST each present section to its endpoint (the server
+// validates each one; a bad section is rejected without touching the file),
+// then re-fetch everything so the editor shows the restored state.
+async function restoreConfig(bundle) {
+  const results = [];
+  const pending = [];
+  for (const s of BACKUP_SECTIONS) {
+    if (!(s.name in bundle) || typeof bundle[s.name] !== "object" || bundle[s.name] === null) continue;
+    pending.push(fetch(s.api, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(bundle[s.name]),
+    }).then((r) => r.json().then((b) => ({ ok: r.ok, body: b, name: s.name }))));
+  }
+  if (!pending.length) { $("saveMsg").textContent = "restore: no sections found in file"; $("saveMsg").className = "err"; return; }
+  const rs = await Promise.all(pending);
+  for (const r of rs) {
+    results.push(r.ok ? r.name : `${r.name} (${r.body.error || r.status})`);
+  }
+  const failed = rs.filter((r) => !r.ok);
+  if (!failed.length) {
+    $("saveMsg").textContent = "restored: " + results.join(", ");
+    $("saveMsg").className = "";
+  } else {
+    $("saveMsg").textContent = "restore failed: " + results.join(", ");
+    $("saveMsg").className = "err";
+  }
+  // Re-fetch the tables so the editor reflects the restored config (loadTable
+  // first: the other loaders seed from TABLE.zones).
+  await loadTable();
+  await loadSound();
+  await loadPatches();
+  await loadMidi();
+  await loadBrain();
+}
+$("backup").onclick = () => { backupConfig().catch((e) => { $("saveMsg").textContent = "backup failed: " + e; $("saveMsg").className = "err"; }); };
+$("restore").onclick = () => $("restoreFile").click();
+$("restoreFile").onchange = (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const done = () => { e.target.value = ""; };
+  const reader = new FileReader();
+  reader.onload = () => {
+    let bundle;
+    try { bundle = JSON.parse(reader.result); }
+    catch (err) { $("saveMsg").textContent = "restore: not valid JSON (" + err + ")"; $("saveMsg").className = "err"; done(); return; }
+    if (!bundle || typeof bundle !== "object" || Array.isArray(bundle)) {
+      $("saveMsg").textContent = "restore: expected a backup object with zones/sound/patches/brain/midi sections";
+      $("saveMsg").className = "err"; done(); return;
+    }
+    const names = BACKUP_SECTIONS.filter((s) => s.name in bundle).map((s) => s.name);
+    if (!names.length) {
+      $("saveMsg").textContent = "restore: no recognisable sections (need at least one of zones, sound, patches, brain, midi)";
+      $("saveMsg").className = "err"; done(); return;
+    }
+    if (!confirm(`restore config from ${f.name}?\noverwrites ${names.join(", ")} and hot-reloads the running core`)) { done(); return; }
+    restoreConfig(bundle).catch((err) => {
+      $("saveMsg").textContent = "restore failed: " + err;
+      $("saveMsg").className = "err";
+    }).finally(done);
+  };
+  reader.onerror = () => { $("saveMsg").textContent = "restore: could not read file"; $("saveMsg").className = "err"; done(); };
+  reader.readAsText(f);
+};
 
 // ---------------------------------------------------------------------------
 // Flow tab (SVG flowchart: nodes = zones, arrows = exits).
