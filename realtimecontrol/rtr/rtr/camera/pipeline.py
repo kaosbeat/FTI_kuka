@@ -511,13 +511,15 @@ class Pipeline:
         # Send candidates (all detected persons). The frame dims (w/h) accompany
         # the pixel coords so the brain can normalize to 0..1 for the centrality
         # score (both cameras share W/H; the wide dims are the frame size).
-        if result.candidates:
-            out["candidates"] = {
-                "camera": result.camera,
-                "w": self.wide.W,
-                "h": self.wide.H,
-                "candidates": result.candidates,
-            }
+        # Always sent — including an empty list — so the core clears its cached
+        # candidates when none remain (a stale non-empty cache would otherwise
+        # linger in the debug view, since the core only updates on a CAM_* payload).
+        out["candidates"] = {
+            "camera": result.camera,
+            "w": self.wide.W,
+            "h": self.wide.H,
+            "candidates": list(result.candidates or []),
+        }
         # Send track (locked person offset).
         if result.track is not None:
             out["track"] = result.track
