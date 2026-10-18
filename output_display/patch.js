@@ -1,3 +1,4 @@
+// noprotect  — disables P5LIVE's loopBreaker guard for this sketch
 // ============================================================================
 //  FTI_kuka — output display
 //  P5LIVE + Hydra video patch
@@ -11,7 +12,7 @@
 //
 //  How to run
 //  1. Put the 23 videos where P5LIVE can serve them (see VID_BASE below).
-//  2. Open this sketch in P5LIVE (offline libs are bundled with P5LIVE).
+//  2. Open this sketch in P5LIVE (offline hydra-synth is bundled with P5LIVE).
 //  3. Enable Web MIDI (browser permission) and connect the MIDI device.
 //  4. Play a note at/above C4 (MIDI 60) to select a video + treatment.
 //     Turn CC1..CC6 to modulate.
@@ -20,19 +21,28 @@
 //    video index = (note - 60) % 23   (wraps over the 23 clips)
 //    patch index = (note - 60) % 12   (12 treatments, one per semitone)
 //    c[i]        = ccs[i+1].value / 127   (CC1 -> c[0] = most significant)
+//
+//  Notes on the Hydra instance
+//  - We build our OWN Hydra (not the hy5 bridge) so we can turn OFF the
+//    defaults that are useless here and were tripping P5LIVE:
+//        detectAudio: false        -> no mic getUserMedia() at load
+//        enableStreamCapture: false-> no canvas.captureStream(25) recorder
+//    makeGlobal stays true so src/s0/out/noize/etc. are exposed on window.
+//    autoLoop stays true so Hydra renders continuously (p5 draw only feeds
+//    the source + rebuilds the graph on change).
 // ============================================================================
 
-// Offline libs shipped with P5LIVE (authoritative hydra-synth v-bundled + hy5).
-// Add the online fallbacks if you ever run without the bundled includes:
-//   let libs = ['https://unpkg.com/hydra-synth/dist/hydra-synth.js',
-//               'includes/libs/hydra-synth.js',
-//               'https://cdn.jsdelivr.net/gh/ffd8/hy5@main/hy5.js',
-//               'includes/libs/hy5.js']
-let libs = ['includes/libs/hydra-synth.js', 'includes/libs/hy5.js'];
+// Offline lib shipped with P5LIVE (authoritative bundled hydra-synth).
+// No hy5: we manage the Hydra + p5 link ourselves for full control.
+let libs = ['includes/libs/hydra-synth.js'];
 
 // ---------------------------------------------------------------------------
 //  Config
 // ---------------------------------------------------------------------------
+
+// Render-resolution scale. 1.0 = native window size. Lower for performance
+// (e.g. 0.5) if the display is large/retina and frames drop.
+const RES = 1.0;
 
 // Base URL for the 23 videos, relative to where P5LIVE serves the project.
 // The clips currently live in  output_display/vids/  .
@@ -40,7 +50,7 @@ let libs = ['includes/libs/hydra-synth.js', 'includes/libs/hy5.js'];
 //   - If it uses the standard p5  data/  asset convention, move the clips to
 //     data/vids/  (or point VID_BASE there).
 // Adjust this one line if neither resolves at runtime.
-const VID_BASE = 'data/vids/';
+const VID_BASE = 'vids/';
 
 // The 23 clips (numbering skips 00030). Listed explicitly so the gap is
 // handled correctly — do NOT generate names with (22 + i).
@@ -73,7 +83,36 @@ const VID_FILES = [
 const NUM_VIDS    = VID_FILES.length; // 23
 const NUM_PATCHES = 12;               // one treatment per semitone
 const NOTE_BASE   = 60;               // C4 — first playable note
-const DEBUG       = false;            // log note/patch changes to console
+const DEBUG       = true;            // log note/patch changes to console
+
+// ---------------------------------------------------------------------------
+//  Hydra output canvas (built once, at sketch top level)
+// ---------------------------------------------------------------------------
+let RW = Math.floor(window.innerWidth * RES);
+let RH = Math.floor(window.innerHeight * RES);
+let hc = document.createElement('canvas');
+hc.width = RW;
+hc.height = RH;
+hc.style.position = 'fixed';
+hc.style.top = '0';
+hc.style.left = '0';
+hc.style.width = '100vw';
+hc.style.height = '100vh';
+hc.style.zIndex = '1';
+document.body.appendChild(hc);
+
+let hydra = new Hydra({
+  detectAudio: false,        // no mic getUserMedia()
+  enableStreamCapture: false, // no canvas.captureStream(25) / videoRecorder
+  makeGlobal: true,          // expose src, s0, out, noize, voronoi, ... on window
+  autoLoop: true,            // Hydra renders continuously on its own rAF
+  canvas: hc                 // render to our canvas (internal res = RW x RH)
+});
+
+// p5 owns `noise`; hydra's noise texture is exposed as `noize` (hydra-synth
+// convention). Alias it explicitly from the synth object so the patches can
+// use noize() without relying on the makeGlobal window-overwrite timing.
+noize = hydra.synth.noise;
 
 // ---------------------------------------------------------------------------
 //  State
@@ -94,7 +133,7 @@ let hud        = null; // on-screen status label (DOM, not the p5 canvas)
 //  Function signatures are the EXACT set from P5LIVE's bundled hydra-synth
 //  (includes/libs/hydra-synth.js). Note: combine functions take a texture
 //  argument as their second input (the _c1), e.g. blend(tex, amount),
-//  mask(tex). `noize` is hy5's alias for hydra's noise (p5 owns `noise`).
+//  mask(tex). `noize` is hydra's noise aliased (p5 owns `noise`).
 // ---------------------------------------------------------------------------
 const patches = [
   // 0  C4   base — brightness + contrast
@@ -145,32 +184,39 @@ const standby = (c) =>
 //  p5 lifecycle
 // ---------------------------------------------------------------------------
 function preload() {
-  // Load all 23 clips up front (muted, looping). Only the active clip is
-  // allowed to play; the rest are paused to keep decode cost down.
+  // P5LIVE's bundled p5 (v1.11.9) is trimmed: it has createVideo but NO
+  // loadVideo. So we build raw HTML5 <video> elements directly — no p5 media
+  // dependency, reliable buffering, and they draw straight onto the p5 canvas.
+  // Only the active clip plays; the rest stay paused to keep decode cost down.
   for (let i = 0; i < NUM_VIDS; i++) {
-    const v = loadVideo(VID_BASE + VID_FILES[i]);
-    v.mute();
-    v.loop();
-    v.pause();
+    const v = document.createElement('video');
+    v.src = VID_BASE + VID_FILES[i];
+    v.muted = true;
+    v.loop = true;
+    v.preload = 'auto';
+    v.playsInline = true;
+    v.crossOrigin = 'anonymous';
+    v.style.display = 'none';
+    document.body.appendChild(v);
+    v.load(); // start buffering without playing
     videos.push(v);
   }
 }
 
 function setup() {
+  // Prevent retina up-scaling of the p5 canvas (the hidden source).
+  pixelDensity(1);
   createCanvas(windowWidth, windowHeight);
 
-  // hy5 bridge: feed the (hidden) p5 canvas into Hydra source s0, then hide
-  // the p5 canvas so the Hydra output is what's on screen.
-  s0.initP5();
-  P5.toggle(0);
-
-  // Optional retina resolution for the Hydra canvas (off by default for
-  // performance with 23 clips). Enable for sharper output:
-  // H.pixelDensity(2);
+  // Feed the (hidden) p5 canvas into Hydra source s0, then hide the p5 canvas
+  // so the Hydra output (hc) is what's on screen. s0 is dynamic: it re-reads
+  // the canvas every frame, so the drawn video updates the pipeline live.
+  s0.init({ src: drawingContext.canvas, dynamic: true });
+  drawingContext.canvas.style.display = 'none';
 
   // MIDI: channel 0, note range enabled.
   setupMidi(0, 0, true);
-  // midi5.debug = ['note', 'controlchange']; // uncomment to trace MIDI
+  midi5.debug = ['note', 'controlchange']; // uncomment to trace MIDI
 
   // On-screen status label (DOM element, since the p5 canvas is hidden).
   hud = document.createElement('div');
@@ -188,30 +234,42 @@ function draw() {
   updateMidi();
 
   // --- note-on: select video + treatment ----------------------------------
-  if (typeof note === 'number' && note !== prevNote && note >= NOTE_BASE) {
-    selectVideo((note - NOTE_BASE) % NUM_VIDS);
-    patchIdx = (note - NOTE_BASE) % NUM_PATCHES;
-    prevNote = note;
-    if (DEBUG) console.log('note', note, '-> vid', activeIdx, 'patch', patchIdx);
+  // P5LIVE's `note` global is an OBJECT (not a number): { number, channel,
+  // on, velocity, name, octave, ... }. The MIDI number is note.number and
+  // note.on === 1 while pressed. Detect a new note-on, and reset prevNote on
+  // release so the same note can re-trigger.
+  let rebuild = false;
+  if (note && typeof note.number === 'number') {
+    const n = note.number;
+    if (note.on === 1 && n !== prevNote && n >= NOTE_BASE) {
+      selectVideo((n - NOTE_BASE) % NUM_VIDS);
+      patchIdx = (n - NOTE_BASE) % NUM_PATCHES;
+      prevNote = n;
+      rebuild = true;
+      if (DEBUG) console.log('note', n, '-> vid', activeIdx, 'patch', patchIdx);
+    } else if (note.on === 0 && n === prevNote) {
+      prevNote = -1; // released; allow re-triggering the same note
+    }
   }
 
   // --- CC1..CC6 -> c[0..5] (CC1 most significant) -------------------------
   const c = readCCs();
-  const changed = isCCChanged(c);
+  if (isCCChanged(c)) rebuild = true;
 
   if (activeIdx < 0) {
     // Standby: no clip selected yet. Rebuild only when CCs change; the
     // Hydra field keeps animating on its own in between.
-    if (changed) standby(c);
+    if (rebuild) standby(c);
   } else {
     // Feed the selected clip frame onto the p5 canvas (s0 reads it, dynamic).
-    drawingContext.drawImage(videos[activeIdx].elt, 0, 0, width, height);
+    // videos[] holds raw HTML5 <video> elements (no .elt wrapper).
+    drawingContext.drawImage(videos[activeIdx], 0, 0, width, height);
     // Rebuild the Hydra graph only when a CC or the patch changes; the
     // pipeline keeps running (and s0 keeps pulling the video) in between.
-    if (changed) patches[patchIdx](c);
+    if (rebuild) patches[patchIdx](c);
   }
 
-  if (changed) lastCC = c.slice();
+  if (rebuild) lastCC = c.slice();
   updateHud();
 }
 
@@ -244,8 +302,7 @@ function selectVideo(idx) {
   }
   activeIdx = idx;
   const v = videos[idx];
-  v.loop();
-  v.time(0);
+  v.currentTime = 0; // restart from the top (raw HTML5 video API)
   v.play();
 }
 
@@ -259,5 +316,10 @@ function updateHud() {
 }
 
 function windowResized() {
+  RW = Math.floor(window.innerWidth * RES);
+  RH = Math.floor(window.innerHeight * RES);
+  hc.width = RW;
+  hc.height = RH;
+  hydra.setResolution(RW, RH);
   resizeCanvas(windowWidth, windowHeight);
 }
