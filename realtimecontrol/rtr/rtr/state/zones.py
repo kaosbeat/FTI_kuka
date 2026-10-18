@@ -483,6 +483,15 @@ def _validate_action(name: str, a: dict, all_zone_names: set) -> None:
             for p in poses)):
         raise ValueError(f"action {name!r}: poses must be a non-empty list of 6-number poses")
 
+    # Optional per-pose reference images: a list aligned with ``poses`` (each entry
+    # is a filename string or ``null`` for "no image"). When present it must match
+    # the pose count exactly so the two stay in lock-step.
+    pimgs = a.get("pose_imgs")
+    if pimgs is not None:
+        if not (isinstance(pimgs, list) and len(pimgs) == len(poses)
+                and all(e is None or (isinstance(e, str) and e) for e in pimgs)):
+            raise ValueError(f"action {name!r}: pose_imgs must be a list matching the pose count (filename or null)")
+
     va = a.get("variable_axes", [])
     if not (isinstance(va, list) and all(
             isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= 5

@@ -1,7 +1,7 @@
 """HTTP server: static pages + the zone API.
 
-This is a small stdlib-only server (``ThreadingHTTPServer``) that runs in a daemon
-thread alongside the WebSocket server. It exists because browsers block loading local
+This is a small server (``ThreadingHTTPServer``) that runs in a daemon thread
+alongside the WebSocket server. It exists because browsers block loading local
 assets (three.js, the environment GLB, shared JS) from a ``file://`` page, so the
 control pages are best served over HTTP.
 
@@ -49,17 +49,31 @@ It serves two kinds of requests:
     ``midi.json`` and submit a ``RELOAD_MIDI`` command so the running core hot-reloads.
     On validation failure the file is untouched and a 400 is returned.
   - ``GET /api/midi/ports`` → the available MIDI in ports (for the input-device picker).
-  - ``POST /api/midi/learn`` → arm (``{"action": "start"}``) or disarm
-    (``{"action": "stop"}``) the learn capture on the running :class:`MidiInput`.
-    A start may target a zone command (``zone``), a zone action (``zone`` +
-    ``action_name``), or a global navigation command (``nav``).
+   - ``POST /api/midi/learn`` → arm (``{"action": "start"}``) or disarm
+     (``{"action": "stop"}``) the learn capture on the running :class:`MidiInput`.
+     A start may target a zone command (``zone``), a zone action (``zone`` +
+     ``action_name``), or a global navigation command (``nav``).
+- **The pose-images API** (per-pose reference images, cropped + resized to a
+  768×768 square, stored under ``assets/imgs/``):
+   - ``POST /api/imgs`` → process an uploaded image (JSON: base64 ``image`` + a
+     square ``crop`` in original-pixel coords), crop + resize to 768×768, preserve
+     the source PNG's tEXt + XMP metadata, and save it to ``assets/imgs/<name>``.
+   - ``DELETE /api/imgs/<name>`` → delete a stored pose image.
 
-Only the standard library is used (no new dependencies).
+The standard library is used for the HTTP layer; Pillow is used for the image
+processing (crop + resize + metadata preservation).
 """
 
+import base64
+import io
 import json
 import os
+import re
+import secrets
+import struct
 import threading
+import time
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ..core.bus import StateBus
@@ -100,6 +114,82 @@ _CTYPES = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Pose-image processing (Pillow).
+#
+# A pose reference image is uploaded as the *original* file plus a *square* crop
+# rectangle in original-pixel coords. We crop that square, resize it to a fixed
+# 768×768 square, and preserve the source PNG's metadata (tEXt chunks + XMP) so
+# the reference photo keeps its provenance. The XMP lives in an iTXt chunk keyed
+# ``XML:com.adobe.xmp``; Pillow does not rewrite it on save, so we splice a fresh
+# iTXt chunk into the header region of the saved PNG.
+# ---------------------------------------------------------------------------
+
+# Fixed output size (square) for every pose reference image.
+POSE_IMG_SIZE = (768, 768)
+
+
+def _splice_xtxt(png_bytes: bytes, keyword: bytes, payload: bytes) -> bytes:
+    """Insert an uncompressed iTXt chunk into a PNG, just before the first IDAT.
+
+    Pillow's PNG reader stops at the first IDAT chunk (it raises ``EOFError``
+    there), so any metadata chunk must sit in the header region to be read back.
+    This keeps the XMP payload intact across a Pillow crop/resize round-trip.
+    """
+    # iTXt data: keyword\0 + compression_flag + compression_method
+    #            + language_tag\0 + translated_keyword\0 + payload
+    data = keyword + b"\0\0\0" + b"" + b"\0" + b"" + b"\0" + payload
+    ctype = b"iTXt"
+    crc = zlib.crc32(ctype + data) & 0xffffffff
+    chunk = struct.pack(">I", len(data)) + ctype + data + struct.pack(">I", crc)
+    idat = png_bytes.find(b"IDAT")
+    if idat < 0:
+        return png_bytes
+    return png_bytes[:idat - 4] + chunk + png_bytes[idat - 4:]
+
+
+def process_pose_image(data: bytes, crop: dict, size=POSE_IMG_SIZE) -> bytes:
+    """Crop a square region from an uploaded image and resize it to ``size``.
+
+    ``crop`` is a square in *original* pixel coordinates: ``{"x", "y", "s"}``
+    (top-left corner + side length), or the equivalent ``{"x", "y", "w", "h"}``.
+    Returns the processed PNG bytes, with the source's tEXt + XMP preserved.
+    Raises ``ValueError`` on a bad crop or unreadable image.
+    """
+    from PIL import Image
+    from PIL.PngImagePlugin import PngInfo
+
+    im = Image.open(io.BytesIO(data))
+    xmp = im.info.get("xmp")
+    # Carry the source's tEXt chunks forward (skip the XMP; it is spliced below).
+    pnginfo = PngInfo()
+    for k, v in im.info.items():
+        if isinstance(v, str) and k not in ("xmp",):
+            pnginfo.add_text(k, v)
+
+    x = int(crop.get("x", 0))
+    y = int(crop.get("y", 0))
+    s = int(crop.get("s", crop.get("w", 0)))
+    if s <= 0:
+        raise ValueError("invalid crop size")
+    W, H = im.size
+    # Clamp to the largest in-bounds square at the requested top-left corner.
+    x0 = max(0, min(x, W - 1))
+    y0 = max(0, min(y, H - 1))
+    side = min(s, W - x0, H - y0)
+    if side < 1:
+        raise ValueError("crop out of bounds")
+    cropped = im.crop((x0, y0, x0 + side, y0 + side))
+    resized = cropped.resize(size, Image.LANCZOS)
+
+    out = io.BytesIO()
+    resized.save(out, format="PNG", pnginfo=pnginfo)
+    ob = out.getvalue()
+    if xmp:
+        ob = _splice_xtxt(ob, b"XML:com.adobe.xmp", xmp)
+    return ob
+
+
 class HttpServer:
     """Serves the control pages + the zone API on a daemon thread."""
 
@@ -127,6 +217,8 @@ class HttpServer:
         self.brain_provider = brain_provider
         self.brain_path = os.path.abspath(brain_path) if brain_path else None
         self.root = os.path.abspath(root)
+        # Pose reference images live under the static assets dir (assets/imgs/).
+        self.imgs_path = os.path.join(self.root, "assets", "imgs")
         self.host = host
         self.port = port
         self.enabled = enabled
@@ -214,6 +306,15 @@ def _make_handler(server: HttpServer):
                 self._post_midi_learn()
             elif path == "/api/brain":
                 self._post_brain()
+            elif path == "/api/imgs":
+                self._post_imgs()
+            else:
+                self._send_text(404, "not found")
+
+        def do_DELETE(self):
+            path = self.path.split("?", 1)[0]
+            if path.startswith("/api/imgs/"):
+                self._delete_img()
             else:
                 self._send_text(404, "not found")
 
@@ -223,7 +324,7 @@ def _make_handler(server: HttpServer):
             # the API; the browser requires this handshake before the real call.
             self.send_response(204)
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
             self.end_headers()
 
@@ -512,6 +613,76 @@ def _make_handler(server: HttpServer):
                     req.get("zone"), req.get("action_name"), req.get("nav"),
                     req.get("nav_port"))
             self._send_json(200, {"ok": True, "learning": server.midi.is_learning})
+
+        # ------------------------------------------------------------------
+        # Pose-images API (per-pose reference images).
+        # ------------------------------------------------------------------
+        def _post_imgs(self):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                length = 0
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                req = json.loads(body)
+            except (ValueError, json.JSONDecodeError):
+                self._send_json(400, {"error": "invalid json"})
+                return
+            b64 = req.get("image")
+            if not isinstance(b64, str):
+                self._send_json(400, {"error": "missing image"})
+                return
+            try:
+                data = base64.b64decode(b64)
+            except (ValueError, TypeError) as exc:
+                self._send_json(400, {"error": f"bad image data: {exc}"})
+                return
+            crop = req.get("crop", {})
+            if not isinstance(crop, dict):
+                self._send_json(400, {"error": "missing crop"})
+                return
+            try:
+                png = process_pose_image(data, crop)
+            except Exception as exc:  # noqa: BLE001
+                self._send_json(400, {"error": f"could not process image: {exc}"})
+                return
+            name = req.get("name")
+            if not (isinstance(name, str)
+                    and re.fullmatch(r"[A-Za-z0-9_.\-]+", name)):
+                name = f"pose_{int(time.time() * 1000)}_{secrets.token_hex(4)}"
+            if not name.endswith(".png"):
+                name += ".png"
+            try:
+                os.makedirs(server.imgs_path, exist_ok=True)
+                tmp = os.path.join(server.imgs_path, name + ".tmp")
+                with open(tmp, "wb") as f:
+                    f.write(png)
+                os.replace(tmp, os.path.join(server.imgs_path, name))
+            except OSError as exc:
+                self._send_json(500, {"error": f"could not save image: {exc}"})
+                return
+            self._send_json(200, {"ok": True, "name": name,
+                                    "url": f"/assets/imgs/{name}"})
+
+        def _delete_img(self):
+            fname = self.path.split("?", 1)[0][len("/api/imgs/"):]
+            if not re.fullmatch(r"[A-Za-z0-9_.\-]+", fname):
+                self._send_text(400, "bad name")
+                return
+            base = os.path.realpath(server.imgs_path)
+            full = os.path.realpath(os.path.join(server.imgs_path, fname))
+            if not (full == base or full.startswith(base + os.sep)):
+                self._send_text(403, "forbidden")
+                return
+            if not os.path.isfile(full):
+                self._send_json(404, {"error": "no such image"})
+                return
+            try:
+                os.remove(full)
+            except OSError as exc:
+                self._send_json(500, {"error": f"could not delete image: {exc}"})
+                return
+            self._send_json(200, {"ok": True})
 
         # ------------------------------------------------------------------
         # Static files.
