@@ -120,23 +120,23 @@
             "velocity": 60
           },
           {
-            "note": 60,
+            "note": 61,
             "velocity": 60
           },
           {
-            "note": 60,
+            "note": 62,
             "velocity": 60
           }
         ]
       },
       "wake": {
         "start": {
-          "note": 48,
+          "note": 49,
           "velocity": 60
         },
         "poses": [
           {
-            "note": 60,
+            "note": 61,
             "velocity": 60
           }
         ]
@@ -560,5 +560,6 @@
         ]
       }
     }
-  }
+  },
+  "out_port": 0
 }
