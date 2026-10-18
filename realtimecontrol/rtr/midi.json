@@ -60,12 +60,28 @@
       "in_port": null,
       "command": null,
       "actions": {}
+    },
+    "resting_sleeping_bridge": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "stretching_hunting_bridge": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "sleeping_stretching_bridge": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
     }
   },
   "nav": {
     "next_action": null,
     "next_zone": null,
     "back": null,
-    "retrigger": null
+    "retrigger": null,
+    "next_pose": null
   }
 }

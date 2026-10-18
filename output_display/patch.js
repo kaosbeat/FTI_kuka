@@ -40,7 +40,7 @@ let libs = ['includes/libs/hydra-synth.js', 'includes/libs/hy5.js'];
 //   - If it uses the standard p5  data/  asset convention, move the clips to
 //     data/vids/  (or point VID_BASE there).
 // Adjust this one line if neither resolves at runtime.
-const VID_BASE = 'data/vids/';
+const VID_BASE = 'vids/';
 
 // The 23 clips (numbering skips 00030). Listed explicitly so the gap is
 // handled correctly — do NOT generate names with (22 + i).
