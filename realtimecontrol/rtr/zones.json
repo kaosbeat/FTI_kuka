@@ -88,11 +88,24 @@
           "next": {
             "zone": "resting",
             "action": "wake"
-          }
+          },
+          "pose_imgs": [
+            "pose_1792351891652_77103614.png",
+            "pose_1792351922635_a6b53eac.png",
+            "pose_1792351903804_8bb45799.png"
+          ]
         },
         "wake": {
           "enabled": true,
           "poses": [
+            [
+              -60,
+              -90,
+              90,
+              0,
+              15,
+              0
+            ],
             [
               -60,
               -90,
@@ -109,7 +122,11 @@
           "next": {
             "zone": "resting_sleeping_bridge",
             "action": "bridge"
-          }
+          },
+          "pose_imgs": [
+            "pose_1792351954291_9fb5ceb5.png",
+            "pose_1792351975693_2b5700ee.png"
+          ]
         }
       }
     },
@@ -737,9 +754,18 @@
             ]
           ],
           "axis_bands": {
-            "0": [-20, 20],
-            "1": [-10, 0],
-            "4": [-80, 80]
+            "0": [
+              -20,
+              20
+            ],
+            "1": [
+              -10,
+              0
+            ],
+            "4": [
+              -80,
+              80
+            ]
           },
           "behavior": "locked",
           "engine": {
