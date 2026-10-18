@@ -509,7 +509,8 @@ def _make_handler(server: HttpServer):
                 server.midi.stop_learn()
             else:
                 server.midi.start_learn(
-                    req.get("zone"), req.get("action_name"), req.get("nav"))
+                    req.get("zone"), req.get("action_name"), req.get("nav"),
+                    req.get("nav_port"))
             self._send_json(200, {"ok": True, "learning": server.midi.is_learning})
 
         # ------------------------------------------------------------------

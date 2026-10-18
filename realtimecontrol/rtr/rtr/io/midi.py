@@ -26,15 +26,17 @@ the robot.
 
 Global navigation (from ``midi.json`` ``nav``)
 ----------------------------------------------
-The optional top-level ``nav`` object maps the four navigation commands
-(``next_action`` / ``next_zone`` / ``back`` / ``retrigger``) to MIDI keys. They are
-**global** (matched on any port, after the per-zone dispatch) and drive a virtual
-cursor over the current zone's ``build_items`` rows (imported from :mod:`rtr.flow`),
-mirroring the TUI flow-map navigation: ``next_action`` / ``next_zone`` advance the
-cursor to the next action / exit row (wrapping) and activate it; ``back`` activates
-the first reverse-exit row; ``retrigger`` re-activates the currently-playing action.
-A nav key is learned with ``start_learn(nav=<command>)`` (captured on the default
-port) and stored in ``nav[<command>]``.
+The optional top-level ``nav`` object maps the navigation commands
+(``next_action`` / ``next_zone`` / ``back`` / ``retrigger`` / ``next_pose``) to MIDI
+keys and carries an optional ``in_port`` (the MIDI-in port the nav keys are learned
+and dispatched on; null = the default port). They are **global** (they work in any
+zone, after the per-zone dispatch) and drive a virtual cursor over the current
+zone's ``build_items`` rows (imported from :mod:`rtr.flow`), mirroring the TUI
+flow-map navigation: ``next_action`` / ``next_zone`` advance the cursor to the next
+action / exit row (wrapping) and activate it; ``back`` activates the first
+reverse-exit row; ``retrigger`` re-activates the currently-playing action.
+A nav key is learned with ``start_learn(nav=<command>)`` (captured on the nav's
+``in_port``) and stored in ``nav[<command>]``.
 
 The legacy top-level ``in_port`` and ``mapping`` fields of ``midi.json`` are
 **deprecated**: the validator still accepts and preserves them so old files load,
@@ -80,8 +82,8 @@ NAV_COMMANDS = ("next_action", "next_zone", "back", "retrigger", "next_pose")
 # key|null, "actions": {a: key}}``. A **key** is one of:
 #
 # - ``cc:<cc>:<value>``        — a control change (channel 0, matching legacy),
-# - ``note:<ch>:<note>``       — a note-on (channel 0-7; velocity ignored),
-# - ``program:<ch>:<prog>``    — a program change (channel 0-7).
+# - ``note:<ch>:<note>``       — a note-on (channel 0-15; velocity ignored),
+# - ``program:<ch>:<prog>``    — a program change (channel 0-15).
 #
 # The legacy top-level ``in_port`` and ``mapping`` are **deprecated**: the validator
 # still accepts and preserves them (validating the mapping contents) so old files
@@ -91,11 +93,12 @@ NAV_COMMANDS = ("next_action", "next_zone", "back", "retrigger", "next_pose")
 def builtin_midi_data() -> dict:
     """The fallback shape of ``midi.json`` (no zones → the legacy protocol wins).
 
-    The ``nav`` section holds the four global navigation keys (initially null,
-    learned later); the per-zone table is empty so the legacy protocol still wins.
+    The ``nav`` section holds the global navigation keys (initially null, learned
+    later) plus the ``in_port`` (null = the default port); the per-zone table is
+    empty so the legacy protocol still wins.
     """
     return {"enabled": True, "zones": {},
-            "nav": {"next_action": None, "next_zone": None,
+            "nav": {"in_port": None, "next_action": None, "next_zone": None,
                     "back": None, "retrigger": None, "next_pose": None}}
 
 
@@ -127,7 +130,7 @@ def validate_midi_key(key: Any) -> None:
         _key_int(key, a, 0, 127)
         _key_int(key, b, 0, 127)
     elif kind in ("note", "program"):
-        _key_int(key, a, 0, 7)
+        _key_int(key, a, 0, 15)
         _key_int(key, b, 0, 127)
     else:
         raise ValueError(f"key {key!r}: unknown kind {kind!r} (expected cc/note/program)")
@@ -194,11 +197,18 @@ def validate_midi_data(data: Any) -> dict:
         for action, akey in actions.items():
             if akey is not None:
                 validate_midi_key(akey)
-    # The global navigation keys (optional): each a MIDI key or null.
+    # The global navigation section (optional): the ``in_port`` (the MIDI-in port
+    # nav keys are learned/dispatched on; null = the default port) plus the nav
+    # keys, each a MIDI key or null.
     nav = data.get("nav", {})
     if not isinstance(nav, dict):
         raise ValueError("'nav' must be an object")
     for name, nkey in nav.items():
+        if name == "in_port":
+            if nkey is not None and not (isinstance(nkey, int) and not isinstance(nkey, bool)
+                                          and nkey >= 0):
+                raise ValueError("nav.in_port must be a non-negative int or null")
+            continue
         if name not in NAV_COMMANDS:
             raise ValueError(f"nav[{name!r}] is not a known nav command "
                               f"(expected one of {NAV_COMMANDS})")
@@ -324,16 +334,25 @@ class MidiInput:
             return ip
         return self.in_port
 
+    def _nav_in_port(self) -> Optional[int]:
+        """The ``in_port`` for the global nav section (else the default port)."""
+        nav = self._data.get("nav")
+        ip = nav.get("in_port") if isinstance(nav, dict) else None
+        if isinstance(ip, int) and not isinstance(ip, bool) and ip >= 0:
+            return ip
+        return self.in_port
+
     def _zones_by_port(self, port) -> list:
         """The zones whose effective ``in_port`` is ``port``."""
         return [z for z in self._data.get("zones", {})
                 if self._zone_in_port(z) == port]
 
     def _in_ports(self) -> set:
-        """The distinct ports to open: every zone's in_port plus the default port."""
+        """The distinct ports to open: every zone's in_port, the nav in_port, plus the default port."""
         ports = {self.in_port}
         for z in self._data.get("zones", {}):
             ports.add(self._zone_in_port(z))
+        ports.add(self._nav_in_port())
         return ports
 
     # ------------------------------------------------------------------
@@ -400,17 +419,22 @@ class MidiInput:
     # ------------------------------------------------------------------
     # Learn capture (armed per-zone).
     # ------------------------------------------------------------------
-    def start_learn(self, zone=None, action=None, nav=None) -> None:
+    def start_learn(self, zone=None, action=None, nav=None, nav_port=None) -> None:
         """Arm the learn capture for a zone key or a global nav key.
 
         A zone learn (``zone``/``action``) captures the next mappable message on the
-        zone's ``in_port``; a nav learn (``nav``) captures on the default port. The key
-        is submitted as ``Cmd.MIDI_LEARN`` with the matching context (the editor writes
-        it into the zone's ``command``/``actions`` or into ``nav[nav]``). The captured
-        message is **not** dispatched, so arming learn never moves the robot.
+        zone's ``in_port``; a nav learn (``nav``) captures on the nav's ``in_port``
+        (the default port when it is null), or on ``nav_port`` when given (the editor
+        passes the currently-selected nav port). The key is submitted as
+        ``Cmd.MIDI_LEARN`` with the matching context (the editor writes it into the
+        zone's ``command``/``actions`` or into ``nav[nav]``). The captured message is
+        **not** dispatched, so arming learn never moves the robot.
         """
         if nav is not None:
-            self._learn = {"port": self.in_port, "zone": None, "action": None, "nav": nav}
+            port = self._nav_in_port()
+            if isinstance(nav_port, int) and not isinstance(nav_port, bool) and nav_port >= 0:
+                port = nav_port
+            self._learn = {"port": port, "zone": None, "action": None, "nav": nav}
         else:
             self._learn = {"port": self._zone_in_port(zone), "zone": zone,
                             "action": action, "nav": None}
@@ -616,15 +640,22 @@ class MidiInput:
         # Per-zone dispatch: a matching command or actions key → TRIGGER_ACTION.
         if self._dispatch_zone_key(port, message):
             return
-        # Nav dispatch: the global navigation keys (any port).
-        if self._dispatch_nav(message):
+        # Nav dispatch: the global navigation keys (on the nav's in_port).
+        if self._dispatch_nav(port, message):
             return
         # Legacy fallback: only on the default port.
         if port == self.in_port:
             self._legacy_dispatch(message)
 
-    def _dispatch_nav(self, message) -> bool:
-        """Match the global nav keys (any port); True if a nav command was dispatched."""
+    def _dispatch_nav(self, port, message) -> bool:
+        """Match the global nav keys on the nav's in_port; True if a nav command was dispatched.
+
+        The nav keys are global (they work in any zone), but they are scoped to the
+        nav's ``in_port`` (the default port when it is null), mirroring the
+        port-scoped per-zone dispatch.
+        """
+        if port != self._nav_in_port():
+            return False
         key = self._key_for(message)
         if key is None:
             return False

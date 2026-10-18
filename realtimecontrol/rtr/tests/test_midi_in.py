@@ -11,10 +11,11 @@ Covers the ``rtr/io/midi.py`` feature for the per-zone ``midi`` editor tab:
 - learn capture (``start_learn(zone, action)`` / ``stop_learn`` / ``stop`` /
   ``is_learning``), armed per-zone and scoped to the zone's port;
 - the global nav cursor (``nav`` section of ``midi.json``): validation of the nav
-  keys, the virtual cursor over the current zone's ``build_items`` rows
-  (``next_action`` wraps, ``next_zone`` / ``back`` → GOTO_ZONE, ``retrigger`` replays
-  the current action), nav dispatch on any port, and nav learn capture on the default
-  port (never dispatched);
+  keys and the nav ``in_port``, the virtual cursor over the current zone's
+  ``build_items`` rows (``next_action`` wraps, ``next_zone`` / ``back`` → GOTO_ZONE,
+  ``retrigger`` replays the current action), nav dispatch scoped to the nav's
+  ``in_port`` (the default port when null), and nav learn capture on the nav's
+  ``in_port`` (never dispatched);
 - ``reload()`` (re-read via the loader, swap the table, publish ``MIDI_CHANGED``,
   reconnect the ports);
 - the effective enabled setting, the per-port helpers, and ``list_ports()``.
@@ -58,13 +59,13 @@ from rtr.io.midi import (
 # ---------------------------------------------------------------------------
 def test_validate_midi_key_accepts_valid_keys():
     for key in ("cc:7:42", "cc:0:0", "cc:127:127",
-                "note:0:60", "note:7:127",
-                "program:0:0", "program:7:127"):
+                "note:0:60", "note:7:127", "note:15:99",
+                "program:0:0", "program:7:127", "program:15:127"):
         validate_midi_key(key)  # must not raise
 
 
 def test_validate_midi_key_rejects_bad_keys():
-    for key in ("cc:7", "cc:7:42:1", "xyz:7:42", "note:8:60", "cc:999:1", ""):
+    for key in ("cc:7", "cc:7:42:1", "xyz:7:42", "note:16:60", "cc:999:1", ""):
         try:
             validate_midi_key(key)
         except ValueError:
@@ -145,6 +146,23 @@ def test_validate_midi_data_accepts_nav():
     assert validate_midi_data(data) is data
 
 
+def test_validate_midi_data_accepts_nav_in_port():
+    # The nav in_port (the MIDI-in port nav keys are learned/dispatched on) is accepted.
+    data = {"enabled": True, "zones": {},
+            "nav": {"in_port": 2, "next_action": "cc:1:5"}}
+    assert validate_midi_data(data)["nav"]["in_port"] == 2
+
+
+def test_validate_midi_data_rejects_bad_nav_in_port():
+    for bad in (-1, "0", True):
+        try:
+            validate_midi_data({"enabled": True, "zones": {},
+                                 "nav": {"in_port": bad}})
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for nav.in_port {bad!r}")
+
+
 def test_validate_midi_data_rejects_unknown_nav_name():
     try:
         validate_midi_data({"enabled": True, "zones": {},
@@ -166,9 +184,9 @@ def test_validate_midi_data_rejects_bad_nav_key():
 
 def test_builtin_midi_data_is_empty_zones():
     assert builtin_midi_data() == {"enabled": True, "zones": {},
-                                    "nav": {"next_action": None, "next_zone": None,
-                                             "back": None, "retrigger": None,
-                                             "next_pose": None}}
+                                    "nav": {"in_port": None, "next_action": None,
+                                             "next_zone": None, "back": None,
+                                             "retrigger": None, "next_pose": None}}
 
 
 def test_load_midi_data_reads_and_validates():
@@ -399,17 +417,29 @@ def test_nav_retrigger_replays_current_action():
     assert _cmds(bus) == [("play_action", {"action": "stand"})]
 
 
-def test_nav_dispatch_fires_on_any_port():
-    # Nav is global: the key fires on a non-default port too (contrast with the
-    # port-scoped per-zone dispatch).
+def test_nav_dispatch_scoped_to_nav_port():
+    # Nav keys are global (they work in any zone) but scoped to the nav's in_port
+    # (the default port when it is null): the same key on another port is a no-op.
     m, bus = _midi({"zones": {"wander": {"in_port": 1}},
                     "nav": {"next_zone": "cc:12:0"}}, zones=_NAV_ZONES)
     m._current_zone = "init"
-    _feed(m, [0xB0, 12, 0], port=1)
+    _feed(m, [0xB0, 12, 0], port=1)  # not the nav port (default = 0)
+    assert _cmds(bus) == []
+
+
+def test_nav_dispatch_fires_on_nav_port():
+    # When the nav in_port is set to a non-default port, the key fires there.
+    m, bus = _midi({"zones": {"wander": {"in_port": 1}},
+                    "nav": {"in_port": 2, "next_zone": "cc:12:0"}}, zones=_NAV_ZONES)
+    m._current_zone = "init"
+    _feed(m, [0xB0, 12, 0], port=2)
     assert _cmds(bus) == [("trigger_action", {"zone": "rest", "action": "rest"})]
+    _feed(m, [0xB0, 12, 0], port=0)  # the default port is now a no-op
+    assert _cmds(bus) == []
 
 
-def test_nav_learn_captured_on_default_port():
+def test_nav_learn_captured_on_nav_port():
+    # Nav learn captures on the nav's in_port (the default port when it is null).
     m, bus = _midi({"nav": {"next_action": None}}, zones=_NAV_ZONES)
     m.start_learn(nav="next_action")
     assert m.is_learning is True
@@ -418,9 +448,23 @@ def test_nav_learn_captured_on_default_port():
     assert len(cmds) == 1
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1] == {"key": "cc:11:0", "msg": [0xB0, 11, 0],
-                           "zone": None, "action": None, "nav": "next_action"}
+                            "zone": None, "action": None, "nav": "next_action"}
     # Learn is single-shot: disarmed after capture.
     assert m.is_learning is False
+
+
+def test_nav_learn_scoped_to_nav_port():
+    # When the nav in_port is set, the learn capture is scoped to that port.
+    m, bus = _midi({"nav": {"in_port": 2, "next_action": None}}, zones=_NAV_ZONES)
+    m.start_learn(nav="next_action")
+    assert m.is_learning is True
+    _feed(m, [0xB0, 11, 0], port=0)  # the default port: not captured
+    assert _cmds(bus) == []
+    assert m.is_learning is True  # still armed
+    _feed(m, [0xB0, 11, 0], port=2)  # the nav port: captured
+    cmds = _cmds(bus)
+    assert cmds[0][0] == "midi_learn"
+    assert cmds[0][1]["nav"] == "next_action"
 
 
 def test_nav_learn_not_dispatched():
@@ -539,6 +583,11 @@ def test_current_data_returns_loaded_table():
 # ---------------------------------------------------------------------------
 def main():
     failures = 0
+    skips = 0
+    try:
+        from _pytest.outcomes import Skipped as _Skipped
+    except ImportError:
+        _Skipped = type("_Skipped", (BaseException,), {})
     tests = sorted([(k, v) for k, v in list(globals().items())
                     if k.startswith("test_") and callable(v)],
                    key=lambda kv: kv[0])
@@ -546,10 +595,14 @@ def main():
         try:
             fn()
             print(f"PASS  {name}")
+        except _Skipped:
+            skips += 1
+            print(f"SKIP  {name}")
         except AssertionError as exc:
             failures += 1
             print(f"FAIL  {name}: {exc}")
-    print(f"\n{'ALL TESTS PASSED' if failures == 0 else f'{failures} TEST(S) FAILED'}")
+    print(f"\n{'ALL TESTS PASSED' if failures == 0 else f'{failures} TEST(S) FAILED'}"
+          + (f" ({skips} skipped)" if skips else ""))
     return 1 if failures else 0
 
 

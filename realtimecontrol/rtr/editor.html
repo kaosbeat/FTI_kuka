@@ -1477,16 +1477,21 @@ function midiKeyValid(key) {
   const [kind, a, b] = parts;
   const num = (s) => /^\d+$/.test(s);
   if (kind === "cc") return num(a) && num(b) && +a <= 127 && +b <= 127;
-  if (kind === "note" || kind === "program") return num(a) && num(b) && +a <= 7 && +b <= 127;
+  if (kind === "note" || kind === "program") return num(a) && num(b) && +a <= 15 && +b <= 127;
   return false;
 }
 
 function validateMidi() {
   const errs = [];
   if (typeof MIDI.enabled !== "boolean") errs.push("enabled must be a bool");
-  // global navigation: each key is a valid MIDI key or null
+  // global navigation: the in_port (a MIDI-in device index, null = default) plus each
+  // nav key (a valid MIDI key or null)
   if (MIDI.nav) {
+    if (MIDI.nav.in_port !== null && MIDI.nav.in_port !== undefined) {
+      if (!Number.isInteger(MIDI.nav.in_port) || MIDI.nav.in_port < 0) errs.push("nav.in_port: must be a non-negative int or null");
+    }
     for (const [nav, nkey] of Object.entries(MIDI.nav)) {
+      if (nav === "in_port") continue;
       if (nkey !== null && nkey !== undefined && !midiKeyValid(nkey)) {
         errs.push(`nav[${nav}]: must be a valid key`);
       }
@@ -1523,8 +1528,10 @@ async function loadMidi() {
   if (!data) data = { enabled: true, zones: {} };
   if (data.zones === undefined) data.zones = {};
   if (data.enabled === undefined) data.enabled = true;
-  // Seed the global navigation section: each of the four nav commands is a MIDI key or null.
+  // Seed the global navigation section: the in_port (null = default port) plus each
+  // of the nav commands (a MIDI key or null).
   if (!data.nav || typeof data.nav !== "object") data.nav = {};
+  if (data.nav.in_port === undefined) data.nav.in_port = null;
   NAV_COMMANDS.forEach((n) => { if (data.nav[n] === undefined) data.nav[n] = null; });
   MIDI = data;
   // Seed per-zone entries: ensure each zone has {in_port, command, actions}.
@@ -1685,6 +1692,30 @@ function buildMidiNav() {
   const el = $("midiNav");
   el.innerHTML = "";
   if (!MIDI.nav) MIDI.nav = {};
+  if (MIDI.nav.in_port === undefined) MIDI.nav.in_port = null;
+  // in_port picker: which MIDI-in device the global navigation keys are learned on
+  // (null = the default port, the first available device).
+  const portRow = document.createElement("div");
+  portRow.className = "sndRow";
+  const portLbl = document.createElement("span");
+  portLbl.className = "sndName"; portLbl.textContent = "listen on";
+  portLbl.title = "Which MIDI controller the global navigation keys are learned on. 'default' = the first available device.";
+  portRow.appendChild(portLbl);
+  const portSel = document.createElement("select");
+  portSel.className = "midiKey";
+  const portNone = document.createElement("option");
+  portNone.value = ""; portNone.textContent = "default";
+  portSel.appendChild(portNone);
+  midiPorts.forEach((p) => {
+    const o = document.createElement("option");
+    o.value = String(p.index); o.textContent = `${p.index} — ${p.name}`;
+    portSel.appendChild(o);
+  });
+  const nip = MIDI.nav.in_port;
+  portSel.value = (nip === null || nip === undefined) ? "" : String(nip);
+  portSel.onchange = () => { MIDI.nav.in_port = portSel.value === "" ? null : parseInt(portSel.value, 10); };
+  portRow.appendChild(portSel);
+  el.appendChild(portRow);
   NAV_COMMANDS.forEach((nav) => {
     if (MIDI.nav[nav] === undefined) MIDI.nav[nav] = null;
     const row = document.createElement("div");
@@ -1701,19 +1732,19 @@ function buildMidiNav() {
     const btn = document.createElement("button");
     btn.className = "small"; btn.textContent = "learn";
     btn.title = "Click, then press the key on your MIDI controller — the robot remembers it.";
-    btn.onclick = () => midiLearn(null, null, nav);
+    btn.onclick = () => midiLearn(null, null, nav, MIDI.nav.in_port);
     row.appendChild(btn);
     el.appendChild(row);
   });
 }
 
-function midiLearn(zone, actionName, navName) {
+function midiLearn(zone, actionName, navName, navPort) {
   if (midiLearnPending) { $("midiStatus").textContent = "already learning — send a MIDI message first"; return; }
   midiLearnPending = { zone, action_name: actionName, nav_name: navName || null };
   fetch("/api/midi/learn", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "start", zone, action_name: actionName, nav: navName || null }),
+    body: JSON.stringify({ action: "start", zone, action_name: actionName, nav: navName || null, nav_port: navPort === undefined ? null : navPort }),
   }).then((r) => r.json().then((b) => ({ ok: r.ok, b }))).then(({ ok, b }) => {
     const label = navName ? navName : (actionName ? `${zone}/${actionName}` : zone);
     if (ok) $("midiStatus").textContent = `learning "${label}" — now press a key on your MIDI controller`;

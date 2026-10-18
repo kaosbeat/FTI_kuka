@@ -85,6 +85,13 @@ const NUM_PATCHES = 12;               // one treatment per semitone
 const NOTE_BASE   = 60;               // C4 — first playable note
 const DEBUG       = true;            // log note/patch changes to console
 
+// "Video finished" signal: when the active clip plays to the end, send this
+// MIDI note out (to the robot). Tweak to match the receiving side.
+const END_NOTE     = 99;   // MIDI note number
+const END_CHANNEL  = 16;   // MIDI channel (1-16)
+const END_VELOCITY = 100;  // 0-127
+const END_DURATION = 0.1;  // seconds the note stays on
+
 // ---------------------------------------------------------------------------
 //  Hydra output canvas (built once, at sketch top level)
 // ---------------------------------------------------------------------------
@@ -188,16 +195,19 @@ function preload() {
   // loadVideo. So we build raw HTML5 <video> elements directly — no p5 media
   // dependency, reliable buffering, and they draw straight onto the p5 canvas.
   // Only the active clip plays; the rest stay paused to keep decode cost down.
+  // Clips do NOT loop: when the active clip plays through, its `ended` event
+  // fires the "video finished" MIDI note (see onVideoEnd).
   for (let i = 0; i < NUM_VIDS; i++) {
     const v = document.createElement('video');
     v.src = VID_BASE + VID_FILES[i];
     v.muted = true;
-    v.loop = true;
+    v.loop = false;
     v.preload = 'auto';
     v.playsInline = true;
     v.crossOrigin = 'anonymous';
     v.style.display = 'none';
     document.body.appendChild(v);
+    v.addEventListener('ended', () => onVideoEnd(i));
     v.load(); // start buffering without playing
     videos.push(v);
   }
@@ -302,8 +312,24 @@ function selectVideo(idx) {
   }
   activeIdx = idx;
   const v = videos[idx];
-  v.currentTime = 0; // restart from the top (raw HTML5 video API)
+  v.currentTime = 0; // start at position 0 (raw HTML5 video API)
   v.play();
+}
+
+// Called by each clip's `ended` event. Only signal when this clip is the one
+// currently on screen (the others are paused and never reach `ended`).
+function onVideoEnd(i) {
+  if (i === activeIdx) {
+    sendEndNote();
+  }
+}
+
+// Fire the "video finished" MIDI note to the robot (note 99 on ch 16).
+function sendEndNote() {
+  if (DEBUG) console.log('video ended -> MIDI note', END_NOTE, 'ch', END_CHANNEL);
+  if (midi5 && midi5.midiOutput) {
+    midi5.sendNote(END_CHANNEL, END_NOTE, 0, END_DURATION, END_VELOCITY);
+  }
 }
 
 function updateHud() {
