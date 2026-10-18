@@ -227,6 +227,12 @@
   .aePreview canvas { display: block; width: 100%; height: 100%; }
   .aeStatus { font-size: 12px; color: var(--dim); margin-top: 4px; }
   #aeSaveStatus.err { color: #e05d5d; }
+  .aePoseImgs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; align-items: center; }
+  .aePoseImgsLabel { font-size: 11px; color: var(--dim); }
+  .aePoseImgThumb { width: 48px; height: 48px; object-fit: cover; border: 2px solid var(--border);
+                    border-radius: 4px; cursor: pointer; }
+  .aePoseImgThumb:hover { border-color: var(--accent); }
+  .aePoseImgHint { font-size: 11px; color: var(--dim); }
   /* Flow action rows: discreet (the zone label is the primary mark; the action rows
      are quiet sub-rows that become the connection points). */
   .fnode .fnodeBody { fill: #22262f; }
@@ -509,6 +515,7 @@
     </div>
     <div id="aeBody"></div>
     <div class="aeSec"><h3>patch</h3>
+      <div id="aePoseImgs" class="aePoseImgs"></div>
       <textarea id="aePatchCode" class="aePatch" spellcheck="false"></textarea>
       <div id="aePreview" class="aePreview"></div>
       <div id="aePatchStatus" class="aeStatus"></div></div>
@@ -3112,6 +3119,56 @@ function evalAePatchPreview(code) {
   }
 }
 
+// Generate a hydra patch template that loads a pose's reference image into s0
+// and displays it. The pose index (0-based) is included as a comment so the
+// user knows which pose this template corresponds to.
+function generatePoseImgTemplate(zn, an, pi) {
+  const name = poseImgAt(zn, an, pi);
+  if (!name) return "";
+  const total = actionPoses(TABLE.zones[zn].actions[an]).length;
+  return `// Per-pose reference image (pose ${pi + 1} of ${total})\n` +
+         `// pose: ${pi}\n` +
+         `s0.initImage("/assets/imgs/${name}")\n` +
+         `src(s0).out()`;
+}
+
+// Build the pose-images thumbnail strip in the AE patch section. Each thumbnail
+// is clickable: clicking inserts a hydra initImage template for that pose into
+// the patch textarea and re-evaluates the preview.
+function buildAePoseImgs(zn, an) {
+  const el = $("aePoseImgs");
+  el.innerHTML = "";
+  const a = TABLE.zones[zn].actions[an];
+  const imgs = reconcileActionImgs(zn, an);
+  const hasImgs = imgs.some((im) => im);
+  if (!hasImgs) {
+    const hint = document.createElement("span");
+    hint.className = "aePoseImgHint";
+    hint.textContent = "no pose images — add them in the poses section above";
+    el.appendChild(hint);
+    return;
+  }
+  const label = document.createElement("span");
+  label.className = "aePoseImgsLabel";
+  label.textContent = "pose images:";
+  el.appendChild(label);
+  imgs.forEach((name, pi) => {
+    if (!name) return;
+    const thumb = document.createElement("img");
+    thumb.className = "aePoseImgThumb";
+    thumb.src = "/assets/imgs/" + name;
+    thumb.title = "pose " + (pi + 1) + " — click to insert initImage patch";
+    thumb.onclick = () => {
+      const code = generatePoseImgTemplate(zn, an, pi);
+      if (!code) return;
+      $("aePatchCode").value = code;
+      setPatchCode("actions." + zn + "." + an, code);
+      evalAePatchPreview(code);
+    };
+    el.appendChild(thumb);
+  });
+}
+
 // Swap two anchor poses (and their sound entries) in place, so reordering keeps the
 // per-pose sound aligned. Mirrors the zones-tab pose handling but also swaps sound.
 function aeSwapPoses(zn, an, i, j) {
@@ -3386,6 +3443,7 @@ function uploadPoseImg(file, crop, zn, an, pi) {
         if (!Array.isArray(a.pose_imgs)) a.pose_imgs = reconcileActionImgs(zn, an);
         a.pose_imgs[pi] = res.name;
         buildActionEditor();
+        buildAePoseImgs(zn, an);
       } else {
         alert("image upload failed: " + (res.error || "unknown error"));
       }
@@ -3402,6 +3460,7 @@ function deletePoseImg(zn, an, pi) {
   a.pose_imgs[pi] = null;
   fetch("/api/imgs/" + encodeURIComponent(name), { method: "DELETE" }).catch(() => {});
   buildActionEditor();
+  buildAePoseImgs(zn, an);
 }
 
 // Schematic preview of a single pose, drawn in the action editor's right column.
@@ -3927,6 +3986,7 @@ function buildActionEditor() {
     ssec.appendChild(prow);
   });
   el.appendChild(ssec);
+  buildAePoseImgs(zn, an);
 }
 
 // Duplicate an action in its zone (same poses/behavior/loop, same `next`). The copy
@@ -4062,6 +4122,7 @@ function openActionEditor(zn, an) {
   $("actionEditor").classList.add("open");
   $("aeTitle").textContent = zn + " / " + an;
   $("aePatchCode").value = getPatchCode("actions." + zn + "." + an);
+  buildAePoseImgs(zn, an);
   if (BRAIN) { buildActionEditor(); }
   else { loadBrain().then(() => buildActionEditor()); }
   evalAePatchPreview($("aePatchCode").value);
