@@ -107,20 +107,39 @@ def build_target(machine, curjpos: List[float]):
     if not (isinstance(poses, list) and poses):
         machine.servo_state = {}
         return None  # no active action, or the action has no poses
-    idx = machine.action_index if 0 <= machine.action_index < len(poses) else 0
-    anchor = list(poses[idx])
+
+    axis_bands = zone.action_axis_bands(name)
+    if axis_bands:
+        # Active-class axis_bands (track/farfocus/approach/facefocus): the anchor is
+        # the robot's *current* position clamped into the band (recalculated every
+        # tick), so the servo roams within the zone safezone instead of looping
+        # through anchor poses. The variable axes are the band's keys; a band with
+        # min == max is a fixed axis (excluded — the servo never moves it). The
+        # servo drives the remaining axes to keep the locked person centered,
+        # hard-clamped to [min, max] ∩ safezone (see :func:`_servo`).
+        anchor = [float(c) for c in curjpos]
+        limits = effective(machine)
+        for ax, (lo, hi) in axis_bands.items():
+            anchor[ax] = max(max(lo, limits[ax][0]), min(min(hi, limits[ax][1]), anchor[ax]))
+        var_axes = [ax for ax, (lo, hi) in sorted(axis_bands.items()) if lo != hi]
+    else:
+        idx = machine.action_index if 0 <= machine.action_index < len(poses) else 0
+        anchor = list(poses[idx])
+        var_axes = zone.action_variable_axes(name)
+
     # Forced behavior (live test override): run this behavior's policy on the
     # action's variable axes regardless of the action's declared behavior.
     active_behavior = machine.forced_behavior or zone.action_behavior(name)
-    _apply_behavior(machine, anchor, zone.action_variable_axes(name),
-                    active_behavior, curjpos, action)
+    _apply_behavior(machine, anchor, var_axes, active_behavior, curjpos, action, axis_bands)
     return anchor
 
 
-def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
+def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action, axis_bands=None) -> None:
     """Drive the variable axes according to the behaviour policy.
 
     Non-variable axes remain at the current anchor (already set in ``pose``).
+    ``axis_bands`` (the active-class per-axis ``[min, max]`` bands, or ``None``) is
+    threaded to the servo so its clamp uses the band ∩ safezone floor.
     """
     # ``calm`` and ``bridge`` are no-op policies: they drive no variable axes (a bridge
     # action holds its curated poses so the robot transitions safely between zones).
@@ -138,9 +157,9 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
             image_gain = g
 
     if behavior in ("locked", "curious", "intent"):
-        _apply_camera(machine, pose, var_axes, behavior, curjpos, image_gain, action)
+        _apply_camera(machine, pose, var_axes, behavior, curjpos, image_gain, action, axis_bands)
     elif behavior == "gentle":
-        _apply_face(machine, pose, var_axes, curjpos, image_gain, action, behavior)
+        _apply_face(machine, pose, var_axes, curjpos, image_gain, action, behavior, axis_bands)
     elif behavior == "vigilant":
         _apply_scan(machine, pose, var_axes, limits)
     elif behavior == "restless":
@@ -173,7 +192,7 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action) -> None:
                            amp_scale=_bp(machine, behavior, "amp_scale", 0.2))
 
 
-def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain, action) -> None:
+def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain, action, axis_bands=None) -> None:
     """Drive variable axes from the camera offset (visual servoing).
 
     The image offset (``dx``, ``dy``, pixels) is the error to be driven to zero. The
@@ -204,10 +223,10 @@ def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain, action) -> N
         look = _bp(machine, "curious", "look_factor", _LOOK_FACTOR)
         dx *= look
         dy *= look
-    _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior)
+    _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior, axis_bands)
 
 
-def _apply_face(machine, pose, var_axes, curjpos, gain, action, behavior) -> None:
+def _apply_face(machine, pose, var_axes, curjpos, gain, action, behavior, axis_bands=None) -> None:
     """Drive variable axes from the close camera's face offset (subtle).
 
     Reads the face offset the brain stashes on ``machine.face_state`` each tick
@@ -225,10 +244,10 @@ def _apply_face(machine, pose, var_axes, curjpos, gain, action, behavior) -> Non
     face = _bp(machine, "gentle", "face_factor", _FACE_FACTOR)
     dx *= face
     dy *= face
-    _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior)
+    _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior, axis_bands)
 
 
-def _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior) -> None:
+def _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior, axis_bands=None) -> None:
     """Map the image offset to joint deltas via the image Jacobian.
 
     Shared by the camera behaviours (``locked`` / ``intent`` / ``curious``) and the face
@@ -263,9 +282,12 @@ def _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior) -> 
     orientation), so the joint deltas already compensate for how the camera is
     mounted/rotated — no separate rotation term is needed.
 
-    **Safezone clamp.** The resulting variable-axis pose is clamped to the effective
-    floor (the current zone's safezone ∩ the hardware limits) before it is recorded,
-    so a recentering command can never leave the zone's safe bounds. This matches the
+    **Safezone clamp.** The resulting variable-axis pose is clamped before it is
+    recorded, so a recentering command can never leave the zone's safe bounds. For
+    axis_bands actions (``axis_bands`` is not ``None``) the floor is the per-axis band
+    ∩ safezone — the action's roaming range intersected with the hard safety floor —
+    so the servo roams within the band without ever leaving the zone safezone.
+    Otherwise the floor is the effective floor (safezone ∩ hardware), matching the
     clamping in :func:`_apply_wander` / :func:`_apply_oscillation`; the
     ``StateMachine.step`` driver clamps the final target again (idempotent). When the
     clamp truncates a delta, ``dq_deg`` still reports the requested (Jacobian) delta
@@ -308,11 +330,20 @@ def _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior) -> 
         dq_deg = [q * _DEG_PER_RAD for q in dq_rad]
         for k, ax in enumerate(var_axes):
             pose[ax] = pose[ax] + dq_rad[k] * _DEG_PER_RAD
-    # Safezone clamp: keep the recentering command inside the current zone's safe
-    # bounds (safezone ∩ hardware), matching _apply_wander / _apply_oscillation.
+    # Clamp: keep the recentering command inside the current zone's safe bounds. For
+    # axis_bands actions the floor is the per-axis band ∩ safezone (the band is the
+    # action's roaming range; the safezone is the hard safety floor). Otherwise the
+    # effective floor (safezone ∩ hardware), matching _apply_wander / _apply_oscillation.
     limits = effective(machine)
-    for axis in var_axes:
-        pose[axis] = fitlimits(axis, pose[axis], limits)
+    if axis_bands:
+        floor = list(limits)
+        for ax, (lo, hi) in axis_bands.items():
+            floor[ax] = [max(lo, limits[ax][0]), min(hi, limits[ax][1])]
+        for axis in var_axes:
+            pose[axis] = fitlimits(axis, pose[axis], floor)
+    else:
+        for axis in var_axes:
+            pose[axis] = fitlimits(axis, pose[axis], limits)
     machine.servo_state = {
         "behavior": behavior, "dx": dx, "dy": dy,
         "dq_deg": dq_deg, "axes": list(var_axes),

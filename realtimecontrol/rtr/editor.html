@@ -3270,7 +3270,7 @@ function buildActionEditor() {
   csec.appendChild(crow);
   el.appendChild(csec);
 
-  // --- poses section: behavior + speed + variable_axes + one row per anchor pose ---
+  // --- poses section: behavior + speed + variable_axes/axis_bands + one row per anchor pose ---
   const psec = document.createElement("div");
   psec.className = "aeSec";
   // behavior + speed (action-level: every anchor shares them)
@@ -3290,21 +3290,99 @@ function buildActionEditor() {
   sp.querySelector("input").oninput = (e) => { a.speed = parseFloat(e.target.value); };
   brow.appendChild(sp);
   psec.appendChild(brow);
-  // variable_axes (checkboxes over the six axes)
-  psec.appendChild(h3("variable_axes"));
-  const va = document.createElement("div");
-  va.className = "row";
-  AXES.forEach((n, i) => {
-    const c = document.createElement("label");
-    c.className = "inline";
-    c.innerHTML = `<input type="checkbox" ${a.variable_axes.includes(i) ? "checked" : ""}> ${n}`;
-    c.querySelector("input").onchange = (e) => {
-      a.variable_axes = e.target.checked ? [...a.variable_axes, i] : a.variable_axes.filter((x) => x !== i);
-      a.variable_axes.sort((x, y) => x - y);
-    };
-    va.appendChild(c);
-  });
-  psec.appendChild(va);
+
+  // Active-class detection: the zone's class (track/farfocus/approach/facefocus)
+  // uses axis_bands (per-axis min/max) instead of the legacy variable_axes list.
+  const ACTIVE_CLASSES = ["track", "farfocus", "approach", "facefocus"];
+  const isActive = ACTIVE_CLASSES.includes(z.class || "scan");
+
+  if (isActive) {
+    // --- axis_bands section: per-axis min/max, auto-clamped to safezone ---
+    psec.appendChild(h3("axis_bands (min / max)"));
+    const bandHelp = document.createElement("div");
+    bandHelp.className = "hint";
+    bandHelp.textContent = "Per-axis roaming bands. The servo drives these axes to keep the person centered, clamped to the band. min == max = fixed axis (excluded from servo). Auto-clamped to safezone.";
+    psec.appendChild(bandHelp);
+    const bandGrid = document.createElement("div");
+    bandGrid.style.cssText = "display:grid;grid-template-columns:36px 1fr 1fr;gap:4px;align-items:center";
+    // Seed axis_bands from existing data or default to safezone
+    if (!a.axis_bands) a.axis_bands = {};
+    for (let i = 0; i < 6; i++) {
+      const ax = document.createElement("span");
+      ax.style.cssText = "font-size:11px;color:var(--dim);align-self:center";
+      ax.textContent = AXES[i];
+      bandGrid.appendChild(ax);
+      const [szLo, szHi] = z.safezone[i];
+      const band = a.axis_bands[String(i)] || a.axis_bands[i] || [szLo, szHi];
+      const mkBandInput = (k, label) => {
+        const inp = document.createElement("input");
+        inp.type = "number"; inp.step = "0.1";
+        inp.value = band[k];
+        inp.title = label + " (clamped to safezone " + szLo + ".." + szHi + ")";
+        inp.oninput = () => {
+          let v = parseFloat(inp.value);
+          if (isNaN(v)) return;
+          // Auto-clamp to safezone
+          const clamped = Math.max(szLo, Math.min(szHi, v));
+          if (clamped !== v) inp.value = clamped;
+          v = clamped;
+          const key = String(i);
+          const cur = a.axis_bands[key] || a.axis_bands[i] || [szLo, szHi];
+          cur[k] = v;
+          a.axis_bands[key] = [cur[0], cur[1]];
+          delete a.axis_bands[i];
+          // Rebuild to update fixed-axis indicator
+          buildActionEditor();
+        };
+        return inp;
+      };
+      bandGrid.appendChild(mkBandInput(0, "min"));
+      bandGrid.appendChild(mkBandInput(1, "max"));
+    }
+    psec.appendChild(bandGrid);
+    // Single anchor pose row (the robot's starting position within the band)
+    psec.appendChild(h3("anchor pose"));
+    const anchorHelp = document.createElement("div");
+    anchorHelp.className = "hint";
+    anchorHelp.textContent = "The robot's starting position. The servo roams from here within the band.";
+    psec.appendChild(anchorHelp);
+    const anchorRow = document.createElement("div");
+    anchorRow.className = "row";
+    const p = a.poses[0] || [0,0,0,0,0,0];
+    for (let i = 0; i < 6; i++) {
+      const inp = document.createElement("input");
+      inp.type = "number"; inp.step = "0.1";
+      inp.value = p[i] != null ? p[i] : 0;
+      if (z.safezone) {
+        const [lo, hi] = z.safezone[i];
+        if (p[i] < lo || p[i] > hi) inp.className = "oob";
+      }
+      inp.oninput = () => {
+        a.poses[0][i] = parseFloat(inp.value);
+        if (z.safezone) {
+          const [lo, hi] = z.safezone[i];
+          inp.className = (a.poses[0][i] < lo || a.poses[0][i] > hi) ? "oob" : "";
+        }
+      };
+      anchorRow.appendChild(inp);
+    }
+    psec.appendChild(anchorRow);
+  } else {
+    // --- variable_axes (checkboxes over the six axes) ---
+    psec.appendChild(h3("variable_axes"));
+    const va = document.createElement("div");
+    va.className = "row";
+    AXES.forEach((n, i) => {
+      const c = document.createElement("label");
+      c.className = "inline";
+      c.innerHTML = `<input type="checkbox" ${a.variable_axes.includes(i) ? "checked" : ""}> ${n}`;
+      c.querySelector("input").onchange = (e) => {
+        a.variable_axes = e.target.checked ? [...a.variable_axes, i] : a.variable_axes.filter((x) => x !== i);
+        a.variable_axes.sort((x, y) => x - y);
+      };
+      va.appendChild(c);
+    });
+    psec.appendChild(va);
   psec.appendChild(h3("poses"));
   // Two-column layout: the pose rows sit left, the hover preview right. The preview
   // shows the first pose by default and follows the hovered row; the safezone bars
@@ -3413,6 +3491,7 @@ function buildActionEditor() {
   };
   plist.appendChild(clampR);
   showPrev(0);  // seed the schematic with the first pose
+  }
   el.appendChild(psec);
 
   // --- next section: the action's ordered LIST of successor {zone, action} targets ---

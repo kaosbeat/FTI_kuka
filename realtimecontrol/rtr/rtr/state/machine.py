@@ -284,8 +284,15 @@ class StateMachine:
         true, the default) wraps around. A single-run action (``loop`` false) does
         **not** wrap on its last anchor; instead it hands off via
         :meth:`_advance_after_action`.
+
+        axis_bands actions are the exception: their anchor is the robot's current
+        position clamped into the band (recalculated each tick in
+        :func:`rtr.state.behavior.build_target`), so the index never advances — the
+        robot stays on the single pose and keeps servoing within the band.
         """
         name = self.current_action
+        if zone.action_axis_bands(name):
+            return
         n = len(action["poses"])
         self.action_index += 1
         if self.action_index >= n:

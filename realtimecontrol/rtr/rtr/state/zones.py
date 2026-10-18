@@ -71,6 +71,13 @@ MODE_GROUPS = ("museum-closed", "event-sit-back", "stage-takeover")
 # defined here rather than imported to avoid the state↔brain import cycle).
 ZONE_CLASSES = ("ignore", "scan", "track", "farfocus", "approach", "facefocus", "retreat")
 
+# The engagement classes in which the robot actively tracks a locked person. Their
+# actions use ``axis_bands`` (per-axis min/max bands) instead of the legacy
+# ``variable_axes`` list: the servo drives the banded axes to keep the person
+# centered, clamped to the band, so the robot roams within the zone safezone
+# rather than looping through anchor poses.
+ACTIVE_CLASSES = ("track", "farfocus", "approach", "facefocus")
+
 # Kept for backward compat (MIDI legacy dispatch, display patches); no longer
 # used by zones or the state machine.
 MODES = ("wander", "random", "action", "track", "hold")
@@ -481,6 +488,17 @@ def _validate_action(name: str, a: dict, all_zone_names: set) -> None:
             isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= 5
             for x in va)):
         raise ValueError(f"action {name!r}: variable_axes must be a list of axis indices (0-5)")
+    ab = a.get("axis_bands")
+    if ab is not None:
+        if not isinstance(ab, dict):
+            raise ValueError(f"action {name!r}: axis_bands must be an object")
+        for k, band in ab.items():
+            ax = Zone._axis_band_key(k)
+            if ax is None:
+                raise ValueError(f"action {name!r}: axis_bands key {k!r} must be an axis index (0-5)")
+            if not (isinstance(band, list) and len(band) == 2
+                    and _is_num(band[0]) and _is_num(band[1])):
+                raise ValueError(f"action {name!r}: axis_bands[{k!r}] must be a [min, max] pair")
     beh = a.get("behavior", "calm")
     if not (isinstance(beh, str) and beh in BEHAVIORS):
         raise ValueError(f"action {name!r}: behavior must be one of {BEHAVIORS}")
@@ -652,6 +670,44 @@ class Zone:
         if isinstance(va, list):
             return [x for x in va if isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= 5]
         return []
+
+    def action_axis_bands(self, name: str) -> Dict[int, List[float]]:
+        """The action's ``axis_bands`` (dict of axis -> ``[min, max]``), or ``{}`` when absent.
+
+        Used by active-class actions (see :data:`ACTIVE_CLASSES`): the keys are the
+        variable axes the camera servo may move, and each value is the absolute
+        ``[min, max]`` band the axis roams within (clamped to the zone safezone). A
+        band of ``[v, v]`` (min == max) is a fixed axis (the servo never moves it).
+        Malformed keys/bands are dropped; the result is keyed by int axis index.
+        """
+        a = self._action(name)
+        ab = a.get("axis_bands")
+        if not isinstance(ab, dict):
+            return {}
+        out: Dict[int, List[float]] = {}
+        for k, band in ab.items():
+            ax = self._axis_band_key(k)
+            if ax is None:
+                continue
+            if not (isinstance(band, list) and len(band) == 2 and all(_is_num(x) for x in band)):
+                continue
+            lo, hi = float(band[0]), float(band[1])
+            if lo > hi:
+                lo, hi = hi, lo
+            out[ax] = [lo, hi]
+        return out
+
+    @staticmethod
+    def _axis_band_key(k) -> Optional[int]:
+        """Normalize an ``axis_bands`` key (JSON string or int) to a 0-5 int, else None."""
+        if isinstance(k, bool):
+            return None
+        if isinstance(k, int) and 0 <= k <= 5:
+            return k
+        if isinstance(k, str) and k.strip().lstrip("-").isdigit():
+            v = int(k)
+            return v if 0 <= v <= 5 else None
+        return None
 
     def action_behavior(self, name: str) -> str:
         """The action's behavior name, or ``"calm"`` when absent/unknown."""
