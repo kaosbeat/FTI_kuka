@@ -3119,22 +3119,58 @@ function evalAePatchPreview(code) {
   }
 }
 
-// Generate a hydra patch template that loads a pose's reference image into s0
-// and displays it. The pose index (0-based) is included as a comment so the
-// user knows which pose this template corresponds to.
+// Generate a hydra patch that displays the pose image in s0 only. s1-s3 are left
+// free for other uses. On pose change only s0's texture is swapped (swapAePoseImg);
+// the rest of the patch is not rebuilt.
 function generatePoseImgTemplate(zn, an, pi) {
-  const name = poseImgAt(zn, an, pi);
-  if (!name) return "";
-  const total = actionPoses(TABLE.zones[zn].actions[an]).length;
-  return `// Per-pose reference image (pose ${pi + 1} of ${total})\n` +
-         `// pose: ${pi}\n` +
-         `s0.initImage("/assets/imgs/${name}")\n` +
+  const a = TABLE.zones[zn].actions[an];
+  const imgs = a.pose_imgs || [];
+  const cur = imgs[pi];
+  if (!cur) return "";
+  return `// Pose reference image (pose ${pi + 1}) — s0 only, s1-s3 free\n` +
+         `s0.initImage("/assets/imgs/${cur}")\n` +
          `src(s0).out()`;
 }
 
+// Preload all pose images for an action into a JS texture array (AE.poseTexs),
+// created once with the AE hydra's regl. These live in JS, NOT in s1-s3, so the
+// other source slots stay free. Enables instant, leak-free pose switching.
+function preloadAePoseImgs(zn, an) {
+  const h = ensureAeHydra();
+  if (!h) return;
+  const a = TABLE.zones[zn].actions[an];
+  const imgs = reconcileActionImgs(zn, an);
+  if (!AE.poseTexs) AE.poseTexs = {};
+  if (!AE.poseTexs[zn]) AE.poseTexs[zn] = {};
+  AE.poseTexs[zn][an] = [];
+  imgs.forEach((name, pi) => {
+    if (!name) { AE.poseTexs[zn][an][pi] = null; return; }
+    const img = new Image();
+    img.onload = () => {
+      AE.poseTexs[zn][an][pi] = h.regl.texture({ data: img });
+    };
+    img.src = "/assets/imgs/" + name;
+  });
+}
+
+// Pose-change function: swap the image shown in s0 for pose pi. Reassigns s0's
+// texture from the preloaded array (instant, no re-eval, rest of patch untouched).
+// Falls back to s0.initImage if the texture hasn't been preloaded yet.
+function swapAePoseImg(zn, an, pi) {
+  const h = ensureAeHydra();
+  if (!h) return;
+  const name = poseImgAt(zn, an, pi);
+  if (!name) return;
+  const tex = AE.poseTexs && AE.poseTexs[zn] && AE.poseTexs[zn][an] && AE.poseTexs[zn][an][pi];
+  if (tex) {
+    h.s[0].tex = tex;
+  } else {
+    h.s[0].initImage("/assets/imgs/" + name);
+  }
+}
+
 // Build the pose-images thumbnail strip in the AE patch section. Each thumbnail
-// is clickable: clicking inserts a hydra initImage template for that pose into
-// the patch textarea and re-evaluates the preview.
+// is clickable: clicking swaps the displayed pose in the hydra preview (s0 only).
 function buildAePoseImgs(zn, an) {
   const el = $("aePoseImgs");
   el.innerHTML = "";
@@ -3157,14 +3193,8 @@ function buildAePoseImgs(zn, an) {
     const thumb = document.createElement("img");
     thumb.className = "aePoseImgThumb";
     thumb.src = "/assets/imgs/" + name;
-    thumb.title = "pose " + (pi + 1) + " — click to insert initImage patch";
-    thumb.onclick = () => {
-      const code = generatePoseImgTemplate(zn, an, pi);
-      if (!code) return;
-      $("aePatchCode").value = code;
-      setPatchCode("actions." + zn + "." + an, code);
-      evalAePatchPreview(code);
-    };
+    thumb.title = "pose " + (pi + 1) + " — click to show in preview";
+    thumb.onclick = () => { swapAePoseImg(zn, an, pi); };
     el.appendChild(thumb);
   });
 }
@@ -3444,6 +3474,7 @@ function uploadPoseImg(file, crop, zn, an, pi) {
         a.pose_imgs[pi] = res.name;
         buildActionEditor();
         buildAePoseImgs(zn, an);
+        preloadAePoseImgs(zn, an);
       } else {
         alert("image upload failed: " + (res.error || "unknown error"));
       }
@@ -3461,6 +3492,7 @@ function deletePoseImg(zn, an, pi) {
   fetch("/api/imgs/" + encodeURIComponent(name), { method: "DELETE" }).catch(() => {});
   buildActionEditor();
   buildAePoseImgs(zn, an);
+  preloadAePoseImgs(zn, an);
 }
 
 // Schematic preview of a single pose, drawn in the action editor's right column.
@@ -3769,6 +3801,7 @@ function buildActionEditor() {
     aePrevIdx = idx;
     const pp = a.poses[idx];
     renderPosePreview(Array.isArray(pp) && pp.length === 6 ? pp : [0,0,0,0,0,0], pprev, z.safezone);
+    swapAePoseImg(zn, an, idx);  // pose change: swap the image in s0
   };
   a.poses.forEach((pose, pi) => {
     const p = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
@@ -4121,7 +4154,22 @@ function openActionEditor(zn, an) {
   AE.zone = zn; AE.action = an;
   $("actionEditor").classList.add("open");
   $("aeTitle").textContent = zn + " / " + an;
-  $("aePatchCode").value = getPatchCode("actions." + zn + "." + an);
+  const cur = getPatchCode("actions." + zn + "." + an);
+  const imgs = reconcileActionImgs(zn, an);
+  const hasImgs = imgs && imgs.some((im) => im);
+  if (hasImgs && cur.indexOf("s0.initImage") < 0) {
+    // First time: seed the patch with the s0-only pose-image template so the
+    // src(s0) pipeline exists (required before swapAePoseImg can show anything).
+    // Use the first pose that actually has an image. If the user already has a
+    // patch using s0.initImage, leave it untouched.
+    const first = imgs.findIndex((im) => im);
+    const code = generatePoseImgTemplate(zn, an, first) || cur;
+    $("aePatchCode").value = code;
+    setPatchCode("actions." + zn + "." + an, code);
+  } else {
+    $("aePatchCode").value = cur;
+  }
+  if (hasImgs) preloadAePoseImgs(zn, an);  // build the JS texture array (s1-s3 stay free)
   buildAePoseImgs(zn, an);
   if (BRAIN) { buildActionEditor(); }
   else { loadBrain().then(() => buildActionEditor()); }
