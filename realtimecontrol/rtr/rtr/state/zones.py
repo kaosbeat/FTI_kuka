@@ -852,6 +852,17 @@ class Zones:
         """A copy of the full zone table (for the HTTP ``GET /api/zones`` endpoint)."""
         return {n: dict(d) for n, d in self._zones.items()}
 
+    def action_pose_imgs(self, zone_name: str, action_name: str) -> Optional[List]:
+        """The action's per-pose reference-image filenames (aligned with ``poses``), or None.
+
+        Each entry is a filename string or ``None`` (a pose with no image). Used by the
+        patches adapter to build the ``poseindex`` array for the pose level.
+        """
+        if not self.has(zone_name):
+            return None
+        imgs = self.get(zone_name)._action(action_name).get("pose_imgs")
+        return imgs if isinstance(imgs, list) else None
+
     def mode_groups(self) -> Dict[str, List[str]]:
         """Zones grouped by mode_group: ``{group_name: [zone_names]}``.
 

@@ -63,8 +63,8 @@ def validate_patches_data(data: Any) -> dict:
     if not isinstance(data, dict):
         raise ValueError("data must be an object")
     default = data.get("default")
-    if default is not None and (not isinstance(default, str) or not default):
-        raise ValueError("'default' must be a non-empty string")
+    if default is not None and not isinstance(default, str):
+        raise ValueError("'default' must be a string (may be empty)")
     for key in ("zones", "modes"):
         v = data.get(key, {})
         if not isinstance(v, dict):
@@ -112,6 +112,32 @@ def match_patch(data: dict, zone=None, mode=None, action=None) -> str:
     return DEFAULT_HYDRA_CODE
 
 
+def inject_pose_globals(code: str, pose_index, pose_imgs) -> str:
+    """Prepend the pose globals (``pose`` + ``poseindex``) to a resolved hydra patch.
+
+    The "pose" level is the action patch with these globals injected at the top:
+    ``pose`` is the current pose index (clamped to the image list) and ``poseindex``
+    is the array of per-pose reference-image URLs (``null`` for a pose with no image).
+    A patch that references ``poseindex[pose]`` then resolves to the current pose's
+    image. Without a pose context (no index, or no images for the action) the code is
+    returned unchanged, so mode / zone / default patches are untouched.
+    """
+    if pose_index is None or not pose_imgs:
+        return code
+    try:
+        n = len(pose_imgs)
+        idx = max(0, min(int(pose_index), n - 1))
+    except (TypeError, ValueError):
+        return code
+    if n <= 0:
+        return code
+    urls = ['"/assets/imgs/' + im + '"' if im else 'null' for im in pose_imgs]
+    header = ('// Pose reference images — pose = current pose index, poseindex[i] = image, s0 only\n'
+              f'var pose = {idx}\n'
+              f'var poseindex = [{", ".join(urls)}]\n\n')
+    return header + code
+
+
 # ---------------------------------------------------------------------------
 # The adapter.
 # ---------------------------------------------------------------------------
@@ -124,9 +150,12 @@ class Patches:
     :data:`Event.PATCHES_CHANGED` so the display can tell the pages to re-fetch.
     """
 
-    def __init__(self, bus: StateBus, patches_loader):
+    def __init__(self, bus: StateBus, patches_loader, poses_provider=None):
         self.bus = bus
         self._patches_loader = patches_loader
+        # A callable that returns the zones table (or None); used to look up the current
+        # action's per-pose images so code_for can inject the pose globals (pose level).
+        self._poses_provider = poses_provider
         self._data: dict = builtin_patches_data()
         # A manual screen override (set by the SET_SCREEN_PATCH command): when non-None,
         # it is what the tool screen / render page show, taking precedence over the
@@ -156,15 +185,31 @@ class Patches:
               f"modes={len(data.get('modes', {}))} "
               f"actions={len(data.get('actions', {}))}")
 
-    def code_for(self, zone, mode, action) -> str:
-        """The hydra code for a state (used by the /api/screen endpoint).
+    def code_for(self, zone, mode, action, pose_index=None) -> str:
+        """The hydra code for a state (used by the state frame and the /api/screen endpoint).
 
         A manual screen override (set via :meth:`set_screen_override`) wins over the
         zone/mode/action match — it is the patch the operator has pushed to the screens.
+        Otherwise the base patch is matched (action > mode > zone > default) and, when
+        the state is inside an action that has per-pose images, the pose globals
+        (``pose`` + ``poseindex``) are injected at the top (the "pose" level) so the
+        action patch can reference the current pose's image.
         """
         if self._screen_override:
             return self._screen_override
-        return match_patch(self._data, zone, mode, action)
+        code = match_patch(self._data, zone, mode, action)
+        return inject_pose_globals(code, pose_index, self._pose_imgs(zone, action))
+
+    def _pose_imgs(self, zone, action):
+        """The current action's per-pose image filenames, or None (duck-typed lookup)."""
+        if not zone or not action or self._poses_provider is None:
+            return None
+        try:
+            zones = self._poses_provider()
+            imgs = zones.action_pose_imgs(zone, action) if zones is not None else None
+            return imgs if isinstance(imgs, list) and imgs else None
+        except Exception:  # noqa: BLE001 - a bad provider must not break patch resolution
+            return None
 
     def set_screen_override(self, code) -> None:
         """Set (or clear with ``None`` / an empty string) the manual screen override.
@@ -178,5 +223,5 @@ class Patches:
         print(f"[patches] screen override {'cleared' if self._screen_override is None else 'set'}")
 
 
-def make_patches(bus: StateBus, patches_loader) -> Patches:
-    return Patches(bus, patches_loader)
+def make_patches(bus: StateBus, patches_loader, poses_provider=None) -> Patches:
+    return Patches(bus, patches_loader, poses_provider=poses_provider)

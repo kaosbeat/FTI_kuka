@@ -189,7 +189,8 @@ async def run(cfg: Config) -> None:
                        out_port=cfg.midi_out_port, out_device=cfg.midi_out_device)
     # The hydra patches (tool screen) are data-driven too; the engine holds the
     # reload hook so a POST /api/patches hot-reloads the running table.
-    patches = Patches(bus, patches_loader=lambda: load_patches_data_fallback(cfg.patches_path))
+    patches = Patches(bus, patches_loader=lambda: load_patches_data_fallback(cfg.patches_path),
+                      poses_provider=lambda: machine.zones)
     # The MIDI-in learned mapping is data-driven as well; created before the engine
     # so the engine can hold its reload hook (POST /api/midi hot-reloads the table).
     midi = MidiInput(bus, in_port=cfg.midi_in_port,

@@ -383,9 +383,11 @@ async function fetchPatches() {
   updatePatchPreview();
 }
 
-// Match precedence: action > mode > zone > default (mirrors the core's match_patch).
-// The actions table is two-level (zone -> action -> code), so the action lookup is
-// scoped to the zone.
+// Match precedence: pose > action > mode > zone > default (mirrors the core's match_patch).
+// The pose level is the pose/poseindex globals the core prepends to an action patch; this
+// local fallback can't build them without the zones data, so it matches the base patch
+// only (the core-pushed state frame carries the pose globals). The actions table is
+// two-level (zone -> action -> code), so the action lookup is scoped to the zone.
 function matchPatch(zone, mode, action) {
   if (zone && action) {
     const code = (PATCHES.actions || {})[zone] && (PATCHES.actions || {})[zone][action];

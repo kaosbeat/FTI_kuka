@@ -96,6 +96,71 @@ def test_bad_resolver_degrades_to_no_patch():
     assert sent[0]["patch"] is None
 
 
+class _MockZones:
+    """A duck-typed zones object exposing ``action_pose_imgs`` for the pose level."""
+    def __init__(self, imgs):
+        self._imgs = imgs
+
+    def action_pose_imgs(self, zone, action):
+        return self._imgs
+
+
+def test_pose_injection_in_frame():
+    """When the state frame is inside an action with per-pose images, the pose globals
+    (pose + poseindex) are injected at the top of the resolved patch."""
+    imgs = ["pose0.png", None, "pose2.png"]
+    p = Patches(StateBus(), patches_loader=lambda: {
+        "default": "osc(4, 0.1, 1.2).out()",
+        "actions": {"wander": {"look": "s0.initImage(poseindex[pose])"}},
+    }, poses_provider=lambda: _MockZones(imgs))
+    sent = []
+    bus = StateBus()
+    Display(bus, send=lambda f: sent.append(f), enabled=True, patch_code=p.code_for)
+    snap = Snapshot(zone="wander", mode="action", action="look",
+                    joint_pose=[0.0] * 6, cart_pose=[0.0] * 3, target_pose=[0.0] * 6,
+                    speed=20.0, moving=False, action_index=1)
+    bus.publish(Event.SNAPSHOT, snap)
+    frame = sent[0]
+    assert frame["type"] == "state"
+    patch = frame["patch"]
+    assert "var pose = 1" in patch
+    assert "var poseindex = [\"/assets/imgs/pose0.png\", null, \"/assets/imgs/pose2.png\"]" in patch
+    assert "s0.initImage(poseindex[pose])" in patch
+
+
+def test_no_pose_injection_without_action_index():
+    """Without an action_index (pose_index=None), no pose globals are injected."""
+    imgs = ["pose0.png"]
+    p = Patches(StateBus(), patches_loader=lambda: {
+        "default": "osc(4, 0.1, 1.2).out()",
+        "actions": {"wander": {"look": "s0.initImage(poseindex[pose])"}},
+    }, poses_provider=lambda: _MockZones(imgs))
+    sent = []
+    bus = StateBus()
+    Display(bus, send=lambda f: sent.append(f), enabled=True, patch_code=p.code_for)
+    snap = Snapshot(zone="wander", mode="action", action="look",
+                    joint_pose=[0.0] * 6, cart_pose=[0.0] * 3, target_pose=[0.0] * 6,
+                    speed=20.0, moving=False, action_index=None)
+    bus.publish(Event.SNAPSHOT, snap)
+    assert sent[0]["patch"] == "s0.initImage(poseindex[pose])"
+
+
+def test_no_pose_injection_without_pose_imgs():
+    """When the action has no per-pose images, no pose globals are injected."""
+    p = Patches(StateBus(), patches_loader=lambda: {
+        "default": "osc(4, 0.1, 1.2).out()",
+        "actions": {"wander": {"look": "ACTION_CODE"}},
+    }, poses_provider=lambda: _MockZones(None))
+    sent = []
+    bus = StateBus()
+    Display(bus, send=lambda f: sent.append(f), enabled=True, patch_code=p.code_for)
+    snap = Snapshot(zone="wander", mode="action", action="look",
+                    joint_pose=[0.0] * 6, cart_pose=[0.0] * 3, target_pose=[0.0] * 6,
+                    speed=20.0, moving=False, action_index=0)
+    bus.publish(Event.SNAPSHOT, snap)
+    assert sent[0]["patch"] == "ACTION_CODE"
+
+
 def main():
     failures = 0
     for name, fn in [
@@ -103,6 +168,9 @@ def main():
         ("test_patch_precedence_action_mode_zone_default", test_patch_precedence_action_mode_zone_default),
         ("test_state_frame_without_resolver_has_no_patch", test_state_frame_without_resolver_has_no_patch),
         ("test_bad_resolver_degrades_to_no_patch", test_bad_resolver_degrades_to_no_patch),
+        ("test_pose_injection_in_frame", test_pose_injection_in_frame),
+        ("test_no_pose_injection_without_action_index", test_no_pose_injection_without_action_index),
+        ("test_no_pose_injection_without_pose_imgs", test_no_pose_injection_without_pose_imgs),
     ]:
         try:
             fn()

@@ -23,15 +23,16 @@ class Display:
 
     def __init__(self, bus: StateBus, send: Callable[[dict], None],
                  enabled: bool = True,
-                 patch_code: Callable[[str, str, str], str] = None,
+                 patch_code: Callable[..., str] = None,
                  camera: Optional[CameraController] = None,
                  machine=None):
         self.bus = bus
         self._send = send
         self.enabled = enabled
         self._machine = machine
-        # Resolves the hydra patch for a state (action > mode > zone > default). The
-        # core is the single source of truth: it pushes the resolved code in every
+        # Resolves the hydra patch for a state (action > mode > zone > default), with the
+        # pose globals injected for an action that has per-pose images (the pose level).
+        # The core is the single source of truth: it pushes the resolved code in every
         # state frame so all display clients (client.html, render.html, the 3D tool
         # screen) stay in sync no matter what triggered the change (MIDI, WS, HTTP).
         self._patch_code = patch_code
@@ -77,7 +78,7 @@ class Display:
         if self._patch_code is None:
             return None
         try:
-            code = self._patch_code(snap.zone, snap.mode, snap.action)
+            code = self._patch_code(snap.zone, snap.mode, snap.action, snap.action_index)
         except Exception:  # noqa: BLE001 - a bad resolver must not kill the frame
             return None
         return code if isinstance(code, str) and code else None
@@ -168,7 +169,7 @@ class Display:
 
 
 def make_display(bus: StateBus, send: Callable[[dict], None], enabled: bool,
-                 patch_code: Callable[[str, str, str], str] = None,
+                 patch_code: Callable[..., str] = None,
                  camera: Optional[CameraController] = None,
                  machine=None) -> Display:
     return Display(bus, send, enabled=enabled, patch_code=patch_code,

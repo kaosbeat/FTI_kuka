@@ -3003,7 +3003,7 @@ function buildPatchesForm() {
   const code = getPatchCode(selectedPatch);
   $("patchCode").value = code;
   $("patchTitle").textContent = "patch: " + selectedPatch;
-  $("patchInfo").textContent = "match precedence: action > behavior > zone > default";
+  $("patchInfo").textContent = "match precedence: pose > action > behavior > zone > default";
   evalPatchPreview(code);
 }
 
@@ -3043,7 +3043,7 @@ function removePatchSlot() {
 
 function validatePatches() {
   const errs = [];
-  if (typeof PATCHES.default !== "string" || !PATCHES.default) errs.push("default: must be a non-empty string");
+  if (typeof PATCHES.default !== "string") errs.push("default: must be a string (may be empty)");
   for (const [scope, table] of [["zones", PATCHES.zones], ["modes", PATCHES.modes]]) {
     for (const name of Object.keys(table)) {
       if (typeof table[name] !== "string" || !table[name]) errs.push(`${scope}[${name}]: must be a non-empty string`);
@@ -3127,9 +3127,12 @@ function augmentPatchWithPose(zn, an, pi, existingCode) {
   const a = TABLE.zones[zn].actions[an];
   const imgs = a.pose_imgs || [];
   const urls = imgs.map((name) => name ? '"/assets/imgs/' + name + '"' : 'null');
-  const header = '// Pose reference images — poseindex[i] (i = pose index), s0 only\n' +
+  // pose is a live variable (injected at the top, mirroring the core); the patch
+  // references poseindex[pose] so the index resolves to the current pose's image.
+  const header = '// Pose reference images — pose = current pose index, poseindex[i] = image, s0 only\n' +
+                 'var pose = ' + pi + '\n' +
                  'var poseindex = [' + urls.join(', ') + ']\n' +
-                 's0.initImage(poseindex[' + pi + '])\n\n';
+                 's0.initImage(poseindex[pose])\n\n';
   return header + existingCode;
 }
 
