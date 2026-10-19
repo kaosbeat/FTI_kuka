@@ -371,6 +371,14 @@ class Brain:
         """Fold one command into the state machine."""
         c = cmd.cmd
         p = cmd.payload
+        # [debug] log every command that can clear the current action, with the
+        # robot pose at the moment it arrives (to pin down what clears hold).
+        if c in (Cmd.STOP, Cmd.SET_CONTROL_MODE, Cmd.CLEAR_ACTION, Cmd.SET_JOINT_POSE,
+                 Cmd.PLAY_ACTION, Cmd.TRIGGER_ACTION):
+            print(f"[debug-cmd] {c.value if hasattr(c, 'value') else c} payload={p} "
+                  f"curjpos={[round(v, 1) for v in curjpos]} "
+                  f"action={self.machine.current_action} zone={self.machine.current_zone} "
+                  f"mode={self.machine.control_mode}")
         if c == Cmd.TRIGGER_ACTION:
             self.machine.trigger_action(p.get("zone"), p.get("action"))
         elif c == Cmd.PLAY_ACTION:

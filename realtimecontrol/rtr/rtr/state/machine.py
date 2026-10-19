@@ -240,6 +240,12 @@ class StateMachine:
             print(f"[state] invalid control mode: {mode}")
             return
         if mode == "manual" and self.control_mode != "manual":
+            # [debug] capture entering-manual clearing the action (the hold-revert bug).
+            if self.current_action is not None:
+                import traceback
+                print(f"[debug-set_control_mode] entering manual, clearing "
+                      f"action={self.current_action} zone={self.current_zone}\n"
+                      + "".join(traceback.format_stack()[-4:-1]))
             self._transition = None
             self._pending = None
             self.current_action = None
@@ -358,6 +364,12 @@ class StateMachine:
         return True
 
     def clear_action(self) -> None:
+        # [debug] capture who is clearing the action (the hold-revert bug).
+        if self.current_action is not None:
+            import traceback
+            print(f"[debug-clear_action] clearing action={self.current_action} "
+                  f"zone={self.current_zone}\n"
+                  + "".join(traceback.format_stack()[-4:-1]))
         self.current_action = None
         self.action_index = 0
         self._midi_pulse = False
@@ -666,6 +678,12 @@ class StateMachine:
         Unlike :meth:`reset`, this preserves the current zone (no zone change).
         The robot holds its current joint position.
         """
+        # [debug] capture who is halting (the hold-revert bug).
+        if self.current_action is not None:
+            import traceback
+            print(f"[debug-halt] clearing action={self.current_action} "
+                  f"zone={self.current_zone} curjpos={[round(v, 1) for v in curjpos]}\n"
+                  + "".join(traceback.format_stack()[-4:-1]))
         self._transition = None
         self._pending = None
         self.current_action = None
