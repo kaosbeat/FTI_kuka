@@ -3119,17 +3119,18 @@ function evalAePatchPreview(code) {
   }
 }
 
-// Generate a hydra patch that displays the pose image in s0 only. s1-s3 are left
-// free for other uses. On pose change only s0's texture is swapped (swapAePoseImg);
-// the rest of the patch is not rebuilt.
-function generatePoseImgTemplate(zn, an, pi) {
+// Prepend the pose-image mechanism to the existing patch: a poseindex array
+// (all pose image URLs) + s0.initImage(poseindex[i]) for the current pose.
+// The existing patch is preserved as-is; the user adds src(s0) usage themselves.
+// s1-s3 stay free for other uses. On pose change, swapAePoseImg swaps s0.
+function augmentPatchWithPose(zn, an, pi, existingCode) {
   const a = TABLE.zones[zn].actions[an];
   const imgs = a.pose_imgs || [];
-  const cur = imgs[pi];
-  if (!cur) return "";
-  return `// Pose reference image (pose ${pi + 1}) — s0 only, s1-s3 free\n` +
-         `s0.initImage("/assets/imgs/${cur}")\n` +
-         `src(s0).out()`;
+  const urls = imgs.map((name) => name ? '"/assets/imgs/' + name + '"' : 'null');
+  const header = '// Pose reference images — poseindex[i] (i = pose index), s0 only\n' +
+                 'var poseindex = [' + urls.join(', ') + ']\n' +
+                 's0.initImage(poseindex[' + pi + '])\n\n';
+  return header + existingCode;
 }
 
 // Preload all pose images for an action into a JS texture array (AE.poseTexs),
@@ -4157,13 +4158,12 @@ function openActionEditor(zn, an) {
   const cur = getPatchCode("actions." + zn + "." + an);
   const imgs = reconcileActionImgs(zn, an);
   const hasImgs = imgs && imgs.some((im) => im);
-  if (hasImgs && cur.indexOf("s0.initImage") < 0) {
-    // First time: seed the patch with the s0-only pose-image template so the
-    // src(s0) pipeline exists (required before swapAePoseImg can show anything).
-    // Use the first pose that actually has an image. If the user already has a
-    // patch using s0.initImage, leave it untouched.
+  if (hasImgs && cur.indexOf("poseindex") < 0) {
+    // First time: prepend the pose mechanism (poseindex array + s0.initImage) to
+    // the existing patch. The existing patch is preserved; the user adds src(s0)
+    // usage themselves. Use the first pose that has an image as the initial index.
     const first = imgs.findIndex((im) => im);
-    const code = generatePoseImgTemplate(zn, an, first) || cur;
+    const code = augmentPatchWithPose(zn, an, first, cur);
     $("aePatchCode").value = code;
     setPatchCode("actions." + zn + "." + an, code);
   } else {
