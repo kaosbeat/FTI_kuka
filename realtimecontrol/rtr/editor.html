@@ -177,7 +177,10 @@
   .aePoseRow { display: grid; grid-template-columns: repeat(6, 1fr) 56px 84px; gap: 4px;
                 margin-bottom: 4px; align-items: center; }
   .aePoseRow input[type=number] { padding: 2px 4px; }
+  .aePoseRow input[type=text] { padding: 2px 4px; text-align: center; }
   .aePoseRow input.oob { border-color: #e0a030; color: #e0a030; }
+  .aePoseRow input.frozenX { border-color: #4fc08d; color: #4fc08d; font-weight: 600; }
+  .aePrevBar .mark.frozenX { background: #4fc08d; border-color: #4fc08d; }
   .aePoseCtl { display: flex; gap: 3px; }
   .aePoseCtl button { padding: 1px 5px; font-size: 11px; }
   /* Per-pose reference image (col 8 of the pose row): a thumbnail (or an
@@ -616,11 +619,16 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<!-- <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/hydra-synth/dist/hydra-synth.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hydra-synth/dist/hydra-synth.js"></script> -->
+<script src="three.min.js"></script>
+<script src="OrbitControls.js"></script>
+<script src="GLTFLoader.js"></script>
+<script src="STLLoader.js"></script>
+<script src="hydra-synth.js"></script>
 <script src="collide.js"></script>
 <script src="rtr3d.js"></script>
 <script>
@@ -2213,6 +2221,12 @@ function normalizeBehaviors(raw) {
     for (const key of Object.keys(defaults)) {
       beh[key] = typeof entry[key] === "number" ? entry[key] : defaults[key];
     }
+    // Per-behavior next-selection params (stay / triggers / dwell_s / lock_duration_s):
+    // preserve what is present so a hand-edited brain.json is not clobbered.
+    if (typeof entry.stay === "number") beh.stay = entry.stay;
+    if (Array.isArray(entry.triggers)) beh.triggers = entry.triggers.slice();
+    if (typeof entry.dwell_s === "number") beh.dwell_s = entry.dwell_s;
+    if (typeof entry.lock_duration_s === "number") beh.lock_duration_s = entry.lock_duration_s;
     out[name] = beh;
   }
   for (const name of Object.keys(src)) {
@@ -2507,6 +2521,61 @@ function buildBrainForm() {
     } else {
       mkInfo(card, BEHAVIOR_INFO[name] || "no tunable params.");
     }
+    // --- next-selection: the stay probability + the behavior triggers that apply it ---
+    const nEntry = behParams[name] || {};
+    const setNext = (key, val) => {
+      behParams[name] = behParams[name] || {};
+      if (val === null) delete behParams[name][key];
+      else behParams[name][key] = val;
+    };
+    mkSub(card, "next-selection (stay / triggers)");
+    const nStayInp = mkNum("brainBh" + cap(name) + "Stay",
+      (typeof nEntry.stay === "number") ? nEntry.stay : 0.0, "0.05", "0",
+      "Probability (0-1) this action STAYS (keeps looping) when a trigger fires; otherwise it advances to a random valid next. External events (midi/camera/websocket) are a strong trigger and always advance, bypassing this.");
+    nStayInp.oninput = () => { const v = parseFloat(nStayInp.value); if (!isNaN(v)) setNext("stay", v); };
+    mkRow(card, "stay (loop probability)", nStayInp);
+    const nTrigs = new Set(Array.isArray(nEntry.triggers) ? nEntry.triggers : []);
+    const TRIGS = [
+      ["dwell", "Fires when the action has run for dwell_s (falls back to the global autonomy dwell)."],
+      ["new_lock", "Fires on the edge from no camera-lock to a new lock."],
+      ["lost_lock", "Fires on the edge from a camera-lock to no lock."],
+      ["lock_duration", "Fires when the current lock has been held for lock_duration_s."],
+    ];
+    const trigRow = document.createElement("div");
+    trigRow.className = "row";
+    trigRow.style.alignItems = "center";
+    trigRow.style.marginBottom = "6px";
+    const trigLab = document.createElement("label");
+    trigLab.textContent = "triggers";
+    trigRow.appendChild(trigLab);
+    TRIGS.forEach(([t, tip]) => {
+      const c = document.createElement("label");
+      c.className = "inline";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = nTrigs.has(t);
+      cb.title = tip;
+      cb.dataset.trig = t;
+      cb.onchange = () => {
+        const list = [];
+        trigRow.querySelectorAll("input[type=checkbox]").forEach((x) => { if (x.checked) list.push(x.dataset.trig); });
+        setNext("triggers", list.length ? list : null);
+      };
+      c.appendChild(cb);
+      c.appendChild(document.createTextNode(" " + t));
+      trigRow.appendChild(c);
+    });
+    card.appendChild(trigRow);
+    const nDwellInp = mkNum("brainBh" + cap(name) + "DwellS",
+      (typeof nEntry.dwell_s === "number") ? nEntry.dwell_s : "", "0.5", "0",
+      "Per-behavior dwell timeout (s) for the dwell trigger; empty = use the global autonomy dwell.");
+    nDwellInp.oninput = () => { const v = parseFloat(nDwellInp.value); setNext("dwell_s", isNaN(v) ? null : v); };
+    mkRow(card, "dwell_s (dwell trigger, s)", nDwellInp);
+    const nLockInp = mkNum("brainBh" + cap(name) + "LockDurS",
+      (typeof nEntry.lock_duration_s === "number") ? nEntry.lock_duration_s : "", "0.1", "0",
+      "Per-behavior lock-hold timeout (s) for the lock_duration trigger; empty = the trigger never fires.");
+    nLockInp.oninput = () => { const v = parseFloat(nLockInp.value); setNext("lock_duration_s", isNaN(v) ? null : v); };
+    mkRow(card, "lock_duration_s (lock trigger, s)", nLockInp);
     // Per-behavior enable/test button (live test override).
     const btnRow = document.createElement("div");
     btnRow.className = "row";
@@ -3647,7 +3716,10 @@ function deletePoseImg(zn, an, pi) {
 function renderPosePreview(pose, el, safezone) {
   el.innerHTML = "";
   if (!pose || pose.length !== 6) { el.textContent = "no pose"; return; }
-  const [a1, a2, a3, a4, a5, a6] = pose;
+  // "x" (frozen / copy-from-previous) axes have no static value; use 0 for the FK
+  // schematic so the pose stays finite.
+  const px = (v) => (typeof v === "number" ? v : 0);
+  const [a1, a2, a3, a4, a5, a6] = [px(pose[0]), px(pose[1]), px(pose[2]), px(pose[3]), px(pose[4]), px(pose[5])];
   const rad = (d) => d * Math.PI / 180;
   // KR60 chain (meters, Z-up): shoulder pivot + the three in-plane link lengths.
   const S = { x: 0.35, z: 0.815 };
@@ -3712,23 +3784,25 @@ function renderPosePreview(pose, el, safezone) {
   // Axis bars: each joint's value against the zone safezone (mirrors the oob highlight).
   AXES.forEach((n, i) => {
     const v = pose[i];
+    const nx = px(v);
+    const frozen = (v === "x");
     const bar = document.createElement("div");
     bar.className = "aePrevBar";
-    const lbl = document.createElement("span"); lbl.className = "lbl"; lbl.textContent = n;
+    const lbl = document.createElement("span"); lbl.className = "lbl"; lbl.textContent = n + (frozen ? " (x)" : "");
     bar.appendChild(lbl);
     const track = document.createElement("div"); track.className = "track";
     const val = document.createElement("span"); val.className = "val";
     if (safezone && safezone[i]) {
       const [lo, hi] = safezone[i];
       const span = hi - lo || 1;
-      const frac = Math.max(0, Math.min(1, (v - lo) / span));
+      const frac = Math.max(0, Math.min(1, (nx - lo) / span));
       const mark = document.createElement("div");
-      mark.className = "mark" + (v < lo || v > hi ? " oob" : "");
+      mark.className = "mark" + (frozen ? " frozenX" : ((nx < lo || nx > hi) ? " oob" : ""));
       mark.style.left = (frac * 100) + "%";
       track.appendChild(mark);
     }
     bar.appendChild(track);
-    val.textContent = Math.round(v * 10) / 10;
+    val.textContent = frozen ? "x" : (Math.round(nx * 10) / 10);
     bar.appendChild(val);
     el.appendChild(bar);
   });
@@ -3736,7 +3810,7 @@ function renderPosePreview(pose, el, safezone) {
   const st = document.createElement("div");
   st.className = "aePrevStatus";
   if (typeof Robot3D !== "undefined") {
-    const res = Robot3D.checkPoseCollision(pose);
+    const res = Robot3D.checkPoseCollision([px(pose[0]), px(pose[1]), px(pose[2]), px(pose[3]), px(pose[4]), px(pose[5])]);
     if (!res) { st.textContent = "collision engine not ready"; st.classList.add("dim"); }
     else if (res.bodies.length === 0) { st.textContent = "clear"; st.classList.add("ok"); }
     else { st.textContent = "COLLIDES: " + res.collisions.map((c) => c.a + "~" + c.b).join(", "); st.classList.add("bad"); }
@@ -3835,10 +3909,40 @@ function buildActionEditor() {
   brow.appendChild(sp);
   psec.appendChild(brow);
 
-  // Active-class detection: the zone's class (track/farfocus/approach/facefocus)
-  // uses axis_bands (per-axis min/max) instead of the legacy variable_axes list.
-  const ACTIVE_CLASSES = ["track", "farfocus", "approach", "facefocus"];
-  const isActive = ACTIVE_CLASSES.includes(z.class || "scan");
+  // Axis mechanism: field-presence, mirroring behavior.build_target — a non-empty
+  // `axis_bands` uses the per-axis min/max (servo) path; otherwise the legacy
+  // variable_axes path. The zone class no longer selects the mechanism.
+  const hasAxisBands = !!(a.axis_bands && typeof a.axis_bands === "object" && Object.keys(a.axis_bands).length);
+  const isActive = hasAxisBands;
+  const mechRow = document.createElement("div");
+  mechRow.className = "row";
+  mechRow.style.marginBottom = "6px";
+  const mechHint = document.createElement("span");
+  mechHint.className = "hint";
+  mechHint.textContent = "axis mechanism: ";
+  mechRow.appendChild(mechHint);
+  const mkMechBtn = (label, active, onclick) => {
+    const b = document.createElement("button");
+    b.className = "small" + (active ? " active" : "");
+    b.textContent = label;
+    b.onclick = onclick;
+    mechRow.appendChild(b);
+  };
+  mkMechBtn("axis_bands", hasAxisBands, () => {
+    if (!a.axis_bands) a.axis_bands = {};
+    for (let i = 0; i < 6; i++) {
+      if (!a.axis_bands[String(i)] && !a.axis_bands[i]) {
+        const [lo, hi] = z.safezone ? z.safezone[i] : [0, 0];
+        a.axis_bands[String(i)] = [lo, hi];
+      }
+    }
+    buildActionEditor();
+  });
+  mkMechBtn("variable_axes", !hasAxisBands, () => {
+    delete a.axis_bands;
+    buildActionEditor();
+  });
+  psec.appendChild(mechRow);
 
   if (isActive) {
     // --- axis_bands section: per-axis min/max, auto-clamped to safezone ---
@@ -3955,17 +4059,35 @@ function buildActionEditor() {
     pr.onmouseenter = () => showPrev(pi);
     for (let i = 0; i < 6; i++) {
       const inp = document.createElement("input");
-      inp.type = "number"; inp.step = "0.1";
-      inp.value = p[i] != null ? p[i] : 0;
-      if (z.safezone) {
-        const [lo, hi] = z.safezone[i];
-        if (p[i] < lo || p[i] > hi) inp.className = "oob";
-      }
-      inp.oninput = () => {
-        a.poses[pi][i] = parseFloat(inp.value);
+      inp.type = "text"; inp.inputMode = "decimal";
+      const isX = p[i] === "x";
+      inp.value = isX ? "x" : (p[i] != null ? p[i] : 0);
+      if (isX) {
+        inp.classList.add("frozenX");
+        inp.title = AXES[i] + ' — frozen ("x"): copies the robot\'s value on this axis at the action\'s start (e.g. the camera-lock pose) and holds it for the whole action.';
+      } else {
+        inp.title = AXES[i] + ' — pinned: holds this anchor value. Add the axis to variable_axes to make it wiggle, or type "x" to freeze it from the action start.';
         if (z.safezone) {
           const [lo, hi] = z.safezone[i];
-          inp.className = (a.poses[pi][i] < lo || a.poses[pi][i] > hi) ? "oob" : "";
+          if (p[i] < lo || p[i] > hi) inp.classList.add("oob");
+        }
+      }
+      inp.oninput = () => {
+        const v = inp.value.trim();
+        if (v === "x" || v.toLowerCase() === "x") {
+          a.poses[pi][i] = "x";
+          inp.classList.add("frozenX");
+          inp.classList.remove("oob");
+        } else {
+          const n = parseFloat(v);
+          a.poses[pi][i] = isNaN(n) ? 0 : n;
+          inp.classList.remove("frozenX");
+          if (z.safezone) {
+            const [lo, hi] = z.safezone[i];
+            inp.classList.toggle("oob", a.poses[pi][i] < lo || a.poses[pi][i] > hi);
+          } else {
+            inp.classList.remove("oob");
+          }
         }
         if (aePrevIdx === pi) showPrev(pi);  // keep the schematic in sync while editing
       };
@@ -4022,7 +4144,11 @@ function buildActionEditor() {
   const oobCount = (() => {
     let n = 0;
     if (z.safezone) a.poses.forEach((p) => {
-      for (let i = 0; i < 6; i++) { const [lo, hi] = z.safezone[i]; if (p[i] < lo || p[i] > hi) n++; }
+      for (let i = 0; i < 6; i++) {
+        if (p[i] === "x") continue;  // frozen axis: no static value to clamp
+        const [lo, hi] = z.safezone[i];
+        if (p[i] < lo || p[i] > hi) n++;
+      }
     });
     return n;
   })();
@@ -4031,6 +4157,7 @@ function buildActionEditor() {
   clampR.onclick = () => {
     if (z.safezone) a.poses.forEach((p) => {
       for (let i = 0; i < 6; i++) {
+        if (p[i] === "x") continue;  // frozen axis: holds the action-start value
         const [lo, hi] = z.safezone[i];
         if (p[i] < lo) p[i] = lo;
         else if (p[i] > hi) p[i] = hi;

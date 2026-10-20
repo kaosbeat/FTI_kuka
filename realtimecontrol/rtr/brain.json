@@ -426,49 +426,80 @@
   },
   "behaviors": {
     "locked": {
-      "gain": 0.3
+      "gain": 0.3,
+      "stay": 1.0,
+      "triggers": ["dwell"]
     },
     "curious": {
       "gain": 0.3,
-      "look_factor": 0.5
+      "look_factor": 0.5,
+      "stay": 1.0,
+      "triggers": ["dwell"]
     },
     "intent": {
-      "gain": 0.3
+      "gain": 0.3,
+      "stay": 1.0,
+      "triggers": ["dwell"]
     },
     "gentle": {
       "gain": 0.3,
-      "face_factor": 0.5
+      "face_factor": 0.5,
+      "stay": 1.0,
+      "triggers": ["dwell"]
     },
     "vigilant": {
-      "freq": 1
+      "freq": 1,
+      "stay": 0.0,
+      "triggers": ["dwell"]
     },
     "restless": {
-      "wander_adj": 5
+      "wander_adj": 5,
+      "stay": 0.7,
+      "triggers": ["dwell"]
     },
-    "spontaneous": {},
+    "spontaneous": {
+      "stay": 0.0,
+      "triggers": ["dwell"]
+    },
     "soothing": {
       "freq": 0.5,
-      "amp_scale": 0.1
+      "amp_scale": 0.1,
+      "stay": 0.0,
+      "triggers": ["dwell"]
     },
     "agitated": {
       "freq": 1,
-      "amp_scale": 0.5
+      "amp_scale": 0.5,
+      "stay": 0.0,
+      "triggers": ["lock_duration", "dwell"],
+      "lock_duration_s": 1.0
     },
     "aggressive": {
       "freq": 1,
-      "amp_scale": 0.3
+      "amp_scale": 0.3,
+      "stay": 0.0,
+      "triggers": ["lock_duration", "dwell"],
+      "lock_duration_s": 1.0
     },
     "exhilarated": {
       "freq": 2,
-      "amp_scale": 0.5
+      "amp_scale": 0.5,
+      "stay": 0.0,
+      "triggers": ["lock_duration", "dwell"],
+      "lock_duration_s": 1.0
     },
     "impatient": {
       "freq": 1,
-      "amp_scale": 0.3
+      "amp_scale": 0.3,
+      "stay": 0.0,
+      "triggers": ["lock_duration", "dwell"],
+      "lock_duration_s": 1.0
     },
     "drowsy": {
       "freq": 0.3,
-      "amp_scale": 0.2
+      "amp_scale": 0.2,
+      "stay": 0.0,
+      "triggers": ["dwell"]
     }
   }
 }

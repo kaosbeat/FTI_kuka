@@ -86,6 +86,21 @@ def hardware_clamp(pose: List[float]) -> List[float]:
     return [fitlimits(i, pose[i], HARDWARE_LIMITS) for i in range(len(pose))]
 
 
+def resolve_x(pose, ref):
+    """Resolve ``"x"`` (frozen / copy-from-previous) axes in a pose to ``ref``.
+
+    A pose axis set to the string ``"x"`` means "copy the robot's current value on
+    this axis and freeze it for the action" (e.g. the camera-lock pose's A1 when a
+    claw action starts). Returns a new pose with every ``"x"`` replaced by the
+    matching value from ``ref`` (the frozen base, or the live ``curjpos`` as a
+    fallback); non-``"x"`` axes are copied through unchanged.
+    """
+    if not isinstance(pose, list):
+        return pose
+    return [ref[ax] if ax < len(ref) and pose[ax] == "x" else pose[ax]
+            for ax in range(len(pose))]
+
+
 def build_target(machine, curjpos: List[float]):
     """Compute the target pose for the current action this tick.
 
@@ -124,8 +139,16 @@ def build_target(machine, curjpos: List[float]):
         var_axes = [ax for ax, (lo, hi) in sorted(axis_bands.items()) if lo != hi]
     else:
         idx = machine.action_index if 0 <= machine.action_index < len(poses) else 0
-        anchor = list(poses[idx])
+        # ``"x"`` axes (frozen / copy-from-previous) take the frozen base — the
+        # robot's position captured at the action's transition commit — falling back
+        # to the live curjpos when no frozen base is set (a restart without a
+        # transition). Non-``"x"`` axes stay at the anchor pose value.
+        frozen = getattr(machine, "_frozen_base", None)
+        ref = frozen if frozen is not None else curjpos
+        anchor = resolve_x(poses[idx], ref)
         var_axes = zone.action_variable_axes(name)
+        # A ``"x"`` axis is frozen (never driven), even if listed in variable_axes.
+        var_axes = [ax for ax in var_axes if poses[idx][ax] != "x"]
 
     # Forced behavior (live test override): run this behavior's policy on the
     # action's variable axes regardless of the action's declared behavior.

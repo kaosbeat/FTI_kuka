@@ -83,17 +83,27 @@ ACTIVE_CLASSES = ("track", "farfocus", "approach", "facefocus")
 MODES = ("wander", "random", "action", "track", "hold")
 
 
+def _pose_numeric(p) -> bool:
+    """True when every axis of the pose is a real number (no ``"x"`` frozen axes)."""
+    return (isinstance(p, list)
+            and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in p))
+
+
 def find_shared_pose(poses_a: List[List[float]], poses_b: List[List[float]],
                      margin: float = 0.5) -> Optional[Tuple[List[float], int, int]]:
     """Find a pose that appears in both pose lists.
 
     Returns ``(pose, index_in_a, index_in_b)`` for the first pair of poses
     (scanning A in order, B in order) that match within ``margin`` on every
-    axis, or ``None`` when no shared pose exists.
+    axis, or ``None`` when no shared pose exists. Poses containing a non-numeric
+    axis (an ``"x"`` frozen/copy axis) are skipped — they have no fixed value to
+    compare against.
     """
     for i, pa in enumerate(poses_a):
+        if not _pose_numeric(pa):
+            continue
         for j, pb in enumerate(poses_b):
-            if all(abs(pa[k] - pb[k]) <= margin for k in range(len(pa))):
+            if _pose_numeric(pb) and all(abs(pa[k] - pb[k]) <= margin for k in range(len(pa))):
                 return (list(pa), i, j)
     return None
 
@@ -479,9 +489,10 @@ def _validate_action(name: str, a: dict, all_zone_names: set) -> None:
 
     poses = a.get("poses")
     if not (isinstance(poses, list) and poses and all(
-            isinstance(p, list) and len(p) == 6 and all(_is_num(x) for x in p)
+            isinstance(p, list) and len(p) == 6
+            and all(_is_num(x) or x == "x" for x in p)
             for p in poses)):
-        raise ValueError(f"action {name!r}: poses must be a non-empty list of 6-number poses")
+        raise ValueError(f"action {name!r}: poses must be a non-empty list of 6-axis poses (number or \"x\")")
 
     # Optional per-pose reference images: a list aligned with ``poses`` (each entry
     # is a filename string or ``null`` for "no image"). When present it must match

@@ -1351,7 +1351,7 @@
           "enabled": true,
           "poses": [
             [
-              85,
+              "x",
               -97,
               17,
               -2,
@@ -1360,7 +1360,6 @@
             ]
           ],
           "variable_axes": [
-            0,
             2
           ],
           "behavior": "agitated",
@@ -1375,7 +1374,7 @@
           "enabled": true,
           "poses": [
             [
-              85,
+              "x",
               -97,
               17,
               -2,
@@ -1384,7 +1383,6 @@
             ]
           ],
           "variable_axes": [
-            0,
             2
           ],
           "behavior": "aggressive",

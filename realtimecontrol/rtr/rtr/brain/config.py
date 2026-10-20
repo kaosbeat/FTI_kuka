@@ -70,19 +70,19 @@ ZONE_CLASSES = ("ignore", "scan", "track", "farfocus", "approach", "facefocus", 
 # behaviors carry entries: ``calm`` / ``bridge`` are no-ops and ``spontaneous`` has
 # no tunable knob.
 DEFAULT_BEHAVIORS: Dict[str, dict] = {
-    "locked":      {"gain": 0.3},
-    "curious":     {"gain": 0.3, "look_factor": 0.5},
-    "intent":      {"gain": 0.3},
-    "gentle":      {"gain": 0.3, "face_factor": 0.5},
-    "vigilant":    {"freq": 1.0},
-    "restless":    {"wander_adj": 5.0},
-    "spontaneous": {},
-    "soothing":    {"freq": 0.5, "amp_scale": 0.1},
-    "agitated":    {"freq": 1.0, "amp_scale": 0.3},
-    "aggressive":  {"freq": 1.0, "amp_scale": 0.3},
-    "exhilarated": {"freq": 2.0, "amp_scale": 0.5},
-    "impatient":   {"freq": 1.0, "amp_scale": 0.3},
-    "drowsy":      {"freq": 0.3, "amp_scale": 0.2},
+    "locked":      {"gain": 0.3, "stay": 1.0, "triggers": ["dwell"]},
+    "curious":     {"gain": 0.3, "look_factor": 0.5, "stay": 1.0, "triggers": ["dwell"]},
+    "intent":      {"gain": 0.3, "stay": 1.0, "triggers": ["dwell"]},
+    "gentle":      {"gain": 0.3, "face_factor": 0.5, "stay": 1.0, "triggers": ["dwell"]},
+    "vigilant":    {"freq": 1.0, "stay": 0.0, "triggers": ["dwell"]},
+    "restless":    {"wander_adj": 5.0, "stay": 0.7, "triggers": ["dwell"]},
+    "spontaneous": {"stay": 0.0, "triggers": ["dwell"]},
+    "soothing":    {"freq": 0.5, "amp_scale": 0.1, "stay": 0.0, "triggers": ["dwell"]},
+    "agitated":    {"freq": 1.0, "amp_scale": 0.3, "stay": 0.0, "triggers": ["lock_duration", "dwell"], "lock_duration_s": 1.0},
+    "aggressive":  {"freq": 1.0, "amp_scale": 0.3, "stay": 0.0, "triggers": ["lock_duration", "dwell"], "lock_duration_s": 1.0},
+    "exhilarated": {"freq": 2.0, "amp_scale": 0.5, "stay": 0.0, "triggers": ["lock_duration", "dwell"], "lock_duration_s": 1.0},
+    "impatient":   {"freq": 1.0, "amp_scale": 0.3, "stay": 0.0, "triggers": ["lock_duration", "dwell"], "lock_duration_s": 1.0},
+    "drowsy":      {"freq": 0.3, "amp_scale": 0.2, "stay": 0.0, "triggers": ["dwell"]},
 }
 
 # The autonomy + mode-group + hunt/facefocus + cam_control decision parameters,
@@ -331,8 +331,10 @@ def _validate_behaviors_section(data: Any) -> dict:
 
     Known behaviors (see :data:`DEFAULT_BEHAVIORS`) are always present in the result
     — missing keys are filled from the defaults so the runtime always sees a complete
-    section. Unknown behavior names are ignored (dropped); present params are
-    type-checked as numbers.
+    section. Unknown behavior names are ignored (dropped). Each key is type-checked
+    by the type of its default: numeric keys (``gain``/``freq``/``stay``/``dwell_s``/
+    ``lock_duration_s``/...) via :func:`_num`, the ``triggers`` list via
+    :func:`_str_list`.
     """
     if data is not None and not isinstance(data, dict):
         raise ValueError("'behaviors' must be an object")
@@ -344,7 +346,10 @@ def _validate_behaviors_section(data: Any) -> dict:
             entry = {}
         out: dict = {}
         for key, default in defaults.items():
-            out[key] = _num(entry.get(key), f"behaviors.{name}.{key}", default)
+            if isinstance(default, list):
+                out[key] = _str_list(entry.get(key), f"behaviors.{name}.{key}", default)
+            else:
+                out[key] = _num(entry.get(key), f"behaviors.{name}.{key}", default)
         result[name] = out
     return result
 
