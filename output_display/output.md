@@ -2,6 +2,12 @@
 What will be on the display.
 
 Tech, P5live + hydra (because I can)
+# patch
+
+P5live running in a browser https://github.com/ffd8/p5live
+
+a list of videos
+All videos are Preloaded
 
 ## method
 Three methods are considered
