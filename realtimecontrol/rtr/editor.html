@@ -6410,7 +6410,7 @@ function setupCamTest() {
   const status = $("camTestStatus");
   // Populate the zone dropdown with zones that have at least one variable-axis action.
   zoneSel.innerHTML = "";
-  for (const [zn, z] of Object.entries(TABLE)) {
+  for (const [zn, z] of Object.entries(TABLE.zones || {})) {
     const hasVarAxis = Object.values(z.actions || {}).some(
       a => Array.isArray(a.variable_axes) && a.variable_axes.length > 0
     );
@@ -6429,7 +6429,7 @@ function setupCamTest() {
   // Update the action dropdown when the zone changes.
   zoneSel.onchange = () => {
     actionSel.innerHTML = "";
-    const z = TABLE[zoneSel.value];
+    const z = TABLE.zones && TABLE.zones[zoneSel.value];
     if (z && z.actions) {
       for (const [an, a] of Object.entries(z.actions)) {
         if (Array.isArray(a.variable_axes) && a.variable_axes.length > 0) {
