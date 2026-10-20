@@ -57,6 +57,12 @@ class Brain:
         self._retreat_start_ts = 0.0
         self._hunt_lock_id = None
         self._hunt_last_track_ts = 0.0
+        # Lock-state tracking for the per-behavior trigger system: ``_prev_lock_id``
+        # is the previous tick's lock id (edge detection for new_lock/lost_lock) and
+        # ``_lock_start_ts`` is when the current lock was (re)acquired (the
+        # lock_duration timer). Updated at the end of every autonomy tick.
+        self._prev_lock_id = None
+        self._lock_start_ts = 0.0
         # Feral detection: the robot is "feral" when it has lost a locked person
         # 3+ times within a 30 s window (rapid hunt-loop cycling).
         self._feral_lost_ts: list = []
@@ -763,16 +769,21 @@ class Brain:
                         return float(pd)
         return self._autonomy_cfg().get("dwell_s", 30.0)
 
-    def _first_valid_next(self, zone: str, action: str) -> Optional[tuple]:
-        """The first valid ``(zone, action)`` candidate from the action's ordered
-        ``next`` list: the zone is in the enabled union, and the action is named,
-        exists, and is enabled. Returns None when no candidate is usable.
+    def _behavior_params(self, behavior: str) -> dict:
+        """The per-behavior params (``stay``/``triggers``/``dwell_s``/``lock_duration_s``)
+        off the machine's ``behavior_params``, else ``{}``."""
+        params = getattr(self.machine, "behavior_params", None) or {}
+        entry = params.get(behavior)
+        return entry if isinstance(entry, dict) else {}
 
-        Skips candidates marked as blocked by the safety gate (auto mode).
-        """
+    def _valid_next_candidates(self, zone: str, action: str) -> list:
+        """All valid ``(zone, action)`` candidates from the action's ``next`` list:
+        the zone is in the enabled union, the action is named, exists, and is
+        enabled. Skips candidates blocked by the safety gate (auto mode)."""
         z = self.machine.zones.get(zone)
         if z is None:
-            return None
+            return []
+        cands = []
         for n in z.action_next_list(action):
             tz = n.get("zone")
             ta = n.get("action")
@@ -787,44 +798,103 @@ class Brain:
                 continue
             if (tz, ta) in self._blocked_candidates:
                 continue  # blocked by the safety gate on a previous tick
-            return (tz, ta)
-        return None
+            cands.append((tz, ta))
+        return cands
 
-    def _wants_stay(self, zone: str, action: str) -> bool:
-        """Whether the brain wants the current action to keep looping (stay).
+    def _random_valid_next(self, zone: str, action: str) -> Optional[tuple]:
+        """A random valid ``(zone, action)`` candidate from the action's ``next`` list
+        (replacing the old deterministic first-valid pick). Returns None when none."""
+        cands = self._valid_next_candidates(zone, action)
+        return random.choice(cands) if cands else None
 
-        The robot stays while it is actively in an engagement class with a locked
-        person (the hunt loop is running): advancing would interrupt the tracking.
-        The dwell-expiry decision consults this; an external event overrides it (the
-        event is a push to move on).
+    def _behavior_triggers_fired(self, zone: str, action: str, behavior: str, now: float) -> dict:
+        """Which of the behavior's configured triggers fired this tick.
+
+        Returns a dict of ``trigger -> bool`` for the behavior's configured
+        ``triggers`` (default ``["dwell"]``). ``dwell`` fires when the action has run
+        for >= its dwell timeout; ``new_lock`` / ``lost_lock`` are the lock-state
+        edges (previous vs current lock id); ``lock_duration`` fires when the lock has
+        been held for >= ``lock_duration_s``.
         """
-        return self.current_class in ("track", "farfocus", "approach", "facefocus") and self._hunt_lock_id is not None
+        bp = self._behavior_params(behavior)
+        triggers = bp.get("triggers")
+        if not (isinstance(triggers, list) and triggers):
+            triggers = ["dwell"]
+        fired = {}
+        for t in triggers:
+            if t == "dwell":
+                dwell_s = bp.get("dwell_s")
+                if not (isinstance(dwell_s, (int, float)) and not isinstance(dwell_s, bool)):
+                    dwell_s = self._autonomy_dwell_s(zone, action)
+                fired["dwell"] = (now - self._autonomy_action_start_ts) >= dwell_s
+            elif t == "new_lock":
+                fired["new_lock"] = (self._prev_lock_id is None and self._hunt_lock_id is not None)
+            elif t == "lost_lock":
+                fired["lost_lock"] = (self._prev_lock_id is not None and self._hunt_lock_id is None)
+            elif t == "lock_duration":
+                ld = bp.get("lock_duration_s")
+                if (self._hunt_lock_id is not None
+                        and isinstance(ld, (int, float)) and not isinstance(ld, bool)):
+                    fired["lock_duration"] = (now - self._lock_start_ts) >= ld
+                else:
+                    fired["lock_duration"] = False
+        return fired
 
-    def _autonomy_decide(self, zone: str, action: str, event: bool) -> bool:
-        """The brain's decision on the current action's "end" (an event, or dwell
-        expiry): stay (keep looping) or advance (pick a next). Returns True if it
-        advanced.
+    def _rearm_stay(self) -> None:
+        """Re-arm the timers so a stayed (looping) action re-evaluates on the next
+        trigger instead of re-firing every tick."""
+        self._autonomy_action_start_ts = time.time()
+        if self._hunt_lock_id is not None:
+            self._lock_start_ts = time.time()
 
-        - An external event (midi / camera / websocket) is a push to move on: advance.
-        - While the camera is actively tracking a locked person, the robot stays (it
-          keeps looping the current action to keep following the person).
-        - Otherwise (idle, dwell expired), advance to the first valid candidate.
-        - No valid candidate: stay (the action keeps looping).
-        """
-        if not event and self._wants_stay(zone, action):
-            return False
-        target = self._first_valid_next(zone, action)
+    def _autonomy_advance(self, zone: str, action: str) -> bool:
+        """Advance to a random valid next; no valid candidate -> stay (loop)."""
+        target = self._random_valid_next(zone, action)
         if target is None:
-            # No usable next link: pick a random valid zone exit (wandering).
-            z = self.machine.zones.get(zone)
-            valid = [(ez, ea) for (ez, ea) in z.exits() if ez in self._enabled_zones]
-            if not valid:
-                return False
-            ez, ea = random.choice(valid)
-        else:
-            ez, ea = target
-        self._autonomy_go(zone, ez, ea)
+            self._rearm_stay()
+            return False
+        tz, ta = target
+        self._autonomy_go(zone, tz, ta)
         return True
+
+    def _autonomy_decide(self, zone: str, action: str, behavior: str,
+                          event: bool, fired: dict) -> bool:
+        """The brain's decision on the current action's "end": stay (keep looping) or
+        advance (pick a random valid next). Returns True if it advanced.
+
+        - An external event (midi / camera / websocket) is a STRONG trigger: it always
+          advances, bypassing the behavior's stay probability (operator control).
+        - A behavior trigger (dwell / new_lock / lost_lock / lock_duration) that fired
+          applies the stay probability: roll < stay -> stay (loop, re-arm timers);
+          else advance to a random valid next.
+        - Advancing with no valid candidate: stay (the action keeps looping).
+        """
+        if event:
+            return self._autonomy_advance(zone, action)
+        bp = self._behavior_params(behavior)
+        stay = bp.get("stay", 0.0)
+        if not (isinstance(stay, (int, float)) and not isinstance(stay, bool)):
+            stay = 0.0
+        if random.random() < stay:
+            self._rearm_stay()
+            return False
+        return self._autonomy_advance(zone, action)
+
+    def _update_lock_tracking(self) -> None:
+        """Update the lock-state tracking (the new_lock/lost_lock/lock_duration inputs).
+
+        ``_prev_lock_id`` becomes the current lock id; ``_lock_start_ts`` is reset to
+        now when the lock is (re)acquired and zeroed when it is lost. Called at the
+        end of every autonomy tick so the edge/duration triggers are evaluated against
+        a consistent baseline on the next tick.
+        """
+        cur_lock = self._hunt_lock_id
+        if cur_lock is not None:
+            if cur_lock != self._prev_lock_id:
+                self._lock_start_ts = time.time()
+        else:
+            self._lock_start_ts = 0.0
+        self._prev_lock_id = cur_lock
 
     def _autonomy_go(self, zone: str, target_zone: str, target_action: str) -> None:
         """Follow a target: same-zone uses play_action, cross-zone uses trigger_action."""
@@ -846,6 +916,7 @@ class Brain:
         # Guard: while a safety-gated pending move is unresolved, do not stack
         # another autonomy decision on top of it.
         if self.machine.pending:
+            self._update_lock_tracking()
             return
         cur = (self.machine.current_zone, self.machine.current_action)
         if cur != self._autonomy_prev:
@@ -864,30 +935,36 @@ class Brain:
             self._apply_action_cam(self.machine.current_zone, self.machine.current_action)
             self._apply_action_engine(self.machine.current_zone, self.machine.current_action)
         if not self._autonomy_cfg().get("enabled", False):
+            self._update_lock_tracking()
             return
         if self.machine.transitioning:
+            self._update_lock_tracking()
             return
         zone, action = cur
         if not zone or not action:
+            self._update_lock_tracking()
             return
         # The current action must loop for autonomy to consider advancing (a
         # non-looping action has no "next" to follow in the same zone).
         z = self.machine.zones.get(zone)
         if z is None or not z.action_loops(action):
+            self._update_lock_tracking()
             return
-        dwell = self._autonomy_dwell_s(zone, action)
         now = time.time()
+        behavior = z.action_behavior(action)
+        fired = self._behavior_triggers_fired(zone, action, behavior, now)
         event = self._autonomy_triggered
-        if not (event or (now - self._autonomy_action_start_ts >= dwell)):
-            return
-        # The action has "ended": the brain decides to stay (loop) or advance.
-        self._autonomy_decide(zone, action, event)
-        self._autonomy_triggered = False
-        # If the (zone, action) did not change (stayed, or the advance was refused),
-        # reset the dwell timer so the brain re-evaluates on the next dwell expiry
-        # instead of re-firing every tick.
+        # Decide: an external event is a STRONG trigger (always advance); a fired
+        # behavior trigger applies the stay probability (loop vs random valid next).
+        if event or any(fired.values()):
+            self._autonomy_decide(zone, action, behavior, event, fired)
+            self._autonomy_triggered = False
+        # If the (zone, action) did not change (stayed, self-loop advance, or advance
+        # refused), reset the dwell timer so the brain re-evaluates on the next
+        # trigger instead of re-firing every tick.
         if (self.machine.current_zone, self.machine.current_action) == cur:
             self._autonomy_action_start_ts = time.time()
+        self._update_lock_tracking()
 
     # ------------------------------------------------------------------
     # External event handlers (autonomy triggers).

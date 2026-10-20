@@ -25,7 +25,7 @@ import random
 from typing import List, Optional
 
 from ..robot.helpers import comparelist
-from .behavior import build_target, clamp, hardware_clamp
+from .behavior import build_target, clamp, hardware_clamp, resolve_x
 from .zones import Zones, find_shared_pose
 
 
@@ -75,6 +75,16 @@ class StateMachine:
 
         self.target: Optional[List[float]] = None
         self.target_kind: str = "joint"  # "joint" | "linear"
+
+        # The robot's last reported joint position (updated at the top of every
+        # step tick). Used to resolve ``"x"`` (frozen/copy) axes in a transition
+        # entry pose so it is a concrete pose before the safety gate checks it.
+        self._last_curjpos: Optional[List[float]] = None
+        # The frozen base for the current action: the robot's joint position
+        # captured at the action's transition commit. ``"x"`` axes in the action's
+        # poses take this value (frozen within the action). None until the first
+        # commit installs an action.
+        self._frozen_base: Optional[List[float]] = None
 
         # Pending move (safety gate): when a safety gate is wired, trigger_action
         # / play_action validate and store the move here instead of committing
@@ -152,6 +162,11 @@ class StateMachine:
         if handoff is None:
             print(f"[state] no entry pose for {zone}/{action}")
             return False
+        # Resolve ``"x"`` (frozen/copy) axes to the robot's current position so the
+        # entry pose is concrete: the safety gate collision-checks it, and the
+        # transition holds those axes while the robot moves to the action.
+        if self._last_curjpos:
+            handoff = resolve_x(handoff, self._last_curjpos)
 
         # Safety gate: when wired, store the move as pending (the engine resolves
         # it: conflict + collision checks) instead of committing immediately.
@@ -379,6 +394,9 @@ class StateMachine:
         if handoff is None:
             print(f"[state] no entry pose for {self.current_zone}/{name}")
             return False
+        # Resolve ``"x"`` (frozen/copy) axes so the safety-gate entry pose is concrete.
+        if self._last_curjpos:
+            handoff = resolve_x(handoff, self._last_curjpos)
 
         # Safety gate: when wired, store the move as pending (the engine resolves
         # it) instead of committing immediately.
@@ -409,6 +427,7 @@ class StateMachine:
             # Restart / no shared pose: legacy immediate commit.
             self.current_action = name
             self.action_index = 0
+            self._frozen_base = None  # no transition to capture; build_target falls back to curjpos
             self._midi_pulse = False
         return True
 
@@ -458,6 +477,7 @@ class StateMachine:
         else:
             self.current_action = p["action"]
             self.action_index = 0
+            self._frozen_base = None  # no transition to capture; build_target falls back to curjpos
             self._midi_pulse = False
 
     def clear_pending(self) -> None:
@@ -550,6 +570,7 @@ class StateMachine:
         """
         self.tick += 1
         self.speed = self._current_speed()
+        self._last_curjpos = list(curjpos)
 
         # A pending safety-gated move holds the robot until the engine resolves it.
         if self._pending is not None:
@@ -622,24 +643,31 @@ class StateMachine:
         """Drive the transition one step. Returns the target pose, or None when idle.
 
         When the robot reaches the handoff pose (comparelist), the transition commits
-        and returns None for that tick.
+        and returns None for that tick. Any ``"x"`` (frozen/copy) axes left in the
+        handoff pose are resolved to the robot's current position each tick (the
+        robot holds them while the rest of the pose is driven).
         """
         if self._transition is None:
             return None
         t = self._transition
-        pose = t["pose"]
+        pose = resolve_x(t["pose"], curjpos)
         if comparelist(curjpos, pose, margin=0.1, count=5):
-            self._commit(t)
+            self._commit(t, curjpos)
             return None
         return pose
 
-    def _commit(self, t: dict) -> None:
+    def _commit(self, t: dict, curjpos: Optional[List[float]] = None) -> None:
         """Commit arrival at the transition pose and begin the target action.
 
         ``t`` is the transition dict (zone, action, pose, resume_index). The action
         begins at ``resume_index`` (the index after the shared pose). When that index
         is past the last anchor, the loop rules apply: a looping action wraps to the
         start; a single-run action has no further poses, so it hands off via ``next``.
+
+        ``curjpos`` is the robot's position at arrival; it is captured as the frozen
+        base so ``"x"`` (frozen/copy) axes in the new action hold this value. When not
+        supplied (a direct commit, e.g. a test), it falls back to the transition pose
+        — the robot is at that pose when the commit fires.
         """
         zone = t["zone"]
         action = t["action"]
@@ -647,6 +675,9 @@ class StateMachine:
         self.current_zone = zone
         self.speed = z.speed
         self.current_action = action
+        base = curjpos if curjpos is not None else t.get("pose")
+        if base is not None:
+            self._frozen_base = list(base)
         self._midi_pulse = False
         resume = t.get("resume_index", 0)
         poses = z._action(action).get("poses")
