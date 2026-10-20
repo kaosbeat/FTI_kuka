@@ -129,48 +129,103 @@
   },
   "zone_classes": {
     "ignore": {
-      "camera": { "active": "none", "mode": "idle", "lock": "none" },
+      "camera": {
+        "active": "none",
+        "mode": "idle",
+        "lock": "none"
+      },
       "params": {},
       "color": "#8a8a8a"
     },
     "scan": {
-      "camera": { "active": "wide", "mode": "idle", "lock": "none" },
-      "params": { "scan_s": 2.0 },
+      "camera": {
+        "active": "wide",
+        "mode": "idle",
+        "lock": "none"
+      },
+      "params": {
+        "scan_s": 2
+      },
       "color": "#5b9bd5"
     },
     "track": {
-      "camera": { "active": "wide", "mode": "track", "lock": "auto" },
+      "camera": {
+        "active": "wide",
+        "mode": "track",
+        "lock": "auto"
+      },
       "params": {
-        "lost_s": 2.0,
+        "lost_s": 2,
         "min_conf": 0.1,
         "centrality_weight": 0.1,
-        "attention_guard": ["locked", "intent", "curious", "gentle"],
-        "detect": { "zone": "hunting", "action": "track" },
-        "scan": { "zone": "hunting", "action": "scan" }
+        "attention_guard": [
+          "locked",
+          "intent",
+          "curious",
+          "gentle"
+        ],
+        "detect": {
+          "zone": "hunting",
+          "action": "track"
+        },
+        "scan": {
+          "zone": "hunting",
+          "action": "scan"
+        }
       },
       "color": "#2e6fd0"
     },
     "farfocus": {
-      "camera": { "active": "wide", "mode": "track", "lock": "auto" },
+      "camera": {
+        "active": "wide",
+        "mode": "track",
+        "lock": "auto"
+      },
       "params": {
-        "lost_s": 2.0,
+        "lost_s": 2,
         "min_conf": 0.1,
         "centrality_weight": 0.1,
-        "attention_guard": ["locked", "intent", "curious", "gentle"],
-        "detect": { "zone": "hunting", "action": "track" },
-        "scan": { "zone": "hunting", "action": "scan" }
+        "attention_guard": [
+          "locked",
+          "intent",
+          "curious",
+          "gentle"
+        ],
+        "detect": {
+          "zone": "hunting",
+          "action": "track"
+        },
+        "scan": {
+          "zone": "hunting",
+          "action": "scan"
+        }
       },
       "color": "#00b0c8"
     },
     "approach": {
-      "camera": { "active": "wide", "mode": "track", "lock": "auto" },
+      "camera": {
+        "active": "wide",
+        "mode": "track",
+        "lock": "auto"
+      },
       "params": {
-        "lost_s": 2.0,
+        "lost_s": 2,
         "min_conf": 0.1,
         "centrality_weight": 0.1,
-        "attention_guard": ["locked", "intent", "curious", "gentle"],
-        "detect": { "zone": "hunting", "action": "track" },
-        "scan": { "zone": "hunting", "action": "scan" },
+        "attention_guard": [
+          "locked",
+          "intent",
+          "curious",
+          "gentle"
+        ],
+        "detect": {
+          "zone": "hunting",
+          "action": "track"
+        },
+        "scan": {
+          "zone": "hunting",
+          "action": "scan"
+        },
         "approach_speed": 100,
         "keep_in_sight": 120,
         "engage_dist": 250
@@ -178,17 +233,32 @@
       "color": "#f0862c"
     },
     "facefocus": {
-      "camera": { "active": "close", "mode": "analyze", "lock": "auto" },
+      "camera": {
+        "active": "close",
+        "mode": "analyze",
+        "lock": "auto"
+      },
       "params": {
-        "actions": ["wink", "inspect", "call"],
-        "action_s": 3.0,
+        "actions": [
+          "wink",
+          "inspect",
+          "call"
+        ],
+        "action_s": 3,
         "face_lost_s": 2.5
       },
       "color": "#d9489a"
     },
     "retreat": {
-      "camera": { "active": "wide", "mode": "idle", "lock": "none" },
-      "params": { "retreat_speed": 40, "break_off_s": 3.0 },
+      "camera": {
+        "active": "wide",
+        "mode": "idle",
+        "lock": "none"
+      },
+      "params": {
+        "retreat_speed": 40,
+        "break_off_s": 3
+      },
       "color": "#4caf50"
     }
   },

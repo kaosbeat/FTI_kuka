@@ -90,7 +90,7 @@
             "action": "wake"
           },
           "pose_imgs": [
-            "pose_1792351891652_77103614.png",
+            "pose_1792397354907_2e4d7151.png",
             "pose_1792351922635_a6b53eac.png",
             "pose_1792351903804_8bb45799.png"
           ]
@@ -1767,10 +1767,10 @@
       }
     },
     "view": {
-      "x": -1680.721741925967,
-      "y": -239.49034962464944,
-      "w": 3927.8249999999935,
-      "h": 396.7499999999989
+      "x": -521.5550889027522,
+      "y": 202.12412359520704,
+      "w": 1284.012959857321,
+      "h": 129.6982787734664
     },
     "key": "clawing,cuddling,examining,growling,hunting,leaping,performing,purring,resting,resting_sleeping_bridge,roaring,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge"
   }
