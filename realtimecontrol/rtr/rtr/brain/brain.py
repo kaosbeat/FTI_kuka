@@ -439,6 +439,10 @@ class Brain:
             self._handle_safety_confirm()
         elif c == Cmd.SAFETY_CANCEL:
             self._handle_safety_cancel()
+        elif c == Cmd.CAM_TEST_START:
+            self._handle_cam_test_start(p, curjpos)
+        elif c == Cmd.CAM_TEST_STOP:
+            self._handle_cam_test_stop()
 
     # ------------------------------------------------------------------
     # Engine move mode + cadence.
@@ -678,6 +682,11 @@ class Brain:
         - **retreat → scan**: the break-off time expires.
         """
         self._sync_camera()
+        # Cam test mode: the brain drives the scripted navigation/behavior.
+        if self.machine.test_mode:
+            self._test_tick(curjpos)
+            self._update_hunt_state()
+            return
         if self.machine.control_mode == "manual":
             self._clear_feral_if_stale()
             self._update_hunt_state()
@@ -890,6 +899,8 @@ class Brain:
         next :meth:`_autonomy_tick` follows the current action's next link.
         No-op in manual mode (the operator drives the robot).
         """
+        if self.machine.test_mode:
+            return
         if self.machine.control_mode == "manual":
             return
         if self._autonomy_cfg().get("events", {}).get("midi", False):
@@ -904,6 +915,8 @@ class Brain:
         ignores the pulse otherwise). Unlike the autonomy triggers, this is an
         explicit operator action and works in manual mode too.
         """
+        if self.machine.test_mode:
+            return
         self.machine.midi_pulse()
 
     def _handle_proceed(self) -> None:
@@ -956,3 +969,101 @@ class Brain:
         # old blocked targets are no longer relevant.
         if self._autonomy_prev != cur:
             self._blocked_candidates.clear()
+
+    # ------------------------------------------------------------------
+    # Cam test controller (two-phase: NAVIGATE → BEHAVIOR).
+    # ------------------------------------------------------------------
+    def _handle_cam_test_start(self, p: dict, curjpos: List[float]) -> None:
+        """Start a cam test: navigate to the target zone/action, then run the
+        chosen behavior.
+
+        Payload: ``{zone, action, behavior}`` — the target zone/action and the
+        behavior to run there.
+
+        1. Find a safe path from the current position to the target.
+        2. If no safe path exists, reject (log error, do not enter test mode).
+        3. Enter test mode: the brain drives navigation, then behavior.
+        """
+        target_zone = p.get("zone")
+        target_action = p.get("action")
+        behavior = p.get("behavior")
+        if not target_zone or not target_action or not behavior:
+            print("[brain] cam_test_start: missing zone/action/behavior; ignored")
+            return
+        # Validate the target exists and is enabled.
+        if not self.machine.zones.has(target_zone):
+            print(f"[brain] cam_test_start: unknown zone {target_zone!r}")
+            return
+        tz = self.machine.zones.get(target_zone)
+        if not tz.enabled:
+            print(f"[brain] cam_test_start: disabled zone {target_zone!r}")
+            return
+        if target_action not in tz.actions() or not tz.action_enabled(target_action):
+            print(f"[brain] cam_test_start: unknown or disabled action {target_action!r} in {target_zone!r}")
+            return
+        # Find a safe path from the current position to the target.
+        cur_zone = self.machine.current_zone
+        cur_action = self.machine.current_action or ""
+        zones_dict = self.machine.zones.table()
+        safety_check = None
+        if self.machine.safety is not None:
+            safety_check = self.machine.safety.check_conflict
+        path = find_safe_path(
+            zones_dict,
+            cur_zone, cur_action,
+            target_zone, target_action,
+            safety_check=safety_check,
+        )
+        if path is None:
+            print(f"[brain] cam_test_start: no safe path from {cur_zone}/{cur_action} to {target_zone}/{target_action}")
+            return
+        # The path includes the start position; the brain navigates the rest.
+        # Strip the start (the robot is already there).
+        nav_path = path[1:] if len(path) > 1 else []
+        self.machine.start_cam_test(nav_path, behavior)
+        print(f"[brain] cam test started: navigating {len(nav_path)} waypoints to {target_zone}/{target_action}, behavior={behavior}")
+
+    def _handle_cam_test_stop(self) -> None:
+        """Stop the cam test: clear test state and return to auto mode."""
+        self.machine.stop_cam_test()
+        print("[brain] cam test stopped")
+
+    def _test_tick(self, curjpos: List[float]) -> None:
+        """Per-tick cam test navigation driver.
+
+        Called from :meth:`tick` when ``test_mode`` is active. Drives the two-phase
+        controller:
+
+        - **NAVIGATE**: trigger the next waypoint when the previous one is done.
+          When all waypoints are reached, switch to BEHAVIOR.
+        - **BEHAVIOR**: the robot stays in the target zone/action with the forced
+          behavior running. No further navigation.
+        """
+        m = self.machine
+        if not m.test_mode:
+            return
+        if m.test_phase == "navigate":
+            # Drive the next waypoint when the robot is idle (no transition, no pending).
+            if not m.transitioning and not m.pending:
+                if m.test_path_index < len(m.test_path):
+                    wz, wa = m.test_path[m.test_path_index]
+                    # Trigger the waypoint.
+                    if wz == m.current_zone:
+                        m.play_action(wa)
+                    else:
+                        m.trigger_action(wz, wa)
+                    m.test_path_index += 1
+                    print(f"[brain] cam test: navigating to {wz}/{wa} "
+                          f"({m.test_path_index}/{len(m.test_path)})")
+                else:
+                    # All waypoints triggered; the robot should be at the target.
+                    # Switch to behavior phase.
+                    m.test_phase = "behavior"
+                    m.enable_behavior(m.test_behavior)
+                    print(f"[brain] cam test: arrived at target, running behavior {m.test_behavior!r}")
+            # If transitioning or pending, wait (do nothing this tick).
+        elif m.test_phase == "behavior":
+            # The robot stays in the target zone/action with the forced behavior.
+            # Ensure the behavior keeps running (the machine's step() handles this
+            # via the forced_behavior + current_action).
+            pass

@@ -30,6 +30,7 @@ _BROWSER_CMDS = {
     "random_wrist", "set_screen_patch", "set_render_ui",
     "stop", "proceed", "cam_force_lock", "set_control_mode",
     "safety_confirm", "safety_cancel",
+    "cam_test_start", "cam_test_stop",
 }
 
 

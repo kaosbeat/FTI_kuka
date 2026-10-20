@@ -1,5 +1,5 @@
 {
-  "default": "osc(2, 0.1, 1.2)\n.posterize(3)\n.out()",
+  "default": "",
   "zones": {
     "resting": "osc(2, 0.1, 1.2)\n.posterize(3)\n.out()",
     "sleeping": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out()",

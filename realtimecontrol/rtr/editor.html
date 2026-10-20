@@ -542,6 +542,24 @@
     </section>
   </div>
   <div id="camBrainCards" class="brainGrid" style="margin-top:16px"></div>
+  <section id="camTestSection" style="margin-top:16px">
+    <h2>cam test (navigate + behavior)</h2>
+    <p class="midiHelp">Drive the robot to a variable-axis zone and run a chosen behavior there.
+       All brain autonomy and external inputs are suspended during the test.</p>
+    <div class="row" style="margin-top:8px">
+      <label>zone</label>
+      <select id="camTestZone" style="max-width:180px"></select>
+      <label>action</label>
+      <select id="camTestAction" style="max-width:180px"></select>
+      <label>behavior</label>
+      <select id="camTestBehavior" style="max-width:180px"></select>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="camTestStart" class="small">start test</button>
+      <button id="camTestStop" class="small" disabled>stop test</button>
+      <span id="camTestStatus" style="font-size:12px;color:var(--dim)"></span>
+    </div>
+  </section>
 </main>
 
 <main id="groupsMain" style="display:none">
@@ -6251,6 +6269,66 @@ function camSnapUpdate() {
 }
 $("camSnapBtn").onclick = camSnapUpdate;
 $("camSnapshot").onclick = camSnapUpdate;
+// --- Cam test: navigate to a variable-axis zone + run a behavior ---
+function setupCamTest() {
+  const zoneSel = $("camTestZone");
+  const actionSel = $("camTestAction");
+  const behavSel = $("camTestBehavior");
+  const startBtn = $("camTestStart");
+  const stopBtn = $("camTestStop");
+  const status = $("camTestStatus");
+  // Populate the zone dropdown with zones that have at least one variable-axis action.
+  zoneSel.innerHTML = "";
+  for (const [zn, z] of Object.entries(TABLE)) {
+    const hasVarAxis = Object.values(z.actions || {}).some(
+      a => Array.isArray(a.variable_axes) && a.variable_axes.length > 0
+    );
+    if (!hasVarAxis) continue;
+    const o = document.createElement("option");
+    o.value = zn; o.textContent = zn;
+    zoneSel.appendChild(o);
+  }
+  // Populate the behavior dropdown.
+  behavSel.innerHTML = "";
+  for (const b of BEHAVIORS) {
+    const o = document.createElement("option");
+    o.value = b; o.textContent = b;
+    behavSel.appendChild(o);
+  }
+  // Update the action dropdown when the zone changes.
+  zoneSel.onchange = () => {
+    actionSel.innerHTML = "";
+    const z = TABLE[zoneSel.value];
+    if (z && z.actions) {
+      for (const [an, a] of Object.entries(z.actions)) {
+        if (Array.isArray(a.variable_axes) && a.variable_axes.length > 0) {
+          const o = document.createElement("option");
+          o.value = an; o.textContent = an;
+          actionSel.appendChild(o);
+        }
+      }
+    }
+  };
+  zoneSel.onchange();
+  // Start button.
+  startBtn.onclick = () => {
+    const zone = zoneSel.value;
+    const action = actionSel.value;
+    const behavior = behavSel.value;
+    if (!zone || !action || !behavior) { status.textContent = "select zone, action, and behavior"; return; }
+    send({ cmd: "cam_test_start", zone, action, behavior });
+    status.textContent = "starting...";
+    startBtn.disabled = true;
+    stopBtn.disabled = false;
+  };
+  // Stop button.
+  stopBtn.onclick = () => {
+    send({ cmd: "cam_test_stop" });
+    status.textContent = "stopped";
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+  };
+}
 // Toggle the green ghost (target) arm in the 3D preview.
 let ghostVisible = true;
 $("ghostToggle").onclick = () => {
@@ -6279,7 +6357,7 @@ $("patchCode").oninput = () => {
 // zone table's action names), then the sound mapping, then the patches, then the brain
 // config (the header status bar derives the current zone group from it), then open
 // the WebSocket.
-loadTable().then(loadSound).then(loadPatches).then(loadMidi).then(loadLimits).then(loadBrain).then(connect);
+loadTable().then(loadSound).then(loadPatches).then(loadMidi).then(loadLimits).then(loadBrain).then(connect).then(() => { if (TABLE) setupCamTest(); });
 $("connect").onclick = () => { $("host").value = $("host").value.trim(); connect(); };
 $("save").onclick = save;
 $("addZone").onclick = addZone;
