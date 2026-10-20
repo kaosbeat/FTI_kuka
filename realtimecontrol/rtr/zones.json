@@ -236,6 +236,13 @@
               "zone": "cuddling",
               "action": "breathe"
             }
+          ],
+          "pose_imgs": [
+            null,
+            null,
+            null,
+            null,
+            null
           ]
         },
         "snore": {
@@ -1387,6 +1394,36 @@
             "zone": "leaping",
             "action": "leap"
           }
+        },
+        "lock_target": {
+          "enabled": true,
+          "poses": [
+            [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "behavior": "aggressive",
+          "speed": 100,
+          "loop": true,
+          "pose_imgs": [
+            null,
+            null
+          ],
+          "axis_bands": {}
         }
       }
     },

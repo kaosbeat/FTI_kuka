@@ -459,7 +459,12 @@
           "note": 61,
           "velocity": 75
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       },
       "grab": {
         "start": {
@@ -467,6 +472,34 @@
           "velocity": 80
         },
         "poses": []
+      },
+      "lock target": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      },
+      "lock_target": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "leaping": {
