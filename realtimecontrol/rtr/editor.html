@@ -314,6 +314,7 @@
   <button id="tabBrain">brain</button>
   <button id="tabCam">cam</button>
   <button id="tabValidate">validate</button>
+  <button id="tabRobotConfig">robotconfig</button>
   <button id="save">save</button>
   <span id="saveMsg"></span>
   <button id="backup" title="Download the current config (zones, sound, patches, brain, midi) as one JSON file — a snapshot of the config files on disk.">backup</button>
@@ -528,6 +529,22 @@
   </section>
 </main>
 
+<main id="robotconfigMain" style="display:none">
+  <section>
+    <h2>robotconfig — physical-robot calibration</h2>
+    <p class="midiHelp">Calibration offsets for the <b>real</b> KUKA only (the sim is never offset).
+       Each axis is shifted by these degrees relative to the core's virtual joint space.
+       On the way out the offset is subtracted from the target; on the way in it is added
+       back to the read pose, so the core's arrival check keeps firing.
+       <b>A6</b> is the axis you tune; the others default to 0 (no change) and are kept so
+       more axes can be calibrated later.</p>
+    <div id="robotConfigForm"></div>
+    <div class="row" style="margin-top:12px">
+      <button id="robotConfigReset" class="small">reset to zero</button>
+    </div>
+  </section>
+</main>
+
 <main id="camMain" style="display:none">
   <div class="camCols">
     <section>
@@ -727,6 +744,7 @@ let groupsView = false;
 let camView = false;
 const grpOpen = {};  // group name -> bool (zone-list collapse; default open)
 let validateView = false;
+let robotconfigView = false;
 let valScanTimer = null;   // active scan animation frame id
 // Flow-tab state. Node positions + the user's viewBox persist to zones.json under
 // ``layout`` (see buildFlowLayout/flowSaveLayout); the layoutKey guards flowEnter so
@@ -3037,6 +3055,90 @@ function saveBrain() {
   }).catch((e) => { $("saveMsg").textContent = "save failed: " + e; $("saveMsg").className = "err"; });
 }
 
+// --- robotconfig (physical-robot-only calibration) -----------------------
+// GET /api/robotconfig (falling back to /robotconfig.json, then the built-in
+// all-zero offsets), POST /api/robotconfig to save + hot-reload the running core.
+const ROBOT_JOINTS = ["A1", "A2", "A3", "A4", "A5", "A6"];
+const ROBOT_CONFIG_FALLBACK = { joint_offsets_deg: [0, 0, 0, 0, 0, 0] };
+let ROBOT_CONFIG = null;
+
+function normalizeRobotConfig(data) {
+  const d = (data && typeof data === "object") ? data : {};
+  const arr = (Array.isArray(d.joint_offsets_deg) && d.joint_offsets_deg.length === 6)
+    ? d.joint_offsets_deg.slice()
+    : ROBOT_CONFIG_FALLBACK.joint_offsets_deg.slice();
+  return Object.assign({}, d, { joint_offsets_deg: arr });
+}
+
+async function loadRobotConfig() {
+  let data = null;
+  try {
+    const r = await fetch("/api/robotconfig", { cache: "no-store" });
+    if (r.ok) data = await r.json();
+  } catch (e) {}
+  if (!data) {
+    try {
+      const r = await fetch("/robotconfig.json", { cache: "no-store" });
+      if (r.ok) data = await r.json();
+    } catch (e) {}
+  }
+  if (!data) data = JSON.parse(JSON.stringify(ROBOT_CONFIG_FALLBACK));
+  ROBOT_CONFIG = normalizeRobotConfig(data);
+  if (robotconfigView) buildRobotConfigForm();
+  return ROBOT_CONFIG;
+}
+
+function buildRobotConfigForm() {
+  const el = $("robotConfigForm");
+  el.innerHTML = "";
+  ROBOT_CONFIG.joint_offsets_deg.forEach((val, i) => {
+    const joint = ROBOT_JOINTS[i];
+    const isA6 = joint === "A6";
+    const row = document.createElement("div");
+    row.className = "row";
+    const label = document.createElement("label");
+    label.textContent = joint + (isA6 ? " (calibration)" : "");
+    label.style.maxWidth = "130px";
+    const input = document.createElement("input");
+    input.type = "number";
+    input.step = "0.1";
+    input.value = val;
+    input.style.maxWidth = "160px";
+    if (isA6) input.style.fontWeight = "bold";
+    row.appendChild(label);
+    row.appendChild(input);
+    el.appendChild(row);
+  });
+  $("robotConfigReset").onclick = () => {
+    el.querySelectorAll("input[type=number]").forEach((inp) => { inp.value = 0; });
+  };
+}
+
+function saveRobotConfig() {
+  const inputs = $("robotConfigForm").querySelectorAll("input[type=number]");
+  const offsets = ROBOT_CONFIG.joint_offsets_deg.map((_, i) => {
+    const v = inputs[i];
+    const num = v ? parseFloat(v.value) : 0;
+    return isNaN(num) ? 0 : num;
+  });
+  const payload = Object.assign({}, ROBOT_CONFIG, { joint_offsets_deg: offsets });
+  fetch("/api/robotconfig", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => r.json().then((body) => ({ ok: r.ok, status: r.status, body })))
+   .then(({ ok, status, body }) => {
+    if (ok) {
+      ROBOT_CONFIG = normalizeRobotConfig(payload);
+      $("saveMsg").textContent = "saved";
+      $("saveMsg").className = "";
+    } else {
+      $("saveMsg").textContent = "save failed: " + (body.error || status);
+      $("saveMsg").className = "err";
+    }
+  }).catch((e) => { $("saveMsg").textContent = "save failed: " + e; $("saveMsg").className = "err"; });
+}
+
 // Live brain state from the state frame (hunt state + lock + camera intent + cam telemetry).
 // "facefocus" is shown as "check out" (the robot is stretching at that human).
 // Header status bar (always on): control mode › zone group › zone › action › behavior › #candidates.
@@ -4497,17 +4599,18 @@ function switchView(v) {
   patchView = v === "patches";
   midiView = v === "midi";
   flowView = v === "flow";
-  brainView = v === "brain";
-  groupsView = v === "groups";
-  camView = v === "cam";
-  validateView = v === "validate";
+   brainView = v === "brain";
+   groupsView = v === "groups";
+   camView = v === "cam";
+   validateView = v === "validate";
+   robotconfigView = v === "robotconfig";
   if (wasPatch && !patchView) commitPatchEditor();  // leaving the patches view: commit
   // While in the validate tab, put the core in manual mode so the brain's
   // autonomy/hunt loop does not retarget the pose while inspecting zones.
   // Restore to auto (the core default) when leaving the tab.
   if (validateView && !wasValidate) send({ cmd: "set_control_mode", mode: "manual" });
   else if (!validateView && wasValidate) send({ cmd: "set_control_mode", mode: "auto" });
-  const other = patchView || midiView || flowView || brainView || groupsView || camView || validateView;
+  const other = patchView || midiView || flowView || brainView || groupsView || camView || validateView || robotconfigView;
   $("zoneMain").style.display = other ? "none" : "";
   $("patchesMain").style.display = patchView ? "" : "none";
   $("midiMain").style.display = midiView ? "" : "none";
@@ -4516,6 +4619,7 @@ function switchView(v) {
   $("groupsMain").style.display = groupsView ? "" : "none";
   $("camMain").style.display = camView ? "" : "none";
   $("validateMain").style.display = validateView ? "" : "none";
+  $("robotconfigMain").style.display = robotconfigView ? "" : "none";
   $("tabZones").className = other ? "" : "active";
   $("tabPatches").className = patchView ? "active" : "";
   $("tabMidi").className = midiView ? "active" : "";
@@ -4524,6 +4628,7 @@ function switchView(v) {
   $("tabBrain").className = brainView ? "active" : "";
   $("tabCam").className = camView ? "active" : "";
   $("tabValidate").className = validateView ? "active" : "";
+  $("tabRobotConfig").className = robotconfigView ? "active" : "";
   // Move the shared 3D singleton between the zones and validate tabs. Leaving
   // the tab stops any running scan so it does not keep driving the (now
   // core-owned) arm in the background.
@@ -4552,6 +4657,10 @@ function switchView(v) {
   if (camView) {
     if (BRAIN) buildCamForm();
     else loadBrain();
+  }
+  if (robotconfigView) {
+    if (ROBOT_CONFIG) buildRobotConfigForm();
+    else loadRobotConfig();
   }
 }
 
@@ -5295,6 +5404,7 @@ function save() {
   if (brainView) { saveBrain(); return; }
   if (groupsView) { saveGroups(); return; }
   if (camView) { saveBrain(); return; }
+  if (robotconfigView) { saveRobotConfig(); return; }
   saveZones();
 }
 
@@ -5408,6 +5518,7 @@ const BACKUP_SECTIONS = [
   { name: "patches", api: "/api/patches", file: "/patches.json", mem: () => PATCHES },
   { name: "brain",   api: "/api/brain",   file: "/brain.json",   mem: () => BRAIN },
   { name: "midi",    api: "/api/midi",    file: "/midi.json",    mem: () => MIDI },
+  { name: "robotconfig", api: "/api/robotconfig", file: "/robotconfig.json", mem: () => ROBOT_CONFIG || ROBOT_CONFIG_FALLBACK },
 ];
 // Fetch one section fresh: API (reads the file on disk) -> static file -> the
 // in-memory copy (already loaded at startup; the offline backstop).
@@ -5473,6 +5584,7 @@ async function restoreConfig(bundle) {
   await loadPatches();
   await loadMidi();
   await loadBrain();
+  await loadRobotConfig();
 }
 $("backup").onclick = () => { backupConfig().catch((e) => { $("saveMsg").textContent = "backup failed: " + e; $("saveMsg").className = "err"; }); };
 $("restore").onclick = () => $("restoreFile").click();
@@ -6516,7 +6628,7 @@ $("patchCode").oninput = () => {
 // zone table's action names), then the sound mapping, then the patches, then the brain
 // config (the header status bar derives the current zone group from it), then open
 // the WebSocket.
-loadTable().then(loadSound).then(loadPatches).then(loadMidi).then(loadLimits).then(loadBrain).then(connect).then(() => { if (TABLE) setupCamTest(); });
+  loadTable().then(loadSound).then(loadPatches).then(loadMidi).then(loadLimits).then(loadBrain).then(loadRobotConfig).then(connect).then(() => { if (TABLE) setupCamTest(); });
 $("connect").onclick = () => { $("host").value = $("host").value.trim(); connect(); };
 $("save").onclick = save;
 $("addZone").onclick = addZone;
@@ -6528,8 +6640,9 @@ $("delZone").onclick = delZone;
   $("tabFlow").onclick = () => switchView("flow");
   $("tabGroups").onclick = () => switchView("groups");
   $("tabBrain").onclick = () => switchView("brain");
-  $("tabCam").onclick = () => switchView("cam");
-  $("tabValidate").onclick = () => switchView("validate");
+   $("tabCam").onclick = () => switchView("cam");
+   $("tabValidate").onclick = () => switchView("validate");
+   $("tabRobotConfig").onclick = () => switchView("robotconfig");
   buildValPoseSetter();
   $("valPoseGo").onclick = applyValPose;
   $("valCopyCollision").onclick = copyValCollisionPose;

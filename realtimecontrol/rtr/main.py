@@ -19,7 +19,13 @@ import sys
 from rtr.config import Config
 from rtr.core.bus import StateBus
 from rtr.core.engine import Engine
-from rtr.robot import make_robot, load_chain
+from rtr.robot import (
+    make_robot,
+    load_chain,
+    builtin_robot_config,
+    load_robot_config,
+    robot_config_offsets,
+)
 from rtr.camera.geometry import load_camera_geometry
 from rtr.state import StateMachine, Zones
 from rtr.state.zones import LIN_POSES, POSES, ZONES, load_state_data
@@ -79,6 +85,8 @@ def parse_args(argv):
                         help="patches data file (default: patches.json next to main.py)")
     parser.add_argument("--brain", default="brain.json",
                         help="brain decision config file (default: brain.json next to main.py)")
+    parser.add_argument("--robot-config", default="robotconfig.json",
+                        help="robot calibration config file (default: robotconfig.json next to main.py)")
     parser.add_argument("--no-display", action="store_true", help="disable display (P5live)")
     parser.add_argument("--camera", action="store_true", help="enable the camera adapter")
     return parser.parse_args(argv)
@@ -97,6 +105,7 @@ def build_config(args) -> Config:
     cfg.sound_path = _resolve(args.sound)
     cfg.patches_path = _resolve(args.patches)
     cfg.brain_path = _resolve(args.brain)
+    cfg.robot_config_path = _resolve(args.robot_config)
     cfg.midi_in_port = None if args.no_midi else args.midi
     cfg.midi_path = _resolve(args.midi_json)
     cfg.enable_sound = not args.no_sound
@@ -146,6 +155,15 @@ def load_brain_config_fallback(path: str) -> dict:
         return builtin_brain_config()
 
 
+def load_robot_config_fallback(path: str) -> dict:
+    """Load the robot calibration config, falling back to the built-in defaults with a warning."""
+    try:
+        return load_robot_config(path)
+    except (OSError, ValueError) as exc:
+        print(f"[rtr] robot config file {path!r} unavailable ({exc}); using built-in robot config")
+        return builtin_robot_config()
+
+
 def load_midi_data_fallback(path: str) -> dict:
     """Load the MIDI-in mapping file, falling back to the built-in table with a warning."""
     try:
@@ -165,7 +183,12 @@ async def run(cfg: Config) -> None:
     lin_poses = data.get("lin_poses", LIN_POSES)
 
     # --- core -----------------------------------------------------------
-    robot = make_robot(cfg.robot_kind, port=cfg.robot_port, tick_hz=cfg.tick_hz)
+    # The robot calibration config is physical-robot-only (A6 home offset). It is
+    # loaded once here and hot-reloaded on POST /api/robotconfig (the engine holds
+    # the reload hook). The sim is never offset.
+    robot_cfg = load_robot_config_fallback(cfg.robot_config_path)
+    robot = make_robot(cfg.robot_kind, port=cfg.robot_port, tick_hz=cfg.tick_hz,
+                       joint_offsets=robot_config_offsets(robot_cfg))
     machine = StateMachine(zones, tick_hz=cfg.tick_hz)
     # Safety gate: pre-movement checks (red-link conflict + self-collision).
     # The collision worker is a persistent Node process (collide_worker.js) that
@@ -199,12 +222,22 @@ async def run(cfg: Config) -> None:
                       zones_provider=lambda: machine.zones,
                       midi_loader=lambda: load_midi_data_fallback(cfg.midi_path),
                       brain=brain)
+    # The robot calibration reload hook re-reads the file and applies the new
+    # offsets to the physical robot (guarded: the sim has no such method).
+    robot_cfg_holder = [robot_cfg]
+
+    def _reload_robot_config():
+        new_cfg = load_robot_config_fallback(cfg.robot_config_path)
+        robot_cfg_holder[0] = new_cfg
+        if hasattr(robot, "set_joint_offsets"):
+            robot.set_joint_offsets(robot_config_offsets(new_cfg))
     engine = Engine(bus, robot, brain, machine, tick_hz=cfg.tick_hz,
                     zone_loader=lambda: load_state_data(cfg.zones_path),
                     sound_reload=sound.reload,
                     patch_reload=patches.reload,
                     midi_reload=midi.reload,
                     brain_reload=brain.reload,
+                    robot_reload=_reload_robot_config,
                     screen_patch_override=patches.set_screen_override,
                     render_ui_setter=patches.set_render_ui)
 
@@ -215,11 +248,12 @@ async def run(cfg: Config) -> None:
                       sound_provider=sound.current_data,
                       patches_provider=patches.current_data,
                       midi_provider=midi.current_data,
-                      brain_provider=brain.config,
-                      zones_path=cfg.zones_path, sound_path=cfg.sound_path,
-                      patches_path=cfg.patches_path, midi_path=cfg.midi_path,
-                      brain_path=cfg.brain_path,
-                      midi=midi, sound=sound, root=ROOT,
+                       brain_provider=brain.config,
+                       robotconfig_provider=lambda: robot_cfg_holder[0],
+                       zones_path=cfg.zones_path, sound_path=cfg.sound_path,
+                       patches_path=cfg.patches_path, midi_path=cfg.midi_path,
+                       brain_path=cfg.brain_path, robotconfig_path=cfg.robot_config_path,
+                       midi=midi, sound=sound, root=ROOT,
                       host=cfg.http_host, port=cfg.http_port,
                       enabled=cfg.enable_http)
     # The display pushes the resolved hydra patch in every state frame (the core is

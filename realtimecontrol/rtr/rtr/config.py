@@ -64,6 +64,11 @@ class Config:
     # is the fallback when the file is missing or corrupt.
     brain_path: str = "brain.json"
 
+    # --- robot data (physical-robot-only calibration) --------------------
+    # On-disk robot calibration config (robotconfig.json). The built-in
+    # DEFAULT_ROBOT_CONFIG (all-zero joint offsets) is the fallback.
+    robot_config_path: str = "robotconfig.json"
+
     # --- display / camera / sound ---------------------------------------
     # Only enabled when the corresponding hardware is present.
     enable_display: bool = True

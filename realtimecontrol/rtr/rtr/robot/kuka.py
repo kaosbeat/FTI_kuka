@@ -15,11 +15,18 @@ from .base import RobotBase
 
 
 class KukaRobot(RobotBase):
-    """Drives the physical robot through the EKI (kukapy)."""
+    """Drives the physical robot through the EKI (kukapy).
 
-    def __init__(self, port: int = 18735):
+    ``joint_offsets`` (A1..A6, degrees) shifts the physical home relative to the
+    core's virtual joint space. It is subtracted from joint targets on the way out
+    and added back to the read pose on the way in, so the core's joint space (and
+    its comparelist arrival check) stays consistent. The sim is never offset.
+    """
+
+    def __init__(self, port: int = 18735, joint_offsets: List[float] = None):
         self._port = port
         self._robot = None
+        self._joint_offsets = list(joint_offsets) if joint_offsets else [0.0] * 6
 
     def connect(self) -> None:
         try:
@@ -40,16 +47,22 @@ class KukaRobot(RobotBase):
                 self._robot = None
 
     def get_curjpos(self) -> List[float]:
-        return list(self._robot.get_curjpos())
+        raw = list(self._robot.get_curjpos())
+        return [raw[i] + self._joint_offsets[i] for i in range(len(raw))]
 
     def get_curpos(self) -> List[float]:
         return list(self._robot.get_curpos())
 
     def move_joint(self, pose: List[float], speed: float, blocking: bool = True) -> None:
-        self._move(pose, speed, blocking, linear=False)
+        shifted = [pose[i] - self._joint_offsets[i] for i in range(len(pose))]
+        self._move(shifted, speed, blocking, linear=False)
 
     def move_linear(self, pose: List[float], speed: float, blocking: bool = True) -> None:
         self._move(pose, speed, blocking, linear=True)
+
+    def set_joint_offsets(self, offsets: List[float]) -> None:
+        """Update the joint home offset (hot-reload from the robot config)."""
+        self._joint_offsets = list(offsets)
 
     def _move(self, pose: List[float], speed: float,
               blocking: bool, linear: bool) -> None:
