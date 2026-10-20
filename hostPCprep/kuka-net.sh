@@ -23,8 +23,9 @@
 #   disable -> tears all of that down and restores the standard DHCP config.
 #
 # Usage (as root):
-#   sudo ./kuka-net.sh discover          # show interfaces so you can fill in the CONFIG
+#   sudo ./kuka-net.sh discover          # show the interfaces (numbered list)
 #   sudo ./kuka-net.sh install           # one-time: install network-manager/iw/etc.
+#   sudo ./kuka-net.sh configure         # interactive: pick interfaces/IPs/wifi, save config
 #   sudo ./kuka-net.sh enable            # build the robot-lab network (TEMPORARY — until reboot)
 #   sudo ./kuka-net.sh enable --persist  # build it AND make it survive reboots (boot service)
 #   sudo ./kuka-net.sh disable           # revert to the standard config
@@ -32,6 +33,12 @@
 #   sudo ./kuka-net.sh reset             # force-restore the saved standard config
 #   sudo ./kuka-net.sh save [FILE]       # save the current robot-lab setup to a file
 #   sudo ./kuka-net.sh restore [FILE]    # re-apply the robot-lab setup from a saved file
+#
+#   `enable` and `configure` are INTERACTIVE: they ask for the config variables,
+#   showing a numbered list of interfaces (name + current IP + cable state), and
+#   save the answer to /etc/kuka-net/config.env (later runs use it as defaults).
+#   Before enabling, they OFFER a timestamped backup of the current network state:
+#       /etc/kuka-net/backups/kuka-net-backup-<YYYYmmdd-HHMMSS>.tar.gz
 #
 #   DEFAULT (plain `enable`) is TEMPORARY: the robot-lab network only exists until
 #   you reboot or run `disable`. No persistent config is written, so if you lose
@@ -42,7 +49,9 @@
 set -uo pipefail
 
 # ============================================================
-#  CONFIG — edit to match your SBC. Run `discover` first.
+#  CONFIG — defaults. `configure`/`enable` ask for these interactively
+#  (numbered interface list with current IPs) and save the result to
+#  /etc/kuka-net/config.env, which then takes precedence over these.
 # ============================================================
 # --- Role: which machine is this script running on? ("" = autodetect) ---
 # sbc : the SBC — 2 ethernet ports, AX210 wifi, BeagleBone USB gadget
@@ -130,6 +139,222 @@ detect_beagle(){
 iface_ip(){ ip -4 addr show "$1" 2>/dev/null | awk '/inet /{print $2; exit}'; }
 subnet_of(){ echo "${1%.*}.0/24"; }  # 192.168.7.2 -> 192.168.7.0/24
 
+# ============================================================
+#  Interactive prompts (enable/configure only — never on a non-TTY)
+# ============================================================
+# ask "Label" "default" -> prints the prompt, reads one line; Enter = default.
+ask(){
+  local label="$1" def="$2" ans=""
+  if [[ -t 0 ]]; then
+    printf '  %s [%s]: ' "$label" "$def" > /dev/tty
+    IFS= read -r ans
+  fi
+  if [[ -z "$ans" ]]; then echo "$def"; else echo "$ans"; fi
+}
+
+# ask_secret "Label" "default" -> same, but hidden input (wifi password).
+ask_secret(){
+  local label="$1" def="$2" ans=""
+  if [[ -t 0 ]]; then
+    printf '  %s [%s]: ' "$label" "$def" > /dev/tty
+    IFS= read -rs ans
+    echo > /dev/tty
+  fi
+  if [[ -z "$ans" ]]; then echo "$def"; else echo "$ans"; fi
+}
+
+# ask_yn "Label" "y|n" -> echoes 1/0 (Enter = default).
+ask_yn(){
+  local ans
+  ans=$(ask "$1 (y/n)" "$2")
+  [[ "$ans" =~ ^[Nn] ]] && echo 0 || echo 1
+}
+
+# --- Numbered interface list (name + current IP + type/cable state) ---
+build_iface_list(){
+  IFCACHE=()
+  local if
+  for if in $(ls /sys/class/net/ 2>/dev/null | sort); do
+    case "$if" in lo|docker*|tailscale*|veth*|vm*|kvm*|virbr*|@*) continue ;; esac
+    IFCACHE+=("$if")
+  done
+}
+
+iface_note(){
+  local if="$1" note="" is_wifi=0 c
+  [[ -d "/sys/class/net/$if/wireless" ]] && { note="wifi"; is_wifi=1; }
+  local dev
+  dev=$(readlink -f "/sys/class/net/$if/device" 2>/dev/null || true)
+  grep -qi 'usb' <<<"$dev" && note="USB ${note:+, $note}"
+  [[ -z "$note" ]] && note="ethernet"
+  if [[ "$is_wifi" == 0 ]]; then
+    c=$(cat "/sys/class/net/$if/carrier" 2>/dev/null || echo 0)
+    [[ "$c" == 1 ]] && note="$note (cable)" || note="$note (no cable)"
+  fi
+  echo "$note"
+}
+
+print_iface_list(){
+  local n=1 if ip_
+  printf '  %-4s %-14s %-18s %s\n' "#" "interface" "current IP" "type"
+  for if in "${IFCACHE[@]}"; do
+    ip_=$(iface_ip "$if")
+    printf '  [%d] %-14s %-18s %s\n' "$n" "$if" "${ip_:-none}" "$(iface_note "$if")"
+    n=$((n+1))
+  done
+}
+
+iface_index(){
+  local n=1 if
+  for if in "${IFCACHE[@]}"; do
+    [[ "$if" == "$1" ]] && { echo "$n"; return; }
+    n=$((n+1))
+  done
+  echo 1
+}
+
+# ask_interface "Label" "default-index" -> echoes the chosen iface name.
+# Accepts a number from the list, or an interface name typed directly.
+ask_interface(){
+  local label="$1" def="$2" choice i
+  print_iface_list > /dev/tty
+  while :; do
+    choice=$(ask "$label (number)" "$def")
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#IFCACHE[@]} )); then
+      echo "${IFCACHE[$((choice-1))]}"
+      return
+    fi
+    for i in "${!IFCACHE[@]}"; do
+      [[ "${IFCACHE[$i]}" == "$choice" ]] && { echo "$choice"; return; }
+    done
+    printf '  ? enter a number 1-%s (or an interface name)\n' "${#IFCACHE[@]}" > /dev/tty
+  done
+}
+
+# ============================================================
+#  Config persistence — /etc/kuka-net/config.env
+# ============================================================
+load_config(){
+  [[ -f "$STATE_DIR/config.env" ]] && . "$STATE_DIR/config.env"
+}
+
+write_config(){
+  mkdir -p "$STATE_DIR"
+  cat > "$STATE_DIR/config.env" <<EOF
+# kuka-net config — written $(date '+%Y-%m-%d %H:%M:%S')
+ROLE="$ROLE"
+SBC_SWITCH_IF="$SBC_SWITCH_IF"
+SBC_FREE_IF="$SBC_FREE_IF"
+SBC_WIFI_IF="$SBC_WIFI_IF"
+RPI_SWITCH_IF="$RPI_SWITCH_IF"
+RPI_WIFI_IF="$RPI_WIFI_IF"
+KUKA_IP="$KUKA_IP"
+RPI_IP="$RPI_IP"
+BEAGLE_IF="$BEAGLE_IF"
+BEAGLE_NAME="$BEAGLE_NAME"
+BEAGLE_IP="$BEAGLE_IP"
+WIFI_SSID="$WIFI_SSID"
+WIFI_PASS="$WIFI_PASS"
+RT_PORTS="$RT_PORTS"
+DISABLE_TAILSCALE="$DISABLE_TAILSCALE"
+ENABLE_WIFI="$ENABLE_WIFI"
+EOF
+  log "config saved to $STATE_DIR/config.env"
+}
+
+# ============================================================
+#  Timestamped backup of the current network state
+# ============================================================
+make_backup(){
+  local ts out
+  ts=$(date +%Y%m%d-%H%M%S)
+  out="$STATE_DIR/backups/kuka-net-backup-$ts.tar.gz"
+  mkdir -p "$STATE_DIR/backups"
+  cp -a "$0" "$BACKUP_DIR/kuka-net.sh"
+  [[ -f "$STATE_DIR/config.env" ]] && cp -a "$STATE_DIR/config.env" "$BACKUP_DIR/config.env"
+  command -v iptables-save >/dev/null 2>&1 && iptables-save > "$BACKUP_DIR/iptables-save" 2>/dev/null || true
+  tar czf "$out" -C "$STATE_DIR" backup
+  echo "$out"
+}
+
+# Offer the timestamped backup before anything is changed (Enter = yes).
+offer_backup(){
+  local ans out
+  ans=$(ask_yn "Save a backup of the current network config? (timestamped tarball)" "y")
+  if [[ "$ans" == 1 ]]; then
+    out=$(make_backup)
+    echo "  backup saved: $out"
+    log "timestamped backup: $out"
+  else
+    echo "  (no timestamped backup)"
+  fi
+}
+
+# ============================================================
+#  interactive_configure — ask for the config variables (TTY only)
+# ============================================================
+interactive_configure(){
+  mkdir -p "$STATE_DIR"
+  build_iface_list
+  [[ ${#IFCACHE[@]} -gt 0 ]] || die "no physical interfaces found"
+
+  echo
+  echo "=== kuka-net interactive config ==="
+  echo "(press Enter to accept the [default])"
+
+  # --- Role ---
+  local detected auto role_
+  detected=$(detect_role)
+  if [[ "$detected" == "rpi" ]]; then auto=2; else auto=1; fi
+  echo
+  echo "  Which machine are you configuring? (auto-detected: ${detected:-unknown})"
+  echo "    [1] SBC   — 2 ethernet ports + AX210 wifi + BeagleBone USB gadget"
+  echo "    [2] RPi 5 — 1 ethernet port to the switch + its own wifi"
+  while :; do
+    role_=$(ask "role (1/2)" "$auto")
+    case "$role_" in 1|2) break ;; esac
+    printf '  ? enter 1 or 2\n' > /dev/tty
+  done
+  if [[ "$role_" == 1 ]]; then ROLE=sbc; else ROLE=rpi; fi
+
+  # --- Interfaces for the chosen role ---
+  if [[ "$ROLE" == "sbc" ]]; then
+    SBC_SWITCH_IF=$(ask_interface "SBC ethernet port cabled to the SWITCH (robot LAN)" "$(iface_index "$SBC_SWITCH_IF")")
+    while [[ "$SBC_FREE_IF" == "$SBC_SWITCH_IF" ]]; do
+      SBC_FREE_IF=$(ask_interface "SBC second ethernet port (left free, normal DHCP)" "$(iface_index "$SBC_FREE_IF")")
+    done
+    SBC_WIFI_IF=$(ask_interface "SBC wifi (AX210 — joins the home network)" "$(iface_index "$SBC_WIFI_IF")")
+    local bg; bg=$(detect_beagle)
+    BEAGLE_IF=$(ask_interface "BeagleBone USB gadget (bela — already working)" "$(iface_index "${BEAGLE_IF:-$bg}")")
+  else
+    RPI_SWITCH_IF=$(ask_interface "RPi ethernet port cabled to the SWITCH (robot LAN)" "$(iface_index "$RPI_SWITCH_IF")")
+    RPI_WIFI_IF=$(ask_interface "RPi wifi (joins the home network)" "$(iface_index "$RPI_WIFI_IF")")
+  fi
+
+  # --- Fixed IPs on the robot LAN ---
+  KUKA_IP=$(ask "SBC fixed IP on the robot LAN (the KRC dials in)" "$KUKA_IP")
+  RPI_IP=$(ask "RPi 5 fixed IP on the robot LAN" "$RPI_IP")
+  if [[ "$ROLE" == "sbc" ]]; then
+    BEAGLE_IP=$(ask "BeagleBone IP (Enter = auto)" "$BEAGLE_IP")
+  fi
+
+  # --- Wifi client + options ---
+  ENABLE_WIFI=$(ask_yn "Join the home wifi (client mode) during enable?" "y")
+  if [[ "$ENABLE_WIFI" == 1 ]]; then
+    WIFI_SSID=$(ask "Wifi SSID to join" "$WIFI_SSID")
+    WIFI_PASS=$(ask_secret "Wifi password" "$WIFI_PASS")
+  fi
+  DISABLE_TAILSCALE=$(ask_yn "Stop Tailscale during enable (routing isolation)?" "y")
+
+  echo
+  echo "  Config:"
+  echo "    role          : $ROLE"
+  echo "    switch port   : $([[ "$ROLE" == "sbc" ]] && echo "$SBC_SWITCH_IF" || echo "$RPI_SWITCH_IF")"
+  echo "    wifi          : $([[ "$ROLE" == "sbc" ]] && echo "$SBC_WIFI_IF" || echo "$RPI_WIFI_IF")"
+  echo "    SBC IP        : $KUKA_IP   RPi IP: $RPI_IP"
+  echo "    wifi SSID     : $WIFI_SSID"
+}
+
 # Which machine are we on? Explicit ROLE wins; else infer from the ifaces.
 detect_role(){
   [[ -n "$ROLE" ]] && { echo "$ROLE"; return; }
@@ -172,14 +397,8 @@ pick_wifi_conn(){
 # ============================================================
 cmd_discover(){
   echo "=== Network interfaces ==="
-  for if in $(ls /sys/class/net/ 2>/dev/null); do
-    echo "--- $if ---"
-    echo "  driver : $(basename $(readlink /sys/class/net/$if/device/driver 2>/dev/null) 2>/dev/null || echo '?')"
-    echo "  device : $(readlink -f /sys/class/net/$if/device 2>/dev/null || echo '?')"
-    echo "  carrier: $(cat /sys/class/net/$if/carrier 2>/dev/null || echo '?')"
-    echo "  inet   : $(iface_ip "$if" || echo 'none')"
-    echo "  up     : $(ip link show "$if" 2>/dev/null | grep -q 'state UP' && echo yes || echo no)"
-  done
+  build_iface_list
+  print_iface_list
   echo
   echo "=== USB devices (look for the BeagleBone gadget) ==="
   lsusb 2>/dev/null | grep -viE 'root hub|hub$' || echo "(none)"
@@ -357,13 +576,36 @@ print_hints(){
 }
 
 # ============================================================
+#  configure — interactive: ask for the config variables and save them
+#  (does NOT build the network; just writes /etc/kuka-net/config.env)
+# ============================================================
+cmd_configure(){
+  load_config
+  if [[ -t 0 ]]; then
+    interactive_configure
+    write_config
+  else
+    die "configure needs a TTY: run it from a terminal (not piped)"
+  fi
+}
+
+# ============================================================
 #  enable — snapshot the standard state, then build the network
 # ============================================================
 cmd_enable(){
   local persist="${1:-$PERSIST_DEFAULT}"
+  load_config   # saved config.env becomes the defaults (TTY) / the config (non-TTY)
+  if [[ -t 0 ]]; then
+    interactive_configure
+    write_config
+  else
+    [[ -f "$STATE_DIR/config.env" ]] || die "no saved config and no TTY: run 'sudo $0 configure' (or 'enable') from a terminal first"
+    echo "  (using saved config: $STATE_DIR/config.env)"
+  fi
   is_enabled && { log "already enabled (marker present); re-applying."; }
   mkdir -p "$STATE_DIR"
   snapshot
+  offer_backup
   apply_runtime
   if [[ "$persist" == 1 ]]; then
     make_persistent
@@ -622,6 +864,7 @@ main(){
   case "$cmd" in
     discover) cmd_discover ;;
     install)  cmd_install ;;
+    configure) need_root configure; cmd_configure ;;
     enable)   need_root enable;   cmd_enable "$persist" ;;
     apply)    need_root apply;    apply_runtime ;;   # internal: boot-service target
     disable)  need_root disable;  cmd_disable ;;
@@ -630,7 +873,7 @@ main(){
     reset)    need_root reset;    cmd_reset ;;
     save)     need_root save;     cmd_save "${rest[1]:-}" ;;
     restore)  need_root restore;  cmd_restore "${rest[1]:-}" ;;
-    *) echo "usage: $0 {discover|install|enable [--persist]|disable|status|hints|reset|save [FILE]|restore [FILE]}"; exit 2 ;;
+    *) echo "usage: $0 {discover|install|configure|enable [--persist]|disable|status|hints|reset|save [FILE]|restore [FILE]}"; exit 2 ;;
   esac
 }
 main "$@"
