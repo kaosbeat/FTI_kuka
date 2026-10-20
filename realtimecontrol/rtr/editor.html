@@ -170,12 +170,17 @@
   #aePanel { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
              width: 800px; max-width: 94vw; max-height: 92vh; overflow: auto;
              background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  /* The body (left) + the sticky pose preview (right) share a row; the preview
+     stays pinned to the top-right as the body scrolls. */
+  #aeContentWrap { display: flex; gap: 12px; align-items: flex-start; }
+  #aeBody { flex: 1; min-width: 0; }
+  #aePreviewCol { width: 200px; flex-shrink: 0; position: sticky; top: 0; align-self: flex-start; }
   .aeHead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 10px; }
   .aeHead h2 { margin: 0; color: var(--text); text-transform: none; letter-spacing: 0; font-size: 15px; }
   .aeSec { margin-bottom: 14px; border-bottom: 1px solid #20242d; padding-bottom: 10px; }
   .aeSec h3 { margin: 0 0 8px; }
-  .aePoseRow { display: grid; grid-template-columns: repeat(6, 1fr) 56px 84px; gap: 4px;
-                margin-bottom: 4px; align-items: center; }
+  .aePoseRow { display: grid; grid-template-columns: repeat(6, 52px) 56px 84px; gap: 4px;
+                 margin-bottom: 4px; align-items: center; }
   .aePoseRow input[type=number] { padding: 2px 4px; }
   .aePoseRow input[type=text] { padding: 2px 4px; text-align: center; }
   .aePoseRow input.oob { border-color: #e0a030; color: #e0a030; }
@@ -214,11 +219,10 @@
   #cropBar { display: flex; gap: 8px; align-items: center; justify-content: flex-end;
             margin-top: 10px; }
   #cropBar .lbl { color: var(--dim); font-size: 12px; margin-right: auto; }
-  /* Hover pose preview: the pose rows sit left, the schematic preview right. */
-  .aePoseWrap { display: flex; gap: 12px; align-items: flex-start; }
-  .aePoseList { flex: 1; min-width: 0; }
-  .aePosePrev { width: 200px; flex-shrink: 0; border: 1px solid var(--border);
-                border-radius: 6px; padding: 8px; background: #0d0f13; }
+  /* Pose rows sit in the body; the schematic preview is the sticky #aePreviewCol. */
+  .aePoseList { min-width: 0; }
+  .aePosePrev { width: 100%; box-sizing: border-box; border: 1px solid var(--border);
+                 border-radius: 6px; padding: 8px; background: #0d0f13; }
   .aePrevSvg { display: block; width: 100%; height: 170px; }
   .aePrevBar { display: flex; align-items: center; gap: 4px; font-size: 10px; margin-top: 2px; }
   .aePrevBar .lbl { width: 20px; color: var(--dim); }
@@ -578,7 +582,10 @@
         <button id="aeClose" class="small">close</button>
       </div>
     </div>
-    <div id="aeBody"></div>
+    <div id="aeContentWrap">
+      <div id="aeBody"></div>
+      <div id="aePreviewCol"></div>
+    </div>
     <div class="aeSec"><h3>patch</h3>
       <div id="aePoseImgs" class="aePoseImgs"></div>
       <textarea id="aePatchCode" class="aePatch" spellcheck="false"></textarea>
@@ -2012,6 +2019,7 @@ function commitPatchEditor() {
 // HUD and code-overlay toggles send set_render_ui to the core.
 // ---------------------------------------------------------------------------
 let liveCodeEditing = false;
+let livePushTimer = null;  // debounce timer: auto-pushes the edited live patch after 1s of no keystrokes
 let renderUi = { hud: true, code: false };
 
 function updateLiveCode(code) {
@@ -3944,6 +3952,24 @@ function buildActionEditor() {
   });
   psec.appendChild(mechRow);
 
+  // --- shared pose preview: a sticky top-right column (#aePreviewCol), driven by
+  // whichever axis mechanism is active. axis_bands shows the anchor pose (hover a
+  // band bound to peek at that extreme); variable_axes follows the hovered row. ---
+  const prevCol = $("aePreviewCol");
+  prevCol.innerHTML = "";
+  const pprev = document.createElement("div");
+  pprev.className = "aePosePrev";
+  prevCol.appendChild(pprev);
+  aePrevEl = pprev;
+  aePrevIdx = 0;
+  const getAnchor = () => {
+    const p = a.poses && a.poses[0];
+    return Array.isArray(p) && p.length === 6 ? p : [0,0,0,0,0,0];
+  };
+  const renderPrev = (pose) => {
+    renderPosePreview(Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0], pprev, z.safezone);
+  };
+
   if (isActive) {
     // --- axis_bands section: per-axis min/max, auto-clamped to safezone ---
     psec.appendChild(h3("axis_bands (min / max)"));
@@ -3982,6 +4008,14 @@ function buildActionEditor() {
           // Rebuild to update fixed-axis indicator
           buildActionEditor();
         };
+        // Hover: peek at the anchor pose with this axis driven to the bound.
+        inp.onmouseenter = () => {
+          const v = parseFloat(inp.value);
+          const pp = getAnchor().slice();
+          pp[i] = isNaN(v) ? pp[i] : v;
+          renderPrev(pp);
+        };
+        inp.onmouseleave = () => renderPrev(getAnchor());
         return inp;
       };
       bandGrid.appendChild(mkBandInput(0, "min"));
@@ -4011,10 +4045,12 @@ function buildActionEditor() {
           const [lo, hi] = z.safezone[i];
           inp.className = (a.poses[0][i] < lo || a.poses[0][i] > hi) ? "oob" : "";
         }
+        renderPrev(getAnchor());  // keep the preview in sync while editing the anchor
       };
       anchorRow.appendChild(inp);
     }
     psec.appendChild(anchorRow);
+    renderPrev(getAnchor());  // seed the sticky preview with the anchor pose
   } else {
     // --- variable_axes (checkboxes over the six axes) ---
     psec.appendChild(h3("variable_axes"));
@@ -4036,24 +4072,16 @@ function buildActionEditor() {
   poseHelp.className = "hint";
   poseHelp.textContent = 'Each axis in a pose is one of three states: VARIABLE (in variable_axes — wiggles around the anchor), PINNED (a number — holds the anchor value), or "x" FROZEN (copies the robot\'s value on that axis at the action\'s start — e.g. the camera-lock pose — and holds it for the whole action). Type x in an axis field to freeze it.';
   psec.appendChild(poseHelp);
-  // Two-column layout: the pose rows sit left, the hover preview right. The preview
-  // shows the first pose by default and follows the hovered row; the safezone bars
-  // mirror the oob highlight (the zone-limits display stays on the inputs, untouched).
-  const pwrap = document.createElement("div");
-  pwrap.className = "aePoseWrap";
+  // The pose rows sit in the body; the sticky preview lives in the top-right
+  // #aePreviewCol (shared with axis_bands). The preview shows the first pose by
+  // default and follows the hovered row; the safezone bars mirror the oob
+  // highlight (the zone-limits display stays on the inputs, untouched).
   const plist = document.createElement("div");
   plist.className = "aePoseList";
-  const pprev = document.createElement("div");
-  pprev.className = "aePosePrev";
-  aePrevEl = pprev;
-  aePrevIdx = 0;
-  pwrap.appendChild(plist);
-  pwrap.appendChild(pprev);
-  psec.appendChild(pwrap);
+  psec.appendChild(plist);
   const showPrev = (idx) => {
     aePrevIdx = idx;
-    const pp = a.poses[idx];
-    renderPosePreview(Array.isArray(pp) && pp.length === 6 ? pp : [0,0,0,0,0,0], pprev, z.safezone);
+    renderPrev(a.poses[idx]);
     swapAePoseImg(zn, an, idx);  // pose change: swap the image in s0
   };
   a.poses.forEach((pose, pi) => {
@@ -6565,6 +6593,16 @@ $("liveToggle").onclick = () => {
 // Guard: don't let state frames overwrite the field while the operator is editing.
 $("liveCode").addEventListener("focus", () => { liveCodeEditing = true; });
 $("liveCode").addEventListener("blur", () => { liveCodeEditing = false; });
+// Auto-push: like the patch editor's live preview, an edit in the live-render field is
+// pushed to the render screen (set_screen_patch) after 1s of no keystrokes. Only while
+// still editing (focused) — a blur lets state frames overwrite the field, so a pending
+// push would send a stale value.
+$("liveCode").oninput = () => {
+  if (livePushTimer) clearTimeout(livePushTimer);
+  livePushTimer = setTimeout(() => {
+    if (ws && liveCodeEditing) ws.send(JSON.stringify({ cmd: "set_screen_patch", code: $("liveCode").value }));
+  }, 1000);
+};
 // Action editor (Step 3) modal wiring.
 $("aeClose").onclick = closeActionEditor;
 $("actionEditor").addEventListener("click", (e) => { if (e.target === e.currentTarget) closeActionEditor(); });

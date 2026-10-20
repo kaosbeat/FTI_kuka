@@ -98,7 +98,7 @@ function applyRenderUi(ui) {
   if (!ui) return;
   renderUi = { hud: ui.hud !== false, code: ui.code === true };
   $("hud").style.display = renderUi.hud ? "" : "none";
-  $("codeOverlay").style.display = renderUi.code ? "" : "none";
+  $("codeOverlay").style.display = renderUi.code ? "block" : "none";
 }
 
 // ---------------------------------------------------------------------------
