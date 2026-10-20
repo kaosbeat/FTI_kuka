@@ -162,6 +162,11 @@ class Patches:
         # zone/mode/action match. It is a live control (not persisted to patches.json);
         # the state frame carries it via code_for so every display client follows it.
         self._screen_override: str | None = None
+        # Render-page UI state: {hud: bool, code: bool}. The HUD is the
+        # connection/status overlay; "code" is the PressStart2P code overlay
+        # that mirrors the live patch. Toggled from the editor's patches tab
+        # (SET_RENDER_UI) and pushed in every state frame.
+        self._render_ui: dict = {"hud": True, "code": False}
         self.reload()
 
     def current_data(self) -> dict:
@@ -221,6 +226,24 @@ class Patches:
         """
         self._screen_override = code if (isinstance(code, str) and code) else None
         print(f"[patches] screen override {'cleared' if self._screen_override is None else 'set'}")
+
+    def set_render_ui(self, hud=None, code=None) -> None:
+        """Set the render-page UI state (HUD and code-overlay visibility).
+
+        ``hud`` controls the connection/status overlay; ``code`` controls the
+        PressStart2P code overlay that mirrors the live patch. Either may be
+        ``None`` to leave that flag unchanged. The state is pushed to every
+        display client via the state frame (see :meth:`render_ui`).
+        """
+        if isinstance(hud, bool):
+            self._render_ui["hud"] = hud
+        if isinstance(code, bool):
+            self._render_ui["code"] = code
+        print(f"[patches] render ui: hud={self._render_ui['hud']} code={self._render_ui['code']}")
+
+    def render_ui(self) -> dict:
+        """The current render-page UI state (for the state frame)."""
+        return dict(self._render_ui)
 
 
 def make_patches(bus: StateBus, patches_loader, poses_provider=None) -> Patches:

@@ -33,12 +33,13 @@ class Engine:
 
     def __init__(self, bus: StateBus, robot: RobotBase, brain: Brain,
                  machine: StateMachine, tick_hz: float = 20.0,
-                  zone_loader: Callable[[], dict] = None,
-                  sound_reload: Callable[[], None] = None,
-                  patch_reload: Callable[[], None] = None,
-                  midi_reload: Callable[[], None] = None,
-                  brain_reload: Callable[[], None] = None,
-                  screen_patch_override: "Callable[[str | None], None]" = None):
+                 zone_loader: Callable[[], dict] = None,
+                 sound_reload: Callable[[], None] = None,
+                 patch_reload: Callable[[], None] = None,
+                 midi_reload: Callable[[], None] = None,
+                 brain_reload: Callable[[], None] = None,
+                 screen_patch_override: "Callable[[str | None], None]" = None,
+                 render_ui_setter: "Callable[[], None]" = None):
         self.bus = bus
         self.robot = robot
         self.brain = brain
@@ -52,6 +53,9 @@ class Engine:
         # Sets (or clears) the manual hydra screen override; the core then pushes it in
         # every state frame so the 3D tool screen and the render page follow it.
         self._screen_patch_override = screen_patch_override
+        # Sets the render-page UI state ({hud, code}); pushed in every state frame
+        # so the render page can toggle its HUD and code overlay.
+        self._render_ui_setter = render_ui_setter
         self._running = False
         # The previous tick's (zone, mode, action), used to emit change events.
         self._prev_state = None
@@ -95,6 +99,12 @@ class Engine:
                 elif cmd.cmd == Cmd.SET_SCREEN_PATCH:
                     if self._screen_patch_override is not None:
                         self._screen_patch_override(cmd.payload.get("code"))
+                elif cmd.cmd == Cmd.SET_RENDER_UI:
+                    if self._render_ui_setter is not None:
+                        self._render_ui_setter(
+                            hud=cmd.payload.get("hud"),
+                            code=cmd.payload.get("code"),
+                        )
                 else:
                     self.brain.on_command(cmd, curjpos)
 

@@ -111,6 +111,8 @@ _CTYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".svg": "image/svg+xml",
+    ".ttf": "font/ttf",
+    ".otf": "font/otf",
 }
 
 
@@ -691,7 +693,8 @@ def _make_handler(server: HttpServer):
             if path == "/":
                 return True
             return (path.endswith(".html") or path.endswith(".js") or
-                    path.endswith(".json") or path.startswith("/assets/"))
+                    path.endswith(".json") or path.startswith("/assets/") or
+                    path.endswith(".ttf") or path.endswith(".otf"))
 
         def _serve_static(self, path):
             rel = "client.html" if path == "/" else path.lstrip("/")

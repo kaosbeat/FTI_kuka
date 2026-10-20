@@ -20,6 +20,20 @@
   #hud .k { color: var(--dim); }
   #hud .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: #e05d5d; vertical-align: middle; }
   #hud .dot.on { background: var(--accent); }
+  @font-face {
+    font-family: "PressStart2P";
+    src: url("/rtr/remote/PressStart2P.ttf") format("truetype");
+    font-display: swap;
+  }
+  #codeOverlay {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    z-index: 20; max-width: 80vw; max-height: 80vh; overflow: hidden;
+    background: rgba(0,0,0,.85); border: 2px solid var(--accent); border-radius: 4px;
+    padding: 16px 20px; color: #fff;
+    font-family: "PressStart2P", monospace; font-size: 14px; line-height: 1.6;
+    white-space: pre-wrap; word-break: break-all;
+    pointer-events: none; display: none;
+  }
 </style>
 </head>
 <body>
@@ -31,7 +45,9 @@
   <div class="row"><span class="k">mode</span><span id="mode">—</span></div>
   <div class="row"><span class="k">action</span><span id="action">—</span></div>
   <div class="row"><span class="k">patch</span><span id="patchSlot">—</span></div>
+  <div class="row"><span class="k">midi</span><span id="midiStatus">—</span></div>
 </div>
+<div id="codeOverlay"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/hydra-synth/dist/hydra-synth.js"></script>
 <script>
@@ -45,6 +61,7 @@ let PATCHES = { default: DEFAULT_CODE, zones: {}, modes: {}, actions: {} };
 let hydra = null;
 let lastCode = null;        // the code currently running in the preview
 let ws = null;
+let renderUi = { hud: true, code: false };
 
 const $ = (id) => document.getElementById(id);
 
@@ -70,9 +87,18 @@ function renderCode(code) {
     h.eval(code || DEFAULT_CODE);
     lastCode = code || DEFAULT_CODE;
     $("patchSlot").textContent = slotLabel();
+    // Update the code overlay (shows the running patch in PressStart2P).
+    $("codeOverlay").textContent = lastCode;
   } catch (e) {
     console.log("hydra eval failed:", e);
   }
+}
+
+function applyRenderUi(ui) {
+  if (!ui) return;
+  renderUi = { hud: ui.hud !== false, code: ui.code === true };
+  $("hud").style.display = renderUi.hud ? "" : "none";
+  $("codeOverlay").style.display = renderUi.code ? "" : "none";
 }
 
 // ---------------------------------------------------------------------------
@@ -150,6 +176,8 @@ function connect() {
       // prefer it. Fall back to local matching when it is absent (file:// or an older
       // core that does not push the patch).
       renderCode((typeof m.patch === "string" && m.patch) ? m.patch : matchPatch(m.zone, m.mode, m.action));
+      // Apply the render-page UI state (HUD / code-overlay visibility).
+      applyRenderUi(m.render_ui);
     } else if (m.type === "patches_changed") {
       loadPatches();
     }
@@ -163,7 +191,43 @@ window.addEventListener("resize", () => {
   if (c) { c.width = window.innerWidth; c.height = window.innerHeight; }
 });
 
+// ---------------------------------------------------------------------------
+// MIDI interactivity: load the hydra-midi extension so patches can use
+// note('C4'), cc(45), etc. from local MIDI devices (Web MIDI).
+// ---------------------------------------------------------------------------
+async function setupMidi() {
+  try {
+    if (typeof loadScript !== "function") { $("midiStatus").textContent = "no loadScript"; return; }
+    await loadScript("https://cdn.jsdelivr.net/npm/hydra-midi@latest/dist/index.js");
+    // Current hydra-midi exposes a `Midi` class; older builds exposed a global `midi`.
+    let m = null;
+    if (typeof Midi === "function") m = new Midi({ debug: false, audio: false });
+    else if (typeof midi !== "undefined" && midi) m = midi;
+    if (!m) { $("midiStatus").textContent = "midi not loaded"; return; }
+    await m.start();
+    const inputs = navigator.requestMIDIAccess && navigator.requestMIDIAccess();
+    if (inputs) {
+      inputs.then((access) => {
+        const names = [];
+        for (const inp of access.inputs.values()) names.push(inp.name);
+        $("midiStatus").textContent = names.length ? names.join(", ") : "no input";
+      }).catch(() => { $("midiStatus").textContent = "midi denied"; });
+    } else {
+      $("midiStatus").textContent = "no web midi";
+    }
+  } catch (e) {
+    console.log("midi setup failed:", e);
+    $("midiStatus").textContent = "midi error";
+  }
+}
+
 connect();
+// Load the hydra-midi extension (patches can then use note()/cc() from local MIDI).
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", setupMidi);
+} else {
+  setupMidi();
+}
 </script>
 </body>
 </html>

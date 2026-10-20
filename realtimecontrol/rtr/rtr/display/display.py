@@ -25,11 +25,15 @@ class Display:
                  enabled: bool = True,
                  patch_code: Callable[..., str] = None,
                  camera: Optional[CameraController] = None,
-                 machine=None):
+                 machine=None,
+                 render_ui_provider: Callable[[], dict] = None):
         self.bus = bus
         self._send = send
         self.enabled = enabled
         self._machine = machine
+        # Returns the render-page UI state ({hud, code}); pushed in every state
+        # frame so the render page can toggle its HUD and code overlay.
+        self._render_ui_provider = render_ui_provider
         # Resolves the hydra patch for a state (action > mode > zone > default), with the
         # pose globals injected for an action that has per-pose images (the pose level).
         # The core is the single source of truth: it pushes the resolved code in every
@@ -83,6 +87,16 @@ class Display:
             return None
         return code if isinstance(code, str) and code else None
 
+    def _render_ui_field(self) -> Optional[dict]:
+        """The render-page UI state for the state frame, or None when no provider is wired."""
+        if self._render_ui_provider is None:
+            return None
+        try:
+            ui = self._render_ui_provider()
+        except Exception:  # noqa: BLE001 - a bad provider must not kill the frame
+            return None
+        return ui if isinstance(ui, dict) else None
+
     def _camera_field(self) -> Optional[dict]:
         """The camera intent for the state frame, or None when no camera is wired."""
         if self._camera is None:
@@ -119,6 +133,9 @@ class Display:
             "speed": snap.speed,
             "moving": snap.moving,
         }
+        rui = self._render_ui_field()
+        if rui is not None:
+            frame["render_ui"] = rui
         # Current behavior + its tunable params (the editor/TUI show them; a no-op
         # behavior like calm/bridge carries no params, so the field is absent).
         if self._machine is not None and self._machine.current_action:
@@ -171,6 +188,8 @@ class Display:
 def make_display(bus: StateBus, send: Callable[[dict], None], enabled: bool,
                  patch_code: Callable[..., str] = None,
                  camera: Optional[CameraController] = None,
-                 machine=None) -> Display:
+                 machine=None,
+                 render_ui_provider: Callable[[], dict] = None) -> Display:
     return Display(bus, send, enabled=enabled, patch_code=patch_code,
-                   camera=camera, machine=machine)
+                   camera=camera, machine=machine,
+                   render_ui_provider=render_ui_provider)

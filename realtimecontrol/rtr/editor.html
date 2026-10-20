@@ -383,6 +383,17 @@
     <div id="patchPreview"></div>
     <div id="patchStatus" style="font-size:12px;color:var(--dim);margin-top:6px">preview</div>
   </section>
+  <section>
+    <h2>live render</h2>
+    <div class="row" style="margin-bottom:8px">
+      <button id="livePush">push to render</button>
+      <button id="liveClear" class="small">clear</button>
+      <button id="liveHud" class="small">hud: on</button>
+      <button id="liveCodeOverlay" class="small">code: off</button>
+    </div>
+    <textarea id="liveCode" spellcheck="false"></textarea>
+    <div id="liveInfo" style="font-size:12px;color:var(--dim);margin-top:6px">current render patch (follows state; edit to push a custom patch)</div>
+  </section>
 </main>
 
 <main id="flowMain" style="display:none">
@@ -1020,6 +1031,10 @@ function connect() {
       // The core is in manual mode (holding its pose) while the tab is open, so
       // skipping its drive here keeps the inspected pose stable.
       if (!validateView) Robot3D.update({ joints: m.joints, target: m.target, patch: m.patch });
+      // Live render slot: follow the core's resolved patch (guarded while editing).
+      updateLiveCode(m.patch);
+      // Render-page UI state (HUD / code-overlay toggles).
+      if (m.render_ui) { renderUi = m.render_ui; syncLiveToggles(); }
       // The 3D arm tracks every frame (20 Hz joints), but the discrete readouts below
       // rarely change; rebuild their DOM only when the rendered output changes so the
       // per-frame cost does not fight the rAF render loop.
@@ -1892,6 +1907,31 @@ function setPatchCode(key, code) {
 // Commit the textarea back to the selected slot (the textarea is the live edit buffer).
 function commitPatchEditor() {
   if (selectedPatch) setPatchCode(selectedPatch, $("patchCode").value);
+}
+
+// ---------------------------------------------------------------------------
+// Live render slot: shows the current patch pushed to render.html (m.patch).
+// The operator can edit it and push it as a screen override (set_screen_patch).
+// HUD and code-overlay toggles send set_render_ui to the core.
+// ---------------------------------------------------------------------------
+let liveCodeEditing = false;
+let renderUi = { hud: true, code: false };
+
+function updateLiveCode(code) {
+  // Guard: don't overwrite the field while the operator is editing it.
+  if (liveCodeEditing) return;
+  if (typeof code === "string" && code) {
+    $("liveCode").value = code;
+  }
+}
+
+function sendRenderUi(hud, code) {
+  if (ws) ws.send(JSON.stringify({ cmd: "set_render_ui", hud: hud, code: code }));
+}
+
+function syncLiveToggles() {
+  $("liveHud").textContent = "hud: " + (renderUi.hud ? "on" : "off");
+  $("liveCodeOverlay").textContent = "code: " + (renderUi.code ? "on" : "off");
 }
 
 async function loadPatches() {
@@ -6210,6 +6250,23 @@ $("flowSvg").addEventListener("click", (e) => {
 });
 $("patchAdd").onclick = addPatchAction;
 $("patchRemove").onclick = removePatchSlot;
+// Live render slot: push/clear the screen override + HUD / code-overlay toggles.
+$("livePush").onclick = () => {
+  if (ws) ws.send(JSON.stringify({ cmd: "set_screen_patch", code: $("liveCode").value }));
+};
+$("liveClear").onclick = () => {
+  if (ws) ws.send(JSON.stringify({ cmd: "set_screen_patch", code: null }));
+  $("liveCode").value = "";
+};
+$("liveHud").onclick = () => {
+  sendRenderUi(!renderUi.hud, renderUi.code);
+};
+$("liveCodeOverlay").onclick = () => {
+  sendRenderUi(renderUi.hud, !renderUi.code);
+};
+// Guard: don't let state frames overwrite the field while the operator is editing.
+$("liveCode").addEventListener("focus", () => { liveCodeEditing = true; });
+$("liveCode").addEventListener("blur", () => { liveCodeEditing = false; });
 // Action editor (Step 3) modal wiring.
 $("aeClose").onclick = closeActionEditor;
 $("actionEditor").addEventListener("click", (e) => { if (e.target === e.currentTarget) closeActionEditor(); });

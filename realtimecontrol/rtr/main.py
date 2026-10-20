@@ -205,7 +205,8 @@ async def run(cfg: Config) -> None:
                     patch_reload=patches.reload,
                     midi_reload=midi.reload,
                     brain_reload=brain.reload,
-                    screen_patch_override=patches.set_screen_override)
+                    screen_patch_override=patches.set_screen_override,
+                    render_ui_setter=patches.set_render_ui)
 
     # --- adapters -------------------------------------------------------
     ws = WebSocketServer(bus, host=cfg.ws_host, port=cfg.ws_port,
@@ -226,7 +227,8 @@ async def run(cfg: Config) -> None:
     # no matter what triggered the change (MIDI, WebSocket, HTTP).
     display = make_display(bus, ws.broadcast, enabled=cfg.enable_display,
                             patch_code=patches.code_for, camera=camera,
-                            machine=machine)
+                            machine=machine,
+                            render_ui_provider=patches.render_ui)
 
     # The WebSocket + HTTP bridges come up first, so the control interface is
     # always reachable (and keeps running) while we wait for the robot.
