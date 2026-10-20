@@ -92,7 +92,16 @@
   .msgFields input[type=number] { width: 62px; background: #0d0f13; color: var(--text);
                                    border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; font: inherit; }
   .sndPoses { margin: 2px 0 6px 86px; }
-  #patchesMain { display: grid; gap: 16px; grid-template-columns: 210px 1fr 380px; align-items: start; }
+  #patchesMain { display: block; }
+  .patchTopBar { position: sticky; top: 0; z-index: 20; display: flex; gap: 12px; align-items: center;
+                 min-height: 48px; background: var(--panel); border: 1px solid var(--border);
+                 border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
+  .liveToggle { font-size: 13px; padding: 6px 14px; }
+  .liveToggle.active { background: var(--accent); color: #0b0d10; border-color: var(--accent); }
+  .patchTopHint { font-size: 11px; color: var(--dim); }
+  .patchGrid { display: grid; gap: 16px; grid-template-columns: 210px 1fr 380px; align-items: start; }
+  .patchCenter { position: sticky; top: 64px; align-self: start; }
+  .patchPreview { position: sticky; top: 64px; align-self: start; }
   .patchList { display: flex; flex-direction: column; gap: 4px; }
   .patchList button { width: 100%; text-align: left; }
   #validateMain { display: grid; gap: 16px; grid-template-columns: 210px 1fr 380px; align-items: start; }
@@ -375,35 +384,43 @@
 
 
 <main id="patchesMain" style="display:none">
-  <section>
-    <h2>patch slots</h2>
-    <div class="patchList" id="patchList"></div>
-  </section>
-  <section>
-    <h2 id="patchTitle">patch code</h2>
-    <div class="row" style="margin-bottom:8px">
-      <button id="patchAdd">+ add action patch</button>
-      <button id="patchRemove" class="small">remove</button>
-    </div>
-    <textarea id="patchCode" spellcheck="false"></textarea>
-    <div id="patchInfo"></div>
-  </section>
-  <section>
-    <h2>live preview</h2>
-    <div id="patchPreview"></div>
-    <div id="patchStatus" style="font-size:12px;color:var(--dim);margin-top:6px">preview</div>
-  </section>
-  <section>
-    <h2>live render</h2>
-    <div class="row" style="margin-bottom:8px">
-      <button id="livePush">push to render</button>
-      <button id="liveClear" class="small">clear</button>
-      <button id="liveHud" class="small">hud: on</button>
-      <button id="liveCodeOverlay" class="small">code: off</button>
-    </div>
-    <textarea id="liveCode" spellcheck="false"></textarea>
-    <div id="liveInfo" style="font-size:12px;color:var(--dim);margin-top:6px">current render patch (follows state; edit to push a custom patch)</div>
-  </section>
+  <div class="patchTopBar" id="patchTopBar">
+    <button id="liveToggle" class="liveToggle">&#8617; live render</button>
+    <span class="patchTopHint">edit a patch slot, or switch to live render to push the running patch</span>
+  </div>
+  <div class="patchGrid">
+    <section>
+      <h2>patch slots</h2>
+      <div class="patchList" id="patchList"></div>
+    </section>
+    <section class="patchCenter" id="patchCenter">
+      <div id="patchCodeView">
+        <h2 id="patchTitle">patch code</h2>
+        <div class="row" style="margin-bottom:8px">
+          <button id="patchAdd">+ add action patch</button>
+          <button id="patchRemove" class="small">remove</button>
+        </div>
+        <textarea id="patchCode" spellcheck="false"></textarea>
+        <div id="patchInfo"></div>
+      </div>
+      <div id="liveRenderView" style="display:none">
+        <h2>live render</h2>
+        <div class="row" style="margin-bottom:8px">
+          <button id="livePush">push to render</button>
+          <button id="liveClear" class="small">clear</button>
+          <button id="liveHud" class="small">hud: on</button>
+          <button id="liveCodeOverlay" class="small">code: off</button>
+        </div>
+        <textarea id="liveCode" spellcheck="false"></textarea>
+        <div id="liveInfo" style="font-size:12px;color:var(--dim);margin-top:6px">current render patch (follows state; edit to push a custom patch)</div>
+      </div>
+    </section>
+    <section class="patchPreview" id="patchPreviewCol">
+      <h2>live preview</h2>
+      <div id="patchPreview"></div>
+      <div id="patchStatus" style="font-size:12px;color:var(--dim);margin-top:6px">preview</div>
+    </section>
+  </div>
 </main>
 
 <main id="flowMain" style="display:none">
@@ -1988,6 +2005,16 @@ function syncLiveToggles() {
   $("liveCodeOverlay").textContent = "code: " + (renderUi.code ? "on" : "off");
 }
 
+// Live render mode: the center column shows the live render block instead of the
+// patch-code editor. The toggle is the prominent top-bar control.
+let liveRenderMode = false;
+
+function syncLiveRenderView() {
+  $("patchCodeView").style.display = liveRenderMode ? "none" : "";
+  $("liveRenderView").style.display = liveRenderMode ? "" : "none";
+  $("liveToggle").className = liveRenderMode ? "liveToggle active" : "liveToggle";
+}
+
 async function loadPatches() {
   let data = null;
   try {
@@ -3075,6 +3102,7 @@ function buildPatchesForm() {
     b.className = key === selectedPatch ? "active" : "";
     b.onclick = () => {
       commitPatchEditor();
+      liveRenderMode = false;  // picking a slot edits that patch, not the live render
       selectedPatch = key;
       buildPatchesForm();
     };
@@ -3099,6 +3127,7 @@ function buildPatchesForm() {
   $("patchTitle").textContent = "patch: " + selectedPatch;
   $("patchInfo").textContent = "match precedence: pose > action > behavior > zone > default";
   evalPatchPreview(code);
+  syncLiveRenderView();
 }
 
 function addPatchAction() {
@@ -6317,6 +6346,12 @@ $("liveHud").onclick = () => {
 };
 $("liveCodeOverlay").onclick = () => {
   sendRenderUi(renderUi.hud, !renderUi.code);
+};
+// Top-bar toggle: switch the center column between the patch-code editor and the
+// live render block.
+$("liveToggle").onclick = () => {
+  liveRenderMode = !liveRenderMode;
+  syncLiveRenderView();
 };
 // Guard: don't let state frames overwrite the field while the operator is editing.
 $("liveCode").addEventListener("focus", () => { liveCodeEditing = true; });
