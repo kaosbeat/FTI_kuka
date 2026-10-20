@@ -307,6 +307,42 @@ target (floored to the hardware limits only — see the hardware-floor note abov
 `Brain` no longer participates in the per-tick decision — it only folds commands into
 the machine (`on_command`).
 
+### Variable-axis wiggle bounds
+
+In the **variable_axes** mechanism (the legacy path, used when an action has no
+`axis_bands`), the non-variable axes hold at the action's anchor pose
+(`poses[action_index]`) and the variable axes are driven by the action's **behavior**.
+There is no single fixed wiggle amount — each behavior has its own motion model, and
+every one is clamped to the **zone safezone ∩ hardware limits**
+(`behavior.effective()`), so a variable axis can never leave the zone's per-axis
+`[lo, hi]`.
+
+| Behavior | Motion model | Excursion |
+| --- | --- | --- |
+| `locked` / `intent` / `curious` (camera servo) | Error-driven: `dq = -gain · pinv2(J) · (dx, dy)` | **0 at zero offset** — the axis rests at the anchor; motion is proportional to the tracking error (pixels). `curious` scales the offset by `look_factor` (0.5), `gentle` by `face_factor` (0.5). Bounded by the safezone clamp. |
+| `soothing` / `agitated` / `aggressive` / `exhilarated` / `impatient` / `drowsy` (oscillation) | Sine **centered on the anchor value**, amplitude = safezone half-width × `amp_scale` | soothing **±10%**, drowsy **±20%**, agitated/aggressive/impatient **±30%**, exhilarated **±50%** of the safezone half-width |
+| `restless` (wander) | Random walk: uniform ±`wander_adj`/2 × (1/tick_hz) per tick | ±2.5° × (1/20 Hz) = **±0.25°/tick** (default adj 5.0); clamped each tick, so over time it can drift **anywhere in the safezone** |
+| `vigilant` (scan) | Sine centered on safezone **midpoint**, full amplitude | **The entire safezone** swept back and forth |
+| `spontaneous` (random) | Instant jump | **Anywhere in the safezone** |
+| `calm` / `bridge` | No-op | No motion at all |
+
+Concrete example (zone 1, A2 safezone `[-105, -65]` = 40° wide, half-width 20°): an
+oscillation behavior wiggles the anchor by ±2° (soothing), ±4° (drowsy), ±6°
+(agitated/aggressive/impatient), or ±10° (exhilarated) — then clamps if the anchor sits
+near a safezone edge.
+
+Notes:
+- The `amp_scale` / `freq` / `gain` values are per-behavior params overridable in
+  brain.json's `behaviors` section (read via `behavior._bp`), and the camera `gain` can
+  be overridden per action (the action's `gain` field wins over the per-behavior
+  default).
+- `"x"` (frozen) axes are excluded from `var_axes` entirely — a frozen axis never
+  wiggles, even if it is listed in `variable_axes`.
+- The **axis_bands** mechanism (per-axis `[min, max]`, used by track/farfocus/approach/
+  facefocus actions) has no fixed wiggle: the anchor is the robot's current position
+  clamped into the band each tick and the servo roams within `band ∩ safezone` while
+  keeping the tracked target centered.
+
 ### P5live / WebSocket / client.html
 
 The `io/websocket.py` adapter is the **single bridge** to P5live and any external

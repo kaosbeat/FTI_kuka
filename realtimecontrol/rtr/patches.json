@@ -5,39 +5,39 @@
     "sleeping": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out()",
     "cuddling": "osc(2, 0.12, 1.2)\n.posterize(3)\n.out()",
     "purring": "osc(3, 0.1, 1.2)\n.posterize(5)\n.out()",
-    "stretching": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3).scale(40)\n.out()\n",
-    "hunting": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(4).out()\n",
-    "examining": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out()\n",
-    "performing": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3).out()\n",
+    "stretching": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3).scale(40)\n.out()\n",
+    "hunting": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(4).out()\n",
+    "examining": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out()\n",
+    "performing": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3).out()\n",
     "roaring": "osc(60, 0.4, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
     "growling": "osc(30, 0.35, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
     "clawing": "osc(45, 0.4, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
     "leaping": "osc(80, 0.5, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
-    "resting_sleeping_bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n",
-    "stretching_hunting_bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n",
-    "sleeping_stretching_bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
+    "resting_sleeping_bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n",
+    "stretching_hunting_bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n",
+    "sleeping_stretching_bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
   },
   "modes": {
     "calm": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out()",
-    "restless": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n",
+    "restless": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n",
     "spontaneous": "setResolution(100,100)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(4).out()",
-    "locked": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).out()\n",
-    "intent": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out()\n",
+    "locked": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).out()\n",
+    "intent": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out()\n",
     "vigilant": "osc(6, 0.2, 1.2)\n.kaleid(3)\n.out()",
     "curious": "osc(4, 0.15, 1.2).out()",
-    "gentle": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out()\n",
+    "gentle": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out()\n",
     "soothing": "osc(3, 0.1, 1.2)\n.posterize(5)\n.out()",
     "agitated": "osc(45, 0.4, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
     "aggressive": "osc(50, 0.45, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
     "exhilarated": "osc(80, 0.5, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
     "impatient": "osc(70, 0.45, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
     "drowsy": "osc(1, 0.06, 1.2)\n.posterize(4)\n.out()",
-    "bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
+    "bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
   },
   "actions": {
     "resting": {
       "hold": "// Pose reference images \u2014 pose = current pose index, poseindex[i] = image, s0 only\nvar pose = 0\nvar poseindex = [\"/assets/imgs/pose_1792351891652_77103614.png\", \"/assets/imgs/pose_1792351922635_a6b53eac.png\", \"/assets/imgs/pose_1792351903804_8bb45799.png\"]\ns0.initImage(poseindex[pose])\n\nosc(2, 0.1, 1.2).modulate(src(s0),1)\n.posterize(3)\n.out()",
-      "wake": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
+      "wake": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
     },
     "sleeping": {
       "breathe": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out()",
@@ -53,24 +53,24 @@
       "purr": "osc(3, 0.14, 1.2)\n.posterize(5)\n.out()"
     },
     "stretching": {
-      "look": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3).scale(40)\n.out()\n",
-      "wink": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out()\n",
-      "inspect": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(30)\n.out()\n",
-      "call": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3)\n.out()\n"
+      "look": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3).scale(40)\n.out()\n",
+      "wink": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out()\n",
+      "inspect": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(30)\n.out()\n",
+      "call": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3)\n.out()\n"
     },
     "hunting": {
-      "track": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).out()\n",
-      "focus": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out()\n",
+      "track": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).out()\n",
+      "focus": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out()\n",
       "scan": "osc(6, 0.2, 1.2)\n.kaleid(3)\n.out()",
-      "track2": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
+      "track2": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
     },
     "examining": {
-      "focus": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out()\n",
-      "face": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(30)\n.out()\n"
+      "focus": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out()\n",
+      "face": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(30)\n.out()\n"
     },
     "performing": {
-      "trick": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3).out()\n",
-      "bow": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(4).out()\n"
+      "trick": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3).out()\n",
+      "bow": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(4).out()\n"
     },
     "roaring": {
       "roar": "osc(60, 0.4, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
@@ -89,13 +89,13 @@
       "pacing": "osc(70, 0.45, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n"
     },
     "resting_sleeping_bridge": {
-      "bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
+      "bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
     },
     "stretching_hunting_bridge": {
-      "bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
+      "bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
     },
     "sleeping_stretching_bridge": {
-      "bridge": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
+      "bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
     }
   }
 }

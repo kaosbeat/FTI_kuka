@@ -60,7 +60,7 @@ const Robot3D = (() => {
   // The tool-screen resolution [width, height] — the hydra canvas mapped onto the tool's
   // red mesh. This is the size hydra screen content is rendered at, so when designing
   // patches, design to this resolution. Overridable per init via opts.screenResolution.
-  const SCREEN_RESOLUTION = [512, 512];
+  const SCREEN_RESOLUTION = [768, 768];
 
   let scene, camera, renderer, controls, rotors, rotorsT, toolNode, ghostRoot;
   // Ghost (target) arm visibility — toggled per view by the page's button. Stored so
