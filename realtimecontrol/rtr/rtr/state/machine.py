@@ -104,6 +104,14 @@ class StateMachine:
         # behavior. Set by the enable_behavior command; cleared by clear_behavior.
         # The robot keeps running (no freeze) while a behavior is forced.
         self.forced_behavior: Optional[str] = None
+        # Cam test mode: when active, the brain drives a scripted navigation to a
+        # target zone/action, then runs the chosen behavior. All other inputs are
+        # suspended (rejected by the brain's on_command gate).
+        self.test_mode: bool = False
+        self.test_path: List[tuple] = []  # [(zone, action), ...] waypoints
+        self.test_path_index: int = 0
+        self.test_behavior: str = ""
+        self.test_phase: str = ""  # "navigate" | "behavior"
 
     # ------------------------------------------------------------------
     # Requested changes (called by the brain when a command arrives).
@@ -278,6 +286,47 @@ class StateMachine:
         self.forced_behavior = None
         self.control_mode = "auto"
         print("[state] forced behavior cleared; control mode: auto")
+
+    # ------------------------------------------------------------------
+    # Cam test mode (scripted navigation + behavior).
+    # ------------------------------------------------------------------
+    def start_cam_test(self, path: List[tuple], behavior: str) -> None:
+        """Enter cam test mode: the brain will navigate along ``path`` and then
+        run ``behavior`` at the target zone/action.
+
+        - ``path``: a list of ``(zone, action)`` waypoints from the current
+          position to the target. The robot visits each in order.
+        - ``behavior``: the behavior to run once the target zone/action is reached.
+
+        The test mode suspends all brain autonomy and rejects all commands
+        except CAM_TEST_START/STOP, CAM_* telemetry, and STOP.
+        """
+        self.test_mode = True
+        self.test_path = list(path)
+        self.test_path_index = 0
+        self.test_behavior = behavior
+        self.test_phase = "navigate" if path else "behavior"
+        self.control_mode = "manual"
+        self.forced_behavior = None
+        print(f"[state] cam test started: path={path} behavior={behavior}")
+
+    def stop_cam_test(self) -> None:
+        """Exit cam test mode: clear test state and return to auto mode.
+
+        The robot resumes autonomous navigation.
+        """
+        self.test_mode = False
+        self.test_path = []
+        self.test_path_index = 0
+        self.test_behavior = ""
+        self.test_phase = ""
+        self.forced_behavior = None
+        self.control_mode = "auto"
+        self._transition = None
+        self._pending = None
+        self.current_action = None
+        self.action_index = 0
+        print("[state] cam test stopped; control mode: auto")
 
     # ------------------------------------------------------------------
     # Actions.

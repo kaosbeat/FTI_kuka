@@ -16,7 +16,6 @@
         "examining",
         "performing"
       ],
-      "behaviors": [],
       "enabled": true,
       "params": {
         "speed": 40,
@@ -30,7 +29,6 @@
         "clawing",
         "leaping"
       ],
-      "behaviors": [],
       "enabled": true,
       "params": {
         "speed": 80,
@@ -44,7 +42,6 @@
         "cuddling",
         "purring"
       ],
-      "behaviors": [],
       "enabled": true,
       "params": {
         "speed": 10,
@@ -63,7 +60,6 @@
         "clawing",
         "leaping"
       ],
-      "behaviors": [],
       "enabled": true,
       "params": {
         "speed": 100,
@@ -77,7 +73,6 @@
         "cuddling",
         "purring"
       ],
-      "behaviors": [],
       "enabled": true,
       "params": {
         "speed": 10,
@@ -89,7 +84,6 @@
     "zones": [
       "hunting"
     ],
-    "behaviors": [],
     "enabled": true,
     "params": {
       "lost_s": 2,
@@ -115,7 +109,6 @@
     "zones": [
       "stretching"
     ],
-    "behaviors": [],
     "enabled": true,
     "params": {
       "actions": [

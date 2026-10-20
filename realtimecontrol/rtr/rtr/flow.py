@@ -11,7 +11,8 @@ Zones are pure safe-boundaries; the navigation graph is derived from the
 naming the zone and action to trigger when the action completes.
 """
 
-from typing import Dict, List, Optional
+from collections import deque
+from typing import Callable, Dict, List, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -191,10 +192,113 @@ def build_items(zones: Dict[str, dict], zone: Optional[str]) -> List[dict]:
         if name not in fwd_set:
             items.append({
                 "section": "zones",
-                "kind": "zone",
-                "name": name,
-                "action": None,
-                "target_action": _first_enabled_action(zones, name),
-                "back": True,
-            })
+                 "kind": "zone",
+                 "name": name,
+                 "action": None,
+                 "target_action": _first_enabled_action(zones, name),
+                 "back": True,
+             })
     return items
+
+
+# ---------------------------------------------------------------------------
+# Safe path-finding (BFS over the (zone, action) graph).
+# ---------------------------------------------------------------------------
+def find_safe_path(
+    zones: Dict[str, dict],
+    from_zone: str,
+    from_action: str,
+    to_zone: str,
+    to_action: str,
+    safety_check: Optional[Callable[..., Tuple[bool, List[str]]]] = None,
+) -> Optional[List[Tuple[str, str]]]:
+    """BFS over the ``(zone, action)`` node graph to find a safe path.
+
+    Nodes are ``(zone, action)`` pairs. Edges come from:
+    - each action's ``next`` field (ordered list of ``{zone, action}``), and
+    - each zone's ``exits`` field (list of ``[zone, action]`` pairs).
+
+    When ``safety_check`` is provided (signature:
+    ``check_conflict(from_zone, from_action, to_zone, to_action) -> (bool, issues)``),
+    each edge is filtered: edges where ``check_conflict`` returns ``True`` (a
+    conflict exists) are excluded from the graph.
+
+    Returns the shortest path as a list of ``(zone, action)`` waypoints
+    (including the start and end), or ``None`` when no safe path exists.
+    """
+    if not isinstance(zones, dict):
+        return None
+    start = (from_zone, from_action)
+    target = (to_zone, to_action)
+    if start == target:
+        return [start]
+
+    # Build the adjacency list: node -> list of (neighbor_node, is_valid).
+    # A node is valid when the zone exists, is enabled, and the action exists
+    # and is enabled.
+    def _node_valid(z: str, a: str) -> bool:
+        if not isinstance(z, str) or not isinstance(a, str):
+            return False
+        zone = zones.get(z)
+        if not isinstance(zone, dict):
+            return False
+        if zone.get("enabled") is False:
+            return False
+        actions = zone.get("actions", {})
+        if not isinstance(actions, dict):
+            return False
+        act = actions.get(a)
+        if not isinstance(act, dict):
+            return False
+        if act.get("enabled") is False:
+            return False
+        return True
+
+    def _edges_from(z: str, a: str) -> List[Tuple[str, str]]:
+        """All (zone, action) successors of node (z, a)."""
+        out: List[Tuple[str, str]] = []
+        zone = zones.get(z)
+        if not isinstance(zone, dict):
+            return out
+        # Edges from the action's next field.
+        act = zone.get("actions", {}).get(a, {})
+        for n in action_next_list(act):
+            nz, na = n.get("zone"), n.get("action")
+            if isinstance(nz, str) and isinstance(na, str):
+                out.append((nz, na))
+        # Edges from the zone's exits field.
+        exits = zone.get("exits", [])
+        if isinstance(exits, list):
+            for e in exits:
+                if isinstance(e, (list, tuple)) and len(e) >= 2:
+                    out.append((e[0], e[1]))
+        return out
+
+    # BFS.
+    parent: Dict[Tuple[str, str], Tuple[str, str]] = {}
+    visited: set = {start}
+    queue = deque([start])
+    while queue:
+        cur = queue.popleft()
+        if cur == target:
+            # Reconstruct the path.
+            path = [target]
+            node = target
+            while node != start:
+                node = parent[node]
+                path.append(node)
+            path.reverse()
+            return path
+        for neighbor in _edges_from(*cur):
+            if neighbor in visited:
+                continue
+            if not _node_valid(*neighbor):
+                continue
+            if safety_check is not None:
+                conflict, _issues = safety_check(*cur, *neighbor)
+                if conflict:
+                    continue
+            visited.add(neighbor)
+            parent[neighbor] = cur
+            queue.append(neighbor)
+    return None

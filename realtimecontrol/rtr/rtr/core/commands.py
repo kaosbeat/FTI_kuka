@@ -43,6 +43,8 @@ class Cmd(str, Enum):
     SAFETY_CANCEL = "safety_cancel"
     ENABLE_BEHAVIOR = "enable_behavior"
     CLEAR_BEHAVIOR = "clear_behavior"
+    CAM_TEST_START = "cam_test_start"
+    CAM_TEST_STOP = "cam_test_stop"
 
 
 class Event(str, Enum):

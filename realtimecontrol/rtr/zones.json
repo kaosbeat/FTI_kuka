@@ -1714,12 +1714,12 @@
         "y": 98.76288604736328
       },
       "sleeping": {
-        "x": 281.95721435546875,
-        "y": 75.08231353759766
+        "x": 317.1058349609375,
+        "y": 77.07186126708984
       },
       "cuddling": {
-        "x": 557.7581176757812,
-        "y": 101.43385314941406
+        "x": 527.0128173828125,
+        "y": 118.15058135986328
       },
       "purring": {
         "x": 83.83537292480469,
@@ -1767,10 +1767,10 @@
       }
     },
     "view": {
-      "x": -521.5550889027522,
-      "y": 202.12412359520704,
-      "w": 1284.012959857321,
-      "h": 129.6982787734664
+      "x": 2229.9841689237005,
+      "y": 207.61139209585014,
+      "w": 734.1385771819415,
+      "h": 149.35673075002833
     },
     "key": "clawing,cuddling,examining,growling,hunting,leaping,performing,purring,resting,resting_sleeping_bridge,roaring,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge"
   }

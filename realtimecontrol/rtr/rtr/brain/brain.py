@@ -22,6 +22,7 @@ import time
 from typing import List, Optional, Tuple
 
 from ..core.commands import Cmd, Command
+from ..flow import find_safe_path
 from ..state.behavior import clamp
 from ..state.machine import StateMachine
 from ..state.zones import MODES  # re-exported for `from rtr.brain import MODES`
@@ -367,10 +368,21 @@ class Brain:
     # ------------------------------------------------------------------
     # Command intake.
     # ------------------------------------------------------------------
+    # Commands allowed during cam test mode (all others are rejected).
+    _TEST_ALLOWED_CMDS = frozenset({
+        Cmd.CAM_TEST_START, Cmd.CAM_TEST_STOP,
+        Cmd.CAM_STATUS, Cmd.CAM_CANDIDATES, Cmd.CAM_TRACK,
+        Cmd.CAM_FACE, Cmd.CAM_FORCE_LOCK, Cmd.STOP,
+    })
+
     def on_command(self, cmd: Command, curjpos: List[float]) -> None:
         """Fold one command into the state machine."""
         c = cmd.cmd
         p = cmd.payload
+        # Cam test mode: reject all commands except the allowed set.
+        if self.machine.test_mode and c not in self._TEST_ALLOWED_CMDS:
+            print(f"[brain] cam test mode: rejecting command {c.value}")
+            return
         # [debug] log every command that can clear the current action, with the
         # robot pose at the moment it arrives (to pin down what clears hold).
         if c in (Cmd.STOP, Cmd.SET_CONTROL_MODE, Cmd.CLEAR_ACTION, Cmd.SET_JOINT_POSE,
