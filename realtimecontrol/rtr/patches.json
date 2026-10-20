@@ -1,5 +1,5 @@
 {
-  "default": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n",
+  "default": "osc(2, 0.1, 1.2)\n.posterize(3)\n.out()",
   "zones": {
     "resting": "osc(2, 0.1, 1.2)\n.posterize(3)\n.out()",
     "sleeping": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out()",
@@ -36,7 +36,7 @@
   },
   "actions": {
     "resting": {
-      "hold": "osc(2, 0.1, 1.2)\n.posterize(3)\n.out()",
+      "hold": "// Pose reference images \u2014 pose = current pose index, poseindex[i] = image, s0 only\nvar pose = 0\nvar poseindex = [\"/assets/imgs/pose_1792351891652_77103614.png\", \"/assets/imgs/pose_1792351922635_a6b53eac.png\", \"/assets/imgs/pose_1792351903804_8bb45799.png\"]\ns0.initImage(poseindex[pose])\n\nosc(2, 0.1, 1.2).modulate(src(s0),1)\n.posterize(3)\n.out()",
       "wake": "setResolution(512,512)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
     },
     "sleeping": {

@@ -28,11 +28,21 @@ cp files from ./config >> ~/.config
 systemctl --user daemonreload
 
 ## robot-lab network (kuka-net.sh)
-builds the KUKA robot-lab network (fixed Kuka IP + RPi link + AX210 AP + BELA).
+builds the KUKA robot-lab network. The robot, the RPi 5 and the SBC all hang off ONE
+switch, and the switch carries the fixed robot LAN `192.168.10.0/24`. The same script
+runs on both machines; `ROLE` in the CONFIG selects which (empty = autodetect):
+
+- `sbc` : one ethernet port (`enp15s0`) to the switch @ `192.168.10.111`, the second
+  ethernet port (`enp24s0`) left free, AX210 wifi client, BeagleBone/BELA USB gadget.
+- `rpi` : one ethernet port (`eth0`) to the switch @ `192.168.10.113`, its own wifi client.
+
+Both machines join the same wifi network (`WIFI_SSID`/`WIFI_PASS` in the CONFIG) as a
+client, and NAT it to the robot LAN so your PC/TB20plus can reach the SBC/RPi and
+`http://bela.local`. The wifi LAN is NATed, so it never shares the Kuka's real-time segment.
 
 ```
 sudo ./kuka-net.sh discover          # show iface names, fill in the CONFIG section
-sudo ./kuka-net.sh install           # one-time: hostapd dnsmasq iw etc.
+sudo ./kuka-net.sh install           # one-time: network-manager iw etc.
 sudo ./kuka-net.sh enable            # build it — TEMPORARY, reverts on reboot
 sudo ./kuka-net.sh enable --persist  # same, but survives reboot (boot service + sysctl)
 sudo ./kuka-net.sh status            # current state (enabled / persist / runtime)
