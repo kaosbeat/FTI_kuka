@@ -4032,6 +4032,10 @@ function buildActionEditor() {
     });
     psec.appendChild(va);
   psec.appendChild(h3("poses"));
+  const poseHelp = document.createElement("div");
+  poseHelp.className = "hint";
+  poseHelp.textContent = 'Each axis in a pose is one of three states: VARIABLE (in variable_axes — wiggles around the anchor), PINNED (a number — holds the anchor value), or "x" FROZEN (copies the robot\'s value on that axis at the action\'s start — e.g. the camera-lock pose — and holds it for the whole action). Type x in an axis field to freeze it.';
+  psec.appendChild(poseHelp);
   // Two-column layout: the pose rows sit left, the hover preview right. The preview
   // shows the first pose by default and follows the hovered row; the safezone bars
   // mirror the oob highlight (the zone-limits display stays on the inputs, untouched).
