@@ -20,7 +20,12 @@
   .dot.on { background: var(--accent); }
   #status { color: var(--dim); }
   #statusBar { background: #0d0f13; border: 1px solid var(--border); border-radius: 4px;
-               padding: 3px 8px; font-size: 12px; white-space: nowrap; }
+                padding: 3px 8px; font-size: 12px; white-space: nowrap; }
+  #midiLights { display: inline-flex; align-items: center; gap: 4px; }
+  .midiLight { width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+               background: #2a2f3a; }
+  .midiLight.on { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .midiLightLbl { color: var(--dim); font-size: 11px; }
   #statusBar .sbSep { color: var(--dim); opacity: .55; padding: 0 5px; }
   #host { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
           padding: 6px 8px; width: 260px; font: inherit; }
@@ -117,6 +122,10 @@
 <header>
   <h1>Exhibiting Intelligence - direct brain interface</h1>
   <span class="dot" id="dot"></span><span id="status">disconnected</span>
+  <span id="midiLights" title="MIDI activity — in / out">
+    <span class="midiLight" id="midiInLight"></span><span class="midiLightLbl">in</span>
+    <span class="midiLight" id="midiOutLight"></span><span class="midiLightLbl">out</span>
+  </span>
   <span id="statusBar"></span>
   <input id="host" value="ws://localhost:8765" spellcheck="false">
   <button id="connect">connect</button>
@@ -562,6 +571,10 @@ function connect() {
       const reason = reasons.length ? reasons.join(" + ") : "safety block";
       log("auto discarded move to " + m.zone + " / " + m.action + " — " + reason, "warn");
     }
+    else if (m.type === "pose_conflict") {
+      const pose = m.pose ? JSON.stringify(m.pose) : "?";
+      log("pose override cleared action " + m.action + " (zone " + m.zone + ") → " + pose, "warn");
+    }
     else log("event " + m.type + " = " + (m.zone !== undefined ? m.zone : m.mode));
   };
 }
@@ -614,6 +627,30 @@ const valEls = [], tgtEls = [], markEls = [];
 const zoneBtns = {}, actionBtns = {};
 const poseInputs = [];
 
+// MIDI activity lights: the server's monitor ring (newest last, monotonic seq)
+// flashes the header dots when fresh in/out traffic arrives.
+let lastMidiSeq = 0;
+function renderMidiLights(ring) {
+  if (!Array.isArray(ring)) return;
+  let inNew = false, outNew = false;
+  for (const e of ring) {
+    if (e.seq > lastMidiSeq) {
+      if (e.dir === "in") inNew = true;
+      else outNew = true;
+      lastMidiSeq = e.seq;
+    }
+  }
+  flashLight("midiInLight", inNew);
+  flashLight("midiOutLight", outNew);
+}
+function flashLight(id, on) {
+  if (!on) return;
+  const el = $(id);
+  el.classList.add("on");
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove("on"), 350);
+}
+
 function renderState(s) {
   // Actions are per-zone: rebuild the action buttons whenever the zone changes.
   if (s.zone !== currentZone) {
@@ -641,6 +678,9 @@ function renderState(s) {
     $("cmManual").className = "seg manual" + (manual ? " active" : "");
     $("cmAuto").className = "seg auto" + (!manual ? " active" : "");
   }
+
+  // MIDI activity lights: flash the in/out dots when the monitor ring has new entries.
+  renderMidiLights(s.midi_monitor);
 
   for (let i = 0; i < 6; i++) {
     valEls[i].textContent = fmt(s.joints[i]);

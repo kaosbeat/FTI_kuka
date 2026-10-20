@@ -61,6 +61,7 @@ class Event(str, Enum):
     CAM_CONTROL = "cam_control"
     SAFETY_ALERT = "safety_alert"
     SAFETY_DISCARD = "safety_discard"
+    POSE_CONFLICT = "pose_conflict"
 
 
 @dataclass

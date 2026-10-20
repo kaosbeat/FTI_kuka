@@ -270,6 +270,16 @@
                  border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; line-height: 1.5; }
   .midiExample .exLbl { color: var(--accent); font-weight: bold; }
   .midiFieldHelp { font-size: 11px; color: var(--dim); margin-top: 2px; }
+  /* Live MIDI monitor: the last raw in / commands out. */
+  #midiMonitorSection { grid-column: 1 / -1; }
+  #midiMonitor { background: #0d0f13; border: 1px solid var(--border); border-radius: 6px;
+                padding: 8px 10px; font-size: 12px; line-height: 1.6;
+                max-height: 260px; overflow: auto; }
+  .mmRow { display: flex; gap: 8px; white-space: nowrap; }
+  .mmTs { color: var(--dim); min-width: 62px; }
+  .mmDir { min-width: 22px; font-weight: bold; }
+  .mmDir.in { color: #4fa0e0; }
+  .mmDir.out { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -477,6 +487,12 @@
       <span id="midiStatus" style="font-size:12px;color:var(--dim)"></span>
     </div>
   </div>
+  <section id="midiMonitorSection">
+    <h2>live monitor</h2>
+    <p class="midiHelp">The last raw MIDI traffic: <b>in</b> = messages received on the MIDI port,
+      <b>out</b> = commands the core sent. Newest at the bottom.</p>
+    <div id="midiMonitor"></div>
+  </section>
 </main>
 
 <main id="brainMain" style="display:none">
@@ -1071,6 +1087,7 @@ function connect() {
         if (fhFp !== _flowFp) { _flowFp = fhFp; applyFlowHighlight(); }
       }
       if (brainView) renderBrainLive(m);
+      if (midiView) renderMidiMonitor(m.midi_monitor);
     } else if (m.type === "sound_changed") {
       // The running core reloaded the sound mapping; re-fetch it.
       loadSound().then(() => { if (midiView) buildMidiOutForm(); });
@@ -1626,6 +1643,43 @@ async function loadMidi() {
   } catch (e) { midiPorts = []; }
   if (midiView) buildMidiInForm();
   return MIDI;
+}
+
+// ---------------------------------------------------------------------------
+// Live MIDI monitor: the last raw in / commands out (from the state frame).
+// ---------------------------------------------------------------------------
+let _midiMonFp = null;
+function renderMidiMonitor(ring) {
+  const el = $("midiMonitor");
+  if (!el || !Array.isArray(ring)) return;
+  // Change-detect on the newest seq: rebuild only when the ring advanced.
+  const fp = ring.length ? String(ring[ring.length - 1].seq) : "empty";
+  if (fp === _midiMonFp) return;
+  _midiMonFp = fp;
+  el.innerHTML = ring.slice(-30).map(mmRow).join("");
+}
+function mmRow(e) {
+  const ts = e.ts ? new Date(e.ts * 1000).toLocaleTimeString() : "";
+  const body = e.dir === "in"
+    ? fmtMidiMsg(e.msg)
+    : (e.cmd ? e.cmd + (e.payload ? " " + JSON.stringify(e.payload) : "") : "—");
+  return `<div class="mmRow"><span class="mmTs">${ts}</span>` +
+         `<span class="mmDir ${e.dir}">${e.dir}</span><span>${body}</span></div>`;
+}
+// Decode a raw MIDI message into a short human label.
+function fmtMidiMsg(msg) {
+  if (!Array.isArray(msg) || msg.length < 2) return "—";
+  const st = msg[0], ch = st & 0x0F, d = msg[1], v = msg[2];
+  const names = { 0x80: "note off", 0x90: "note on", 0xA0: "poly", 0xB0: "cc",
+                  0xC0: "program", 0xD0: "nrp", 0xE0: "aftertouch" };
+  const base = names[st & 0xF0];
+  if (base) {
+    if (base === "cc") return `cc ${d}=${v}`;
+    if (base === "program") return `program ${d}`;
+    if (base === "nrp") return `nrp ${d}=${v}`;
+    return `${base} ch${ch} ${d}` + (v !== undefined ? ` v${v}` : "");
+  }
+  return msg.map((b) => b.toString(16).padStart(2, "0")).join(" ");
 }
 
 function buildMidiInForm() {

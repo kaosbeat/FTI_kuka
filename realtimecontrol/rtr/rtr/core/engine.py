@@ -106,6 +106,15 @@ class Engine:
                             code=cmd.payload.get("code"),
                         )
                 else:
+                    if cmd.cmd == Cmd.SET_JOINT_POSE and self.machine.current_action is not None:
+                        # A raw joint pose is about to clear the active action (the
+                        # brain's SET_JOINT_POSE handler calls clear_action); surface
+                        # the conflict so the operator sees what was interrupted.
+                        self.bus.publish(Event.POSE_CONFLICT, {
+                            "action": self.machine.current_action,
+                            "zone": self.machine.current_zone,
+                            "pose": cmd.payload.get("pose"),
+                        })
                     self.brain.on_command(cmd, curjpos)
 
             # Hunt bookkeeping (lost detection / rescan) before the step, so a

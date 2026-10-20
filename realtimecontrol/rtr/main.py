@@ -228,7 +228,8 @@ async def run(cfg: Config) -> None:
     display = make_display(bus, ws.broadcast, enabled=cfg.enable_display,
                             patch_code=patches.code_for, camera=camera,
                             machine=machine,
-                            render_ui_provider=patches.render_ui)
+                            render_ui_provider=patches.render_ui,
+                            midi_monitor_provider=midi.monitor)
 
     # The WebSocket + HTTP bridges come up first, so the control interface is
     # always reachable (and keeps running) while we wait for the robot.

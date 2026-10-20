@@ -26,7 +26,8 @@ class Display:
                  patch_code: Callable[..., str] = None,
                  camera: Optional[CameraController] = None,
                  machine=None,
-                 render_ui_provider: Callable[[], dict] = None):
+                 render_ui_provider: Callable[[], dict] = None,
+                 midi_monitor_provider: Callable[[], list] = None):
         self.bus = bus
         self._send = send
         self.enabled = enabled
@@ -43,6 +44,10 @@ class Display:
         # The core-side camera controller; its intent is broadcast in every state
         # frame and via CAM_CONTROL event frames for the fast path.
         self._camera = camera
+        # Returns the MIDI monitor ring (recent raw in / commands out); pushed in
+        # every state frame so the editor's live monitor and the client's activity
+        # lights can show the actual MIDI traffic.
+        self._midi_monitor_provider = midi_monitor_provider
         bus.subscribe(self.on_event)
 
     def on_event(self, event: Event, data) -> None:
@@ -72,6 +77,9 @@ class Display:
         elif event == Event.SAFETY_DISCARD:
             # Auto mode discarded a safety-blocked move; the control client logs it.
             self._send({"type": "safety_discard", **data})
+        elif event == Event.POSE_CONFLICT:
+            # A SET_JOINT_POSE cleared the active action; the control client logs it.
+            self._send({"type": "pose_conflict", **data})
 
     def _patch_for(self, snap: Snapshot) -> str | None:
         """The resolved hydra patch for this state, or None if resolution is unavailable.
@@ -96,6 +104,18 @@ class Display:
         except Exception:  # noqa: BLE001 - a bad provider must not kill the frame
             return None
         return ui if isinstance(ui, dict) else None
+
+    def _midi_monitor_field(self) -> Optional[list]:
+        """The MIDI monitor ring for the state frame, or None when no provider is wired.
+
+        A failure in the provider degrades to None (the frame is still sent)."""
+        if self._midi_monitor_provider is None:
+            return None
+        try:
+            ring = self._midi_monitor_provider()
+        except Exception:  # noqa: BLE001 - a bad provider must not kill the frame
+            return None
+        return list(ring) if isinstance(ring, (list, tuple)) else None
 
     def _camera_field(self) -> Optional[dict]:
         """The camera intent for the state frame, or None when no camera is wired."""
@@ -182,6 +202,11 @@ class Display:
             frame["cadence"] = snap.cadence
         if snap.cadence_every is not None:
             frame["cadence_every"] = snap.cadence_every
+        # The MIDI monitor ring (recent raw in / commands out); the editor's live
+        # monitor and the client's activity lights read it from the state frame.
+        mm = self._midi_monitor_field()
+        if mm is not None:
+            frame["midi_monitor"] = mm
         return frame
 
 
@@ -189,7 +214,9 @@ def make_display(bus: StateBus, send: Callable[[dict], None], enabled: bool,
                  patch_code: Callable[..., str] = None,
                  camera: Optional[CameraController] = None,
                  machine=None,
-                 render_ui_provider: Callable[[], dict] = None) -> Display:
+                 render_ui_provider: Callable[[], dict] = None,
+                 midi_monitor_provider: Callable[[], list] = None) -> Display:
     return Display(bus, send, enabled=enabled, patch_code=patch_code,
                    camera=camera, machine=machine,
-                   render_ui_provider=render_ui_provider)
+                   render_ui_provider=render_ui_provider,
+                   midi_monitor_provider=midi_monitor_provider)

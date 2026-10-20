@@ -57,6 +57,7 @@ brain's continuous tick in the new architecture, so they are intentionally not m
 """
 
 import json
+import time
 from typing import Any, Optional
 
 from ..core.bus import StateBus
@@ -66,6 +67,9 @@ from ..state.zones import LIN_POSES, POSES
 
 # Legacy hardcoded protocol tables (channel-0 fallback, default port only).
 ZONE_BY_CC1 = {1: "init", 2: "rest", 3: "wakeup", 4: "stretch", 5: "wander", 6: "wildwander"}
+
+# How many recent MIDI events the live monitor ring holds (newest last).
+MONITOR_MAX = 50
 
 # The global navigation commands: a relative virtual cursor over the current
 # zone's ``build_items`` rows (mirrors the TUI flow-map navigation), plus the
@@ -278,6 +282,12 @@ class MidiInput:
         self._nav_zone = None
         self._nav_items: list = []
         self._nav_cursor = 0
+        # The live monitor: a small ring of the last raw MIDI traffic (in) and the
+        # commands we sent (out), so the editor can show what is actually flowing.
+        # Appended from the rtmidi callback thread + the engine thread; a plain list
+        # is atomic enough under the GIL (consistent with the rest of this adapter).
+        self._monitor: list = []
+        self._monitor_seq = 0
         if enabled:
             self.reload()
         # Track the current zone/action so CC3 and the nav cursor can resolve them.
@@ -318,6 +328,28 @@ class MidiInput:
             print(f"[midi] mapping reloaded: ports={sorted(self._in_ports())} "
                   f"enabled={self._effective_enabled()} "
                   f"zones={len(self._data.get('zones', {}))}")
+
+    # ------------------------------------------------------------------
+    # Live monitor (raw in / commands out).
+    # ------------------------------------------------------------------
+    def _record(self, direction: str, port=None, msg=None, cmd=None, payload=None) -> None:
+        """Append one entry to the monitor ring and trim it to ``MONITOR_MAX``."""
+        self._monitor_seq += 1
+        self._monitor.append({
+            "seq": self._monitor_seq,
+            "dir": direction,
+            "ts": time.time(),
+            "port": port,
+            "msg": list(msg) if msg is not None else None,
+            "cmd": cmd,
+            "payload": payload,
+        })
+        if len(self._monitor) > MONITOR_MAX:
+            del self._monitor[: len(self._monitor) - MONITOR_MAX]
+
+    def monitor(self) -> list:
+        """A copy of the current monitor ring (newest last)."""
+        return list(self._monitor)
 
     # ------------------------------------------------------------------
     # Effective settings + per-zone helpers.
@@ -620,6 +652,7 @@ class MidiInput:
         message = event[0]
         if len(message) < 2:
             return
+        self._record("in", port=port, msg=message)
         # Autonomy trigger: a note-on (velocity > 0) notifies the brain. The brain
         # checks ``autonomy.events.midi`` and sets ``_autonomy_triggered`` if enabled.
         if (self._brain is not None and len(message) >= 3
@@ -630,11 +663,11 @@ class MidiInput:
             if port == self._learn["port"]:
                 key = self._key_for(message)
                 if key is not None:
-                    self.bus.submit(Command(cmd=Cmd.MIDI_LEARN,
-                                             payload={"key": key, "msg": list(message),
-                                                       "zone": self._learn["zone"],
-                                                       "action": self._learn["action"],
-                                                       "nav": self._learn["nav"]}))
+                    self._submit(Cmd.MIDI_LEARN,
+                                  {"key": key, "msg": list(message),
+                                   "zone": self._learn["zone"],
+                                   "action": self._learn["action"],
+                                   "nav": self._learn["nav"]})
                     self._learn = None
             return
         # Per-zone dispatch: a matching command or actions key → TRIGGER_ACTION.
@@ -745,6 +778,7 @@ class MidiInput:
                 self._submit(Cmd.SET_LINEAR_POSE, {"pose": table[velocity % len(table)]})
 
     def _submit(self, cmd: Cmd, payload: dict) -> None:
+        self._record("out", cmd=cmd.value, payload=payload)
         self.bus.submit(Command(cmd=cmd, payload=payload))
 
     def stop(self) -> None:
