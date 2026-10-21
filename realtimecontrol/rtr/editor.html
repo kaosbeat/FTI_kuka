@@ -46,6 +46,9 @@
   .poseRow { display: grid; grid-template-columns: repeat(6, 1fr) 56px 22px; gap: 4px;
              margin-bottom: 4px; align-items: center; }
   .poseRow input[type=number] { padding: 2px 4px; }
+  .poseRow input[type=text] { padding: 2px 4px; width: 100%; background: #0d0f13; color: var(--text);
+                               border: 1px solid var(--border); border-radius: 4px; font: inherit; }
+  .poseRow input.frozenX { border-color: #4fc08d; color: #4fc08d; font-weight: 600; }
   #robot3d { width: 100%; height: 320px; border: 1px solid var(--border); border-radius: 6px;
              overflow: hidden; background: #0d0f13; }
   #robot3d canvas { display: block; }
@@ -981,9 +984,19 @@ function edgeConflict(e) {
   } else {
     const gaps = zoneOverlapGaps(zA, zB);
     if (gaps.length) issues.push(`safezones do not overlap on ${gaps.join(", ")}`);
-    if (end && start && !end.every((v, i) => Math.abs(v - start[i]) < 0.5)) {
-      issues.push(`no shared position: ${e.from.zone}/${e.from.action} ends [${end.join(", ")}] but ` +
-                  `${e.to.zone}/${e.to.action} starts [${start.join(", ")}]`);
+    // A "x" (frozen / copy-from-previous) axis has no static value — it resolves to
+    // the robot's live position at the action's start — so it can never be a static
+    // mismatch. Compare only the axes where BOTH ends are concrete numbers.
+    if (end && start) {
+      const mismatch = [];
+      end.forEach((v, i) => {
+        if (v === "x" || start[i] === "x") return;
+        if (Math.abs(v - start[i]) >= 0.5) mismatch.push(AXES[i]);
+      });
+      if (mismatch.length) {
+        issues.push(`no shared position on ${mismatch.join(", ")}: ${e.from.zone}/${e.from.action} ends [${end.join(", ")}] but ` +
+                    `${e.to.zone}/${e.to.action} starts [${start.join(", ")}]`);
+      }
     }
   }
   return { any: issues.length > 0, issues };
@@ -4388,7 +4401,8 @@ function buildActionEditor() {
     const diffs = targets.filter((t) => {
       const tgt = (t.zone && t.action && TABLE.zones[t.zone] && TABLE.zones[t.zone].actions[t.action])
         ? actionPoses(TABLE.zones[t.zone].actions[t.action]) : [];
-      return tgt.length && !a.poses[0].every((v, i) => Math.abs(v - tgt[0][i]) < 0.001);
+      // "x" axes have no static value (resolved at runtime); compare only concrete axes.
+      return tgt.length && a.poses[0].some((v, i) => v !== "x" && tgt[0][i] !== "x" && Math.abs(v - tgt[0][i]) >= 0.001);
     });
     if (diffs.length) {
       const hint = document.createElement("div");
@@ -5245,8 +5259,17 @@ function buildActionList(container, name, z, rebuild, onChanged, showPoses) {
         const p = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
         for (let i = 0; i < 6; i++) {
           const inp = document.createElement("input");
-          inp.type = "number"; inp.step = "0.1"; inp.value = p[i];
-          inp.oninput = () => { a.poses[pi][i] = parseFloat(inp.value); if (an === selectedAction) onChanged(); };
+          // Text (not number) so a frozen "x" axis renders instead of an empty field.
+          inp.type = "text"; inp.inputMode = "decimal";
+          const isX = p[i] === "x";
+          inp.value = isX ? "x" : (p[i] != null ? p[i] : 0);
+          if (isX) inp.classList.add("frozenX");
+          inp.oninput = () => {
+            const v = inp.value.trim();
+            if (v === "x") { a.poses[pi][i] = "x"; inp.classList.add("frozenX"); }
+            else { const n = parseFloat(v); a.poses[pi][i] = isNaN(n) ? 0 : n; inp.classList.remove("frozenX"); }
+            if (an === selectedAction) onChanged();
+          };
           pr.appendChild(inp);
         }
         const rx = document.createElement("button");
@@ -5367,7 +5390,10 @@ function validate() {
         errs.push(`${name}/${an}: legacy base_pose/pos — use the unified poses list`); continue;
       }
       if (!Array.isArray(a.poses) || !a.poses.length) { errs.push(`${name}/${an}: poses needs at least 1 anchor`); continue; }
-      a.poses.forEach((p, i) => { if (!Array.isArray(p) || p.length !== 6 || !p.every(isNum)) errs.push(`${name}/${an}: pose ${i} needs 6 numbers`); });
+      // A pose axis is a number OR "x" (frozen / copy-from-previous — resolved at
+      // runtime to the robot's live value), mirroring the core's zones._validate_action.
+      const isPoseVal = (v) => isNum(v) || v === "x";
+      a.poses.forEach((p, i) => { if (!Array.isArray(p) || p.length !== 6 || !p.every(isPoseVal)) errs.push(`${name}/${an}: pose ${i} needs 6 numbers or "x"`); });
       if (a.variable_axes !== undefined && (!Array.isArray(a.variable_axes) || !a.variable_axes.every((x) => Number.isInteger(x) && x >= 0 && x <= 5)))
         errs.push(`${name}/${an}: variable_axes must be axis indices 0-5`);
       if (a.behavior !== undefined && !BEHAVIORS.includes(a.behavior))
@@ -5442,7 +5468,8 @@ function saveZones() {
       for (const t of nextList(a)) {
         if (t.zone && t.action && TABLE.zones[t.zone] && TABLE.zones[t.zone].actions[t.action]) {
           const tgt = actionPoses(TABLE.zones[t.zone].actions[t.action]);
-          if (poses.length && tgt.length && !poses[0].every((v, i) => Math.abs(v - tgt[0][i]) < 0.001)) {
+          // "x" axes have no static value (resolved at runtime); compare only concrete axes.
+          if (poses.length && tgt.length && poses[0].some((v, i) => v !== "x" && tgt[0][i] !== "x" && Math.abs(v - tgt[0][i]) >= 0.001)) {
             warns.push(`${name}/${an}: entry pose differs from next ${t.zone}/${t.action}`);
           }
         }
