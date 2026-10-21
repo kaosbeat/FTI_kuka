@@ -99,11 +99,14 @@ def builtin_midi_data() -> dict:
 
     The ``nav`` section holds the global navigation keys (initially null, learned
     later) plus the ``in_port`` (null = the default port); the per-zone table is
-    empty so the legacy protocol still wins.
+    empty so the legacy protocol still wins. The ``capture`` section holds the
+    single global key that grabs the camera snapshot (``in_port`` + ``key``, both
+    initially null) — it drives ``Cmd.SNAPSHOT_GRAB``.
     """
     return {"enabled": True, "zones": {},
             "nav": {"in_port": None, "next_action": None, "next_zone": None,
-                    "back": None, "retrigger": None, "next_pose": None}}
+                    "back": None, "retrigger": None, "next_pose": None},
+            "capture": {"in_port": None, "key": None}}
 
 
 def _key_int(key: str, s: str, lo: int, hi: int) -> int:
@@ -218,6 +221,22 @@ def validate_midi_data(data: Any) -> dict:
                               f"(expected one of {NAV_COMMANDS})")
         if nkey is not None:
             validate_midi_key(nkey)
+    # The global capture section (optional): the single key that grabs the camera
+    # snapshot, plus the ``in_port`` it is learned/dispatched on (null = default).
+    capture = data.get("capture", {})
+    if not isinstance(capture, dict):
+        raise ValueError("'capture' must be an object")
+    for name, val in capture.items():
+        if name == "in_port":
+            if val is not None and not (isinstance(val, int) and not isinstance(val, bool)
+                                         and val >= 0):
+                raise ValueError("capture.in_port must be a non-negative int or null")
+        elif name == "key":
+            if val is not None:
+                validate_midi_key(val)
+        else:
+            raise ValueError(f"capture[{name!r}] is not a known field "
+                              f"(expected in_port/key)")
     # Deprecated top-level fields: accepted and preserved (not used for dispatch).
     in_port = data.get("in_port")
     if in_port is not None:
@@ -374,17 +393,32 @@ class MidiInput:
             return ip
         return self.in_port
 
+    def _capture_in_port(self) -> Optional[int]:
+        """The ``in_port`` for the global capture section (else the default port)."""
+        cap = self._data.get("capture")
+        ip = cap.get("in_port") if isinstance(cap, dict) else None
+        if isinstance(ip, int) and not isinstance(ip, bool) and ip >= 0:
+            return ip
+        return self.in_port
+
+    def _capture_key(self) -> Optional[str]:
+        """The learned key for the global capture command (None when unset)."""
+        cap = self._data.get("capture")
+        return cap.get("key") if isinstance(cap, dict) else None
+
     def _zones_by_port(self, port) -> list:
         """The zones whose effective ``in_port`` is ``port``."""
         return [z for z in self._data.get("zones", {})
                 if self._zone_in_port(z) == port]
 
     def _in_ports(self) -> set:
-        """The distinct ports to open: every zone's in_port, the nav in_port, plus the default port."""
+        """The distinct ports to open: every zone's in_port, the nav in_port, the
+        capture in_port, plus the default port."""
         ports = {self.in_port}
         for z in self._data.get("zones", {}):
             ports.add(self._zone_in_port(z))
         ports.add(self._nav_in_port())
+        ports.add(self._capture_in_port())
         return ports
 
     # ------------------------------------------------------------------
@@ -451,25 +485,35 @@ class MidiInput:
     # ------------------------------------------------------------------
     # Learn capture (armed per-zone).
     # ------------------------------------------------------------------
-    def start_learn(self, zone=None, action=None, nav=None, nav_port=None) -> None:
-        """Arm the learn capture for a zone key or a global nav key.
+    def start_learn(self, zone=None, action=None, nav=None, nav_port=None,
+                    capture=None, capture_port=None) -> None:
+        """Arm the learn capture for a zone key, a global nav key, or the capture key.
 
         A zone learn (``zone``/``action``) captures the next mappable message on the
         zone's ``in_port``; a nav learn (``nav``) captures on the nav's ``in_port``
         (the default port when it is null), or on ``nav_port`` when given (the editor
-        passes the currently-selected nav port). The key is submitted as
-        ``Cmd.MIDI_LEARN`` with the matching context (the editor writes it into the
-        zone's ``command``/``actions`` or into ``nav[nav]``). The captured message is
-        **not** dispatched, so arming learn never moves the robot.
+        passes the currently-selected nav port); a capture learn (``capture``)
+        captures on the capture's ``in_port`` (the default port when it is null), or
+        on ``capture_port`` when given. The key is submitted as ``Cmd.MIDI_LEARN``
+        with the matching context (the editor writes it into the zone's
+        ``command``/``actions``, into ``nav[nav]``, or into ``capture.key``). The
+        captured message is **not** dispatched, so arming learn never moves the robot.
         """
-        if nav is not None:
+        if capture is not None:
+            port = self._capture_in_port()
+            if isinstance(capture_port, int) and not isinstance(capture_port, bool) and capture_port >= 0:
+                port = capture_port
+            self._learn = {"port": port, "zone": None, "action": None, "nav": None,
+                            "capture": capture}
+        elif nav is not None:
             port = self._nav_in_port()
             if isinstance(nav_port, int) and not isinstance(nav_port, bool) and nav_port >= 0:
                 port = nav_port
-            self._learn = {"port": port, "zone": None, "action": None, "nav": nav}
+            self._learn = {"port": port, "zone": None, "action": None, "nav": nav,
+                            "capture": None}
         else:
             self._learn = {"port": self._zone_in_port(zone), "zone": zone,
-                            "action": action, "nav": None}
+                            "action": action, "nav": None, "capture": None}
 
     def stop_learn(self) -> None:
         """Disarm the learn capture (without disconnecting the port)."""
@@ -667,7 +711,8 @@ class MidiInput:
                                   {"key": key, "msg": list(message),
                                    "zone": self._learn["zone"],
                                    "action": self._learn["action"],
-                                   "nav": self._learn["nav"]})
+                                   "nav": self._learn["nav"],
+                                   "capture": self._learn["capture"]})
                     self._learn = None
             return
         # Per-zone dispatch: a matching command or actions key → TRIGGER_ACTION.
@@ -675,6 +720,9 @@ class MidiInput:
             return
         # Nav dispatch: the global navigation keys (on the nav's in_port).
         if self._dispatch_nav(port, message):
+            return
+        # Capture dispatch: the global snapshot-grab key (on the capture's in_port).
+        if self._dispatch_capture(port, message):
             return
         # Legacy fallback: only on the default port.
         if port == self.in_port:
@@ -697,6 +745,24 @@ class MidiInput:
                 self._ensure_nav()
                 self._nav_command(name)
                 return True
+        return False
+
+    def _dispatch_capture(self, port, message) -> bool:
+        """Match the global capture key on the capture's in_port; submit SNAPSHOT_GRAB.
+
+        The capture key is global (it works in any zone) but scoped to the
+        capture's ``in_port`` (the default port when it is null), mirroring the
+        port-scoped nav dispatch. When the key matches, the core fetches the
+        RPi's latest camera frame into the local snapshot file.
+        """
+        if port != self._capture_in_port():
+            return False
+        key = self._key_for(message)
+        if key is None:
+            return False
+        if self._capture_key() == key:
+            self._submit(Cmd.SNAPSHOT_GRAB, {})
+            return True
         return False
 
     def _dispatch_zone_key(self, port, message) -> bool:

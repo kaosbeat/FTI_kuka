@@ -78,6 +78,15 @@ class Config:
     # Camera device index for the vision adapter (unused in sim).
     camera_device: int = 0
 
+    # --- snapshot grab (core-side fetch of the RPi's latest frame) --------
+    # The RPi serves its latest camera frame as a JPEG (the SnapshotServer in
+    # rtr/camera/snapshot.py, on the RPi at :8080). The core fetches that JPEG
+    # and writes it to a local file so the render page can show it. The URL is
+    # the RPi's snapshot endpoint; the path is the local file (resolved against
+    # the rtr root, i.e. where assets/ lives).
+    snapshot_url: str = "http://192.168.10.112:8080/?action=snapshot"
+    snapshot_path: str = "assets/latest.jpg"
+
     def __post_init__(self):
         if self.robot_kind not in ("sim", "kuka"):
             raise ValueError(f"unknown robot_kind: {self.robot_kind!r}")
