@@ -43,6 +43,47 @@ _LOOK_FACTOR = 0.5
 # exterior pose and only gestures toward the face location.
 _FACE_FACTOR = 0.5
 
+# Test-sweep amplitude: the fraction of the safezone half-width each variable axis
+# drifts through (see :func:`_add_sweep`). Kept modest so the camera servo still holds
+# the target centred while every axis is exercised for the test.
+_SWEEP_AMP = 0.5
+
+
+def _sweep_enabled(action) -> bool:
+    """True when the action opts into the test sweep (``"sweep": true`` in zones.json)."""
+    return isinstance(action, dict) and action.get("sweep") is True
+
+
+def _add_sweep(machine, pose, var_axes, axis_bands=None) -> None:
+    """Exercise every variable axis with a slow, desynchronised drift (test mode).
+
+    Runs on top of the camera servo (see :func:`_apply_behavior`): each variable axis
+    gets a sinusoidal drift around its current value, phase-offset per axis so the
+    axes do not all move together. The amplitude is a fraction of the safezone
+    half-width and the result is clamped to the effective floor, so the sweep stays
+    within the zone's safe bounds. This is what makes a ``testing`` action visibly use
+    *all* of its variable axes (not just the one the image Jacobian happens to drive)
+    while the person stays tracked.
+    """
+    limits = effective(machine)
+    if axis_bands:
+        floor = list(limits)
+        for ax, (lo, hi) in axis_bands.items():
+            floor[ax] = [max(lo, limits[ax][0]), min(hi, limits[ax][1])]
+    else:
+        floor = limits
+    t = machine.tick * 0.1
+    for k, ax in enumerate(var_axes):
+        lo, hi = floor[ax]
+        half = (hi - lo) / 2.0
+        amp = half * _SWEEP_AMP
+        pose[ax] = pose[ax] + amp * math.sin(t + k * 0.9)
+    for ax in var_axes:
+        pose[ax] = fitlimits(ax, pose[ax], floor)
+    # Keep the debug UI's proposed pose in step with the swept target.
+    if isinstance(machine.servo_state, dict) and "proposed" in machine.servo_state:
+        machine.servo_state["proposed"] = list(pose)
+
 
 def _bp(machine, behavior, key, default):
     """Read a per-behavior param off the machine's ``behavior_params``, else ``default``.
@@ -213,6 +254,13 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action, axis_ban
         _apply_oscillation(machine, pose, var_axes, limits,
                            freq=_bp(machine, behavior, "freq", 0.3),
                            amp_scale=_bp(machine, behavior, "amp_scale", 0.2))
+
+    # Test sweep (zone-local, gated by the action's ``sweep`` flag): on top of the
+    # camera servo, drift every variable axis so a ``testing`` action visibly uses all
+    # of them (bounded by the safezone). The camera behaviours are the only ones that
+    # recenter a tracked target, so the sweep only makes sense there.
+    if behavior in ("locked", "curious", "intent", "gentle") and _sweep_enabled(action):
+        _add_sweep(machine, pose, var_axes, axis_bands)
 
 
 def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain, action, axis_bands=None) -> None:

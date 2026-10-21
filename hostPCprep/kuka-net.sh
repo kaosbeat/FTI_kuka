@@ -657,19 +657,44 @@ remove_persistent(){
   log "persistent artifacts removed."
 }
 
+# Pin public DNS on a wifi connection profile (persisted to the profile).
+# The home router's DHCP-supplied DNS is unreachable from the NATed wifi client,
+# which breaks the SBC's OWN internet (name resolution fails) even though the
+# route is fine. Public DNS keeps it working. Only the wifi connection's DNS
+# changes — the wired robot-LAN route stays separate.
+apply_wifi_dns(){
+  local conn="${1:-}"
+  [[ -z "$conn" ]] && { log "WARN: apply_wifi_dns: no connection name given"; return 1; }
+  nmcli connection modify "$conn" ipv4.ignore-auto-dns yes ipv4.dns "1.1.1.1 9.9.9.9" 2>>"$LOG" \
+    || { log "WARN: could not set public DNS on wifi connection '$conn'"; return 1; }
+  log "wifi DNS: public (1.1.1.1, 9.9.9.9) pinned on connection '$conn'"
+  return 0
+}
+
 # Wi-Fi as a client: join WIFI_SSID via NetworkManager (SBC AX210 or RPi wifi).
 cmd_apply_wifi(){
-  local conn ip
+  local conn ip fb
   conn=$(pick_wifi_conn)
   if [[ -z "$conn" ]]; then
     log "WARN: no saved wifi connection found for $WIFI_IF (set WIFI_SSID or save the network first); wifi skipped"
     return
   fi
+  # Pin public DNS on the saved profile BEFORE activating, so the activation
+  # applies it (the router's DHCP DNS is unreachable from the NATed client).
+  apply_wifi_dns "$conn"
   log "wifi: activating saved connection '$conn' on $WIFI_IF"
   nmcli connection up "$conn" ifname "$WIFI_IF" 2>>"$LOG" || true
   # fall back to an explicit SSID/password if the saved activation left no IP
   if [[ -z "$(iface_ip "$WIFI_IF")" && -n "$WIFI_SSID" ]]; then
     nmcli device wifi connect "$WIFI_SSID" password "$WIFI_PASS" ifname "$WIFI_IF" 2>>"$LOG" || true
+    # the fallback may have created a NEW profile (named by SSID); pin DNS there
+    fb=$(pick_wifi_conn)
+    if [[ -n "$fb" && "$fb" != "$conn" ]]; then
+      apply_wifi_dns "$fb"
+      # that profile is already active; bounce it so the DNS change applies
+      nmcli connection down "$fb" 2>>"$LOG" || true
+      nmcli connection up "$fb" 2>>"$LOG" || true
+    fi
   fi
   # wait for a DHCP lease (up to 30s)
   for _ in $(seq 1 30); do
@@ -696,10 +721,17 @@ cmd_apply_forward(){
   local wnet; wnet=$(subnet_of "$(iface_ip "$WIFI_IF" 2>/dev/null)")
   [[ "$wnet" == "$KUKA_NET" ]] && log "WARN: wifi subnet $wnet collides with the Kuka LAN $KUKA_NET"
 
-  # dedicated chains so disable removes exactly what we added
+  # dedicated chains so disable removes exactly what we added.
+  # KUKA_NET_FWD is a FILTER-table chain (hooked into FORWARD); KUKA_NET_NAT is
+  # a NAT-table chain (hooked into POSTROUTING). Create/flush each in its OWN
+  # table — the MASQUERADE append fails with "Chain 'KUKA_NET_NAT' does not
+  # exist" if the NAT chain is created in the filter table by default.
   iptables -N KUKA_NET_FWD 2>/dev/null || true
-  iptables -N KUKA_NET_NAT 2>/dev/null || true
-  iptables -F KUKA_NET_FWD; iptables -F KUKA_NET_NAT
+  iptables -t nat -N KUKA_NET_NAT 2>/dev/null || true
+  iptables -F KUKA_NET_FWD 2>/dev/null || true
+  iptables -t nat -F KUKA_NET_NAT 2>/dev/null || true
+  # best-effort: drop a legacy FILTER-table KUKA_NET_NAT left by an older run
+  iptables -X KUKA_NET_NAT 2>/dev/null || true
 
   # the wifi LAN (client side) may reach the robot LAN + BeagleBone
   if [[ -n "$wnet" ]]; then
@@ -744,12 +776,15 @@ cmd_disable(){
   systemctl stop hostapd dnsmasq 2>/dev/null || true
 
   # --- remove firewall / NAT ---
+  # KUKA_NET_FWD = filter table (FORWARD); KUKA_NET_NAT = nat table (POSTROUTING)
   iptables -D FORWARD -j KUKA_NET_FWD 2>/dev/null || true
   iptables -t nat -D POSTROUTING -j KUKA_NET_NAT 2>/dev/null || true
   iptables -F KUKA_NET_FWD 2>/dev/null || true
-  iptables -F KUKA_NET_NAT 2>/dev/null || true
+  iptables -t nat -F KUKA_NET_NAT 2>/dev/null || true
   iptables -X KUKA_NET_FWD 2>/dev/null || true
   iptables -t nat -X KUKA_NET_NAT 2>/dev/null || true
+  # best-effort: drop a legacy FILTER-table KUKA_NET_NAT left by an older run
+  iptables -X KUKA_NET_NAT 2>/dev/null || true
   sysctl -w net.ipv4.ip_forward=0 >/dev/null
 
   # --- remove the static IP we added ---
