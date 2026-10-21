@@ -1758,7 +1758,7 @@
         ],
         [
           0,
-          20
+          42
         ],
         [
           -15,
@@ -1789,9 +1789,9 @@
           "enabled": true,
           "poses": [
             [
-              0,
-              -10,
-              12,
+              45,
+              -30,
+              42,
               0,
               -5,
               0
@@ -1817,7 +1817,7 @@
           "enabled": true,
           "poses": [
             [
-              0,
+              45,
               -10,
               12,
               0,
@@ -1831,7 +1831,7 @@
             4
           ],
           "behavior": "intent",
-          "speed": 20,
+          "speed": 100,
           "loop": true,
           "next": {
             "zone": "testing",
@@ -1845,7 +1845,7 @@
           "enabled": true,
           "poses": [
             [
-              0,
+              45,
               -10,
               12,
               0,
@@ -1873,7 +1873,7 @@
           "enabled": true,
           "poses": [
             [
-              0,
+              45,
               -10,
               12,
               0,
@@ -1895,6 +1895,60 @@
           "pose_imgs": [
             null
           ]
+        },
+        "locked_band": {
+          "enabled": true,
+          "poses": [
+            [
+              45,
+              -30,
+              42,
+              0,
+              -5,
+              0
+            ]
+          ],
+          "variable_axes": [
+            0,
+            1,
+            4
+          ],
+          "behavior": "curious",
+          "speed": 100,
+          "loop": true,
+          "next": {
+            "zone": "testing",
+            "action": "locked"
+          },
+          "pose_imgs": [
+            null
+          ],
+          "axis_bands": {
+            "0": [
+              0,
+              80
+            ],
+            "1": [
+              -30,
+              -10
+            ],
+            "2": [
+              0,
+              42
+            ],
+            "3": [
+              -15,
+              15
+            ],
+            "4": [
+              -20,
+              10
+            ],
+            "5": [
+              -15,
+              15
+            ]
+          }
         }
       }
     },
