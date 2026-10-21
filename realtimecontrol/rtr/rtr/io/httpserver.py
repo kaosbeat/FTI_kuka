@@ -83,6 +83,11 @@ from ..brain import (
     load_brain_config,
     validate_brain_config,
 )
+from ..robot import (
+    builtin_robot_config,
+    load_robot_config,
+    validate_robot_config,
+)
 from ..patches import (
     DEFAULT_HYDRA_CODE,
     load_patches_data,
@@ -201,7 +206,8 @@ class HttpServer:
                   enabled: bool = True, screen_code: str = None,
                   patches_provider=None, patches_path: str = None,
                   midi_provider=None, midi_path: str = None, midi=None,
-                  sound=None, brain_provider=None, brain_path: str = None):
+                  sound=None, brain_provider=None, brain_path: str = None,
+                 robotconfig_provider=None, robotconfig_path: str = None):
         self.bus = bus
         self.zones_provider = zones_provider
         self.sound_provider = sound_provider
@@ -218,6 +224,8 @@ class HttpServer:
         # The brain decision config (data-driven hunt-loop parameters).
         self.brain_provider = brain_provider
         self.brain_path = os.path.abspath(brain_path) if brain_path else None
+        self.robotconfig_provider = robotconfig_provider
+        self.robotconfig_path = os.path.abspath(robotconfig_path) if robotconfig_path else None
         self.root = os.path.abspath(root)
         # Pose reference images live under the static assets dir (assets/imgs/).
         self.imgs_path = os.path.join(self.root, "assets", "imgs")
@@ -287,6 +295,8 @@ def _make_handler(server: HttpServer):
                 self._get_midi_ports()
             elif path == "/api/brain":
                 self._get_brain()
+            elif path == "/api/robotconfig":
+                self._get_robotconfig()
             elif self._is_static(path):
                 self._serve_static(path)
             else:
@@ -308,6 +318,8 @@ def _make_handler(server: HttpServer):
                 self._post_midi_learn()
             elif path == "/api/brain":
                 self._post_brain()
+            elif path == "/api/robotconfig":
+                self._post_robotconfig()
             elif path == "/api/imgs":
                 self._post_imgs()
             else:
@@ -525,6 +537,40 @@ def _make_handler(server: HttpServer):
                 return
             # Ask the running core to hot-reload the new config.
             server.bus.submit(Command(cmd=Cmd.RELOAD_BRAIN, payload={}))
+            self._send_json(200, {"ok": True})
+
+        def _get_robotconfig(self):
+            if server.robotconfig_path:
+                try:
+                    return self._send_json(200, load_robot_config(server.robotconfig_path))
+                except (OSError, ValueError):
+                    pass
+            if server.robotconfig_provider is not None:
+                self._send_json(200, server.robotconfig_provider())
+                return
+            self._send_json(200, builtin_robot_config())
+
+        def _post_robotconfig(self):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                length = 0
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                data = json.loads(body)
+                validate_robot_config(data)
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._send_json(400, {"error": str(exc)})
+                return
+            tmp = server.robotconfig_path + ".tmp"
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(tmp, server.robotconfig_path)
+            except OSError as exc:
+                self._send_json(500, {"error": f"could not write robotconfig: {exc}"})
+                return
+            server.bus.submit(Command(cmd=Cmd.RELOAD_ROBOT_CONFIG, payload={}))
             self._send_json(200, {"ok": True})
 
         # ------------------------------------------------------------------

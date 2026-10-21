@@ -1,6 +1,13 @@
 """Robot abstraction: base interface, Kuka and Sim implementations, limit helpers."""
 
 from .base import RobotBase
+from .config import (
+    DEFAULT_ROBOT_CONFIG,
+    builtin_robot_config,
+    load_robot_config,
+    robot_config_offsets,
+    validate_robot_config,
+)
 from .helpers import (
     JOINT_COUNT,
     LIMITED_JOINTS,
@@ -19,6 +26,11 @@ __all__ = [
     "KukaRobot",
     "SimRobot",
     "make_robot",
+    "DEFAULT_ROBOT_CONFIG",
+    "builtin_robot_config",
+    "load_robot_config",
+    "robot_config_offsets",
+    "validate_robot_config",
     "fitlimits",
     "checklimits",
     "posSafe",
@@ -31,10 +43,15 @@ __all__ = [
 ]
 
 
-def make_robot(kind: str, port: int = 18735, tick_hz: float = 20.0) -> RobotBase:
-    """Build a robot by kind ("kuka" or "sim")."""
+def make_robot(kind: str, port: int = 18735, tick_hz: float = 20.0,
+               joint_offsets: list = None) -> RobotBase:
+    """Build a robot by kind ("kuka" or "sim").
+
+    ``joint_offsets`` (A1..A6, degrees) is the physical robot's home offset; it is
+    applied only to the KUKA (the sim is never offset).
+    """
     if kind == "kuka":
-        return KukaRobot(port=port)
+        return KukaRobot(port=port, joint_offsets=joint_offsets)
     if kind == "sim":
         return SimRobot(tick_hz=tick_hz)
     raise ValueError(f"unknown robot kind: {kind!r}")
