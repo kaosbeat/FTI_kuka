@@ -409,8 +409,8 @@
 
 <main id="patchesMain" style="display:none">
   <div class="patchTopBar" id="patchTopBar">
-    <button id="liveToggle" class="liveToggle">&#8617; live render</button>
-    <span class="patchTopHint">edit a patch slot, or switch to live render to push the running patch</span>
+    <button id="liveToggle" class="liveToggle">&#8617; broadcast</button>
+    <span class="patchTopHint">edit a patch slot; toggle broadcast to push the selected slot to the screens</span>
   </div>
   <div class="patchGrid">
     <section>
@@ -427,17 +427,7 @@
         <textarea id="patchCode" spellcheck="false"></textarea>
         <div id="patchInfo"></div>
       </div>
-      <div id="liveRenderView" style="display:none">
-        <h2>live render</h2>
-        <div class="row" style="margin-bottom:8px">
-          <button id="livePush">push to render</button>
-          <button id="liveClear" class="small">clear</button>
-          <button id="liveHud" class="small">hud: on</button>
-          <button id="liveCodeOverlay" class="small">code: off</button>
-        </div>
-        <textarea id="liveCode" spellcheck="false"></textarea>
-        <div id="liveInfo" style="font-size:12px;color:var(--dim);margin-top:6px">current render patch (follows state; edit to push a custom patch)</div>
-      </div>
+
     </section>
     <section class="patchPreview" id="patchPreviewCol">
       <h2>live preview</h2>
@@ -1148,10 +1138,8 @@ function connect() {
       // The core is in manual mode (holding its pose) while the tab is open, so
       // skipping its drive here keeps the inspected pose stable.
       if (!validateView) Robot3D.update({ joints: m.joints, target: m.target, patch: m.patch });
-      // Live render slot: follow the core's resolved patch (guarded while editing).
-      updateLiveCode(m.patch);
       // Render-page UI state (HUD / code-overlay toggles).
-      if (m.render_ui) { renderUi = m.render_ui; syncLiveToggles(); }
+      if (m.render_ui) { renderUi = m.render_ui; }
       // The 3D arm tracks every frame (20 Hz joints), but the discrete readouts below
       // rarely change; rebuild their DOM only when the rendered output changes so the
       // per-frame cost does not fight the rAF render loop.
@@ -2127,39 +2115,30 @@ function commitPatchEditor() {
 }
 
 // ---------------------------------------------------------------------------
-// Live render slot: shows the current patch pushed to render.html (m.patch).
-// The operator can edit it and push it as a screen override (set_screen_patch).
-// HUD and code-overlay toggles send set_render_ui to the core.
+// Broadcast toggle: pushes the currently selected patch slot to the screens.
+// ON = the selected slot's code is sent as set_screen_patch (live-updated on
+// every edit); OFF = set_screen_patch null clears the override so the screens
+// follow the live state concatenation.
 // ---------------------------------------------------------------------------
-let liveCodeEditing = false;
-let livePushTimer = null;  // debounce timer: auto-pushes the edited live patch after 1s of no keystrokes
+let broadcastOn = false;
 let renderUi = { hud: true, code: false };
-
-function updateLiveCode(code) {
-  // Guard: don't overwrite the field while the operator is editing it.
-  if (liveCodeEditing) return;
-  if (typeof code === "string" && code) {
-    $("liveCode").value = code;
-  }
-}
 
 function sendRenderUi(hud, code) {
   if (ws) ws.send(JSON.stringify({ cmd: "set_render_ui", hud: hud, code: code }));
 }
 
-function syncLiveToggles() {
-  $("liveHud").textContent = "hud: " + (renderUi.hud ? "on" : "off");
-  $("liveCodeOverlay").textContent = "code: " + (renderUi.code ? "on" : "off");
+function broadcastCurrentSlot() {
+  if (!ws) return;
+  if (broadcastOn && selectedPatch) {
+    const code = getPatchCode(selectedPatch) || "";
+    ws.send(JSON.stringify({ cmd: "set_screen_patch", code: code }));
+  } else {
+    ws.send(JSON.stringify({ cmd: "set_screen_patch", code: null }));
+  }
 }
 
-// Live render mode: the center column shows the live render block instead of the
-// patch-code editor. The toggle is the prominent top-bar control.
-let liveRenderMode = false;
-
-function syncLiveRenderView() {
-  $("patchCodeView").style.display = liveRenderMode ? "none" : "";
-  $("liveRenderView").style.display = liveRenderMode ? "" : "none";
-  $("liveToggle").className = liveRenderMode ? "liveToggle active" : "liveToggle";
+function syncBroadcastToggle() {
+  $("liveToggle").className = broadcastOn ? "liveToggle active" : "liveToggle";
 }
 
 async function loadPatches() {
@@ -3478,9 +3457,9 @@ function buildPatchesForm() {
     b.className = key === selectedPatch ? "active" : "";
     b.onclick = () => {
       commitPatchEditor();
-      liveRenderMode = false;  // picking a slot edits that patch, not the live render
       selectedPatch = key;
       buildPatchesForm();
+      if (broadcastOn) broadcastCurrentSlot();
     };
     listEl.appendChild(b);
   };
@@ -3501,9 +3480,8 @@ function buildPatchesForm() {
   const code = getPatchCode(selectedPatch);
   $("patchCode").value = code;
   $("patchTitle").textContent = "patch: " + selectedPatch;
-  $("patchInfo").textContent = "match precedence: pose > action > behavior > zone > default";
+  $("patchInfo").textContent = "layers: zone (o0) + action/default (o1) + behavior (o3)";
   evalPatchPreview(code);
-  syncLiveRenderView();
 }
 
 function addPatchAction() {
@@ -6811,11 +6789,13 @@ $("valMeshRobReal").onclick = () => { valMeshRobReal = !valMeshRobReal; Robot3D.
 $("valMeshRobColl").onclick = () => { valMeshRobColl = !valMeshRobColl; Robot3D.setRobotCollisionVisible(valMeshRobColl); $("valMeshRobColl").className = valMeshRobColl ? "active" : ""; };
 $("valMeshToolColl").onclick = () => { valMeshToolColl = !valMeshToolColl; Robot3D.setToolCollisionVisible(valMeshToolColl); $("valMeshToolColl").className = valMeshToolColl ? "active" : ""; };
 // The live-preview textarea: commit + re-render (debounced) as the user types.
+// When broadcast is ON, the committed code is also pushed to the screens.
 $("patchCode").oninput = () => {
   if (patchTimer) clearTimeout(patchTimer);
   patchTimer = setTimeout(() => {
     commitPatchEditor();
     evalPatchPreview($("patchCode").value);
+    if (broadcastOn) broadcastCurrentSlot();
   }, 300);
 };
 // Load the zone table first (the sound + patches editors seed their lists from the
@@ -6877,38 +6857,11 @@ $("flowSvg").addEventListener("click", (e) => {
 });
 $("patchAdd").onclick = addPatchAction;
 $("patchRemove").onclick = removePatchSlot;
-// Live render slot: push/clear the screen override + HUD / code-overlay toggles.
-$("livePush").onclick = () => {
-  if (ws) ws.send(JSON.stringify({ cmd: "set_screen_patch", code: $("liveCode").value }));
-};
-$("liveClear").onclick = () => {
-  if (ws) ws.send(JSON.stringify({ cmd: "set_screen_patch", code: null }));
-  $("liveCode").value = "";
-};
-$("liveHud").onclick = () => {
-  sendRenderUi(!renderUi.hud, renderUi.code);
-};
-$("liveCodeOverlay").onclick = () => {
-  sendRenderUi(renderUi.hud, !renderUi.code);
-};
-// Top-bar toggle: switch the center column between the patch-code editor and the
-// live render block.
+// Broadcast toggle: ON pushes the selected slot's code to the screens; OFF clears.
 $("liveToggle").onclick = () => {
-  liveRenderMode = !liveRenderMode;
-  syncLiveRenderView();
-};
-// Guard: don't let state frames overwrite the field while the operator is editing.
-$("liveCode").addEventListener("focus", () => { liveCodeEditing = true; });
-$("liveCode").addEventListener("blur", () => { liveCodeEditing = false; });
-// Auto-push: like the patch editor's live preview, an edit in the live-render field is
-// pushed to the render screen (set_screen_patch) after 1s of no keystrokes. Only while
-// still editing (focused) — a blur lets state frames overwrite the field, so a pending
-// push would send a stale value.
-$("liveCode").oninput = () => {
-  if (livePushTimer) clearTimeout(livePushTimer);
-  livePushTimer = setTimeout(() => {
-    if (ws && liveCodeEditing) ws.send(JSON.stringify({ cmd: "set_screen_patch", code: $("liveCode").value }));
-  }, 1000);
+  broadcastOn = !broadcastOn;
+  syncBroadcastToggle();
+  broadcastCurrentSlot();
 };
 // Action editor (Step 3) modal wiring.
 $("aeClose").onclick = closeActionEditor;

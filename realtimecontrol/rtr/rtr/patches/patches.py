@@ -9,15 +9,18 @@ corrupt.
 A patch is a **hydra-synth JS code string**. The table maps the core's state to
 code:
 
-- ``default`` — the code used when nothing else matches,
-- ``zones``   — zone name -> code (zone entry),
-- ``modes``   — mode name -> code (mode change),
-- ``actions`` — two-level map ``zone name -> action name -> code`` (action start).
+- ``default`` — the code used as the action-slot fallback,
+- ``zones``   — zone name -> code (zone layer, renders to ``o0``),
+- ``modes``   — behavior name -> code (behavior layer, renders to ``o3``),
+- ``actions`` — two-level map ``zone name -> action name -> code`` (action layer, renders to ``o1``).
 
-Match precedence (most specific wins): **action > mode > zone > default**.
-The browser pages fetch the whole table once and match locally on every state
-frame (no per-tick traffic); a ``PATCHES_CHANGED`` event tells them to
-re-fetch after a hot-reload.
+The core concatenates the three layers in order — **zone → action/default →
+behavior** — and pushes the result in every state frame. Each layer's output
+slot (``o0``, ``o1``, ``o3``) is declared by the patch code itself (via
+``.out(oN)``); the core joins the raw code strings verbatim. The browser pages
+fetch the whole table once and match locally on every state frame (no
+per-tick traffic); a ``PATCHES_CHANGED`` event tells them to re-fetch after a
+hot-reload.
 """
 
 import json
@@ -87,7 +90,11 @@ def load_patches_data(path: str) -> dict:
 
 
 def match_patch(data: dict, zone=None, mode=None, action=None) -> str:
-    """The hydra code for a state: action > mode > zone > default.
+    """The hydra code for a state (browser-local fallback): action > mode > zone > default.
+
+    Used by the browser pages that fetch the table and match locally (when the
+    core's pushed ``patch`` is unavailable). The core's main path uses
+    :meth:`Patches.code_for` which concatenates zone + action/default + behavior.
 
     The actions table is two-level (``zone -> action -> code``); a missing zone
     (or action) falls through to the next level. An empty table returns
@@ -190,20 +197,46 @@ class Patches:
               f"modes={len(data.get('modes', {}))} "
               f"actions={len(data.get('actions', {}))}")
 
-    def code_for(self, zone, mode, action, pose_index=None) -> str:
+    def code_for(self, zone, mode, action, pose_index=None, behavior=None) -> str:
         """The hydra code for a state (used by the state frame and the /api/screen endpoint).
 
         A manual screen override (set via :meth:`set_screen_override`) wins over the
-        zone/mode/action match — it is the patch the operator has pushed to the screens.
-        Otherwise the base patch is matched (action > mode > zone > default) and, when
-        the state is inside an action that has per-pose images, the pose globals
-        (``pose`` + ``poseindex``) are injected at the top (the "pose" level) so the
-        action patch can reference the current pose's image.
+        concatenation — it is the patch the operator has pushed to the screens.
+        Otherwise the three parts are concatenated in order:
+
+        1. **Zone patch** (``zones[zone]``) — renders to ``o0``.
+        2. **Action/default patch** (``actions[zone][action]`` or ``default``) —
+           renders to ``o1``, with the pose globals (``pose`` + ``poseindex``)
+           injected when the state is inside an action that has per-pose images.
+        3. **Behavior patch** (``modes[behavior]``) — renders to ``o3``.
+
+        Missing parts are omitted; the parts are joined by newlines. When no part
+        is available, :data:`DEFAULT_HYDRA_CODE` is returned.
         """
         if self._screen_override:
             return self._screen_override
-        code = match_patch(self._data, zone, mode, action)
-        return inject_pose_globals(code, pose_index, self._pose_imgs(zone, action))
+        parts = []
+        # 1. Zone patch (o0)
+        if zone:
+            zone_code = (self._data.get("zones") or {}).get(zone)
+            if isinstance(zone_code, str) and zone_code:
+                parts.append(zone_code)
+        # 2. Action/default patch (o1), with pose globals injected
+        action_code = None
+        if zone and action:
+            action_code = (self._data.get("actions") or {}).get(zone, {}).get(action)
+        if not (isinstance(action_code, str) and action_code):
+            action_code = self._data.get("default")
+        if isinstance(action_code, str) and action_code:
+            parts.append(inject_pose_globals(action_code, pose_index, self._pose_imgs(zone, action)))
+        # 3. Behavior patch (o3)
+        if behavior:
+            beh_code = (self._data.get("modes") or {}).get(behavior)
+            if isinstance(beh_code, str) and beh_code:
+                parts.append(beh_code)
+        if not parts:
+            return DEFAULT_HYDRA_CODE
+        return "\n".join(parts)
 
     def _pose_imgs(self, zone, action):
         """The current action's per-pose image filenames, or None (duck-typed lookup)."""

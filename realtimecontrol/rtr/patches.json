@@ -15,7 +15,9 @@
     "leaping": "osc(80, 0.5, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
     "resting_sleeping_bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n",
     "stretching_hunting_bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n",
-    "sleeping_stretching_bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
+    "sleeping_stretching_bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n",
+    "testing": "osc(4, 0.1, 1.2).out()",
+    "resting_testing_bridge": "osc(4, 0.1, 1.2).out()"
   },
   "modes": {
     "calm": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out()",
@@ -55,7 +57,7 @@
     "stretching": {
       "look": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3).scale(40)\n.out()\n",
       "wink": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out()\n",
-      "inspect": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(30)\n.out()\n",
+      "inspect": "setResolution(768,768)\ns0.initVideo(\"assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(30)\n.out()\n",
       "call": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3)\n.out()\n"
     },
     "hunting": {
@@ -82,7 +84,8 @@
     },
     "clawing": {
       "claw": "osc(45, 0.4, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
-      "grab": "osc(50, 0.45, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n"
+      "grab": "osc(50, 0.45, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
+      "lock_target": "osc(4, 0.1, 1.2).out()"
     },
     "leaping": {
       "leap": "osc(80, 0.5, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out()\n",
@@ -96,6 +99,15 @@
     },
     "sleeping_stretching_bridge": {
       "bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out()\n"
+    },
+    "testing": {
+      "locked": "osc(4, 0.1, 1.2).out()",
+      "intent": "osc(4, 0.1, 1.2).out()",
+      "curious": "osc(4, 0.1, 1.2).out()",
+      "gentle": "osc(4, 0.1, 1.2).out()"
+    },
+    "resting_testing_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
     }
   }
 }

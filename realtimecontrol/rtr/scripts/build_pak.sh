@@ -213,6 +213,7 @@ CODE_FILES=(
     "rtr/remote/__init__.py"
     "rtr/remote/mainmenu.py"
     "rtr/remote/ledtest.py"
+    "rtr/remote/led.py"
     "rtr/remote/sdlapp.py"
     "rtr/remote/view.py"
     "rtr/remote/config.py"

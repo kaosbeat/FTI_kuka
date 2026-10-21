@@ -35,11 +35,12 @@ class Display:
         # Returns the render-page UI state ({hud, code}); pushed in every state
         # frame so the render page can toggle its HUD and code overlay.
         self._render_ui_provider = render_ui_provider
-        # Resolves the hydra patch for a state (action > mode > zone > default), with the
-        # pose globals injected for an action that has per-pose images (the pose level).
-        # The core is the single source of truth: it pushes the resolved code in every
-        # state frame so all display clients (client.html, render.html, the 3D tool
-        # screen) stay in sync no matter what triggered the change (MIDI, WS, HTTP).
+        # Resolves the hydra patch for a state by concatenating zone + action/default
+        # + behavior (the extra-patches model), with the pose globals injected for an
+        # action that has per-pose images. The core is the single source of truth: it
+        # pushes the resolved code in every state frame so all display clients
+        # (client.html, render.html, the 3D tool screen) stay in sync no matter what
+        # triggered the change (MIDI, WS, HTTP).
         self._patch_code = patch_code
         # The core-side camera controller; its intent is broadcast in every state
         # frame and via CAM_CONTROL event frames for the fast path.
@@ -90,7 +91,8 @@ class Display:
         if self._patch_code is None:
             return None
         try:
-            code = self._patch_code(snap.zone, snap.mode, snap.action, snap.action_index)
+            beh = self._machine.behavior if self._machine is not None else None
+            code = self._patch_code(snap.zone, snap.mode, snap.action, snap.action_index, behavior=beh)
         except Exception:  # noqa: BLE001 - a bad resolver must not kill the frame
             return None
         return code if isinstance(code, str) and code else None

@@ -277,7 +277,7 @@ Inputs are **commands** (see `core/commands.py`). They are flat JSON, e.g.
 | `set_linear_pose` | Move to a cartesian pose (linear). Not simulated.  |
 | `adjust_limit`    | Nudge a wander drift limit A1/A2/A3 (MIDI CC 20/21/22). |
 | `random_wrist`    | Randomise A4/A5 of the current target (then `hold`).|
-| `set_screen_patch`| Push a hydra patch to the screens (sets the `Patches` screen override); `code: null` clears it so the screens follow the live state match. |
+| `set_screen_patch`| Push a hydra patch to the screens (sets the `Patches` broadcast override); `code: null` clears it so the screens follow the live zone + action/default + behavior concatenation. |
 | `stop`            | Defined in the `Cmd` enum but **not handled** (the brain's `on_command` has no case for it) — currently a no-op. |
 
 Outputs are **events** the `StateBus` publishes: a full `snapshot` each tick, plus
@@ -644,36 +644,52 @@ A patch table maps the core's state to code. The schema:
 
 ```json
 {
-  "default": "osc(4, 0.1, 1.2).out()",
-  "zones":   { "init": "osc(2, 0.1, 1.2).out()", "rest": "osc(3, 0.08, 1.2).out()", "..." : "..." },
-  "modes":   { "wander": "osc(4, 0.3, 1.2).out()", "..." : "..." },
-  "actions": { "breathe": "osc(6, 0.2, 1.2).out()", "..." : "..." }
+  "default": "osc(4, 0.1, 1.2).out(o1)",
+  "zones":   { "init": "osc(2, 0.1, 1.2).out(o0)", "rest": "osc(3, 0.08, 1.2).out(o0)", "..." : "..." },
+  "modes":   { "calm": "osc(4, 0.3, 1.2).out(o3)", "..." : "..." },
+  "actions": { "wander": { "breathe": "osc(6, 0.2, 1.2).out(o1)", "..." : "..." } }
 }
 ```
 
-`zones` / `modes` / `actions` each map a name to a hydra code string (the zones are seeded
-by default; modes and actions start empty). `default` is the code used when nothing else
-matches. **Match precedence (most specific wins): `action > mode > zone > default`** — a
-state's patch is looked up by action name first, then mode, then zone, then `default`
-(`match_patch` in `patches/patches.py`).
+The table has four scopes:
+
+- **`zones`** — zone name → code (the **zone layer**, renders to `o0`).
+- **`actions`** — two-level map `zone → action → code` (the **action layer**, renders to `o1`).
+- **`modes`** — behavior name → code (the **behavior layer**, renders to `o3`).
+- **`default`** — the code used as the action-slot fallback when no action patch matches.
+
+**The core concatenates the three layers in order: zone → action/default → behavior.**
+`Patches.code_for` builds the final patch by joining the available layers with newlines:
+
+1. The zone patch (`zones[zone]`) — if the current zone has a patch.
+2. The action patch (`actions[zone][action]`) or the `default` entry — with the pose
+   globals (`pose` + `poseindex`) injected when the state is inside an action that has
+   per-pose images.
+3. The behavior patch (`modes[behavior]`) — if the current behavior has a patch.
+
+Each layer's output slot (`o0`, `o1`, `o3`) is declared by the patch code itself (via
+`.out(oN)`); the core joins the raw code strings verbatim. Missing layers are omitted.
+When no layer is available, `DEFAULT_HYDRA_CODE` is returned.
 
 **The core is the single source of truth for the resolved patch.** It resolves the patch
-for every snapshot (`Patches.code_for`, i.e. `match_patch`) and pushes the code in the
-`patch` field of each broadcast `state` frame (built by `display.py`). Every consumer —
-`client.html`, `render.html`, and the **3D tool screen** in `rtr3d.js` — prefers that
-pushed `patch`, so all of them stay in sync no matter what triggered the zone/mode/action
-change (MIDI, WebSocket, or HTTP). The resolver is wired in `main.py`
+for every snapshot (`Patches.code_for`) and pushes the code in the `patch` field of each
+broadcast `state` frame (built by `display.py`). Every consumer — `client.html`,
+`render.html`, and the **3D tool screen** in `rtr3d.js` — prefers that pushed `patch`, so
+all of them stay in sync no matter what triggered the zone/mode/action change (MIDI,
+WebSocket, or HTTP). The resolver is wired in `main.py`
 (`make_display(..., patch_code=patches.code_for)`).
 
-**Manual screen override.** The tool client (`client.html`) can push a specific patch slot
-to the screens. Selecting a slot sends a `set_screen_patch` command with that slot's code;
-the `Patches` adapter holds it as an in-memory **screen override** (`set_screen_override`),
-and `code_for` returns the override while it is set — so the pushed `patch` field (and thus
-the 3D tool screen and `render.html`) follow the operator's choice. Selecting **auto** sends
-`set_screen_patch` with `code: null`, which clears the override and the screens fall back to
-the live `action > mode > zone > default` match. The override is a **live control**: it is
-held in memory (not persisted to `patches.json`) and is handled by the engine
-(`SET_SCREEN_PATCH` → `patches.set_screen_override`, wired in `main.py`).
+**Broadcast override.** The editor's patches tab has a **broadcast** toggle (top bar). When
+ON, the currently selected patch slot's code is pushed to the screens via a
+`set_screen_patch` command; the `Patches` adapter holds it as an in-memory **screen
+override** (`set_screen_override`), and `code_for` returns the override while it is set —
+so the pushed `patch` field (and thus the 3D tool screen and `render.html`) follow the
+operator's choice. The override live-updates as the operator edits the selected slot or
+switches slots. Toggling **OFF** sends `set_screen_patch` with `code: null`, which clears
+the override and the screens fall back to the live zone + action/default + behavior
+concatenation. The override is a **live control**: it is held in memory (not persisted to
+`patches.json`) and is handled by the engine (`SET_SCREEN_PATCH` →
+`patches.set_screen_override`, wired in `main.py`).
 
 As a **fallback**, the browser pages also **fetch the whole table once** and match locally
 (`matchPatch`) on every state frame, so a page served over `file://` — or one talking to an
@@ -690,13 +706,16 @@ arrives, then follows the pushed patch.
   small HUD shows the current zone / mode / action and the code in use. This is the page to
   open on a display to see the live hydra output.
 - **`editor.html`** has a dedicated **patches** tab (alongside the zone and sound tabs): a
-  `default` code field, a `zones` list, a `modes` list, and an `actions` list, each with a
-  **live hydra preview** (the code is `eval`'d as you type). It loads from `GET /api/patches`
-  (falling back to `/patches.json`, then a built-in), validates client-side, and saves to
-  `POST /api/patches` (the core hot-reloads); it re-fetchs on the `patches_changed` frame.
-- **`client.html`** has a **patch chooser**: it shows the patch currently matched to the
-  live state (action > mode > zone > default) with its own small preview, so you can see
-  which patch the render page / tool screen is using without opening a second page.
+  `default` code field, a `zones` list, a `behaviors` list (the `modes` scope), and an
+  `actions` list, each with a **live hydra preview** (the code is `eval`'d as you type).
+  The top bar has a **broadcast** toggle: when ON, the selected slot's code is pushed to
+  the screens (live-updating as you edit or switch slots); when OFF, the screens follow
+  the live concatenation. It loads from `GET /api/patches` (falling back to
+  `/patches.json`, then a built-in), validates client-side, and saves to `POST /api/patches`
+  (the core hot-reloads); it re-fetchs on the `patches_changed` frame.
+- **`client.html`** has a **patch chooser**: it shows the patch currently resolved by the
+  core (zone + action/default + behavior concatenation) with its own small preview, so you
+  can see which patch the render page / tool screen is using without opening a second page.
 
 When no hydra-synth is available (or the code fails to `eval`), the pages fall back to the
 built-in default code and log the failure; the core keeps running either way.
