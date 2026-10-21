@@ -85,10 +85,16 @@
           "behavior": "restless",
           "speed": 20,
           "loop": true,
-          "next": {
-            "zone": "resting",
-            "action": "wake"
-          },
+          "next": [
+            {
+              "zone": "resting",
+              "action": "wake"
+            },
+            {
+              "zone": "resting_testing_bridge",
+              "action": "bridge"
+            }
+          ],
           "pose_imgs": [
             "pose_1792397354907_2e4d7151.png",
             "pose_1792351922635_a6b53eac.png",
@@ -1351,7 +1357,7 @@
           "enabled": true,
           "poses": [
             [
-              "x",
+              0,
               -97,
               17,
               -2,
@@ -1374,7 +1380,7 @@
           "enabled": true,
           "poses": [
             [
-              "x",
+              0,
               -97,
               17,
               -2,
@@ -1736,77 +1742,301 @@
           }
         }
       }
+    },
+    "testing": {
+      "enabled": true,
+      "class": "track",
+      "mode_group": "event-sit-back",
+      "safezone": [
+        [
+          0,
+          80
+        ],
+        [
+          -30,
+          -10
+        ],
+        [
+          0,
+          20
+        ],
+        [
+          -15,
+          15
+        ],
+        [
+          -20,
+          10
+        ],
+        [
+          -15,
+          15
+        ]
+      ],
+      "speed": 20,
+      "exits": [
+        [
+          "hunting",
+          "track"
+        ],
+        [
+          "resting",
+          "hold"
+        ]
+      ],
+      "actions": {
+        "locked": {
+          "enabled": true,
+          "poses": [
+            [
+              0,
+              -10,
+              12,
+              0,
+              -5,
+              0
+            ]
+          ],
+          "variable_axes": [
+            0,
+            1,
+            4
+          ],
+          "behavior": "locked",
+          "speed": 20,
+          "loop": true,
+          "next": {
+            "zone": "testing",
+            "action": "locked"
+          },
+          "pose_imgs": [
+            null
+          ]
+        },
+        "intent": {
+          "enabled": true,
+          "poses": [
+            [
+              0,
+              -10,
+              12,
+              0,
+              -5,
+              0
+            ]
+          ],
+          "variable_axes": [
+            0,
+            1,
+            4
+          ],
+          "behavior": "intent",
+          "speed": 20,
+          "loop": true,
+          "next": {
+            "zone": "testing",
+            "action": "intent"
+          },
+          "pose_imgs": [
+            null
+          ]
+        },
+        "curious": {
+          "enabled": true,
+          "poses": [
+            [
+              0,
+              -10,
+              12,
+              0,
+              -5,
+              0
+            ]
+          ],
+          "variable_axes": [
+            0,
+            1,
+            4
+          ],
+          "behavior": "curious",
+          "speed": 20,
+          "loop": true,
+          "next": {
+            "zone": "testing",
+            "action": "curious"
+          },
+          "pose_imgs": [
+            null
+          ]
+        },
+        "gentle": {
+          "enabled": true,
+          "poses": [
+            [
+              0,
+              -10,
+              12,
+              0,
+              -5,
+              0
+            ]
+          ],
+          "variable_axes": [
+            4,
+            5
+          ],
+          "behavior": "gentle",
+          "speed": 20,
+          "loop": true,
+          "next": {
+            "zone": "testing",
+            "action": "gentle"
+          },
+          "pose_imgs": [
+            null
+          ]
+        }
+      }
+    },
+    "resting_testing_bridge": {
+      "enabled": true,
+      "safezone": [
+        [
+          -94,
+          122
+        ],
+        [
+          -105,
+          5
+        ],
+        [
+          0,
+          115
+        ],
+        [
+          -15,
+          15
+        ],
+        [
+          -20,
+          45
+        ],
+        [
+          -15,
+          15
+        ]
+      ],
+      "speed": 20,
+      "actions": {
+        "bridge": {
+          "enabled": true,
+          "loop": false,
+          "behavior": "bridge",
+          "poses": [
+            [
+              60,
+              -90,
+              90,
+              15,
+              15,
+              0
+            ],
+            [
+              45,
+              -7,
+              12,
+              0,
+              -5,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "speed": 20,
+          "next": {
+            "zone": "testing",
+            "action": "locked"
+          }
+        }
+      }
     }
   },
   "layout": {
     "pos": {
       "resting": {
-        "x": -182.87825775146484,
-        "y": 139.8656120300293
+        "x": 40,
+        "y": 40
       },
       "resting_sleeping_bridge": {
-        "x": 99.14602661132812,
-        "y": 98.76288604736328
+        "x": 250,
+        "y": 40
       },
       "sleeping": {
-        "x": 317.1058349609375,
-        "y": 77.07186126708984
+        "x": 460,
+        "y": 40
       },
       "cuddling": {
-        "x": 527.0128173828125,
-        "y": 118.15058135986328
-      },
-      "purring": {
-        "x": 83.83537292480469,
-        "y": 238.6498260498047
-      },
-      "stretching": {
-        "x": 820.6994018554688,
-        "y": 418.2312774658203
-      },
-      "stretching_hunting_bridge": {
-        "x": 1300,
-        "y": 40
-      },
-      "hunting": {
-        "x": 1510,
-        "y": 40
-      },
-      "examining": {
-        "x": 1720,
-        "y": 40
-      },
-      "performing": {
-        "x": 1930,
-        "y": 40
-      },
-      "roaring": {
-        "x": 2140,
-        "y": 40
-      },
-      "growling": {
-        "x": 2350,
-        "y": 40
-      },
-      "clawing": {
-        "x": 2560,
-        "y": 40
-      },
-      "leaping": {
-        "x": 2770,
+        "x": 670,
         "y": 40
       },
       "sleeping_stretching_bridge": {
-        "x": 515.9505615234375,
-        "y": 382.71413803100586
+        "x": 670,
+        "y": 158
+      },
+      "purring": {
+        "x": 880,
+        "y": 40
+      },
+      "stretching": {
+        "x": 880,
+        "y": 206
+      },
+      "stretching_hunting_bridge": {
+        "x": 1090,
+        "y": 40
+      },
+      "hunting": {
+        "x": 1300,
+        "y": 40
+      },
+      "examining": {
+        "x": 1510,
+        "y": 40
+      },
+      "performing": {
+        "x": 1720,
+        "y": 40
+      },
+      "roaring": {
+        "x": 1930,
+        "y": 40
+      },
+      "growling": {
+        "x": 2140,
+        "y": 40
+      },
+      "clawing": {
+        "x": 2350,
+        "y": 40
+      },
+      "leaping": {
+        "x": 2560,
+        "y": 40
+      },
+      "testing": {
+        "x": 391.4085388183594,
+        "y": 300.52848052978516
+      },
+      "resting_testing_bridge": {
+        "x": 187.8206024169922,
+        "y": 238.73723220825195
       }
     },
     "view": {
-      "x": 2229.9841689237005,
-      "y": 207.61139209585014,
-      "w": 734.1385771819415,
-      "h": 149.35673075002833
+      "x": -459.8653438280889,
+      "y": 158.00041217433747,
+      "w": 1698.1071394113083,
+      "h": 224.12727227246876
     },
-    "key": "clawing,cuddling,examining,growling,hunting,leaping,performing,purring,resting,resting_sleeping_bridge,roaring,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge"
+    "key": "clawing,cuddling,examining,growling,hunting,leaping,performing,purring,resting,resting_sleeping_bridge,resting_testing_bridge,roaring,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge,testing"
   }
 }

@@ -422,6 +422,26 @@
       "active": "wide",
       "mode": "track",
       "lock": "none"
+    },
+    "testing/locked": {
+      "active": "wide",
+      "mode": "track",
+      "lock": "auto"
+    },
+    "testing/intent": {
+      "active": "wide",
+      "mode": "track",
+      "lock": "auto"
+    },
+    "testing/curious": {
+      "active": "wide",
+      "mode": "track",
+      "lock": "auto"
+    },
+    "testing/gentle": {
+      "active": "close",
+      "mode": "analyze",
+      "lock": "auto"
     }
   },
   "behaviors": {
