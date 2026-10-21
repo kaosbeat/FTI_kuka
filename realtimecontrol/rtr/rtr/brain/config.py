@@ -70,10 +70,10 @@ ZONE_CLASSES = ("ignore", "scan", "track", "farfocus", "approach", "facefocus", 
 # behaviors carry entries: ``calm`` / ``bridge`` are no-ops and ``spontaneous`` has
 # no tunable knob.
 DEFAULT_BEHAVIORS: Dict[str, dict] = {
-    "locked":      {"gain": 0.3, "stay": 1.0, "triggers": ["dwell"]},
-    "curious":     {"gain": 0.3, "look_factor": 0.5, "stay": 1.0, "triggers": ["dwell"]},
-    "intent":      {"gain": 0.3, "stay": 1.0, "triggers": ["dwell"]},
-    "gentle":      {"gain": 0.3, "face_factor": 0.5, "stay": 1.0, "triggers": ["dwell"]},
+    "locked":      {"gain": 0.3, "stay": 1.0, "triggers": ["dwell"], "sweep_amp": 0.5},
+    "curious":     {"gain": 0.3, "look_factor": 0.5, "stay": 1.0, "triggers": ["dwell"], "sweep_amp": 0.5},
+    "intent":      {"gain": 0.3, "stay": 1.0, "triggers": ["dwell"], "sweep_amp": 0.5},
+    "gentle":      {"gain": 0.3, "face_factor": 0.5, "stay": 1.0, "triggers": ["dwell"], "sweep_amp": 0.5},
     "vigilant":    {"freq": 1.0, "stay": 0.0, "triggers": ["dwell"]},
     "restless":    {"wander_adj": 5.0, "stay": 0.7, "triggers": ["dwell"]},
     "spontaneous": {"stay": 0.0, "triggers": ["dwell"]},

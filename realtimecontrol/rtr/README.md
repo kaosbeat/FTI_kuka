@@ -922,11 +922,18 @@ python -m rtr.camera.camera_mock \
 | `--fps` | `30` | Target frame rate. |
 | `--model` | `yolo26n.pt` | Person detector weight (resolved in `rtr/camera/models`). |
 | `--tracker` | `bytetrack.yaml` | ByteTrack config. |
+| `--snapshot-port` | `8080` | HTTP port that serves the latest frame as a JPEG (the editor's "real camera" snapshot). |
 | `--show` | off | Open the OpenCV debug window (candidate boxes + lock + overlay). |
 | `--log-level` | `INFO` | Log verbosity. |
 
+The snapshot endpoint ignores the path/query — any GET (e.g.
+`http://<rpi-ip>:8080/?action=snapshot`) returns the latest frame as `image/jpeg`
+(503 until the first frame). Point the editor's "snapshot url" field at it.
+
 `camera_mock` flags: `--core-host`, `--core-port`, `--http-port`, `--candidates`
-(simulated persons, default `3`), `--fps` (telemetry rate, default `30`), `--log-level`.
+(simulated persons, default `3`), `--fps` (telemetry rate, default `30`), `--video`
+(run the real YOLO+ByteTrack pipeline on a video file), `--snapshot-port`
+(snapshot HTTP port, video mode only), `--log-level`.
 
 With the core running, open the pages over the HTTP server (port 8766):
 

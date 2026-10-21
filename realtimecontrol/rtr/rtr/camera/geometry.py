@@ -119,8 +119,30 @@ class CameraGeometry:
         off = mat3_vec(R, [xc, yc, depth])
         return [C[k] + off[k] for k in range(3)]
 
+    def camera_position_jacobian(self, joints_deg: List[float],
+                                  eps_rad: float = 1e-4) -> List[List[float]]:
+        """The camera position Jacobian ``dC/d(joints)`` (3x6, m/rad).
+
+        Computed by finite differences over the 6 joints: perturbing joint ``i`` by
+        ``eps_rad`` moves the camera position; the ratio is the Jacobian column.
+        Used by the target-aware sweep (see :mod:`rtr.state.behavior`) to convert a
+        desired base-frame camera displacement into joint deltas
+        (``dq = pinv3(Jc_var) @ d_cam``): this is what lets the robot move to a new
+        position while the servo keeps the locked target centred.
+        """
+        deg = 180.0 / math.pi
+        C0, _ = self.camera_pose(joints_deg)
+        J = [[0.0] * 6 for _ in range(3)]
+        for i in range(6):
+            jp = list(joints_deg)
+            jp[i] += eps_rad * deg
+            Ci, _ = self.camera_pose(jp)
+            for r in range(3):
+                J[r][i] = (Ci[r] - C0[r]) / eps_rad
+        return J
+
     def image_jacobian(self, joints_deg: List[float], target: Vec3,
-                       eps_rad: float = 1e-4) -> List[List[float]]:
+                        eps_rad: float = 1e-4) -> List[List[float]]:
         """The visual-servoing image Jacobian ``d(dx, dy)/d(joints)`` (2x6, px/rad).
 
         Computed by finite differences over the 6 joints (FK is cheap). For the

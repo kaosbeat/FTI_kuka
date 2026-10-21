@@ -562,7 +562,7 @@
       <h2>real camera</h2>
       <div class="row" style="margin-top:8px">
         <label>snapshot url</label>
-        <input type="text" id="camSnapUrl" value="http://192.168.1.185:8080/?action=snapshot" spellcheck="false">
+        <input type="text" id="camSnapUrl" value="http://192.168.10.112:8080/?action=snapshot" spellcheck="false">
         <button id="camSnapBtn" class="small">capture</button>
       </div>
       <img id="camSnapshot" alt="camera snapshot">
@@ -1092,10 +1092,10 @@ const BRAIN_FALLBACK = {
     leaping:    { active: "wide", mode: "track", lock: "auto" },
   },
   behaviors: {
-    locked:      { gain: 0.3 },
-    curious:     { gain: 0.3, look_factor: 0.5 },
-    intent:      { gain: 0.3 },
-    gentle:      { gain: 0.3, face_factor: 0.5 },
+    locked:      { gain: 0.3, sweep_amp: 0.5 },
+    curious:     { gain: 0.3, look_factor: 0.5, sweep_amp: 0.5 },
+    intent:      { gain: 0.3, sweep_amp: 0.5 },
+    gentle:      { gain: 0.3, face_factor: 0.5, sweep_amp: 0.5 },
     vigilant:    { freq: 1.0 },
     restless:    { wander_adj: 5.0 },
     spontaneous: {},
@@ -2153,10 +2153,10 @@ const BRAIN_DEFAULT_GROUPS = {
 // Per-behavior motion params (mirrors rtr/brain/config.py DEFAULT_BEHAVIORS).
 // calm/bridge are not listed (no params); spontaneous is listed empty.
 const BEHAVIOR_PARAMS = {
-  locked:      { gain: 0.3 },
-  curious:     { gain: 0.3, look_factor: 0.5 },
-  intent:      { gain: 0.3 },
-  gentle:      { gain: 0.3, face_factor: 0.5 },
+  locked:      { gain: 0.3, sweep_amp: 0.5 },
+  curious:     { gain: 0.3, look_factor: 0.5, sweep_amp: 0.5 },
+  intent:      { gain: 0.3, sweep_amp: 0.5 },
+  gentle:      { gain: 0.3, face_factor: 0.5, sweep_amp: 0.5 },
   vigilant:    { freq: 1.0 },
   restless:    { wander_adj: 5.0 },
   spontaneous: {},
@@ -2176,6 +2176,7 @@ const BEHAVIOR_PARAM_META = {
   freq:        { step: "0.1",  min: "0" },
   amp_scale:   { step: "0.05", min: "0" },
   wander_adj:  { step: "0.5",  min: "0" },
+  sweep_amp:   { step: "0.05", min: "0" },
 };
 
 // Info text for the no-param behaviors (info-only cards).
@@ -6557,8 +6558,9 @@ async function setupCamLensSel() {
   Robot3D.setCameraViewLens(sel.value);
 }
 setupCamLensSel();
-// Capture a real-camera snapshot: the URL is user-configurable; a timestamp cache-buster
-// forces a fresh image on every click (no HTTP snapshot endpoint in the core).
+// Capture a real-camera snapshot: the URL is user-configurable (points at the
+// RPi's snapshot HTTP endpoint, served by the camera remote); a timestamp
+// cache-buster forces a fresh image on every click.
 function camSnapUpdate() {
   const url = $("camSnapUrl").value.trim();
   if (!url) return;

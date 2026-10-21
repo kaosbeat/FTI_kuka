@@ -448,24 +448,28 @@
     "locked": {
       "gain": 0.3,
       "stay": 1.0,
-      "triggers": ["dwell"]
+      "triggers": ["dwell"],
+      "sweep_amp": 0.5
     },
     "curious": {
       "gain": 0.3,
       "look_factor": 0.5,
       "stay": 1.0,
-      "triggers": ["dwell"]
+      "triggers": ["dwell"],
+      "sweep_amp": 0.5
     },
     "intent": {
       "gain": 0.3,
       "stay": 1.0,
-      "triggers": ["dwell"]
+      "triggers": ["dwell"],
+      "sweep_amp": 0.5
     },
     "gentle": {
       "gain": 0.3,
       "face_factor": 0.5,
       "stay": 1.0,
-      "triggers": ["dwell"]
+      "triggers": ["dwell"],
+      "sweep_amp": 0.5
     },
     "vigilant": {
       "freq": 1,

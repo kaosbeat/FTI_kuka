@@ -18,7 +18,7 @@ import random
 from typing import List
 
 from ..robot.helpers import fitlimits
-from ..robot.kinematics import pinv2
+from ..robot.kinematics import cross, pinv2, pinv3
 from .zones import HARDWARE_LIMITS, effective_limits
 
 # Legacy fallback gain (degrees of joint travel per pixel of offset), used only when
@@ -43,10 +43,25 @@ _LOOK_FACTOR = 0.5
 # exterior pose and only gestures toward the face location.
 _FACE_FACTOR = 0.5
 
-# Test-sweep amplitude: the fraction of the safezone half-width each variable axis
-# drifts through (see :func:`_add_sweep`). Kept modest so the camera servo still holds
-# the target centred while every axis is exercised for the test.
+# Default test-sweep amplitude: the fraction of the safezone half-width the camera
+# explores each tick (see :func:`_target_aware_sweep`). Overridable per behaviour via
+# the brain config's ``sweep_amp`` key (the brain-tab cards). Kept modest so the camera
+# servo still holds the target centred while the axes are exercised for the test.
 _SWEEP_AMP = 0.5
+
+# The reference lock distance (metres) the sweep amplitude is normalised against: a
+# target at this range moves the camera by exactly ``sweep_amp`` of the safezone
+# half-width. A target farther away scales the amplitude up (more room to roam while
+# the target stays in view); a closer target scales it down.
+_SWEEP_DIST_REF = 2.0
+
+# Per-behaviour per-tick base-frame displacement scale (metres), multiplied by
+# ``sweep_amp``. The per-tick delta integrates to a position oscillation of roughly
+# 10x the per-tick magnitude (sum of sin over the ~63-tick period), so these are
+# kept small to roam within the safezone without the clamp doing all the work.
+_SWEEP_LOCKED_SCALE = 0.02
+_SWEEP_INTENT_SCALE = 0.05
+_SWEEP_CURIOS_SCALE = 0.08
 
 
 def _sweep_enabled(action) -> bool:
@@ -54,16 +69,164 @@ def _sweep_enabled(action) -> bool:
     return isinstance(action, dict) and action.get("sweep") is True
 
 
-def _add_sweep(machine, pose, var_axes, axis_bands=None) -> None:
-    """Exercise every variable axis with a slow, desynchronised drift (test mode).
+def _sweep_amp(machine, behavior) -> float:
+    """The sweep amplitude (fraction of the safezone half-width) for a behaviour.
 
-    Runs on top of the camera servo (see :func:`_apply_behavior`): each variable axis
-    gets a sinusoidal drift around its current value, phase-offset per axis so the
-    axes do not all move together. The amplitude is a fraction of the safezone
-    half-width and the result is clamped to the effective floor, so the sweep stays
-    within the zone's safe bounds. This is what makes a ``testing`` action visibly use
-    *all* of its variable axes (not just the one the image Jacobian happens to drive)
-    while the person stays tracked.
+    Read from the per-behaviour brain params (``sweep_amp`` on the brain-tab card),
+    falling back to :data:`_SWEEP_AMP`.
+    """
+    return _bp(machine, behavior, "sweep_amp", _SWEEP_AMP)
+
+
+def _perp(v):
+    """A unit vector perpendicular to ``v`` (cross with the up vector; falling back to
+    the x-axis when ``v`` is parallel to up). Returns ``[0,0,0]`` for a degenerate ``v``.
+    """
+    c = cross(v, [0.0, 0.0, 1.0])
+    n = math.sqrt(sum(x * x for x in c))
+    if n < 1e-6:
+        c = cross(v, [1.0, 0.0, 0.0])
+        n = math.sqrt(sum(x * x for x in c))
+    if n < 1e-6:
+        return [0.0, 0.0, 0.0]
+    return [c[k] / n for k in range(3)]
+
+
+def _perp2(v):
+    """A unit vector perpendicular to both ``v`` and :func:`_perp(v)`.
+
+    ``cross(_perp(v), v)`` gives a vector orthogonal to both ``v`` and ``_perp(v)``.
+    Used for the ``curious`` behaviour to explore a direction distinct from ``locked``.
+    Returns ``[0,0,0]`` for a degenerate ``v``.
+    """
+    p = _perp(v)
+    c = cross(p, v)
+    n = math.sqrt(sum(x * x for x in c))
+    if n < 1e-6:
+        return [0.0, 0.0, 0.0]
+    return [c[k] / n for k in range(3)]
+
+
+def _lock_info(machine, curjpos, action):
+    """Compute the lock geometry for the target-aware sweep.
+
+    Returns a dict with:
+      - ``cam``: the camera position in the base frame (metres),
+      - ``target``: the tracked target's world position (metres),
+      - ``lock``: the lock vector ``target - cam`` (camera → target, metres),
+      - ``dist``: the lock length (metres),
+      - ``depth``: the working depth used for the target estimate (metres),
+      - ``jacobian``: the camera position Jacobian (3x6, m/rad).
+
+    Returns ``None`` when the kinematics are not wired (the sweep falls back to the
+    legacy blind drift).
+    """
+    geo = getattr(machine, "camera_geometry", None)
+    if geo is None:
+        return None
+    state = machine.camera_state or {}
+    dx = state.get("dx", 0.0)
+    dy = state.get("dy", 0.0)
+    if not isinstance(dx, (int, float)) or isinstance(dx, bool):
+        dx = 0.0
+    if not isinstance(dy, (int, float)) or isinstance(dy, bool):
+        dy = 0.0
+    depth = geo.target_depth
+    if isinstance(action, dict):
+        td = action.get("target_depth")
+        if isinstance(td, (int, float)) and not isinstance(td, bool) and td > 0:
+            depth = td
+    C, _R = geo.camera_pose(curjpos)
+    T = geo.estimate_target(curjpos, dx, dy, depth)
+    L = [T[k] - C[k] for k in range(3)]
+    D = math.sqrt(sum(x * x for x in L))
+    return {"cam": C, "target": T, "lock": L, "dist": D, "depth": depth,
+            "jacobian": geo.camera_position_jacobian(curjpos)}
+
+
+def _move_cam(machine, pose, var_axes, info, delta_C) -> None:
+    """Move the camera by a base-frame displacement ``delta_C`` (metres).
+
+    Converts the displacement to joint deltas via the camera position Jacobian
+    (reduced to the variable axes): ``dq = pinv3(Jc_var) @ delta_C``. The minimum-norm
+    solve spreads the move across the variable axes; the servo then re-centers the
+    target at the new camera position.
+    """
+    J = info["jacobian"]
+    J_var = [[J[r][ax] for ax in var_axes] for r in range(3)]
+    P = pinv3(J_var)
+    n = len(var_axes)
+    dq_rad = [sum(P[i][c] * delta_C[c] for c in range(3)) for i in range(n)]
+    for k, ax in enumerate(var_axes):
+        pose[ax] = pose[ax] + dq_rad[k] * _DEG_PER_RAD
+
+
+def _sweep_locked(machine, pose, var_axes, info, amp, t):
+    """Locked sweep: tiny perpendicular drift (short path, all axes)."""
+    L = info["lock"]
+    d = _perp(L)
+    mag = amp * _SWEEP_LOCKED_SCALE * math.sin(t)
+    _move_cam(machine, pose, var_axes, info, [d[k] * mag for k in range(3)])
+
+
+def _sweep_intent(machine, pose, var_axes, info, amp, t):
+    """Intent sweep: radial drift along the lock vector (zoom out / wider view)."""
+    D = info["dist"]
+    if D < 1e-6:
+        return
+    L = info["lock"]
+    d = [L[k] / D for k in range(3)]
+    mag = amp * _SWEEP_INTENT_SCALE * math.sin(t + math.pi / 3.0)
+    _move_cam(machine, pose, var_axes, info, [d[k] * mag for k in range(3)])
+
+
+def _sweep_curious(machine, pose, var_axes, info, amp, t):
+    """Curious sweep: broad perpendicular drift (view the target from different sides)."""
+    L = info["lock"]
+    d = _perp2(L)
+    mag = amp * _SWEEP_CURIOS_SCALE * math.sin(t + 2.0 * math.pi / 3.0)
+    _move_cam(machine, pose, var_axes, info, [d[k] * mag for k in range(3)])
+
+
+def _sweep_gentle(machine, pose, var_axes, floor, t):
+    """Gentle sweep: sweep one variable axis at a time (sequential, joint-space).
+
+    Cycles through the variable axes every 30 ticks; the selected axis receives a
+    small sinusoidal increment while the others hold. No lock geometry is needed.
+    """
+    if not var_axes:
+        return
+    ax = var_axes[(machine.tick // 30) % len(var_axes)]
+    lo, hi = floor[ax]
+    amp = (hi - lo) / 2.0 * _sweep_amp(machine, "gentle") * 0.01
+    pose[ax] += amp * math.sin(t)
+
+
+def _sweep_blind(machine, pose, var_axes, floor, t):
+    """Blind sweep: legacy per-axis sinusoidal drift (fallback when kinematics are not wired)."""
+    a = _sweep_amp(machine, "locked") * 0.01
+    for ax in var_axes:
+        lo, hi = floor[ax]
+        pose[ax] += (hi - lo) / 2.0 * a * math.sin(t)
+
+
+def _add_sweep(machine, pose, var_axes, behavior, curjpos, action, axis_bands=None) -> None:
+    """Target-aware test sweep: move the camera to a new position within the safezone
+    while keeping the locked target in view, using a behaviour-specific strategy.
+
+    Runs on top of the camera servo (see :func:`_apply_behavior`). Unlike the old
+    blind sinusoidal drift, the motion is computed from the **lock vector** (the
+    camera→target direction): each behaviour explores the safezone in a different way,
+    all while the servo keeps the target centred. The amplitude is a fraction of the
+    safezone half-width (the brain-tab ``sweep_amp``).
+
+    Behaviour strategies:
+      - ``locked``: minimal motion (short path) — a tiny perpendicular drift.
+      - ``intent``: radial drift (zoom out / wider view, then return).
+      - ``curious``: broad perpendicular drift (view the target from different sides).
+      - ``gentle``: sweep one variable axis at a time (sequential, joint-space).
+
+    Falls back to the legacy blind drift when the kinematics are not wired.
     """
     limits = effective(machine)
     if axis_bands:
@@ -72,12 +235,25 @@ def _add_sweep(machine, pose, var_axes, axis_bands=None) -> None:
             floor[ax] = [max(lo, limits[ax][0]), min(hi, limits[ax][1])]
     else:
         floor = limits
+
     t = machine.tick * 0.1
-    for k, ax in enumerate(var_axes):
-        lo, hi = floor[ax]
-        half = (hi - lo) / 2.0
-        amp = half * _SWEEP_AMP
-        pose[ax] = pose[ax] + amp * math.sin(t + k * 0.9)
+    if behavior == "gentle":
+        _sweep_gentle(machine, pose, var_axes, floor, t)
+    else:
+        info = _lock_info(machine, curjpos, action)
+        if info is None:
+            _sweep_blind(machine, pose, var_axes, floor, t)
+        else:
+            amp = _sweep_amp(machine, behavior)
+            if behavior == "locked":
+                _sweep_locked(machine, pose, var_axes, info, amp, t)
+            elif behavior == "intent":
+                _sweep_intent(machine, pose, var_axes, info, amp, t)
+            elif behavior == "curious":
+                _sweep_curious(machine, pose, var_axes, info, amp, t)
+            else:
+                _sweep_blind(machine, pose, var_axes, floor, t)
+
     for ax in var_axes:
         pose[ax] = fitlimits(ax, pose[ax], floor)
     # Keep the debug UI's proposed pose in step with the swept target.
@@ -260,7 +436,7 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action, axis_ban
     # of them (bounded by the safezone). The camera behaviours are the only ones that
     # recenter a tracked target, so the sweep only makes sense there.
     if behavior in ("locked", "curious", "intent", "gentle") and _sweep_enabled(action):
-        _add_sweep(machine, pose, var_axes, axis_bands)
+        _add_sweep(machine, pose, var_axes, behavior, curjpos, action, axis_bands)
 
 
 def _apply_camera(machine, pose, var_axes, behavior, curjpos, gain, action, axis_bands=None) -> None:

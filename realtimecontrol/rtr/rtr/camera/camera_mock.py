@@ -26,6 +26,7 @@ from typing import Any, Dict, Optional
 
 from ..core.commands import Cmd
 from ..remote.connection import Connection
+from .snapshot import SnapshotServer
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +38,13 @@ class CameraMock:
                  http_port: int = 8766,
                  num_candidates: int = 3,
                  fps: float = 30.0,
-                 video: Optional[str] = None,
-                 close_video: Optional[str] = None,
-                 width: int = 640, height: int = 480,
-                 model_path: str = "yolo26n.pt",
-                 tracker_cfg: str = "bytetrack.yaml",
-                 show: bool = False):
+                  video: Optional[str] = None,
+                  close_video: Optional[str] = None,
+                  width: int = 640, height: int = 480,
+                  model_path: str = "yolo26n.pt",
+                  tracker_cfg: str = "bytetrack.yaml",
+                  snapshot_port: int = 8080,
+                  show: bool = False):
         self.core_host = core_host
         self.core_port = core_port
         self.http_port = http_port
@@ -77,8 +79,11 @@ class CameraMock:
             self._sent = {"status": 0, "candidates": 0, "track": 0, "face": 0}
             self._last_stats = 0.0
             self._video_fps = self._get_video_fps(video, fallback=fps)
+            # Snapshot server (video mode only): serves the latest frame as a JPEG.
+            self._snapshot = SnapshotServer(port=snapshot_port)
         else:
             self.pipeline = None
+            self._snapshot = None
             # Current intent from the core (random-walk simulation).
             self._active = "wide"
             self._mode = "idle"
@@ -181,6 +186,8 @@ class CameraMock:
             start = time.time()
             try:
                 result = await loop.run_in_executor(None, self.pipeline.process)
+                if result.frame is not None:
+                    self._snapshot.set_frame(result.frame)
                 payloads = self.pipeline.to_telemetry(result)
                 self._send_telemetry(payloads)
                 self._log_targets(result)
@@ -354,6 +361,8 @@ class CameraMock:
         else:
             logger.warning("mock camera: WS link not up after 5s; telemetry will be dropped until it connects")
 
+        if self._snapshot is not None:
+            self._snapshot.start()
         if self.video:
             logger.info("mock camera: running pipeline on video %s", self.video)
             loop_task = asyncio.create_task(self._video_loop())
@@ -367,6 +376,8 @@ class CameraMock:
             self._running = False
             loop_task.cancel()
             await asyncio.gather(loop_task, return_exceptions=True)
+            if self._snapshot is not None:
+                self._snapshot.stop()
             await self._conn.stop()
             if self.video:
                 self.pipeline.stop()
@@ -391,6 +402,8 @@ def parse_args(argv=None):
     parser.add_argument("--height", type=int, default=480, help="frame height (video mode)")
     parser.add_argument("--model", default="yolo26n.pt", help="YOLO model path (video mode)")
     parser.add_argument("--tracker", default="bytetrack.yaml", help="tracker config (video mode)")
+    parser.add_argument("--snapshot-port", type=int, default=8080,
+                        help="HTTP port that serves the latest frame as a JPEG snapshot (video mode)")
     parser.add_argument("--show", action="store_true", help="open the debug display window (video mode)")
     parser.add_argument("--log-level", default="INFO", help="log level")
     return parser.parse_args(argv)
@@ -412,6 +425,7 @@ def main(argv=None) -> int:
         height=args.height,
         model_path=args.model,
         tracker_cfg=args.tracker,
+        snapshot_port=args.snapshot_port,
         show=args.show,
     )
 
