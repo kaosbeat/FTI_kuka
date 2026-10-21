@@ -1803,6 +1803,7 @@
             4
           ],
           "behavior": "locked",
+          "sweep": true,
           "speed": 20,
           "loop": true,
           "next": {
@@ -1831,7 +1832,8 @@
             4
           ],
           "behavior": "intent",
-          "speed": 100,
+          "sweep": true,
+          "speed": 20,
           "loop": true,
           "next": {
             "zone": "testing",
@@ -1859,6 +1861,7 @@
             4
           ],
           "behavior": "curious",
+          "sweep": true,
           "speed": 20,
           "loop": true,
           "next": {
@@ -1886,6 +1889,7 @@
             5
           ],
           "behavior": "gentle",
+          "sweep": true,
           "speed": 20,
           "loop": true,
           "next": {
