@@ -159,6 +159,13 @@
   </section>
 
   <section>
+    <h2>zone groups</h2>
+    <div class="btnrow" id="groups"></div>
+    <div class="kv" style="margin-top:6px"><span>active group</span><span id="activeGroup">&#8211;</span></div>
+    <div class="btnrow" style="margin-top:6px"><button id="clearGroupBtn">clear group</button></div>
+  </section>
+
+  <section>
     <h2>axes (cur / target)</h2>
     <div id="axes"></div>
     <h2 style="margin-top:12px">cartesian (sim)</h2>
@@ -547,7 +554,7 @@ function connect() {
   const url = $("host").value.trim();
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   ws = new WebSocket(url);
-  ws.onopen = () => { setConn(true); log("connected to " + url); ws.send(JSON.stringify({ cmd: "hello", client: "screen" })); fetchZones(); loadBrain(); };
+  ws.onopen = () => { setConn(true); log("connected to " + url); ws.send(JSON.stringify({ cmd: "hello", client: "screen" })); fetchZones(); loadBrain().then(buildGroupButtons); };
   ws.onclose = () => {
     setConn(false);
     log("disconnected; retrying in 2s");
@@ -624,7 +631,7 @@ function firstEnabledAction(zoneName) {
 // Render snapshots.
 // ------------------------------------------------------------------
 const valEls = [], tgtEls = [], markEls = [];
-const zoneBtns = {}, actionBtns = {};
+const zoneBtns = {}, actionBtns = {}, groupBtns = {};
 const poseInputs = [];
 
 // MIDI activity lights: the server's monitor ring (newest last, monotonic seq)
@@ -677,6 +684,14 @@ function renderState(s) {
     const manual = s.control_mode === "manual";
     $("cmManual").className = "seg manual" + (manual ? " active" : "");
     $("cmAuto").className = "seg auto" + (!manual ? " active" : "");
+  }
+
+  // Active group: highlight the active group button, dim the rest.
+  const ag = s.active_group || null;
+  $("activeGroup").textContent = ag || "—";
+  for (const name of Object.keys(groupBtns)) {
+    if (ag === name) groupBtns[name].className = "active";
+    else groupBtns[name].className = "";
   }
 
   // MIDI activity lights: flash the in/out dots when the monitor ring has new entries.
@@ -786,6 +801,30 @@ function buildActionButtons(zoneName) {
 }
 
 // ------------------------------------------------------------------
+// Zone group buttons (built from BRAIN.zone_groups; rebuilt after loadBrain).
+// Clicking a group sends enable_group; the active group is reflected from the
+// snapshot's active_group field. Manual mode clears the active group (core interlock).
+// ------------------------------------------------------------------
+function buildGroupButtons() {
+  const el = $("groups");
+  el.innerHTML = "";
+  for (const k in groupBtns) delete groupBtns[k];
+  if (!BRAIN || !BRAIN.zone_groups) return;
+  for (const name of Object.keys(BRAIN.zone_groups)) {
+    const g = BRAIN.zone_groups[name];
+    const b = document.createElement("button");
+    b.textContent = name;
+    b.title = g.zones ? g.zones.join(", ") : "";
+    b.onclick = () => {
+      if (b.disabled) return;
+      send({ cmd: "enable_group", group: name });
+    };
+    el.appendChild(b);
+    groupBtns[name] = b;
+  }
+}
+
+// ------------------------------------------------------------------
 // Build the UI.
 // ------------------------------------------------------------------
 function buildUI() {
@@ -870,6 +909,9 @@ function buildUI() {
   // auto = brain drives). The snapshot render highlights the active side.
   $("cmManual").onclick = () => send({ cmd: "set_control_mode", mode: "manual" });
   $("cmAuto").onclick = () => send({ cmd: "set_control_mode", mode: "auto" });
+
+  // Clear the active zone group (returns to normal multi-group autonomy).
+  $("clearGroupBtn").onclick = () => send({ cmd: "clear_group" });
 
   // engine (move mode + cadence)
   $("engineMode").onchange = () => send({ cmd: "set_engine_mode", mode: $("engineMode").value });

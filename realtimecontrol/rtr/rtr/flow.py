@@ -302,3 +302,99 @@ def find_safe_path(
             parent[neighbor] = cur
             queue.append(neighbor)
     return None
+
+
+def find_safe_path_to_any(
+    zones: Dict[str, dict],
+    from_zone: str,
+    from_action: str,
+    targets: List[Tuple[str, str]],
+    safety_check: Optional[Callable[..., Tuple[bool, List[str]]]] = None,
+) -> Optional[List[Tuple[str, str]]]:
+    """BFS over the ``(zone, action)`` graph to the shortest safe path to **any**
+    node in ``targets``.
+
+    ``targets`` is a list of ``(zone, action)`` nodes (the group's enabled nodes).
+    This is the multi-target version of :func:`find_safe_path`: it stops as soon as
+    any target node is reached, so the robot lands on the *nearest* reachable node
+    in the group rather than a specific one.
+
+    Returns the shortest path as a list of ``(zone, action)`` waypoints (including
+    the start and the reached target), or ``None`` when no target is reachable.
+    """
+    if not isinstance(zones, dict) or not targets:
+        return None
+    start = (from_zone, from_action)
+    target_set = set(targets)
+    if start in target_set:
+        return [start]
+
+    # Build the adjacency list: node -> list of (neighbor_node).
+    # A node is valid when the zone exists, is enabled, and the action exists
+    # and is enabled (same validity rule as find_safe_path).
+    def _node_valid(z: str, a: str) -> bool:
+        if not isinstance(z, str) or not isinstance(a, str):
+            return False
+        zone = zones.get(z)
+        if not isinstance(zone, dict):
+            return False
+        if zone.get("enabled") is False:
+            return False
+        actions = zone.get("actions", {})
+        if not isinstance(actions, dict):
+            return False
+        act = actions.get(a)
+        if not isinstance(act, dict):
+            return False
+        if act.get("enabled") is False:
+            return False
+        return True
+
+    def _edges_from(z: str, a: str) -> List[Tuple[str, str]]:
+        """All (zone, action) successors of node (z, a)."""
+        out: List[Tuple[str, str]] = []
+        zone = zones.get(z)
+        if not isinstance(zone, dict):
+            return out
+        # Edges from the action's next field.
+        act = zone.get("actions", {}).get(a, {})
+        for n in action_next_list(act):
+            nz, na = n.get("zone"), n.get("action")
+            if isinstance(nz, str) and isinstance(na, str):
+                out.append((nz, na))
+        # Edges from the zone's exits field.
+        exits = zone.get("exits", [])
+        if isinstance(exits, list):
+            for e in exits:
+                if isinstance(e, (list, tuple)) and len(e) >= 2:
+                    out.append((e[0], e[1]))
+        return out
+
+    # Multi-target BFS.
+    parent: Dict[Tuple[str, str], Tuple[str, str]] = {}
+    visited: set = {start}
+    queue = deque([start])
+    while queue:
+        cur = queue.popleft()
+        for neighbor in _edges_from(*cur):
+            if neighbor in visited:
+                continue
+            if not _node_valid(*neighbor):
+                continue
+            if safety_check is not None:
+                conflict, _issues = safety_check(*cur, *neighbor)
+                if conflict:
+                    continue
+            visited.add(neighbor)
+            parent[neighbor] = cur
+            if neighbor in target_set:
+                # Reached a target: reconstruct the path.
+                path = [neighbor]
+                node = neighbor
+                while node != start:
+                    node = parent[node]
+                    path.append(node)
+                path.reverse()
+                return path
+            queue.append(neighbor)
+    return None

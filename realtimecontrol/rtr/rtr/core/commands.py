@@ -35,6 +35,8 @@ class Cmd(str, Enum):
     SET_ENGINE_MODE = "set_engine_mode"
     SET_CADENCE = "set_cadence"
     SET_CONTROL_MODE = "set_control_mode"
+    ENABLE_GROUP = "enable_group"
+    CLEAR_GROUP = "clear_group"
     CAM_STATUS = "cam_status"
     CAM_CANDIDATES = "cam_candidates"
     CAM_TRACK = "cam_track"
@@ -113,6 +115,7 @@ class Snapshot:
     cadence_every: Optional[int] = None  # fixed-rhythm interval, in ticks
     autonomy_enabled: Optional[bool] = None  # brain autonomy master switch
     autonomy_enabled_groups: Optional[List[str]] = None  # sorted enabled group names
+    active_group: Optional[str] = None  # runtime-enabled group name (None when none)
     performance_mode: Optional[bool] = None  # perform on, hunt+facefocus off
     autonomy_dwell_remaining: Optional[float] = None  # seconds left in current dwell
     control_mode: Optional[str] = None  # "manual" | "auto"
@@ -145,6 +148,8 @@ class Snapshot:
             d["autonomy_enabled"] = self.autonomy_enabled
         if self.autonomy_enabled_groups is not None:
             d["autonomy_enabled_groups"] = self.autonomy_enabled_groups
+        if self.active_group is not None:
+            d["active_group"] = self.active_group
         if self.performance_mode is not None:
             d["performance_mode"] = self.performance_mode
         if self.autonomy_dwell_remaining is not None:

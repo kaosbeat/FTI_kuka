@@ -227,10 +227,11 @@ def test_validate_midi_data_rejects_unknown_capture_field():
 
 def test_builtin_midi_data_is_empty_zones():
     assert builtin_midi_data() == {"enabled": True, "zones": {},
-                                    "nav": {"in_port": None, "next_action": None,
-                                             "next_zone": None, "back": None,
-                                             "retrigger": None, "next_pose": None},
-                                    "capture": {"in_port": None, "key": None}}
+                                     "nav": {"in_port": None, "next_action": None,
+                                              "next_zone": None, "back": None,
+                                              "retrigger": None, "next_pose": None},
+                                     "capture": {"in_port": None, "key": None},
+                                     "groups": {"in_port": None}}
 
 
 def test_load_midi_data_reads_and_validates():
@@ -358,8 +359,8 @@ def test_learn_arms_and_captures_on_zone_port():
     assert len(cmds) == 1
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1] == {"key": "cc:5:10", "msg": [0xB0, 5, 10],
-                           "zone": "wander", "action": "look", "nav": None,
-                           "capture": None}
+                            "zone": "wander", "action": "look", "nav": None,
+                            "capture": None, "group": None}
     # Learn is single-shot: disarmed after capture.
     assert m.is_learning is False
 
@@ -493,8 +494,8 @@ def test_nav_learn_captured_on_nav_port():
     assert len(cmds) == 1
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1] == {"key": "cc:11:0", "msg": [0xB0, 11, 0],
-                           "zone": None, "action": None, "nav": "next_action",
-                           "capture": None}
+                            "zone": None, "action": None, "nav": "next_action",
+                            "capture": None, "group": None}
     # Learn is single-shot: disarmed after capture.
     assert m.is_learning is False
 
@@ -567,7 +568,7 @@ def test_capture_learn_captured_on_capture_port():
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1] == {"key": "cc:15:0", "msg": [0xB0, 15, 0],
                             "zone": None, "action": None, "nav": None,
-                            "capture": True}
+                            "capture": True, "group": None}
     # Learn is single-shot: disarmed after capture.
     assert m.is_learning is False
 

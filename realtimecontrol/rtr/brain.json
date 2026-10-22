@@ -11,10 +11,10 @@
   "zone_groups": {
     "event-sit-back": {
       "zones": [
-        "stretching",
-        "hunting",
-        "examining",
-        "performing"
+        "resting",
+        "sleeping",
+        "cuddling",
+        "purring"
       ],
       "behaviors": [],
       "enabled": true,
@@ -33,7 +33,7 @@
       "behaviors": [],
       "enabled": true,
       "params": {
-        "speed": 80,
+        "speed": 100,
         "dwell_s": 15
       }
     },
@@ -41,15 +41,13 @@
       "zones": [
         "resting",
         "sleeping",
-        "cuddling",
-        "purring",
         "resting_sleeping_bridge"
       ],
       "behaviors": [],
       "enabled": true,
       "params": {
         "speed": 10,
-        "dwell_s": 60
+        "dwell_s": 600
       }
     },
     "installation-active": {
@@ -69,7 +67,7 @@
       "behaviors": [],
       "enabled": true,
       "params": {
-        "speed": 100,
+        "speed": 80,
         "dwell_s": 25
       }
     }

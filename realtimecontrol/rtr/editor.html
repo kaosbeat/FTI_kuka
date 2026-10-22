@@ -410,6 +410,8 @@
 <main id="patchesMain" style="display:none">
   <div class="patchTopBar" id="patchTopBar">
     <button id="liveToggle" class="liveToggle">&#8617; broadcast</button>
+    <button id="uiCodeToggle" class="liveToggle" title="Toggle the patch-code overlay on the render screens">code</button>
+    <button id="uiHudToggle" class="liveToggle" title="Toggle the HUD on the render screens">hud</button>
     <span class="patchTopHint">edit a patch slot; toggle broadcast to push the selected slot to the screens</span>
   </div>
   <div class="patchGrid">
@@ -513,6 +515,13 @@
         RPi and writes it to the latest snapshot the render page shows).
         <b>learn</b> = click it, then press a key on your MIDI controller — the robot remembers that key.</p>
       <div id="midiCapture"></div>
+    </section>
+    <section>
+      <h2>groups</h2>
+      <p class="midiHelp">Keys that enable a zone group. When a group is enabled the robot stays inside
+        that group's zones (no travel outside). <b>learn</b> = click it, then press a key on your
+        MIDI controller — the robot remembers that key for the group.</p>
+      <div id="midiGroups"></div>
     </section>
     <section>
       <h2>zones (per-zone input)</h2>
@@ -750,7 +759,7 @@ let ws = null;
 // Per-frame DOM change-detect caches: the 20 Hz state frames rebuild these readouts
 // only when the rendered output actually changes, so the per-message cost no longer
 // fights the rAF render loop (the 3D arm still tracks every frame via Robot3D.update).
-let _liveStateFp = "", _safetyFp = "", _flowFp = "", _brainLiveFp = "", _statusBarFp = "";
+let _liveStateFp = "", _safetyFp = "", _flowFp = "", _brainLiveFp = "", _statusBarFp = "", _renderUiFp = "";
 let flowView = false;
 let brainView = false;
 let groupsView = false;
@@ -1139,7 +1148,11 @@ function connect() {
       // skipping its drive here keeps the inspected pose stable.
       if (!validateView) Robot3D.update({ joints: m.joints, target: m.target, patch: m.patch });
       // Render-page UI state (HUD / code-overlay toggles).
-      if (m.render_ui) { renderUi = m.render_ui; }
+      if (m.render_ui) {
+        renderUi = m.render_ui;
+        const ruFp = (renderUi.hud ? 1 : 0) + "." + (renderUi.code ? 1 : 0);
+        if (ruFp !== _renderUiFp) { _renderUiFp = ruFp; syncRenderUiToggles(); }
+      }
       // The 3D arm tracks every frame (20 Hz joints), but the discrete readouts below
       // rarely change; rebuild their DOM only when the rendered output changes so the
       // per-frame cost does not fight the rAF render loop.
@@ -1722,6 +1735,9 @@ async function loadMidi() {
   if (!data.capture || typeof data.capture !== "object") data.capture = {};
   if (data.capture.in_port === undefined) data.capture.in_port = null;
   if (data.capture.key === undefined) data.capture.key = null;
+  // Seed the groups section: in_port (null = default port) plus per-group keys.
+  if (!data.groups || typeof data.groups !== "object") data.groups = {};
+  if (data.groups.in_port === undefined) data.groups.in_port = null;
   MIDI = data;
   // Seed per-zone entries: ensure each zone has {in_port, command, actions}.
   Object.keys(TABLE.zones || {}).forEach((zn) => {
@@ -1784,6 +1800,7 @@ function buildMidiInForm() {
   $("midiStopLearn").style.display = midiLearnPending ? "" : "none";
   buildMidiNav();
   buildMidiCapture();
+  buildMidiGroups();
   const tbl = $("midiZones");
   tbl.innerHTML = "";
   const zoneNames = Object.keys(TABLE.zones);
@@ -2018,15 +2035,79 @@ function buildMidiCapture() {
   el.appendChild(row);
 }
 
-function midiLearn(zone, actionName, navName, navPort, capture, capturePort) {
+// The groups section: one row per zone_group (from BRAIN), each with a key editor
+// + learn button. The in_port picker chooses which MIDI-in device the group keys
+// are learned/dispatched on (null = default). MIDI.groups = { in_port, <group_name>: key }.
+function buildMidiGroups() {
+  const el = $("midiGroups");
+  if (!el) return;
+  el.innerHTML = "";
+  if (!MIDI.groups || typeof MIDI.groups !== "object") MIDI.groups = {};
+  if (MIDI.groups.in_port === undefined) MIDI.groups.in_port = null;
+  // in_port picker
+  const portRow = document.createElement("div");
+  portRow.className = "sndRow";
+  const portLbl = document.createElement("span");
+  portLbl.className = "sndName"; portLbl.textContent = "listen on";
+  portLbl.title = "Which MIDI controller the group-enable keys are learned on. 'default' = the first available device.";
+  portRow.appendChild(portLbl);
+  const portSel = document.createElement("select");
+  portSel.className = "midiKey";
+  const portNone = document.createElement("option");
+  portNone.value = ""; portNone.textContent = "default";
+  portSel.appendChild(portNone);
+  midiPorts.forEach((p) => {
+    const o = document.createElement("option");
+    o.value = String(p.index); o.textContent = `${p.index} — ${p.name}`;
+    portSel.appendChild(o);
+  });
+  const gip = MIDI.groups.in_port;
+  portSel.value = (gip === null || gip === undefined) ? "" : String(gip);
+  portSel.onchange = () => { MIDI.groups.in_port = portSel.value === "" ? null : parseInt(portSel.value, 10); };
+  portRow.appendChild(portSel);
+  el.appendChild(portRow);
+  // One row per group (from BRAIN.zone_groups, excluding hunt/facefocus).
+  const groups = (BRAIN && BRAIN.zone_groups) ? BRAIN.zone_groups : {};
+  const names = Object.keys(groups).filter((n) => n !== "hunt" && n !== "facefocus");
+  if (names.length === 0) {
+    const empty = document.createElement("div");
+    empty.style.cssText = "font-size:12px;color:var(--dim)";
+    empty.textContent = "no zone groups in brain config";
+    el.appendChild(empty);
+    return;
+  }
+  names.forEach((name) => {
+    const g = groups[name];
+    if (MIDI.groups[name] === undefined) MIDI.groups[name] = null;
+    const row = document.createElement("div");
+    row.className = "sndRow";
+    const lbl = document.createElement("span");
+    lbl.className = "sndName"; lbl.textContent = name;
+    lbl.title = g.zones ? g.zones.join(", ") : "Enable this zone group.";
+    row.appendChild(lbl);
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.className = "midiName";
+    inp.value = MIDI.groups[name] || "";
+    inp.onchange = () => { MIDI.groups[name] = inp.value.trim() || null; };
+    row.appendChild(inp);
+    const btn = document.createElement("button");
+    btn.className = "small"; btn.textContent = "learn";
+    btn.title = "Click, then press the key on your MIDI controller — the robot remembers it for this group.";
+    btn.onclick = () => midiLearn(null, null, null, null, null, null, name, MIDI.groups.in_port);
+    row.appendChild(btn);
+    el.appendChild(row);
+  });
+}
+
+function midiLearn(zone, actionName, navName, navPort, capture, capturePort, group, groupPort) {
   if (midiLearnPending) { $("midiStatus").textContent = "already learning — send a MIDI message first"; return; }
-  midiLearnPending = { zone, action_name: actionName, nav_name: navName || null, capture: capture ? true : null };
+  midiLearnPending = { zone, action_name: actionName, nav_name: navName || null, capture: capture ? true : null, group: group || null };
   fetch("/api/midi/learn", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "start", zone, action_name: actionName, nav: navName || null, nav_port: navPort === undefined ? null : navPort, capture: capture ? true : null, capture_port: capturePort === undefined ? null : capturePort }),
+    body: JSON.stringify({ action: "start", zone, action_name: actionName, nav: navName || null, nav_port: navPort === undefined ? null : navPort, capture: capture ? true : null, capture_port: capturePort === undefined ? null : capturePort, group: group || null, group_port: groupPort === undefined ? null : groupPort }),
   }).then((r) => r.json().then((b) => ({ ok: r.ok, b }))).then(({ ok, b }) => {
-    const label = capture ? "capture" : (navName ? navName : (actionName ? `${zone}/${actionName}` : zone));
+    const label = group ? `group:${group}` : (capture ? "capture" : (navName ? navName : (actionName ? `${zone}/${actionName}` : zone)));
     if (ok) $("midiStatus").textContent = `learning "${label}" — now press a key on your MIDI controller`;
     else $("midiStatus").textContent = "learn failed: " + (b.error || r.status);
   }).catch((e) => { $("midiStatus").textContent = "learn failed: " + e; });
@@ -2139,6 +2220,11 @@ function broadcastCurrentSlot() {
 
 function syncBroadcastToggle() {
   $("liveToggle").className = broadcastOn ? "liveToggle active" : "liveToggle";
+}
+
+function syncRenderUiToggles() {
+  $("uiCodeToggle").className = renderUi.code ? "liveToggle active" : "liveToggle";
+  $("uiHudToggle").className = renderUi.hud ? "liveToggle active" : "liveToggle";
 }
 
 async function loadPatches() {
@@ -6862,6 +6948,17 @@ $("liveToggle").onclick = () => {
   broadcastOn = !broadcastOn;
   syncBroadcastToggle();
   broadcastCurrentSlot();
+};
+// Render-page UI toggles: flip the HUD / code-overlay visibility on the screens.
+$("uiCodeToggle").onclick = () => {
+  renderUi.code = !renderUi.code;
+  syncRenderUiToggles();
+  sendRenderUi(renderUi.hud, renderUi.code);
+};
+$("uiHudToggle").onclick = () => {
+  renderUi.hud = !renderUi.hud;
+  syncRenderUiToggles();
+  sendRenderUi(renderUi.hud, renderUi.code);
 };
 // Action editor (Step 3) modal wiring.
 $("aeClose").onclick = closeActionEditor;

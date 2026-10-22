@@ -101,12 +101,15 @@ def builtin_midi_data() -> dict:
     later) plus the ``in_port`` (null = the default port); the per-zone table is
     empty so the legacy protocol still wins. The ``capture`` section holds the
     single global key that grabs the camera snapshot (``in_port`` + ``key``, both
-    initially null) — it drives ``Cmd.SNAPSHOT_GRAB``.
+    initially null) — it drives ``Cmd.SNAPSHOT_GRAB``. The ``groups`` section holds
+    the per-group enable keys (``in_port`` + per-group keys, initially null) — a
+    matching group key submits ``Cmd.ENABLE_GROUP``.
     """
     return {"enabled": True, "zones": {},
             "nav": {"in_port": None, "next_action": None, "next_zone": None,
                     "back": None, "retrigger": None, "next_pose": None},
-            "capture": {"in_port": None, "key": None}}
+            "capture": {"in_port": None, "key": None},
+            "groups": {"in_port": None}}
 
 
 def _key_int(key: str, s: str, lo: int, hi: int) -> int:
@@ -237,6 +240,18 @@ def validate_midi_data(data: Any) -> dict:
         else:
             raise ValueError(f"capture[{name!r}] is not a known field "
                               f"(expected in_port/key)")
+    # The groups section (optional): per-group enable keys plus the ``in_port``
+    # they are learned/dispatched on (null = the default port).
+    groups = data.get("groups", {})
+    if not isinstance(groups, dict):
+        raise ValueError("'groups' must be an object")
+    for name, val in groups.items():
+        if name == "in_port":
+            if val is not None and not (isinstance(val, int) and not isinstance(val, bool)
+                                         and val >= 0):
+                raise ValueError("groups.in_port must be a non-negative int or null")
+        elif val is not None:
+            validate_midi_key(val)
     # Deprecated top-level fields: accepted and preserved (not used for dispatch).
     in_port = data.get("in_port")
     if in_port is not None:
@@ -401,6 +416,14 @@ class MidiInput:
             return ip
         return self.in_port
 
+    def _groups_in_port(self) -> Optional[int]:
+        """The ``in_port`` for the groups section (else the default port)."""
+        grp = self._data.get("groups")
+        ip = grp.get("in_port") if isinstance(grp, dict) else None
+        if isinstance(ip, int) and not isinstance(ip, bool) and ip >= 0:
+            return ip
+        return self.in_port
+
     def _capture_key(self) -> Optional[str]:
         """The learned key for the global capture command (None when unset)."""
         cap = self._data.get("capture")
@@ -413,12 +436,13 @@ class MidiInput:
 
     def _in_ports(self) -> set:
         """The distinct ports to open: every zone's in_port, the nav in_port, the
-        capture in_port, plus the default port."""
+        capture in_port, the groups in_port, plus the default port."""
         ports = {self.in_port}
         for z in self._data.get("zones", {}):
             ports.add(self._zone_in_port(z))
         ports.add(self._nav_in_port())
         ports.add(self._capture_in_port())
+        ports.add(self._groups_in_port())
         return ports
 
     # ------------------------------------------------------------------
@@ -486,34 +510,43 @@ class MidiInput:
     # Learn capture (armed per-zone).
     # ------------------------------------------------------------------
     def start_learn(self, zone=None, action=None, nav=None, nav_port=None,
-                    capture=None, capture_port=None) -> None:
-        """Arm the learn capture for a zone key, a global nav key, or the capture key.
+                    capture=None, capture_port=None, group=None, group_port=None) -> None:
+        """Arm the learn capture for a zone key, a global nav key, the capture key,
+        or a group-enable key.
 
         A zone learn (``zone``/``action``) captures the next mappable message on the
         zone's ``in_port``; a nav learn (``nav``) captures on the nav's ``in_port``
         (the default port when it is null), or on ``nav_port`` when given (the editor
         passes the currently-selected nav port); a capture learn (``capture``)
         captures on the capture's ``in_port`` (the default port when it is null), or
-        on ``capture_port`` when given. The key is submitted as ``Cmd.MIDI_LEARN``
-        with the matching context (the editor writes it into the zone's
-        ``command``/``actions``, into ``nav[nav]``, or into ``capture.key``). The
-        captured message is **not** dispatched, so arming learn never moves the robot.
+        on ``capture_port`` when given; a group learn (``group``) captures on the
+        groups' ``in_port`` (the default port when it is null), or on ``group_port``
+        when given. The key is submitted as ``Cmd.MIDI_LEARN`` with the matching
+        context (the editor writes it into the zone's ``command``/``actions``, into
+        ``nav[nav]``, into ``capture.key``, or into ``groups[group]``). The captured
+        message is **not** dispatched, so arming learn never moves the robot.
         """
         if capture is not None:
             port = self._capture_in_port()
             if isinstance(capture_port, int) and not isinstance(capture_port, bool) and capture_port >= 0:
                 port = capture_port
             self._learn = {"port": port, "zone": None, "action": None, "nav": None,
-                            "capture": capture}
+                            "capture": capture, "group": None}
         elif nav is not None:
             port = self._nav_in_port()
             if isinstance(nav_port, int) and not isinstance(nav_port, bool) and nav_port >= 0:
                 port = nav_port
             self._learn = {"port": port, "zone": None, "action": None, "nav": nav,
-                            "capture": None}
+                            "capture": None, "group": None}
+        elif group is not None:
+            port = self._groups_in_port()
+            if isinstance(group_port, int) and not isinstance(group_port, bool) and group_port >= 0:
+                port = group_port
+            self._learn = {"port": port, "zone": None, "action": None, "nav": None,
+                            "capture": None, "group": group}
         else:
             self._learn = {"port": self._zone_in_port(zone), "zone": zone,
-                            "action": action, "nav": None, "capture": None}
+                            "action": action, "nav": None, "capture": None, "group": None}
 
     def stop_learn(self) -> None:
         """Disarm the learn capture (without disconnecting the port)."""
@@ -712,7 +745,8 @@ class MidiInput:
                                    "zone": self._learn["zone"],
                                    "action": self._learn["action"],
                                    "nav": self._learn["nav"],
-                                   "capture": self._learn["capture"]})
+                                   "capture": self._learn["capture"],
+                                   "group": self._learn.get("group")})
                     self._learn = None
             return
         # Per-zone dispatch: a matching command or actions key → TRIGGER_ACTION.
@@ -723,6 +757,9 @@ class MidiInput:
             return
         # Capture dispatch: the global snapshot-grab key (on the capture's in_port).
         if self._dispatch_capture(port, message):
+            return
+        # Groups dispatch: a group-enable key (on the groups' in_port).
+        if self._dispatch_groups(port, message):
             return
         # Legacy fallback: only on the default port.
         if port == self.in_port:
@@ -763,6 +800,31 @@ class MidiInput:
         if self._capture_key() == key:
             self._submit(Cmd.SNAPSHOT_GRAB, {})
             return True
+        return False
+
+    def _dispatch_groups(self, port, message) -> bool:
+        """Match a group-enable key on the groups' in_port; submit ENABLE_GROUP.
+
+        The group keys are scoped to the groups' ``in_port`` (the default port when
+        it is null), mirroring the port-scoped nav/capture dispatch. When a key
+        matches a group name in ``midi.json``'s ``groups`` section, the core enables
+        that zone group (the brain finds a safe path to the group and restricts
+        autonomy to it).
+        """
+        if port != self._groups_in_port():
+            return False
+        key = self._key_for(message)
+        if key is None:
+            return False
+        grp = self._data.get("groups", {})
+        if not isinstance(grp, dict):
+            return False
+        for name, gkey in grp.items():
+            if name == "in_port":
+                continue
+            if gkey == key:
+                self._submit(Cmd.ENABLE_GROUP, {"group": name})
+                return True
         return False
 
     def _dispatch_zone_key(self, port, message) -> bool:

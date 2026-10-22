@@ -29,6 +29,7 @@ _BROWSER_CMDS = {
     "set_joint_pose", "set_linear_pose", "adjust_limit",
     "random_wrist", "set_screen_patch", "set_render_ui",
     "stop", "proceed", "cam_force_lock", "set_control_mode",
+    "enable_group", "clear_group",
     "safety_confirm", "safety_cancel",
     "cam_test_start", "cam_test_stop",
 }

@@ -22,7 +22,7 @@ import time
 from typing import List, Optional, Tuple
 
 from ..core.commands import Cmd, Command
-from ..flow import find_safe_path
+from ..flow import find_safe_path, find_safe_path_to_any
 from ..state.behavior import clamp
 from ..state.machine import StateMachine
 from ..state.zones import MODES  # re-exported for `from rtr.brain import MODES`
@@ -84,6 +84,15 @@ class Brain:
         # auto mode. The brain skips these on the next autonomy tick. Cleared when
         # the current (zone, action) changes or a candidate commits.
         self._blocked_candidates: set = set()
+        # Runtime group navigation: a single active group at a time. ``active_group``
+        # is the enabled group name (None when no group is active); ``group_nav``
+        # holds the (zone, action) waypoints to walk (the start is stripped) and
+        # ``group_nav_index`` the next waypoint to trigger. Once the robot has
+        # walked all waypoints, ``group_nav`` is cleared and autonomy resumes,
+        # restricted to the active group's zones.
+        self.active_group: Optional[str] = None
+        self.group_nav: List[tuple] = []
+        self.group_nav_index: int = 0
         if self._config is not None:
             self._recompute_enabled()
 
@@ -269,6 +278,7 @@ class Brain:
         return {
             "enabled": enabled,
             "enabled_groups": groups,
+            "active_group": self.active_group,
             "performance_mode": perf,
             "dwell_remaining": dwell_remaining,
         }
@@ -422,9 +432,17 @@ class Brain:
         elif c == Cmd.SET_CADENCE:
             self._handle_set_cadence(p)
         elif c == Cmd.SET_CONTROL_MODE:
+            # Manual mode disables all groups (the operator drives the robot);
+            # clear the active group before the machine freezes the pose.
+            if p.get("mode") == "manual" and self.active_group is not None:
+                self.clear_group()
             # Pass the current joint position so entering manual mode holds the
             # robot where it is (a freeze), not just stops new autonomous triggers.
             self.machine.set_control_mode(p.get("mode"), curjpos)
+        elif c == Cmd.ENABLE_GROUP:
+            self._handle_enable_group(p.get("group"), curjpos)
+        elif c == Cmd.CLEAR_GROUP:
+            self.clear_group()
         elif c == Cmd.ENABLE_BEHAVIOR:
             self.machine.enable_behavior(p.get("behavior"))
         elif c == Cmd.CLEAR_BEHAVIOR:
@@ -697,6 +715,15 @@ class Brain:
             self._clear_feral_if_stale()
             self._update_hunt_state()
             return
+        # Group navigation: while an active group is still navigating, drive the
+        # path and suppress the regular hunt/autonomy (the robot is en route).
+        if self.active_group is not None:
+            if self._group_tick(curjpos):
+                self._clear_feral_if_stale()
+                self._update_hunt_state()
+                return
+            # Arrived: continue with the regular logic (autonomy now restricted
+            # to the group's zones via _allowed_zones).
         hunt = self._hunt_group()
         hunt_enabled = bool(hunt.get("enabled", False))
         if not hunt_enabled:
@@ -784,10 +811,11 @@ class Brain:
         if z is None:
             return []
         cands = []
+        allowed = self._allowed_zones()
         for n in z.action_next_list(action):
             tz = n.get("zone")
             ta = n.get("action")
-            if not isinstance(tz, str) or tz not in self._enabled_zones:
+            if not isinstance(tz, str) or tz not in allowed:
                 continue
             if not isinstance(ta, str):
                 continue
@@ -1144,3 +1172,126 @@ class Brain:
             # Ensure the behavior keeps running (the machine's step() handles this
             # via the forced_behavior + current_action).
             pass
+
+    # ------------------------------------------------------------------
+    # Runtime group navigation (one active group at a time).
+    # ------------------------------------------------------------------
+    def _group_targets(self, group_name: str) -> List[tuple]:
+        """The group's enabled ``(zone, action)`` nodes (path targets)."""
+        g = self._config.get("zone_groups", {}).get(group_name)
+        if not isinstance(g, dict):
+            return []
+        targets: List[tuple] = []
+        for z in g.get("zones", []):
+            if not isinstance(z, str):
+                continue
+            zone = self.machine.zones.get(z)
+            if zone is None or not zone.enabled:
+                continue
+            for a in zone.actions():
+                if zone.action_enabled(a):
+                    targets.append((z, a))
+        return targets
+
+    def _handle_enable_group(self, group_name: Optional[str], curjpos: List[float]) -> None:
+        """Enable a zone group at runtime: navigate to it, then stay in it.
+
+        1. Validate the group exists in ``zone_groups``.
+        2. Switch to auto mode (enabling a group disables manual mode).
+        3. Find a safe path from the current position to any enabled node in
+           the group, log it, and walk the waypoints hop-by-hop.
+        """
+        if not isinstance(group_name, str) or not group_name:
+            print("[brain] enable_group: missing group name; ignored")
+            return
+        zgs = self._config.get("zone_groups", {})
+        if not isinstance(zgs, dict) or group_name not in zgs:
+            print(f"[brain] enable_group: unknown group {group_name!r}")
+            return
+        # Enabling a group disables manual mode (the brain drives the navigation).
+        self.machine.set_control_mode("auto", curjpos)
+        # Collect the group's enabled nodes as path targets.
+        targets = self._group_targets(group_name)
+        if not targets:
+            print(f"[brain] enable_group: group {group_name!r} has no enabled nodes")
+            self.active_group = group_name
+            self.group_nav = []
+            self.group_nav_index = 0
+            return
+        # Find a safe path from the current position to any target node.
+        cur_zone = self.machine.current_zone
+        cur_action = self.machine.current_action or ""
+        zones_dict = self.machine.zones.table()
+        safety_check = None
+        if self.machine.safety is not None:
+            safety_check = self.machine.safety.check_conflict
+        path = find_safe_path_to_any(
+            zones_dict, cur_zone, cur_action, targets,
+            safety_check=safety_check,
+        )
+        if path is None:
+            print(f"[brain] enable_group: no safe path from {cur_zone}/{cur_action} "
+                  f"to group {group_name!r}")
+            # Revert: no active group (the robot keeps its current state).
+            self.active_group = None
+            self.group_nav = []
+            self.group_nav_index = 0
+            return
+        # Log the path and store the waypoints (strip the start; we are there).
+        path_str = " -> ".join(f"{z}/{a}" for z, a in path)
+        print(f"[brain] enable_group {group_name!r}: {path_str}")
+        self.active_group = group_name
+        self.group_nav = path[1:] if len(path) > 1 else []
+        self.group_nav_index = 0
+
+    def clear_group(self) -> None:
+        """Clear the active group: stop group navigation and resume normal autonomy."""
+        self.active_group = None
+        self.group_nav = []
+        self.group_nav_index = 0
+        print("[brain] group cleared; resuming normal autonomy")
+
+    def _group_tick(self, curjpos: List[float]) -> bool:
+        """Per-tick group navigation driver. Returns True while still navigating.
+
+        Drives the next waypoint when the robot is idle (no transition, no
+        pending). When all waypoints are triggered and the robot has finished
+        the last move, the group is "arrived": ``group_nav`` is cleared and
+        normal autonomy resumes (restricted to the group's zones).
+        """
+        m = self.machine
+        if not self.group_nav:
+            return False  # no waypoints; already arrived
+        # Drive the next waypoint when the robot is idle.
+        if m.transitioning or m.pending:
+            return True  # still navigating; wait for the move to settle
+        if self.group_nav_index < len(self.group_nav):
+            wz, wa = self.group_nav[self.group_nav_index]
+            if wz == m.current_zone:
+                m.play_action(wa)
+            else:
+                m.trigger_action(wz, wa)
+            self.group_nav_index += 1
+            print(f"[brain] group nav: to {wz}/{wa} "
+                  f"({self.group_nav_index}/{len(self.group_nav)})")
+            return True  # still navigating
+        # All waypoints triggered; wait for the robot to finish the last move.
+        if m.transitioning:
+            return True
+        # Arrived.
+        self.group_nav = []
+        self.group_nav_index = 0
+        return False
+
+    def _allowed_zones(self) -> set:
+        """The zones autonomy may navigate to.
+
+        When a group is active, only that group's zones (the robot stays in the
+        group with no group travel). Otherwise the union of all enabled groups'
+        zones (the normal multi-group autonomy).
+        """
+        if self.active_group is not None:
+            g = self._config.get("zone_groups", {}).get(self.active_group)
+            if isinstance(g, dict):
+                return set(z for z in g.get("zones", []) if isinstance(z, str))
+        return self._enabled_zones

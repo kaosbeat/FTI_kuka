@@ -304,6 +304,7 @@ class Engine:
             cadence_every=self.machine.cadence_every,
             autonomy_enabled=info["enabled"],
             autonomy_enabled_groups=info["enabled_groups"],
+            active_group=info.get("active_group"),
             performance_mode=info["performance_mode"],
             autonomy_dwell_remaining=info["dwell_remaining"],
             control_mode=self.machine.control_mode,

@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..flow import (
     action_enabled,
     action_loops,
-    action_next,
+    action_next_list,
     activation_commands,
     build_items,
 )
@@ -245,13 +245,14 @@ def item_label(item: dict) -> str:
     s = name
     if action_loops(a):
         s += " ↻"
-    n = action_next(a)
-    if n:
-        nz = n.get("zone")
+    nxt = action_next_list(a)
+    if nxt:
+        first = nxt[0]
+        nz = first.get("zone")
         if isinstance(nz, str):
             s += f" → {nz}"
         else:
-            na = n.get("action")
+            na = first.get("action")
             if isinstance(na, str):
                 s += f" → {na}"
     return s
@@ -340,6 +341,27 @@ def _item_row(i: int, item: dict, cursor: int, current_len: int, width: int) -> 
        and not action_enabled(item["action"]):
         return {"text": s, "style": "item_dim"}
     return {"text": s, "style": "item"}
+
+
+def _pose_xyz(pose) -> Optional[Tuple[float, float, float]]:
+    """The (x, y, z) of a pose, or None when it has no numeric x/y/z.
+
+    The core sends ``cart`` (cartesian X,Y,Z,A,B,C) and ``target`` (a joint or
+    cartesian pose) as flat float lists, not dicts. Accept both shapes: a dict
+    with ``x``/``y``/``z`` keys, or a list/tuple whose first three values are the
+    position. Returns None for anything else (the caller shows a placeholder).
+    """
+    if isinstance(pose, dict):
+        vals = (pose.get("x"), pose.get("y"), pose.get("z"))
+        if all(isinstance(v, (int, float)) for v in vals):
+            return (float(vals[0]), float(vals[1]), float(vals[2]))
+        return None
+    if isinstance(pose, (list, tuple)) and len(pose) >= 3:
+        try:
+            return (float(pose[0]), float(pose[1]), float(pose[2]))
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -477,11 +499,11 @@ def _brain_content(state, live: Optional[dict] = None):
                      "style": "state"})
         rows.append({"pairs": [("DWELL", dwell_s)], "style": "state"})
     # Target readout.
-    target = live.get("target")
-    if target:
-        tx, ty, tz = target.get("x", 0), target.get("y", 0), target.get("z", 0)
+    target_xyz = _pose_xyz(live.get("target"))
+    if target_xyz:
+        tx, ty, tz = target_xyz
         rows.append({"pairs": [("TARGET", f"x={tx:.1f} y={ty:.1f} z={tz:.1f}")],
-                     "style": "state"})
+                      "style": "state"})
     # MIDI monitor readout.
     midi = live.get("midi_monitor")
     if midi:
@@ -628,32 +650,34 @@ def _arm_content(live: dict, width: int) -> List[dict]:
     else:
         rows.append({"text": "  (no joint data)", "style": "help"})
     rows.append({"style": "divider"})
-    # Tool (cart) and target positions.
-    if cart:
-        x, y, z = cart.get("x", 0), cart.get("y", 0), cart.get("z", 0)
+    # Tool (cart) and target positions (the core sends them as flat pose lists).
+    cart_xyz = _pose_xyz(cart)
+    target_xyz = _pose_xyz(target)
+    if cart_xyz:
+        x, y, z = cart_xyz
         rows.append({"pairs": [("TOOL", f"x={x:.1f} y={y:.1f} z={z:.1f}")],
-                     "style": "state"})
+                      "style": "state"})
     else:
         rows.append({"pairs": [("TOOL", "—")], "style": "state"})
-    if target:
-        tx, ty, tz = target.get("x", 0), target.get("y", 0), target.get("z", 0)
+    if target_xyz:
+        tx, ty, tz = target_xyz
         rows.append({"pairs": [("TARGET", f"x={tx:.1f} y={ty:.1f} z={tz:.1f}")],
-                     "style": "state"})
+                      "style": "state"})
     else:
         rows.append({"pairs": [("TARGET", "—")], "style": "state"})
     # Distance between tool and target.
-    if cart and target:
-        dx = cart.get("x", 0) - target.get("x", 0)
-        dy = cart.get("y", 0) - target.get("y", 0)
-        dz = cart.get("z", 0) - target.get("z", 0)
+    if cart_xyz and target_xyz:
+        dx = cart_xyz[0] - target_xyz[0]
+        dy = cart_xyz[1] - target_xyz[1]
+        dz = cart_xyz[2] - target_xyz[2]
         dist = math.sqrt(dx * dx + dy * dy + dz * dz)
         rows.append({"pairs": [("DIST", f"{dist:.1f} mm")], "style": "state"})
     # Simple top-view ASCII (x/y plane).
-    if cart and target:
+    if cart_xyz and target_xyz:
         rows.append({"style": "divider"})
         rows.append({"text": "  TOP VIEW (x/y)", "style": "label"})
-        cx, cy = cart.get("x", 0), cart.get("y", 0)
-        tx, ty = target.get("x", 0), target.get("y", 0)
+        cx, cy = cart_xyz[0], cart_xyz[1]
+        tx, ty = target_xyz[0], target_xyz[1]
         # Find bounds and scale to a small grid.
         xs = [cx, tx, 0]
         ys = [cy, ty, 0]
