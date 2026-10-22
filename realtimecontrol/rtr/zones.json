@@ -495,7 +495,7 @@
           "enabled": true,
           "poses": [
             [
-              -3,
+              "x",
               -110,
               135,
               -2,
@@ -503,10 +503,18 @@
               0
             ],
             [
-              0,
+              "x",
               -130,
               155,
               0,
+              -5,
+              0
+            ],
+            [
+              "x",
+              -134,
+              135,
+              -2,
               -5,
               0
             ]
@@ -516,7 +524,7 @@
             4,
             5
           ],
-          "behavior": "gentle",
+          "behavior": "locked",
           "speed": 30,
           "loop": true,
           "next": {
@@ -524,6 +532,7 @@
             "action": "purr"
           },
           "pose_imgs": [
+            null,
             null,
             null
           ]
@@ -2474,20 +2483,20 @@
         "y": 179.337158203125
       },
       "stretching": {
-        "x": 969.5587158203125,
-        "y": -27.73971939086914
+        "x": 1101.6875,
+        "y": -181.0494692325592
       },
       "cuddling_purring_bridge": {
         "x": 892.6869506835938,
         "y": 201.8276824951172
       },
       "purring": {
-        "x": 1090,
-        "y": 40
+        "x": 1066.8017578125,
+        "y": 23.86212921142578
       },
       "stretching_hunting_bridge": {
-        "x": 1090,
-        "y": 158
+        "x": 1198.7618408203125,
+        "y": 219.6759033203125
       },
       "hunting": {
         "x": 1300,
@@ -2535,10 +2544,10 @@
       }
     },
     "view": {
-      "x": -281.5588765110738,
-      "y": 134.15391745230988,
-      "w": 1698.1071394113067,
-      "h": 242.42337613144505
+      "x": 130.22287022882824,
+      "y": -102.34498623121003,
+      "w": 1284.012959857321,
+      "h": 183.30690066649885
     },
     "key": "clawing,cuddling,cuddling_purring_bridge,cuddling_stretching_bridge,examining,examining_performing_bridge,growling,hunting,hunting_examining_bridge,hunting_examining_bridge2,leaping,performing,purring,resting,resting_sleeping_bridge,resting_testing_bridge,roaring,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge,testing"
   }
