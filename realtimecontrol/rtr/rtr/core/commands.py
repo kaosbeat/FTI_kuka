@@ -30,6 +30,7 @@ class Cmd(str, Enum):
     MIDI_LEARN = "midi_learn"
     SET_SCREEN_PATCH = "set_screen_patch"
     SET_RENDER_UI = "set_render_ui"
+    SNAPSHOT_GRAB = "snapshot_grab"
     STOP = "stop"
     SET_ENGINE_MODE = "set_engine_mode"
     SET_CADENCE = "set_cadence"

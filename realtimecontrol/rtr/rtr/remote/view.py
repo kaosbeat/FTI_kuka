@@ -17,6 +17,8 @@ own palette (the ``Theme`` class in :mod:`rtr.remote.tui` and the color table
 in :mod:`rtr.remote.sdlapp`).
 """
 
+import math
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..flow import (
@@ -25,6 +27,16 @@ from ..flow import (
     action_next,
     activation_commands,
     build_items,
+)
+from .led import (
+    BLACK_IDX,
+    LED_ACTIONS,
+    LED_NAMES,
+    NUM_COLORS,
+    NUM_LEDS,
+    PALETTE,
+    WHITE_IDX,
+    build_frame,
 )
 
 
@@ -38,7 +50,21 @@ SECTION_LABELS = {
     "buttons": "BUTTONS",
 }
 
-PAGES = ("NAV", "CAMERA", "BRAIN", "HUNT", "CADENCE", "SETUP")
+PAGES = ("NAV", "CAMERA", "BRAIN", "HUNT", "CADENCE", "TRIGGERS", "ARM", "LED", "SETUP")
+
+# Max events kept in the TRIGGERS log (ring buffer).
+EVENT_CAP = 100
+
+# Robot joint hardware limits (degrees) for the ARM page bars.
+AXES = ["A1", "A2", "A3", "A4", "A5", "A6"]
+HW_LIMITS = {
+    "A1": (-185.0, 185.0),
+    "A2": (-135.0, 35.0),
+    "A3": (-120.0, 158.0),
+    "A4": (-350.0, 350.0),
+    "A5": (-119.0, 119.0),
+    "A6": (-350.0, 350.0),
+}
 
 # Joystick button codes (Linux EV_KEY) for page navigation. L1 = previous page,
 # R1 = next page (mirrors the keyboard left/right). The device is configured via
@@ -231,17 +257,41 @@ def item_label(item: dict) -> str:
     return s
 
 
+def build_led_items(led_colors: Optional[List[int]] = None) -> List[dict]:
+    """The selectable rows for the LED page (22 LEDs + 4 actions).
+
+    Each LED row shows its name and current palette color. The 4 action rows
+    (all white / all off / test all / restore) are ``kind="led_action"``.
+    """
+    led_colors = led_colors or [BLACK_IDX] * NUM_LEDS
+    items = []
+    for i in range(NUM_LEDS):
+        items.append({
+            "kind": "led",
+            "led": i,
+            "name": f"LED {i + 1:<3} {LED_NAMES[i]:<6} {PALETTE[led_colors[i]][0]}",
+        })
+    for action in LED_ACTIONS:
+        items.append({"kind": "led_action", "action": action, "name": action})
+    return items
+
+
 def current_items(page: int, items: List[dict],
-                  settings: Optional[dict] = None) -> List[dict]:
+                  settings: Optional[dict] = None,
+                  led_colors: Optional[List[int]] = None) -> List[dict]:
     """The selectable rows for the current page.
 
-    The SETUP page (index 5) uses the SETTINGS rows (font size + mapper) built
-    from ``settings``; page 4 uses the fixed CADENCE options; every other page
-    uses the zone/action ``items``.
+    Name-based dispatch: SETUP uses SETTINGS rows, CADENCE uses fixed options,
+    LED uses LED items, every other page uses the zone/action ``items``.
     """
-    if 0 <= page < len(PAGES) and PAGES[page] == "SETUP":
+    name = PAGES[page] if 0 <= page < len(PAGES) else ""
+    if name == "SETUP":
         return build_settings_items(settings)
-    return CADENCE_ITEMS if page == 4 else items
+    if name == "CADENCE":
+        return CADENCE_ITEMS
+    if name == "LED":
+        return build_led_items(led_colors)
+    return items
 
 
 def _ui_status(item: dict) -> str:
@@ -262,12 +312,19 @@ def activate_commands(item: dict) -> Tuple[Optional[List[dict]], str]:
     An engine row sends its single ``cmd``; an action row sends ``play_action``;
     a zone row sends ``trigger_action`` (see :func:`rtr.flow.activation_commands`).
     A ``ui`` row (SETUP page) is a local action, not a core command: it sends
-    nothing (``None``) and the renderer acts on it. Returns ``(commands, status)``.
+    nothing (``None``) and the renderer acts on it. A ``led`` row advances that
+    LED's color; a ``led_action`` row executes the local LED action. Both return
+    ``(None, status)`` — the renderer handles the sysfs write.
+    Returns ``(commands, status)``.
     """
     if item.get("kind") == "ui":
         return None, _ui_status(item)
     if item.get("kind") == "engine":
         return [item["cmd"]], f"→ {item['name']}"
+    if item.get("kind") == "led":
+        return None, f"LED {item['led'] + 1} → next color"
+    if item.get("kind") == "led_action":
+        return None, f"→ {item['name']}"
     cmds = activation_commands(item)
     if item.get("kind") == "action":
         return cmds, f"→ play {item['name']}"
@@ -368,8 +425,10 @@ def _camera_content(cam_telem, cursor, current_len, width):
     return rows
 
 
-def _brain_content(state):
-    """Page 2: robot state map (zone, mode, action, behavior, heading)."""
+def _brain_content(state, live: Optional[dict] = None):
+    """Page 2: robot state map (zone, mode, action, behavior, heading, safety,
+    autonomy, target, MIDI monitor)."""
+    live = live or {}
     rows = []
     rows.append({"text": "  BRAIN", "style": "label"})
     rows.append({"style": "divider"})
@@ -391,13 +450,48 @@ def _brain_content(state):
     speed = state.get("speed", "—")
     mv = "—" if moving is None else ("yes" if moving else "no")
     rows.append({"pairs": [("MOVING", mv), ("SPEED", speed)], "style": "state"})
-    # Heading: A1 (base rotation) from the joint pose.
-    joints = state.get("joints")
+    # Heading: A1 (base rotation) from the live joint pose.
+    joints = live.get("joints") or state.get("joints")
     if joints and len(joints) >= 6:
         a1 = joints[0]
         rows.append({"pairs": [("HEADING", f"A1={a1:.1f}°")], "style": "state"})
     else:
         rows.append({"pairs": [("HEADING", "—")], "style": "state"})
+    # Safety readout (from editor.html port).
+    safety = live.get("safety")
+    if safety:
+        rows.append({"style": "divider"})
+        rows.append({"text": "  SAFETY", "style": "label"})
+        rows.append({"pairs": [("SAFETY", str(safety))], "style": "state"})
+    # Autonomy readout.
+    auto = live.get("autonomy_enabled")
+    if auto is not None:
+        groups = live.get("autonomy_enabled_groups")
+        groups_s = " ".join(groups) if isinstance(groups, list) and groups else "—"
+        perf = live.get("performance_mode")
+        perf_s = "yes" if perf else "no"
+        dwell = live.get("autonomy_dwell_remaining")
+        dwell_s = f"{dwell:.1f}s" if dwell is not None else "—"
+        rows.append({"pairs": [("AUTONOMY", "on" if auto else "off"),
+                                ("GROUPS", groups_s), ("PERF", perf_s)],
+                     "style": "state"})
+        rows.append({"pairs": [("DWELL", dwell_s)], "style": "state"})
+    # Target readout.
+    target = live.get("target")
+    if target:
+        tx, ty, tz = target.get("x", 0), target.get("y", 0), target.get("z", 0)
+        rows.append({"pairs": [("TARGET", f"x={tx:.1f} y={ty:.1f} z={tz:.1f}")],
+                     "style": "state"})
+    # MIDI monitor readout.
+    midi = live.get("midi_monitor")
+    if midi:
+        rows.append({"style": "divider"})
+        rows.append({"text": "  MIDI", "style": "label"})
+        if isinstance(midi, dict):
+            for k, v in list(midi.items())[:6]:
+                rows.append({"pairs": [(k.upper(), str(v))], "style": "state"})
+        else:
+            rows.append({"pairs": [("MIDI", str(midi))], "style": "state"})
     rows.append({"style": "divider"})
     rows.append({"text": "  STATE", "style": "label"})
     rows.append({"text": f"  zone: {zone}", "style": "text"})
@@ -468,9 +562,151 @@ def _settings_content(settings, cursor, current_len, width):
     return rows
 
 
+def _triggers_content(events: List[Tuple[float, dict]], width: int) -> List[dict]:
+    """TRIGGERS page: timestamped log of core trigger/event frames."""
+    rows = []
+    rows.append({"text": "  TRIGGERS", "style": "label"})
+    rows.append({"style": "divider"})
+    if not events:
+        rows.append({"text": "  (no events yet — waiting for core)", "style": "help"})
+        return rows
+    # Show the most recent events (newest last), clipped to fit the page.
+    for ts, ev in events:
+        etype = ev.get("type", "?")
+        ts_str = time.strftime("%H:%M:%S", time.localtime(ts))
+        # Extract a few key fields for context.
+        extra = ""
+        if etype == "zone":
+            extra = f" zone={ev.get('zone', '?')}"
+        elif etype == "mode":
+            extra = f" mode={ev.get('mode', '?')}"
+        elif etype == "safety_discard":
+            extra = f" reason={ev.get('reason', '?')}"
+        elif etype == "pose_conflict":
+            extra = f" pose={ev.get('pose', '?')}"
+        elif etype == "midi_learn":
+            extra = f" note={ev.get('note', '?')}"
+        elif etype == "cam_control":
+            extra = f" cmd={ev.get('cmd', '?')}"
+        elif etype == "behavior":
+            extra = f" b={ev.get('behavior', '?')}"
+        line = f"  {ts_str}  {etype:<15}{extra}"
+        style = "text"
+        if etype in ("safety_discard", "pose_conflict"):
+            style = "feral"
+        rows.append({"text": _clip(line, width), "style": style})
+    return rows
+
+
+def _arm_content(live: dict, width: int) -> List[dict]:
+    """ARM page: ASCII robot-arm position from live joints/cart/target.
+
+    Renders joint-angle bars against hardware limits, the tool (cart) and
+    target positions, and a simple top-view ASCII sketch of the arm.
+    """
+    rows = []
+    rows.append({"text": "  ARM", "style": "label"})
+    rows.append({"style": "divider"})
+    joints = live.get("joints")
+    cart = live.get("cart")
+    target = live.get("target")
+    # Joint-angle bars (A1..A6) against hardware limits.
+    if joints and len(joints) >= 6:
+        for i, axis in enumerate(AXES):
+            angle = joints[i]
+            lo, hi = HW_LIMITS[axis]
+            span = hi - lo
+            if span > 0:
+                frac = max(0.0, min(1.0, (angle - lo) / span))
+            else:
+                frac = 0.0
+            bar_w = 20
+            filled = int(frac * bar_w)
+            bar = "█" * filled + "░" * (bar_w - filled)
+            rows.append({"text": f"  {axis} {angle:7.1f}°  [{bar}] {lo:.0f}..{hi:.0f}",
+                         "style": "text"})
+    else:
+        rows.append({"text": "  (no joint data)", "style": "help"})
+    rows.append({"style": "divider"})
+    # Tool (cart) and target positions.
+    if cart:
+        x, y, z = cart.get("x", 0), cart.get("y", 0), cart.get("z", 0)
+        rows.append({"pairs": [("TOOL", f"x={x:.1f} y={y:.1f} z={z:.1f}")],
+                     "style": "state"})
+    else:
+        rows.append({"pairs": [("TOOL", "—")], "style": "state"})
+    if target:
+        tx, ty, tz = target.get("x", 0), target.get("y", 0), target.get("z", 0)
+        rows.append({"pairs": [("TARGET", f"x={tx:.1f} y={ty:.1f} z={tz:.1f}")],
+                     "style": "state"})
+    else:
+        rows.append({"pairs": [("TARGET", "—")], "style": "state"})
+    # Distance between tool and target.
+    if cart and target:
+        dx = cart.get("x", 0) - target.get("x", 0)
+        dy = cart.get("y", 0) - target.get("y", 0)
+        dz = cart.get("z", 0) - target.get("z", 0)
+        dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+        rows.append({"pairs": [("DIST", f"{dist:.1f} mm")], "style": "state"})
+    # Simple top-view ASCII (x/y plane).
+    if cart and target:
+        rows.append({"style": "divider"})
+        rows.append({"text": "  TOP VIEW (x/y)", "style": "label"})
+        cx, cy = cart.get("x", 0), cart.get("y", 0)
+        tx, ty = target.get("x", 0), target.get("y", 0)
+        # Find bounds and scale to a small grid.
+        xs = [cx, tx, 0]
+        ys = [cy, ty, 0]
+        xmin, xmax = min(xs), max(xs)
+        ymin, ymax = min(ys), max(ys)
+        span_x = max(xmax - xmin, 1.0)
+        span_y = max(ymax - ymin, 1.0)
+        gw, gh = 24, 8
+        grid = [[" "] * (gw + 1) for _ in range(gh + 1)]
+        def _plot(val_x, val_y, ch):
+            col = int((val_x - xmin) / span_x * gw)
+            row = int((val_y - ymin) / span_y * gh)
+            col = max(0, min(gw, col))
+            row = max(0, min(gh, row))
+            grid[gh - row][col] = ch
+        _plot(0, 0, "o")   # base
+        _plot(cx, cy, "T") # tool
+        _plot(tx, ty, "*") # target
+        for row in grid:
+            rows.append({"text": "  " + " ".join(row), "style": "text"})
+        rows.append({"text": "  o=base  T=tool  *=target", "style": "help"})
+    return rows
+
+
+def _led_content(led_colors: List[int], cursor: int, current_len: int, width: int,
+                 led_available: bool = False) -> List[dict]:
+    """LED page: 22 LED rows + 4 action rows (cursor-navigable)."""
+    rows = []
+    rows.append({"text": "  LED", "style": "label"})
+    rows.append({"style": "divider"})
+    if not led_available:
+        rows.append({"text": "  (sysfs unavailable — preview only)", "style": "conn_bad"})
+    items = build_led_items(led_colors)
+    for i in range(NUM_LEDS):
+        rows.append(_item_row(i, items[i], cursor, current_len, width))
+    rows.append({"style": "divider"})
+    for j, action in enumerate(LED_ACTIONS):
+        item = {"kind": "led_action", "action": action, "name": action}
+        row_idx = NUM_LEDS + j
+        if row_idx == cursor and row_idx < current_len:
+            rows.append({"text": _clip(f"  ▸ {action}", width), "style": "item_sel"})
+        else:
+            rows.append({"text": _clip(f"    {action}", width), "style": "item"})
+    return rows
+
+
 def build_rows(state, zones, page, cursor, engine, hunt, cam_telem, width,
                *, connected=False, endpoint="", status="",
-               settings: Optional[dict] = None) -> List[dict]:
+               settings: Optional[dict] = None,
+               live: Optional[dict] = None,
+               events: Optional[List[Tuple[float, dict]]] = None,
+               led_colors: Optional[List[int]] = None,
+               led_available: bool = False) -> List[dict]:
     """Build the full screen as a list of rows for the current state.
 
     Args:
@@ -488,7 +724,7 @@ def build_rows(state, zones, page, cursor, engine, hunt, cam_telem, width,
         settings: the live SETTINGS values (font_size + joy_map) for the SETUP page.
     """
     items = build_items(zones, state.get("zone"))
-    current = current_items(page, items, settings)
+    current = current_items(page, items, settings, led_colors)
     current_len = len(current)
     rows: List[dict] = []
     rows.append({"text": _center("RTR REMOTE", width), "style": "bar"})
@@ -500,22 +736,33 @@ def build_rows(state, zones, page, cursor, engine, hunt, cam_telem, width,
     cur = PAGES[page]
     rows.append({"text": _clip(f"  [{cur}]  {page_names}", width), "style": "page"})
     rows.append({"style": "divider"})
-    if page == 0:
+    name = PAGES[page] if 0 <= page < len(PAGES) else ""
+    live = live or {}
+    if name == "NAV":
         rows.extend(_nav_content(state, zones, items, cursor, current_len, width))
-    elif page == 1:
+    elif name == "CAMERA":
         rows.extend(_camera_content(cam_telem, cursor, current_len, width))
-    elif page == 2:
-        rows.extend(_brain_content(state))
-    elif page == 3:
+    elif name == "BRAIN":
+        rows.extend(_brain_content(state, live))
+    elif name == "HUNT":
         rows.extend(_hunt_content(hunt, cam_telem, cursor, current_len, width))
-    elif page == 4:
+    elif name == "CADENCE":
         rows.extend(_cadence_content(engine, cursor, current_len, width))
-    elif page == 5:
+    elif name == "TRIGGERS":
+        rows.extend(_triggers_content(events or [], width))
+    elif name == "ARM":
+        rows.extend(_arm_content(live, width))
+    elif name == "LED":
+        rows.extend(_led_content(led_colors or [], cursor, current_len, width,
+                                  led_available))
+    elif name == "SETUP":
         rows.extend(_settings_content(settings, cursor, current_len, width))
     rows.append({"style": "divider"})
     rows.append({"text": _clip(status, width), "style": "status"})
-    if 0 <= page < len(PAGES) and PAGES[page] == "SETUP":
+    if name == "SETUP":
         help_txt = "←→ font · ↑↓ move · enter select · L1/R1 pages"
+    elif name == "LED":
+        help_txt = "←→ pages · ↑↓ move · enter select · q quit"
     else:
         help_txt = "←→ pages · ↑↓ move · enter select · home/q quits"
     rows.append({"text": _clip(help_txt, width), "style": "help"})
@@ -549,6 +796,14 @@ class RemoteState:
         # Live SETTINGS values (font_size + joy_map) for the SETUP page; the SDL
         # app populates this from its config. Empty by default (desktop TUI).
         self.settings: Dict[str, Any] = {}
+        # High-frequency live state (joints, cart, target, safety, autonomy, MIDI).
+        self.live: Dict[str, Any] = {}
+        self.live_key: Any = object()
+        # TRIGGERS event ring buffer: list of (timestamp, event_dict).
+        self.events: List[Tuple[float, dict]] = []
+        # LED state: per-LED palette indices + sysfs availability flag.
+        self.led_colors: List[int] = [BLACK_IDX] * NUM_LEDS
+        self.led_available: bool = False
 
     def apply_state(self, data) -> None:
         self.hunt = data.get("hunt", {})
@@ -581,12 +836,56 @@ class RemoteState:
             self.state_key = key
             self.rebuild_items()
             self.dirty = True
+        # High-frequency live state: joints, cart, target, safety, autonomy, MIDI.
+        live_key = (
+            data.get("joints"),
+            data.get("cart"),
+            data.get("target"),
+            data.get("safety"),
+            data.get("autonomy_enabled"),
+            data.get("autonomy_enabled_groups"),
+            data.get("performance_mode"),
+            data.get("autonomy_dwell_remaining"),
+            data.get("midi_monitor"),
+        )
+        if live_key != self.live_key:
+            self.live = {
+                "joints": data.get("joints"),
+                "cart": data.get("cart"),
+                "target": data.get("target"),
+                "safety": data.get("safety"),
+                "autonomy_enabled": data.get("autonomy_enabled"),
+                "autonomy_enabled_groups": data.get("autonomy_enabled_groups"),
+                "performance_mode": data.get("performance_mode"),
+                "autonomy_dwell_remaining": data.get("autonomy_dwell_remaining"),
+                "midi_monitor": data.get("midi_monitor"),
+            }
+            self.live_key = live_key
+            self.dirty = True
 
     def apply_zones(self, table) -> None:
         if table != self.zones:
             self.zones = table
             self.rebuild_items()
             self.dirty = True
+
+    def apply_event(self, data: dict) -> None:
+        """Record a trigger/event frame in the capped ring buffer."""
+        ts = time.time()
+        self.events.append((ts, data))
+        if len(self.events) > EVENT_CAP:
+            self.events = self.events[-EVENT_CAP:]
+        self.dirty = True
+
+    def set_led_color(self, i: int, idx: int) -> None:
+        """Set a single LED's palette index (wraps around)."""
+        self.led_colors[i] = idx % NUM_COLORS
+        self.dirty = True
+
+    def led_all(self, idx: int) -> None:
+        """Set all LEDs to a single palette index."""
+        self.led_colors = [idx] * NUM_LEDS
+        self.dirty = True
 
     def rebuild_items(self) -> None:
         zone = self.state.get("zone")
@@ -595,7 +894,7 @@ class RemoteState:
             self.cursor = 0
 
     def current_items(self) -> List[dict]:
-        return current_items(self.page, self.items, self.settings)
+        return current_items(self.page, self.items, self.settings, self.led_colors)
 
     def page_item_count(self) -> int:
         return len(self.current_items())
@@ -643,4 +942,7 @@ class RemoteState:
         return build_rows(self.state, self.zones, self.page, self.cursor,
                            self.engine, self.hunt, self.cam_telem, width,
                            connected=connected, endpoint=endpoint,
-                           status=self.status, settings=self.settings)
+                           status=self.status, settings=self.settings,
+                           live=self.live, events=self.events,
+                           led_colors=self.led_colors,
+                           led_available=self.led_available)

@@ -39,8 +39,9 @@ class Engine:
                  midi_reload: Callable[[], None] = None,
                   brain_reload: Callable[[], None] = None,
                   robot_reload: Callable[[], None] = None,
-                  screen_patch_override: "Callable[[str | None], None]" = None,
-                 render_ui_setter: "Callable[[], None]" = None):
+                   screen_patch_override: "Callable[[str | None], None]" = None,
+                  render_ui_setter: "Callable[[], None]" = None,
+                  snapshot_grab: "Callable[[], None]" = None):
         self.bus = bus
         self.robot = robot
         self.brain = brain
@@ -58,6 +59,9 @@ class Engine:
         # Sets the render-page UI state ({hud, code}); pushed in every state frame
         # so the render page can toggle its HUD and code overlay.
         self._render_ui_setter = render_ui_setter
+        # Fetches the RPi's latest camera frame into the local snapshot file
+        # (a non-blocking grab; the core-side client, see rtr/camera/snapshot_grab).
+        self._snapshot_grab = snapshot_grab
         self._running = False
         # The previous tick's (zone, mode, action), used to emit change events.
         self._prev_state = None
@@ -110,6 +114,11 @@ class Engine:
                             hud=cmd.payload.get("hud"),
                             code=cmd.payload.get("code"),
                         )
+                elif cmd.cmd == Cmd.SNAPSHOT_GRAB:
+                    # Fetch the RPi's latest camera frame into the local snapshot
+                    # file (non-blocking: the grabber spawns its own thread).
+                    if self._snapshot_grab is not None:
+                        self._snapshot_grab()
                 else:
                     if cmd.cmd == Cmd.SET_JOINT_POSE and self.machine.current_action is not None:
                         # A raw joint pose is about to clear the active action (the

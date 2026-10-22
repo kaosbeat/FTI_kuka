@@ -399,7 +399,12 @@
           "next": {
             "zone": "cuddling",
             "action": "purr"
-          }
+          },
+          "pose_imgs": [
+            "pose_1792587821163_52dcd328.png",
+            "pose_1792587836243_f7b42108.png",
+            "pose_1792587851214_61cd57b1.png"
+          ]
         },
         "purr": {
           "enabled": true,
@@ -2033,16 +2038,16 @@
         "y": 40
       },
       "cuddling": {
-        "x": 670,
-        "y": 40
+        "x": 664.6832885742188,
+        "y": -192.60755920410156
       },
       "sleeping_stretching_bridge": {
-        "x": 670,
-        "y": 158
+        "x": 631.807861328125,
+        "y": 206.24267578125
       },
       "purring": {
-        "x": 880,
-        "y": 40
+        "x": 862.7205810546875,
+        "y": -192.6075668334961
       },
       "stretching": {
         "x": 880,
@@ -2090,10 +2095,10 @@
       }
     },
     "view": {
-      "x": -459.8653438280889,
-      "y": 158.00041217433747,
-      "w": 1698.1071394113083,
-      "h": 224.12727227246876
+      "x": -344.375685638958,
+      "y": -93.59860910879064,
+      "w": 2245.746691871455,
+      "h": 296.4083175803399
     },
     "key": "clawing,cuddling,examining,growling,hunting,leaping,performing,purring,resting,resting_sleeping_bridge,resting_testing_bridge,roaring,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge,testing"
   }

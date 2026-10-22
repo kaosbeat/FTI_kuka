@@ -19,8 +19,8 @@
       "behaviors": [],
       "enabled": true,
       "params": {
-        "speed": 40,
-        "dwell_s": 30
+        "speed": 20,
+        "dwell_s": 300
       }
     },
     "stage-takeover": {
@@ -42,7 +42,8 @@
         "resting",
         "sleeping",
         "cuddling",
-        "purring"
+        "purring",
+        "resting_sleeping_bridge"
       ],
       "behaviors": [],
       "enabled": true,
@@ -53,6 +54,7 @@
     },
     "installation-active": {
       "zones": [
+        "cuddling",
         "purring",
         "stretching",
         "hunting",
@@ -61,27 +63,14 @@
         "roaring",
         "growling",
         "clawing",
-        "leaping"
+        "leaping",
+        "stretching_hunting_bridge"
       ],
       "behaviors": [],
       "enabled": true,
       "params": {
         "speed": 100,
         "dwell_s": 25
-      }
-    },
-    "museum-closed": {
-      "zones": [
-        "resting",
-        "sleeping",
-        "cuddling",
-        "purring"
-      ],
-      "behaviors": [],
-      "enabled": true,
-      "params": {
-        "speed": 10,
-        "dwell_s": 60
       }
     }
   },
@@ -446,28 +435,64 @@
   },
   "behaviors": {
     "locked": {
-      "gain": 0.3
+      "gain": 0.3,
+      "sweep_amp": 0.5,
+      "stay": 1,
+      "triggers": [
+        "dwell"
+      ]
     },
     "curious": {
       "gain": 0.3,
-      "look_factor": 0.5
+      "look_factor": 0.5,
+      "sweep_amp": 0.5,
+      "stay": 1,
+      "triggers": [
+        "dwell"
+      ]
     },
     "intent": {
-      "gain": 1
+      "gain": 0.3,
+      "sweep_amp": 0.5,
+      "stay": 1,
+      "triggers": [
+        "dwell"
+      ]
     },
     "gentle": {
       "gain": 0.3,
-      "face_factor": 0.5
+      "face_factor": 0.5,
+      "sweep_amp": 0.5,
+      "stay": 1,
+      "triggers": [
+        "dwell"
+      ]
     },
     "vigilant": {
-      "freq": 1
+      "freq": 1,
+      "stay": 0,
+      "triggers": [
+        "dwell"
+      ]
     },
     "restless": {
-      "wander_adj": 5
+      "wander_adj": 5,
+      "stay": 0.7,
+      "triggers": [
+        "dwell"
+      ]
+    },
+    "spontaneous": {
+      "stay": 0,
+      "triggers": [
+        "dwell"
+      ]
+>>>>>>> 52e78c23474af5aeb1b8ccec3ac4ec4d6891be36
     },
     "spontaneous": {},
     "soothing": {
       "freq": 0.5,
+<<<<<<< HEAD
       "amp_scale": 0.1
     },
     "agitated": {
@@ -489,6 +514,61 @@
     "drowsy": {
       "freq": 0.3,
       "amp_scale": 0.2
+=======
+      "amp_scale": 0.1,
+      "stay": 0,
+      "triggers": [
+        "dwell"
+      ]
+    },
+    "agitated": {
+      "freq": 1,
+      "amp_scale": 0.5,
+      "stay": 0,
+      "triggers": [
+        "lock_duration",
+        "dwell"
+      ],
+      "lock_duration_s": 1
+    },
+    "aggressive": {
+      "freq": 1,
+      "amp_scale": 0.3,
+      "stay": 0,
+      "triggers": [
+        "lock_duration",
+        "dwell"
+      ],
+      "lock_duration_s": 1
+    },
+    "exhilarated": {
+      "freq": 2,
+      "amp_scale": 0.5,
+      "stay": 0,
+      "triggers": [
+        "lock_duration",
+        "dwell"
+      ],
+      "lock_duration_s": 1
+    },
+    "impatient": {
+      "freq": 1,
+      "amp_scale": 0.3,
+      "stay": 0,
+      "triggers": [
+        "lock_duration",
+        "dwell"
+      ],
+      "lock_duration_s": 1
+    },
+    "drowsy": {
+      "freq": 0.3,
+      "amp_scale": 0.2,
+      "stay": 0,
+      "triggers": [
+        "dwell"
+      ]
+>>>>>>> 52e78c23474af5aeb1b8ccec3ac4ec4d6891be36
     }
   }
 }

@@ -76,6 +76,19 @@
   .brainCard a { color: var(--accent); font-size: 12px; }
   .brainSep { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; margin: 16px 0 4px; border-top: 1px solid var(--border); padding-top: 8px; }
   .brainCardDesc { font-size: 12px; color: var(--dim); margin-bottom: 8px; line-height: 1.4; }
+  /* Camera behavior groups + zone-class separators span the whole grid row. */
+  .brainGrid .brainSep, .brainGrid .camGroupHead, .brainGrid .brainDetails { grid-column: 1 / -1; }
+  .camGroupHead { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--dim);
+                 text-transform: uppercase; letter-spacing: 0.5px; margin: 0; padding: 10px 0 2px;
+                 border-top: 1px solid var(--border); }
+  .camGroupHead .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; }
+  /* The camera-behavior card accents (wide = track blue, close = facefocus pink). */
+  .brainCard.camWide { border-left: 3px solid #2e6fd0; }
+  .brainCard.camClose { border-left: 3px solid #d9489a; }
+  /* Collapsible help text (the "how the params work" links). */
+  .brainDetails { font-size: 12px; color: var(--dim); margin: 0 0 8px; }
+  .brainDetails summary { cursor: pointer; color: var(--accent); font-size: 12px; list-style-position: inside; }
+  .brainDetails p { margin: 4px 0 0; line-height: 1.5; }
   .grpCardHead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
   .grpCardHead h2 { margin: 0; }
   .grpZoneHead { cursor: pointer; user-select: none; }
@@ -396,8 +409,8 @@
 
 <main id="patchesMain" style="display:none">
   <div class="patchTopBar" id="patchTopBar">
-    <button id="liveToggle" class="liveToggle">&#8617; live render</button>
-    <span class="patchTopHint">edit a patch slot, or switch to live render to push the running patch</span>
+    <button id="liveToggle" class="liveToggle">&#8617; broadcast</button>
+    <span class="patchTopHint">edit a patch slot; toggle broadcast to push the selected slot to the screens</span>
   </div>
   <div class="patchGrid">
     <section>
@@ -414,17 +427,7 @@
         <textarea id="patchCode" spellcheck="false"></textarea>
         <div id="patchInfo"></div>
       </div>
-      <div id="liveRenderView" style="display:none">
-        <h2>live render</h2>
-        <div class="row" style="margin-bottom:8px">
-          <button id="livePush">push to render</button>
-          <button id="liveClear" class="small">clear</button>
-          <button id="liveHud" class="small">hud: on</button>
-          <button id="liveCodeOverlay" class="small">code: off</button>
-        </div>
-        <textarea id="liveCode" spellcheck="false"></textarea>
-        <div id="liveInfo" style="font-size:12px;color:var(--dim);margin-top:6px">current render patch (follows state; edit to push a custom patch)</div>
-      </div>
+
     </section>
     <section class="patchPreview" id="patchPreviewCol">
       <h2>live preview</h2>
@@ -505,6 +508,13 @@
       <div id="midiNav"></div>
     </section>
     <section>
+      <h2>capture</h2>
+      <p class="midiHelp">A key that grabs a fresh frame from the camera (the core pulls it from the
+        RPi and writes it to the latest snapshot the render page shows).
+        <b>learn</b> = click it, then press a key on your MIDI controller — the robot remembers that key.</p>
+      <div id="midiCapture"></div>
+    </section>
+    <section>
       <h2>zones (per-zone input)</h2>
       <p class="midiHelp">Keys that activate a specific zone or action. The <b>command</b> key moves the
         robot to that zone; each action's key triggers just that action.</p>
@@ -562,7 +572,7 @@
       <h2>real camera</h2>
       <div class="row" style="margin-top:8px">
         <label>snapshot url</label>
-        <input type="text" id="camSnapUrl" value="http://192.168.1.185:8080/?action=snapshot" spellcheck="false">
+        <input type="text" id="camSnapUrl" value="http://192.168.10.112:8080/?action=snapshot" spellcheck="false">
         <button id="camSnapBtn" class="small">capture</button>
       </div>
       <img id="camSnapshot" alt="camera snapshot">
@@ -1092,10 +1102,10 @@ const BRAIN_FALLBACK = {
     leaping:    { active: "wide", mode: "track", lock: "auto" },
   },
   behaviors: {
-    locked:      { gain: 0.3 },
-    curious:     { gain: 0.3, look_factor: 0.5 },
-    intent:      { gain: 0.3 },
-    gentle:      { gain: 0.3, face_factor: 0.5 },
+    locked:      { gain: 0.3, sweep_amp: 0.5 },
+    curious:     { gain: 0.3, look_factor: 0.5, sweep_amp: 0.5 },
+    intent:      { gain: 0.3, sweep_amp: 0.5 },
+    gentle:      { gain: 0.3, face_factor: 0.5, sweep_amp: 0.5 },
     vigilant:    { freq: 1.0 },
     restless:    { wander_adj: 5.0 },
     spontaneous: {},
@@ -1128,10 +1138,8 @@ function connect() {
       // The core is in manual mode (holding its pose) while the tab is open, so
       // skipping its drive here keeps the inspected pose stable.
       if (!validateView) Robot3D.update({ joints: m.joints, target: m.target, patch: m.patch });
-      // Live render slot: follow the core's resolved patch (guarded while editing).
-      updateLiveCode(m.patch);
       // Render-page UI state (HUD / code-overlay toggles).
-      if (m.render_ui) { renderUi = m.render_ui; syncLiveToggles(); }
+      if (m.render_ui) { renderUi = m.render_ui; }
       // The 3D arm tracks every frame (20 Hz joints), but the discrete readouts below
       // rarely change; rebuild their DOM only when the rendered output changes so the
       // per-frame cost does not fight the rAF render loop.
@@ -1182,7 +1190,10 @@ function connect() {
       // A learned key was captured; write it into the pending learn slot.
       // The payload is {key, msg, zone, action} (action is null for a zone command).
       if (midiLearnPending && MIDI) {
-        if (midiLearnPending.nav_name) {
+        if (midiLearnPending.capture) {
+          if (!MIDI.capture) MIDI.capture = {};
+          MIDI.capture.key = m.key;
+        } else if (midiLearnPending.nav_name) {
           if (!MIDI.nav) MIDI.nav = {};
           MIDI.nav[midiLearnPending.nav_name] = m.key;
         } else {
@@ -1706,6 +1717,11 @@ async function loadMidi() {
   if (!data.nav || typeof data.nav !== "object") data.nav = {};
   if (data.nav.in_port === undefined) data.nav.in_port = null;
   NAV_COMMANDS.forEach((n) => { if (data.nav[n] === undefined) data.nav[n] = null; });
+  // Seed the global capture section: the in_port (null = default port) plus the
+  // single key that grabs the camera snapshot (a MIDI key or null).
+  if (!data.capture || typeof data.capture !== "object") data.capture = {};
+  if (data.capture.in_port === undefined) data.capture.in_port = null;
+  if (data.capture.key === undefined) data.capture.key = null;
   MIDI = data;
   // Seed per-zone entries: ensure each zone has {in_port, command, actions}.
   Object.keys(TABLE.zones || {}).forEach((zn) => {
@@ -1767,6 +1783,7 @@ function buildMidiInForm() {
   if (!MIDI) return;
   $("midiStopLearn").style.display = midiLearnPending ? "" : "none";
   buildMidiNav();
+  buildMidiCapture();
   const tbl = $("midiZones");
   tbl.innerHTML = "";
   const zoneNames = Object.keys(TABLE.zones);
@@ -1948,15 +1965,68 @@ function buildMidiNav() {
   });
 }
 
-function midiLearn(zone, actionName, navName, navPort) {
+// The global capture section: a single key that grabs the camera snapshot. The
+// key editor + learn button write to MIDI.capture.key; the in_port picker chooses
+// which MIDI-in device the capture key is learned/dispatched on (null = default).
+function buildMidiCapture() {
+  const el = $("midiCapture");
+  if (!el) return;
+  el.innerHTML = "";
+  if (!MIDI.capture || typeof MIDI.capture !== "object") MIDI.capture = {};
+  if (MIDI.capture.in_port === undefined) MIDI.capture.in_port = null;
+  if (MIDI.capture.key === undefined) MIDI.capture.key = null;
+  // in_port picker: which MIDI-in device the capture key is learned on
+  // (null = the default port, the first available device).
+  const portRow = document.createElement("div");
+  portRow.className = "sndRow";
+  const portLbl = document.createElement("span");
+  portLbl.className = "sndName"; portLbl.textContent = "listen on";
+  portLbl.title = "Which MIDI controller the capture key is learned on. 'default' = the first available device.";
+  portRow.appendChild(portLbl);
+  const portSel = document.createElement("select");
+  portSel.className = "midiKey";
+  const portNone = document.createElement("option");
+  portNone.value = ""; portNone.textContent = "default";
+  portSel.appendChild(portNone);
+  midiPorts.forEach((p) => {
+    const o = document.createElement("option");
+    o.value = String(p.index); o.textContent = `${p.index} — ${p.name}`;
+    portSel.appendChild(o);
+  });
+  const cip = MIDI.capture.in_port;
+  portSel.value = (cip === null || cip === undefined) ? "" : String(cip);
+  portSel.onchange = () => { MIDI.capture.in_port = portSel.value === "" ? null : parseInt(portSel.value, 10); };
+  portRow.appendChild(portSel);
+  el.appendChild(portRow);
+  // key editor + learn button
+  const row = document.createElement("div");
+  row.className = "sndRow";
+  const lbl = document.createElement("span");
+  lbl.className = "sndName"; lbl.textContent = "grab frame";
+  lbl.title = "The key that grabs a fresh frame from the camera (the core pulls it from the RPi into the latest snapshot).";
+  row.appendChild(lbl);
+  const inp = document.createElement("input");
+  inp.type = "text"; inp.className = "midiName";
+  inp.value = MIDI.capture.key || "";
+  inp.onchange = () => { MIDI.capture.key = inp.value.trim() || null; };
+  row.appendChild(inp);
+  const btn = document.createElement("button");
+  btn.className = "small"; btn.textContent = "learn";
+  btn.title = "Click, then press the key on your MIDI controller — the robot remembers it.";
+  btn.onclick = () => midiLearn(null, null, null, null, true, MIDI.capture.in_port);
+  row.appendChild(btn);
+  el.appendChild(row);
+}
+
+function midiLearn(zone, actionName, navName, navPort, capture, capturePort) {
   if (midiLearnPending) { $("midiStatus").textContent = "already learning — send a MIDI message first"; return; }
-  midiLearnPending = { zone, action_name: actionName, nav_name: navName || null };
+  midiLearnPending = { zone, action_name: actionName, nav_name: navName || null, capture: capture ? true : null };
   fetch("/api/midi/learn", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "start", zone, action_name: actionName, nav: navName || null, nav_port: navPort === undefined ? null : navPort }),
+    body: JSON.stringify({ action: "start", zone, action_name: actionName, nav: navName || null, nav_port: navPort === undefined ? null : navPort, capture: capture ? true : null, capture_port: capturePort === undefined ? null : capturePort }),
   }).then((r) => r.json().then((b) => ({ ok: r.ok, b }))).then(({ ok, b }) => {
-    const label = navName ? navName : (actionName ? `${zone}/${actionName}` : zone);
+    const label = capture ? "capture" : (navName ? navName : (actionName ? `${zone}/${actionName}` : zone));
     if (ok) $("midiStatus").textContent = `learning "${label}" — now press a key on your MIDI controller`;
     else $("midiStatus").textContent = "learn failed: " + (b.error || r.status);
   }).catch((e) => { $("midiStatus").textContent = "learn failed: " + e; });
@@ -2045,39 +2115,30 @@ function commitPatchEditor() {
 }
 
 // ---------------------------------------------------------------------------
-// Live render slot: shows the current patch pushed to render.html (m.patch).
-// The operator can edit it and push it as a screen override (set_screen_patch).
-// HUD and code-overlay toggles send set_render_ui to the core.
+// Broadcast toggle: pushes the currently selected patch slot to the screens.
+// ON = the selected slot's code is sent as set_screen_patch (live-updated on
+// every edit); OFF = set_screen_patch null clears the override so the screens
+// follow the live state concatenation.
 // ---------------------------------------------------------------------------
-let liveCodeEditing = false;
-let livePushTimer = null;  // debounce timer: auto-pushes the edited live patch after 1s of no keystrokes
+let broadcastOn = false;
 let renderUi = { hud: true, code: false };
-
-function updateLiveCode(code) {
-  // Guard: don't overwrite the field while the operator is editing it.
-  if (liveCodeEditing) return;
-  if (typeof code === "string" && code) {
-    $("liveCode").value = code;
-  }
-}
 
 function sendRenderUi(hud, code) {
   if (ws) ws.send(JSON.stringify({ cmd: "set_render_ui", hud: hud, code: code }));
 }
 
-function syncLiveToggles() {
-  $("liveHud").textContent = "hud: " + (renderUi.hud ? "on" : "off");
-  $("liveCodeOverlay").textContent = "code: " + (renderUi.code ? "on" : "off");
+function broadcastCurrentSlot() {
+  if (!ws) return;
+  if (broadcastOn && selectedPatch) {
+    const code = getPatchCode(selectedPatch) || "";
+    ws.send(JSON.stringify({ cmd: "set_screen_patch", code: code }));
+  } else {
+    ws.send(JSON.stringify({ cmd: "set_screen_patch", code: null }));
+  }
 }
 
-// Live render mode: the center column shows the live render block instead of the
-// patch-code editor. The toggle is the prominent top-bar control.
-let liveRenderMode = false;
-
-function syncLiveRenderView() {
-  $("patchCodeView").style.display = liveRenderMode ? "none" : "";
-  $("liveRenderView").style.display = liveRenderMode ? "" : "none";
-  $("liveToggle").className = liveRenderMode ? "liveToggle active" : "liveToggle";
+function syncBroadcastToggle() {
+  $("liveToggle").className = broadcastOn ? "liveToggle active" : "liveToggle";
 }
 
 async function loadPatches() {
@@ -2100,7 +2161,7 @@ async function loadPatches() {
   if (!PATCHES.actions) PATCHES.actions = {};
   // Seed every zone / mode / action slot with the default code so the editor shows a
   // complete, offline-editable table. Only fills names not already present.
-  const def = PATCHES.default;
+  const def = PATCHES.default || PATCHES_FALLBACK.default;
   Object.keys(TABLE.zones).forEach((n) => { if (PATCHES.zones[n] === undefined) PATCHES.zones[n] = def; });
   // Behavior slots live under the `modes` scope key (legacy name; relabeled "behaviors").
   BEHAVIORS.forEach((m) => { if (PATCHES.modes[m] === undefined) PATCHES.modes[m] = def; });
@@ -2153,10 +2214,10 @@ const BRAIN_DEFAULT_GROUPS = {
 // Per-behavior motion params (mirrors rtr/brain/config.py DEFAULT_BEHAVIORS).
 // calm/bridge are not listed (no params); spontaneous is listed empty.
 const BEHAVIOR_PARAMS = {
-  locked:      { gain: 0.3 },
-  curious:     { gain: 0.3, look_factor: 0.5 },
-  intent:      { gain: 0.3 },
-  gentle:      { gain: 0.3, face_factor: 0.5 },
+  locked:      { gain: 0.3, sweep_amp: 0.5 },
+  curious:     { gain: 0.3, look_factor: 0.5, sweep_amp: 0.5 },
+  intent:      { gain: 0.3, sweep_amp: 0.5 },
+  gentle:      { gain: 0.3, face_factor: 0.5, sweep_amp: 0.5 },
   vigilant:    { freq: 1.0 },
   restless:    { wander_adj: 5.0 },
   spontaneous: {},
@@ -2176,6 +2237,7 @@ const BEHAVIOR_PARAM_META = {
   freq:        { step: "0.1",  min: "0" },
   amp_scale:   { step: "0.05", min: "0" },
   wander_adj:  { step: "0.5",  min: "0" },
+  sweep_amp:   { step: "0.05", min: "0" },
 };
 
 // Info text for the no-param behaviors (info-only cards).
@@ -2207,6 +2269,53 @@ const BEHAVIOR_DESCRIPTIONS = {
 // The camera intent vocabulary (mirrors rtr/brain/config.py CAMERA_CHOICES / CAMERA_MODES).
 const CAMERA_CHOICES = ["wide", "close", "both"];
 const CAMERA_MODES = ["idle", "track", "analyze"];
+
+// The camera-servo behaviors, grouped by which camera they read. locked/intent/
+// curious read the WIDE camera's person lock (track offset); gentle reads the
+// CLOSE camera's face (face offset). Used to colorcode + group these on the
+// brain tab. Colors match the zone-class presets (track = wide blue, facefocus =
+// close pink) so the grouping reads as one visual family.
+const CAMERA_BEHAVIOR_GROUP = { locked: "wide", intent: "wide", curious: "wide", gentle: "close" };
+const CAMERA_BEHAVIOR_GROUPS = {
+  wide: {
+    label: "camera — wide (person lock)",
+    accent: "camWide",
+    color: "#2e6fd0",
+    help: "locked / intent / curious track a person seen by the WIDE camera. "
+      + "gain = how strongly the servo pulls the person back to image center (higher = snappier, lower = lazier). "
+      + "look_factor (curious only) = the fraction of the tracking offset actually applied (0.5 = a softer half-look). "
+      + "sweep_amp = how far the camera roams to a new vantage point while keeping the target in view (0 = no roaming).",
+  },
+  close: {
+    label: "camera — close (face)",
+    accent: "camClose",
+    color: "#d9489a",
+    help: "gentle reads a FACE from the CLOSE camera and makes a subtle gesture toward it. "
+      + "gain = the servo pull on the face. "
+      + "face_factor = the fraction of the face offset actually applied (0.5 = subtle, not a full stare). "
+      + "sweep_amp = how far the camera roams while keeping the face in view (0 = no roaming).",
+  },
+};
+
+// Short plain-language descriptions of the engagement-ladder classes (the zone
+// classes). The ladder escalates ignore → scan → track → farfocus → approach →
+// facefocus; retreat de-escalates back down.
+const ZONE_CLASS_DESCRIPTIONS = {
+  ignore: "rungs 0 — no camera: the robot ignores the person (idle baseline).",
+  scan: "rung 1 — wide camera idles, scanning for a person to lock.",
+  track: "rung 2 — wide camera tracks a locked person (visual servo to image center).",
+  farfocus: "rung 3 — wide camera tracks from a distance (holds the lock while far).",
+  approach: "rung 4 — wide camera tracks while the robot approaches the person.",
+  facefocus: "rung 5 — close camera analyzes the face (runs the face actions).",
+  retreat: "de-escalation — the robot backs away from the person.",
+};
+
+// What the per-class camera preset does (the "always empty" dropdown, explained).
+const ZONE_CLASS_CAMERA_HELP =
+  "The camera preset (active / mode / lock) is the class-level camera intent the brain applies when the robot's "
+  + "engagement class changes to this class. active = which camera (none / wide / close / both), mode = idle / track / analyze, "
+  + "lock = none / auto (auto = use the current hunt lock). A per-action cam_control (set in the action editor) overrides "
+  + "this for specific actions. The dropdown that looked empty was a stray blank <select> in the label — it has been removed.";
 
 function _brainGroupSuffix(name) {
   return name.charAt(0).toUpperCase() + name.slice(1);
@@ -2423,9 +2532,22 @@ function buildBrainForm() {
     mkInfo(card, "The camera baseline is now per-action (zone/action). Set each action's camera intent (active / mode / lock) from the action editor.");
   }
 
-  // --- Zone classes card (the engagement ladder) ---
+  // --- Zone classes (the engagement ladder): one card per class ---
   {
-    const card = mkCard("zone_classes (engagement ladder)", "The per-zone engagement classes. Each class has a camera preset, params, and an editor color.");
+    const zcSep = document.createElement("div");
+    zcSep.className = "brainSep";
+    zcSep.textContent = "zone classes (engagement ladder)";
+    el.appendChild(zcSep);
+    const zcHelp = document.createElement("details");
+    zcHelp.className = "brainDetails";
+    const zcSum = document.createElement("summary");
+    zcSum.textContent = "what the camera preset does (and why one dropdown used to be empty)";
+    zcHelp.appendChild(zcSum);
+    const zcHelpP = document.createElement("p");
+    zcHelpP.textContent = ZONE_CLASS_CAMERA_HELP;
+    zcHelp.appendChild(zcHelpP);
+    el.appendChild(zcHelp);
+
     const zc = b.zone_classes || {};
     const clsNames = ["ignore", "scan", "track", "farfocus", "approach", "facefocus", "retreat"];
     for (const cls of clsNames) {
@@ -2433,23 +2555,29 @@ function buildBrainForm() {
       const cam = entry.camera || { active: "wide", mode: "idle", lock: "none" };
       const color = entry.color || "#888";
       const params = entry.params || {};
-      // Color swatch + class name
-      const clsRow = document.createElement("div");
-      clsRow.className = "row";
-      clsRow.style.marginBottom = "4px";
+      const card = mkCard(cls, ZONE_CLASS_DESCRIPTIONS[cls]);
+      // Color swatch + color picker
+      const colorRow = document.createElement("div");
+      colorRow.className = "row";
+      colorRow.style.alignItems = "center";
       const swatch = document.createElement("span");
-      swatch.style.cssText = `display:inline-block;width:12px;height:12px;border-radius:2px;background:${color};margin-right:4px;vertical-align:middle`;
-      clsRow.appendChild(swatch);
-      const clsLabel = document.createElement("label");
-      clsLabel.textContent = cls;
-      clsRow.appendChild(clsLabel);
-      card.appendChild(clsRow);
-      // Camera preset
+      swatch.style.cssText = `display:inline-block;width:14px;height:14px;border-radius:2px;background:${color};margin-right:4px`;
+      colorRow.appendChild(swatch);
+      const colorLab = document.createElement("label");
+      colorLab.textContent = "color";
+      const colorInp = document.createElement("input");
+      colorInp.type = "color"; colorInp.value = color;
+      colorInp.style.width = "40px"; colorInp.style.height = "24px"; colorInp.style.border = "none"; colorInp.style.padding = "0";
+      colorInp.oninput = () => { zc[cls] = zc[cls] || {}; zc[cls].color = colorInp.value; swatch.style.background = colorInp.value; };
+      colorLab.appendChild(colorInp);
+      colorRow.appendChild(colorLab);
+      card.appendChild(colorRow);
+      // Camera preset (active / mode / lock) — the stray empty <select> is gone.
       const camRow = document.createElement("div");
       camRow.className = "row";
-      camRow.style.marginLeft = "16px";
+      camRow.style.alignItems = "center";
       const camLab = document.createElement("label");
-      camLab.innerHTML = `camera: <select id="zcCam_${cls}">`;
+      camLab.textContent = "camera";
       const actSel = document.createElement("select");
       actSel.id = "zcCamActive_" + cls;
       for (const a of ["none", "wide", "close", "both"]) {
@@ -2479,60 +2607,47 @@ function buildBrainForm() {
       camLab.appendChild(lockSel);
       camRow.appendChild(camLab);
       card.appendChild(camRow);
-      // Color picker
-      const colorRow = document.createElement("div");
-      colorRow.className = "row";
-      colorRow.style.marginLeft = "16px";
-      const colorLab = document.createElement("label");
-      colorLab.innerHTML = `color `;
-      const colorInp = document.createElement("input");
-      colorInp.type = "color"; colorInp.value = color;
-      colorInp.style.width = "40px"; colorInp.style.height = "24px"; colorInp.style.border = "none"; colorInp.style.padding = "0";
-      colorInp.oninput = () => { zc[cls] = zc[cls] || {}; zc[cls].color = colorInp.value; swatch.style.background = colorInp.value; };
-      colorLab.appendChild(colorInp);
-      colorRow.appendChild(colorLab);
-      card.appendChild(colorRow);
       // Key params (class-specific)
       if (cls === "scan" && params.scan_s !== undefined) {
-        const pRow = document.createElement("div"); pRow.className = "row"; pRow.style.marginLeft = "16px";
+        const pRow = document.createElement("div"); pRow.className = "row"; pRow.style.alignItems = "center";
         const pLab = document.createElement("label");
-        pLab.innerHTML = `scan_s `;
+        pLab.textContent = "scan_s";
         const pInp = document.createElement("input"); pInp.type = "number"; pInp.step = "0.1"; pInp.value = params.scan_s;
         pInp.oninput = () => { zc[cls] = zc[cls] || {}; zc[cls].params = zc[cls].params || {}; zc[cls].params.scan_s = parseFloat(pInp.value); };
         pLab.appendChild(pInp); pRow.appendChild(pLab); card.appendChild(pRow);
       }
       if (cls === "approach") {
-        const pRow = document.createElement("div"); pRow.className = "row"; pRow.style.marginLeft = "16px";
+        const pRow = document.createElement("div"); pRow.className = "row"; pRow.style.alignItems = "center";
         const pLab = document.createElement("label");
-        pLab.innerHTML = `approach_speed `;
+        pLab.textContent = "approach_speed";
         const pInp = document.createElement("input"); pInp.type = "number"; pInp.step = "1"; pInp.value = params.approach_speed || 100;
         pInp.oninput = () => { zc[cls] = zc[cls] || {}; zc[cls].params = zc[cls].params || {}; zc[cls].params.approach_speed = parseFloat(pInp.value); };
         pLab.appendChild(pInp); pRow.appendChild(pLab); card.appendChild(pRow);
-        const eRow = document.createElement("div"); eRow.className = "row"; eRow.style.marginLeft = "16px";
+        const eRow = document.createElement("div"); eRow.className = "row"; eRow.style.alignItems = "center";
         const eLab = document.createElement("label");
-        eLab.innerHTML = `engage_dist `;
+        eLab.textContent = "engage_dist";
         const eInp = document.createElement("input"); eInp.type = "number"; eInp.step = "1"; eInp.value = params.engage_dist || 250;
         eInp.oninput = () => { zc[cls] = zc[cls] || {}; zc[cls].params = zc[cls].params || {}; zc[cls].params.engage_dist = parseFloat(eInp.value); };
         eLab.appendChild(eInp); eRow.appendChild(eLab); card.appendChild(eRow);
       }
       if (cls === "facefocus") {
-        const aRow = document.createElement("div"); aRow.className = "row"; aRow.style.marginLeft = "16px";
+        const aRow = document.createElement("div"); aRow.className = "row"; aRow.style.alignItems = "center";
         const aLab = document.createElement("label");
-        aLab.innerHTML = `actions `;
+        aLab.textContent = "actions";
         const aInp = document.createElement("input"); aInp.type = "text"; aInp.value = (params.actions || []).join(", ");
         aInp.oninput = () => { zc[cls] = zc[cls] || {}; zc[cls].params = zc[cls].params || {}; zc[cls].params.actions = aInp.value.split(",").map((s) => s.trim()).filter(Boolean); };
         aLab.appendChild(aInp); aRow.appendChild(aLab); card.appendChild(aRow);
-        const flRow = document.createElement("div"); flRow.className = "row"; flRow.style.marginLeft = "16px";
+        const flRow = document.createElement("div"); flRow.className = "row"; flRow.style.alignItems = "center";
         const flLab = document.createElement("label");
-        flLab.innerHTML = `face_lost_s `;
+        flLab.textContent = "face_lost_s";
         const flInp = document.createElement("input"); flInp.type = "number"; flInp.step = "0.1"; flInp.value = params.face_lost_s || 2.5;
         flInp.oninput = () => { zc[cls] = zc[cls] || {}; zc[cls].params = zc[cls].params || {}; zc[cls].params.face_lost_s = parseFloat(flInp.value); };
         flLab.appendChild(flInp); flRow.appendChild(flLab); card.appendChild(flRow);
       }
       if (cls === "retreat") {
-        const bRow = document.createElement("div"); bRow.className = "row"; bRow.style.marginLeft = "16px";
+        const bRow = document.createElement("div"); bRow.className = "row"; bRow.style.alignItems = "center";
         const bLab = document.createElement("label");
-        bLab.innerHTML = `break_off_s `;
+        bLab.textContent = "break_off_s";
         const bInp = document.createElement("input"); bInp.type = "number"; bInp.step = "0.1"; bInp.value = params.break_off_s || 3.0;
         bInp.oninput = () => { zc[cls] = zc[cls] || {}; zc[cls].params = zc[cls].params || {}; zc[cls].params.break_off_s = parseFloat(bInp.value); };
         bLab.appendChild(bInp); bRow.appendChild(bLab); card.appendChild(bRow);
@@ -2546,8 +2661,38 @@ function buildBrainForm() {
   behSep.className = "brainSep";
   behSep.textContent = "behaviors";
   el.appendChild(behSep);
+  // The camera-servo behaviors (locked/intent/curious = wide, gentle = close) are
+  // grouped + colorcoded: a full-width group header + a "how the params work" help
+  // link appear before the first behavior of each camera group.
+  const mkCamGroupHead = (grp) => {
+    const g = CAMERA_BEHAVIOR_GROUPS[grp];
+    const head = document.createElement("div");
+    head.className = "camGroupHead";
+    const sw = document.createElement("span");
+    sw.className = "swatch";
+    sw.style.background = g.color;
+    head.appendChild(sw);
+    const lab = document.createElement("span");
+    lab.textContent = g.label;
+    head.appendChild(lab);
+    el.appendChild(head);
+    const det = document.createElement("details");
+    det.className = "brainDetails";
+    const sum = document.createElement("summary");
+    sum.textContent = "how the " + grp + "-camera params work";
+    det.appendChild(sum);
+    const p = document.createElement("p");
+    p.textContent = g.help;
+    det.appendChild(p);
+    el.appendChild(det);
+  };
+  let lastCamGroup = null;
   for (const name of BEHAVIORS) {
+    const camGroup = CAMERA_BEHAVIOR_GROUP[name] || null;
+    if (camGroup && camGroup !== lastCamGroup) mkCamGroupHead(camGroup);
+    lastCamGroup = camGroup;
     const card = mkCard(name, BEHAVIOR_DESCRIPTIONS[name]);
+    if (camGroup) card.classList.add(CAMERA_BEHAVIOR_GROUPS[camGroup].accent);
     const defaults = BEHAVIOR_PARAMS[name] || {};
     const keys = Object.keys(defaults);
     if (keys.length) {
@@ -3312,9 +3457,9 @@ function buildPatchesForm() {
     b.className = key === selectedPatch ? "active" : "";
     b.onclick = () => {
       commitPatchEditor();
-      liveRenderMode = false;  // picking a slot edits that patch, not the live render
       selectedPatch = key;
       buildPatchesForm();
+      if (broadcastOn) broadcastCurrentSlot();
     };
     listEl.appendChild(b);
   };
@@ -3335,9 +3480,8 @@ function buildPatchesForm() {
   const code = getPatchCode(selectedPatch);
   $("patchCode").value = code;
   $("patchTitle").textContent = "patch: " + selectedPatch;
-  $("patchInfo").textContent = "match precedence: pose > action > behavior > zone > default";
+  $("patchInfo").textContent = "layers: zone (o0) + action/default (o1) + behavior (o3)";
   evalPatchPreview(code);
-  syncLiveRenderView();
 }
 
 function addPatchAction() {
@@ -6557,8 +6701,9 @@ async function setupCamLensSel() {
   Robot3D.setCameraViewLens(sel.value);
 }
 setupCamLensSel();
-// Capture a real-camera snapshot: the URL is user-configurable; a timestamp cache-buster
-// forces a fresh image on every click (no HTTP snapshot endpoint in the core).
+// Capture a real-camera snapshot: the URL is user-configurable (points at the
+// RPi's snapshot HTTP endpoint, served by the camera remote); a timestamp
+// cache-buster forces a fresh image on every click.
 function camSnapUpdate() {
   const url = $("camSnapUrl").value.trim();
   if (!url) return;
@@ -6644,11 +6789,13 @@ $("valMeshRobReal").onclick = () => { valMeshRobReal = !valMeshRobReal; Robot3D.
 $("valMeshRobColl").onclick = () => { valMeshRobColl = !valMeshRobColl; Robot3D.setRobotCollisionVisible(valMeshRobColl); $("valMeshRobColl").className = valMeshRobColl ? "active" : ""; };
 $("valMeshToolColl").onclick = () => { valMeshToolColl = !valMeshToolColl; Robot3D.setToolCollisionVisible(valMeshToolColl); $("valMeshToolColl").className = valMeshToolColl ? "active" : ""; };
 // The live-preview textarea: commit + re-render (debounced) as the user types.
+// When broadcast is ON, the committed code is also pushed to the screens.
 $("patchCode").oninput = () => {
   if (patchTimer) clearTimeout(patchTimer);
   patchTimer = setTimeout(() => {
     commitPatchEditor();
     evalPatchPreview($("patchCode").value);
+    if (broadcastOn) broadcastCurrentSlot();
   }, 300);
 };
 // Load the zone table first (the sound + patches editors seed their lists from the
@@ -6710,38 +6857,11 @@ $("flowSvg").addEventListener("click", (e) => {
 });
 $("patchAdd").onclick = addPatchAction;
 $("patchRemove").onclick = removePatchSlot;
-// Live render slot: push/clear the screen override + HUD / code-overlay toggles.
-$("livePush").onclick = () => {
-  if (ws) ws.send(JSON.stringify({ cmd: "set_screen_patch", code: $("liveCode").value }));
-};
-$("liveClear").onclick = () => {
-  if (ws) ws.send(JSON.stringify({ cmd: "set_screen_patch", code: null }));
-  $("liveCode").value = "";
-};
-$("liveHud").onclick = () => {
-  sendRenderUi(!renderUi.hud, renderUi.code);
-};
-$("liveCodeOverlay").onclick = () => {
-  sendRenderUi(renderUi.hud, !renderUi.code);
-};
-// Top-bar toggle: switch the center column between the patch-code editor and the
-// live render block.
+// Broadcast toggle: ON pushes the selected slot's code to the screens; OFF clears.
 $("liveToggle").onclick = () => {
-  liveRenderMode = !liveRenderMode;
-  syncLiveRenderView();
-};
-// Guard: don't let state frames overwrite the field while the operator is editing.
-$("liveCode").addEventListener("focus", () => { liveCodeEditing = true; });
-$("liveCode").addEventListener("blur", () => { liveCodeEditing = false; });
-// Auto-push: like the patch editor's live preview, an edit in the live-render field is
-// pushed to the render screen (set_screen_patch) after 1s of no keystrokes. Only while
-// still editing (focused) — a blur lets state frames overwrite the field, so a pending
-// push would send a stale value.
-$("liveCode").oninput = () => {
-  if (livePushTimer) clearTimeout(livePushTimer);
-  livePushTimer = setTimeout(() => {
-    if (ws && liveCodeEditing) ws.send(JSON.stringify({ cmd: "set_screen_patch", code: $("liveCode").value }));
-  }, 1000);
+  broadcastOn = !broadcastOn;
+  syncBroadcastToggle();
+  broadcastCurrentSlot();
 };
 // Action editor (Step 3) modal wiring.
 $("aeClose").onclick = closeActionEditor;

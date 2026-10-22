@@ -93,6 +93,8 @@ class RemoteTUI:
         self._joy_thread = None
         # EV_KEY -> app-key map for the joystick (same table the SDL app uses).
         self._joy_map = getattr(config, "joy_map", view.DEFAULT_JOY_MAP)
+        # LED sysfs backend (None until the LED page is entered).
+        self._led_sysfs = None
 
     # ------------------------------------------------------------------
     # Connection (asyncio worker thread).
@@ -110,6 +112,7 @@ class RemoteTUI:
             on_state=self._on_state,
             on_zones=self._on_zones,
             on_error=self._on_error,
+            on_event=self._on_event,
         )
         self._loop.create_task(self._conn.start())
         self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
@@ -117,6 +120,13 @@ class RemoteTUI:
 
     def _shutdown(self) -> None:
         self._stop_joy()
+        # Restore LED sysfs if we're on the LED page.
+        if self._led_sysfs is not None:
+            try:
+                self._led_sysfs.restore()
+            except OSError:
+                pass
+            self._led_sysfs = None
         if self._loop is None:
             return
 
@@ -178,6 +188,9 @@ class RemoteTUI:
     def _on_error(self, msg) -> None:
         self._q.put(("error", msg))
 
+    def _on_event(self, data) -> None:
+        self._q.put(("event", data))
+
     # ------------------------------------------------------------------
     # Main-thread poll (drains the queue, rebuilds on change).
     # ------------------------------------------------------------------
@@ -190,6 +203,8 @@ class RemoteTUI:
                     self._rs.apply_state(payload)
                 elif kind == "zones":
                     self._rs.apply_zones(payload)
+                elif kind == "event":
+                    self._rs.apply_event(payload)
                 elif kind == "error":
                     self._rs.status = str(payload)
                     self._rs.dirty = True
@@ -309,9 +324,79 @@ class RemoteTUI:
                 # SETUP-page UI rows (kind="ui") produce no core command; the
                 # SDL app handles them locally. The desktop TUI has no local
                 # SETTINGS handler, so a None command set is a no-op here.
+                # LED rows (kind="led"/"led_action") are handled locally.
+                if self._rs.page == view.PAGES.index("LED"):
+                    self._activate_led()
                 return
             for cmd in cmds:
                 self._send(cmd)
+
+    def _activate_led(self) -> None:
+        """Handle LED activation: advance color or execute an action."""
+        from .led import LedSysfs, build_frame
+        items = self._rs.current_items()
+        if 0 <= self._rs.cursor < len(items):
+            item = items[self._rs.cursor]
+            if item.get("kind") == "led":
+                i = item["led"]
+                next_idx = (self._rs.led_colors[i] + 1) % view.NUM_COLORS
+                self._rs.set_led_color(i, next_idx)
+                self._write_led_frame()
+            elif item.get("kind") == "led_action":
+                action = item["action"]
+                if action == "all white":
+                    self._rs.led_all(view.WHITE_IDX)
+                    self._write_led_frame()
+                elif action == "all off":
+                    self._rs.led_all(view.BLACK_IDX)
+                    self._write_led_frame()
+                elif action == "restore":
+                    self._restore_leds()
+
+    def _write_led_frame(self) -> None:
+        """Write the current LED colors to sysfs (safe write)."""
+        from .led import build_frame
+        if self._led_sysfs is None:
+            return
+        frame = build_frame(self._rs.led_colors)
+        try:
+            self._led_sysfs.write_frame(frame)
+        except OSError as exc:
+            self._rs.status = f"LED write failed: {exc}"
+            self._rs.dirty = True
+
+    def _restore_leds(self) -> None:
+        """Restore LED sysfs to the snapshot taken when entering the LED page."""
+        if self._led_sysfs is None:
+            return
+        try:
+            self._led_sysfs.restore()
+        except OSError as exc:
+            self._rs.status = f"LED restore failed: {exc}"
+            self._rs.dirty = True
+
+    def _enter_led_page(self) -> None:
+        """Initialize the LED sysfs backend when entering the LED page."""
+        from .led import LedSysfs, LED_SYSFS_BASE
+        try:
+            self._led_sysfs = LedSysfs()
+            self._led_sysfs.snapshot()
+            self._rs.led_available = True
+        except (OSError, FileNotFoundError) as exc:
+            logger.warning("LED sysfs unavailable: %s", exc)
+            self._led_sysfs = None
+            self._rs.led_available = False
+            self._rs.status = "LED sysfs unavailable — preview only"
+            self._rs.dirty = True
+
+    def _exit_led_page(self) -> None:
+        """Restore LED sysfs and clean up when leaving the LED page."""
+        if self._led_sysfs is not None:
+            try:
+                self._led_sysfs.restore()
+            except OSError as exc:
+                logger.warning("LED restore on exit failed: %s", exc)
+            self._led_sysfs = None
 
     def _on_joystick(self, ev) -> None:
         """Map a raw joystick EV_KEY press to an app key and dispatch it.
@@ -355,16 +440,27 @@ class RemoteTUI:
             self._activate()
             return True
         if key == "left":
-            self._rs.set_page(self._rs.page - 1)
+            self._page_nav(-1)
             return True
         if key == "right":
-            self._rs.set_page(self._rs.page + 1)
+            self._page_nav(1)
             return True
         if key in ("h", "?"):
             self._rs.status = "←→ pages · ↑↓ move · enter select · q quit"
             self._rs.dirty = True
             return True
         return None
+
+    def _page_nav(self, d: int) -> None:
+        """Navigate to the adjacent page, handling LED sysfs lifecycle."""
+        old_page = self._rs.page
+        self._rs.set_page(self._rs.page + d)
+        new_page = self._rs.page
+        if old_page != new_page:
+            if new_page == view.PAGES.index("LED"):
+                self._enter_led_page()
+            elif old_page == view.PAGES.index("LED"):
+                self._exit_led_page()
 
     def _send(self, cmd: Dict[str, Any]) -> None:
         if self._loop is not None and self._conn is not None:

@@ -16,6 +16,10 @@ Covers the ``rtr/io/midi.py`` feature for the per-zone ``midi`` editor tab:
   ``retrigger`` replays the current action), nav dispatch scoped to the nav's
   ``in_port`` (the default port when null), and nav learn capture on the nav's
   ``in_port`` (never dispatched);
+- the global capture section (``capture`` in ``midi.json``): validation of the
+  capture key and ``in_port``, dispatch of the capture key → SNAPSHOT_GRAB
+  (port-scoped), and capture learn capture on the capture's ``in_port``
+  (never dispatched);
 - ``reload()`` (re-read via the loader, swap the table, publish ``MIDI_CHANGED``,
   reconnect the ports);
 - the effective enabled setting, the per-port helpers, and ``list_ports()``.
@@ -182,11 +186,51 @@ def test_validate_midi_data_rejects_bad_nav_key():
         raise AssertionError(f"expected ValueError for nav key {bad!r}")
 
 
+def test_validate_midi_data_accepts_capture():
+    # A capture object with a valid key (MIDI key or null) and in_port is accepted.
+    data = {"enabled": True, "zones": {},
+            "capture": {"in_port": 2, "key": "note:0:60"}}
+    assert validate_midi_data(data)["capture"]["key"] == "note:0:60"
+    data2 = {"enabled": True, "zones": {},
+             "capture": {"in_port": None, "key": None}}
+    assert validate_midi_data(data2)["capture"] == {"in_port": None, "key": None}
+
+
+def test_validate_midi_data_rejects_bad_capture_in_port():
+    for bad in (-1, "0", True):
+        try:
+            validate_midi_data({"enabled": True, "zones": {},
+                                 "capture": {"in_port": bad}})
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for capture.in_port {bad!r}")
+
+
+def test_validate_midi_data_rejects_bad_capture_key():
+    for bad in ("cc:7", "xyz:1:5", 5):
+        try:
+            validate_midi_data({"enabled": True, "zones": {},
+                                 "capture": {"key": bad}})
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for capture key {bad!r}")
+
+
+def test_validate_midi_data_rejects_unknown_capture_field():
+    try:
+        validate_midi_data({"enabled": True, "zones": {},
+                             "capture": {"in_port": None, "key": None, "foo": "bar"}})
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError for an unknown capture field")
+
+
 def test_builtin_midi_data_is_empty_zones():
     assert builtin_midi_data() == {"enabled": True, "zones": {},
                                     "nav": {"in_port": None, "next_action": None,
                                              "next_zone": None, "back": None,
-                                             "retrigger": None, "next_pose": None}}
+                                             "retrigger": None, "next_pose": None},
+                                    "capture": {"in_port": None, "key": None}}
 
 
 def test_load_midi_data_reads_and_validates():
@@ -314,7 +358,8 @@ def test_learn_arms_and_captures_on_zone_port():
     assert len(cmds) == 1
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1] == {"key": "cc:5:10", "msg": [0xB0, 5, 10],
-                           "zone": "wander", "action": "look", "nav": None}
+                           "zone": "wander", "action": "look", "nav": None,
+                           "capture": None}
     # Learn is single-shot: disarmed after capture.
     assert m.is_learning is False
 
@@ -448,7 +493,8 @@ def test_nav_learn_captured_on_nav_port():
     assert len(cmds) == 1
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1] == {"key": "cc:11:0", "msg": [0xB0, 11, 0],
-                            "zone": None, "action": None, "nav": "next_action"}
+                           "zone": None, "action": None, "nav": "next_action",
+                           "capture": None}
     # Learn is single-shot: disarmed after capture.
     assert m.is_learning is False
 
@@ -477,6 +523,67 @@ def test_nav_learn_not_dispatched():
     assert cmds[0][0] == "midi_learn"
     assert "play_action" not in [c[0] for c in cmds]
     assert "goto_zone" not in [c[0] for c in cmds]
+
+
+# ---------------------------------------------------------------------------
+# Global capture (the single key that grabs the camera snapshot → SNAPSHOT_GRAB).
+# ---------------------------------------------------------------------------
+def test_capture_dispatch_submits_snapshot_grab():
+    m, bus = _midi({"capture": {"in_port": None, "key": "cc:15:0"}})
+    _feed(m, [0xB0, 15, 0])  # the capture key on the default port
+    assert _cmds(bus) == [("snapshot_grab", {})]
+
+
+def test_capture_dispatch_scoped_to_port():
+    # The capture key is global (works in any zone) but scoped to the capture's
+    # in_port (the default port when null): the same key on another port is a no-op.
+    m, bus = _midi({"capture": {"in_port": 2, "key": "cc:15:0"}})
+    _feed(m, [0xB0, 15, 0], port=0)  # not the capture port
+    assert _cmds(bus) == []
+    _feed(m, [0xB0, 15, 0], port=2)  # the capture port
+    assert _cmds(bus) == [("snapshot_grab", {})]
+
+
+def test_capture_null_in_port_uses_default_port():
+    m, bus = _midi({"capture": {"in_port": None, "key": "cc:15:0"}})
+    _feed(m, [0xB0, 15, 0])
+    assert _cmds(bus) == [("snapshot_grab", {})]
+
+
+def test_capture_unmapped_key_dispatches_nothing():
+    m, bus = _midi({"capture": {"in_port": None, "key": "cc:15:0"}})
+    _feed(m, [0xB0, 16, 0])  # a different CC: not the capture key
+    assert _cmds(bus) == []
+
+
+def test_capture_learn_captured_on_capture_port():
+    # Capture learn captures on the capture's in_port (the default port when null).
+    m, bus = _midi({"capture": {"in_port": None, "key": None}})
+    m.start_learn(capture=True)
+    assert m.is_learning is True
+    _feed(m, [0xB0, 15, 0])  # the default port
+    cmds = _cmds(bus)
+    assert len(cmds) == 1
+    assert cmds[0][0] == "midi_learn"
+    assert cmds[0][1] == {"key": "cc:15:0", "msg": [0xB0, 15, 0],
+                            "zone": None, "action": None, "nav": None,
+                            "capture": True}
+    # Learn is single-shot: disarmed after capture.
+    assert m.is_learning is False
+
+
+def test_capture_learn_scoped_to_capture_port():
+    # When the capture in_port is set, the learn capture is scoped to that port.
+    m, bus = _midi({"capture": {"in_port": 2, "key": None}})
+    m.start_learn(capture=True)
+    assert m.is_learning is True
+    _feed(m, [0xB0, 15, 0], port=0)  # the default port: not captured
+    assert _cmds(bus) == []
+    assert m.is_learning is True  # still armed
+    _feed(m, [0xB0, 15, 0], port=2)  # the capture port: captured
+    cmds = _cmds(bus)
+    assert cmds[0][0] == "midi_learn"
+    assert cmds[0][1]["capture"] is True
 
 
 # ---------------------------------------------------------------------------

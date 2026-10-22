@@ -22,6 +22,7 @@ import cv2
 from ..core.commands import Cmd
 from ..remote.connection import Connection
 from .pipeline import Pipeline, annotate
+from .snapshot import SnapshotServer
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ class CameraRemote:
                   model_path: str = "yolo26n.pt",
                   face_model_path: str = "yolo26n-face.pt",
                   tracker_cfg: str = "bytetrack.yaml",
+                  snapshot_port: int = 8080,
                   show: bool = False):
         self.core_host = core_host
         self.core_port = core_port
@@ -56,6 +58,8 @@ class CameraRemote:
         self._conn: Optional[Connection] = None
         self._running = False
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # Snapshot server: serves the latest frame as a JPEG for the editor.
+        self._snapshot = SnapshotServer(port=snapshot_port)
         # Current intent from the core (active, mode, lock_id).
         self._intent = {"active": "wide", "mode": "idle", "lock_id": None}
         # Debug display + telemetry bookkeeping.
@@ -127,6 +131,8 @@ class CameraRemote:
             result = None
             try:
                 result = await loop.run_in_executor(None, self.pipeline.process)
+                if result.frame is not None:
+                    self._snapshot.set_frame(result.frame)
                 payloads = self.pipeline.to_telemetry(result)
                 self._send_telemetry(payloads)
                 self._log_targets(result)
@@ -170,6 +176,7 @@ class CameraRemote:
         # Apply the current intent from the state frame (the Connection's
         # on_state callback will fire when the first state frame arrives).
 
+        self._snapshot.start()
         pipeline_task = asyncio.create_task(self._pipeline_loop())
         try:
             await asyncio.Future()  # run until stopped
@@ -179,6 +186,7 @@ class CameraRemote:
             self._running = False
             pipeline_task.cancel()
             await asyncio.gather(pipeline_task, return_exceptions=True)
+            self._snapshot.stop()
             if self._show:
                 cv2.destroyAllWindows()
             await self._conn.stop()
@@ -199,6 +207,8 @@ def parse_args(argv=None):
     parser.add_argument("--model", default="yolo26n.pt", help="YOLO model path (resolved in rtr/camera/models)")
     parser.add_argument("--face-model", default="yolo26n-face.pt", help="YOLO face model path for the close camera (resolved in rtr/camera/models)")
     parser.add_argument("--tracker", default="bytetrack.yaml", help="tracker config")
+    parser.add_argument("--snapshot-port", type=int, default=8080,
+                        help="HTTP port that serves the latest frame as a JPEG snapshot")
     parser.add_argument("--show", action="store_true", help="open the debug display window")
     parser.add_argument("--log-level", default="INFO", help="log level")
     return parser.parse_args(argv)
@@ -220,6 +230,7 @@ def main(argv=None) -> int:
         model_path=args.model,
         face_model_path=args.face_model,
         tracker_cfg=args.tracker,
+        snapshot_port=args.snapshot_port,
         show=args.show,
     )
 

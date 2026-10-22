@@ -27,6 +27,7 @@ from rtr.robot import (
     robot_config_offsets,
 )
 from rtr.camera.geometry import load_camera_geometry
+from rtr.camera.snapshot_grab import SnapshotGrabber
 from rtr.state import StateMachine, Zones
 from rtr.state.zones import LIN_POSES, POSES, ZONES, load_state_data
 from rtr.brain import Brain, builtin_brain_config, load_brain_config
@@ -231,6 +232,11 @@ async def run(cfg: Config) -> None:
         robot_cfg_holder[0] = new_cfg
         if hasattr(robot, "set_joint_offsets"):
             robot.set_joint_offsets(robot_config_offsets(new_cfg))
+    # The snapshot grabber: fetches the RPi's latest camera frame into the local
+    # snapshot file (assets/latest.jpg) so the render page can show it. The path is
+    # resolved against the rtr root (where assets/ lives). The grab is non-blocking.
+    snapshot_grabber = SnapshotGrabber(url=cfg.snapshot_url,
+                                        path=_resolve(cfg.snapshot_path))
     engine = Engine(bus, robot, brain, machine, tick_hz=cfg.tick_hz,
                     zone_loader=lambda: load_state_data(cfg.zones_path),
                     sound_reload=sound.reload,
@@ -239,7 +245,8 @@ async def run(cfg: Config) -> None:
                     brain_reload=brain.reload,
                     robot_reload=_reload_robot_config,
                     screen_patch_override=patches.set_screen_override,
-                    render_ui_setter=patches.set_render_ui)
+                    render_ui_setter=patches.set_render_ui,
+                    snapshot_grab=snapshot_grabber.grab)
 
     # --- adapters -------------------------------------------------------
     ws = WebSocketServer(bus, host=cfg.ws_host, port=cfg.ws_port,
