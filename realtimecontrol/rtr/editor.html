@@ -5006,6 +5006,28 @@ function buildValidateForm() {
   }
   el.appendChild(sz);
 
+  // Action selector: which action to validate (the bridge action, or any other).
+  el.appendChild(h3("action"));
+  const al = document.createElement("div");
+  al.className = "zoneList";
+  const actNames = z.actions ? Object.keys(z.actions) : [];
+  if (!actNames.length) {
+    const am = document.createElement("span");
+    am.style.color = "var(--dim)";
+    am.textContent = "no actions in this zone";
+    al.appendChild(am);
+  }
+  actNames.forEach((an) => {
+    const a = z.actions[an];
+    const np = a && Array.isArray(a.poses) ? a.poses.length : 0;
+    const b = document.createElement("button");
+    b.textContent = an + (a && a.enabled === false ? " (off)" : "") + (np ? ` · ${np} pose${np > 1 ? "s" : ""}` : "");
+    b.className = an === selectedAction ? "active" : "";
+    b.onclick = () => { selectedAction = an; ghostIndex = 0; buildValidateForm(); };
+    al.appendChild(b);
+  });
+  el.appendChild(al);
+
   // Scan controls
   el.appendChild(h3("scan"));
   const scanRow = document.createElement("div");
@@ -5018,6 +5040,11 @@ function buildValidateForm() {
   gridBtn.textContent = "grid scan";
   gridBtn.onclick = () => runValidateScan("grid");
   scanRow.appendChild(gridBtn);
+  const actionBtn = document.createElement("button");
+  actionBtn.textContent = "validate action";
+  actionBtn.title = "Step through the selected action's poses and the path between them, checking each for collisions — test a bridge action after tweaking it.";
+  actionBtn.onclick = () => runActionScan();
+  scanRow.appendChild(actionBtn);
   const stopBtn = document.createElement("button");
   stopBtn.textContent = "stop";
   stopBtn.onclick = () => stopValidateScan();
@@ -5097,6 +5124,42 @@ function runValidateScan(mode) {
   const poses = mode === "corner" ? validateCorners(sz) : validateGrid(sz, 3);
   valScan = { active: true, poses, index: 0, timer: null, collisions: [], current: poses[0] ? poses[0].slice() : null };
   $("valResult").innerHTML = `<span style="color:var(--dim)">scanning ${poses.length} poses…</span>`;
+  stepValidateScan();
+}
+
+// Intermediate path samples inserted between each pair of consecutive anchor poses
+// in an action scan. The bridge action's passage is the move between its two poses;
+// sampling the linear joint-space path approximates the swept volume the robot
+// passes through. A 2-pose action scans 2 + ACTION_SCAN_PATH_STEPS poses.
+const ACTION_SCAN_PATH_STEPS = 8;
+
+// Validate the selected action: step through its `poses` in order, checking each
+// anchor pose AND the sampled path between consecutive anchors for collisions
+// (self + environment). This tests a bridge action (or any action) after tweaking
+// its poses — the safezone scan covers the whole box, the action scan covers the
+// action's actual waypoints + the passage between them.
+function runActionScan() {
+  const z = TABLE.zones[selectedZone];
+  const a = z && z.actions ? z.actions[selectedAction] : null;
+  const ps = a ? actionPoses(a) : [];
+  if (!ps.length) {
+    $("valResult").innerHTML = `<span style="color:var(--dim)">selected action has no poses</span>`;
+    return;
+  }
+  const poses = [];
+  for (let i = 0; i < ps.length; i++) {
+    poses.push(ps[i].slice());
+    if (i < ps.length - 1) {
+      const from = ps[i], to = ps[i + 1];
+      for (let s = 1; s <= ACTION_SCAN_PATH_STEPS; s++) {
+        const t = s / (ACTION_SCAN_PATH_STEPS + 1);
+        poses.push(from.map((fv, j) => fv + (to[j] - fv) * t));
+      }
+    }
+  }
+  stopValidateScan();
+  valScan = { active: true, poses, index: 0, timer: null, collisions: [], current: poses[0].slice() };
+  $("valResult").innerHTML = `<span style="color:var(--dim)">scanning ${poses.length} action poses (${selectedZone} / ${selectedAction})…</span>`;
   stepValidateScan();
 }
 
