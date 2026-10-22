@@ -75,6 +75,9 @@ const Robot3D = (() => {
   let envRealVisible = true, envCollisionVisible = false;
   let realMeshes = [];  // current arm's link meshes + pedestal + tool (the robot real mesh)
   let container, toolEl, logFn, running = false;
+  // The real arm's last concrete joint angles (deg). A frozen ("x") axis in a driven
+  // pose holds its current value, so this is the concrete value an "x" resolves to.
+  const curJoints = HOME.slice();
   // The tool-screen texture (fed by hydra); re-uploaded from the hydra canvas each frame.
   let screenTex = null;
   let screenW = SCREEN_RESOLUTION[0], screenH = SCREEN_RESOLUTION[1];
@@ -191,6 +194,7 @@ const Robot3D = (() => {
 
   function setJoints(rot, jointsDeg) {
     for (let j = 0; j < 6; j++) {
+      if (jointsDeg[j] === "x") continue;  // frozen axis: hold the current angle (no NaN)
       const ang = jointsDeg[j] * Math.PI / 180;
       const axis = new THREE.Vector3(JOINTS[j].axis[0], JOINTS[j].axis[1], JOINTS[j].axis[2]);
       rot[j].quaternion.setFromAxisAngle(axis, ang);
@@ -962,7 +966,12 @@ const Robot3D = (() => {
 
   function update(s) {
     if (!running) return;
-    if (s.joints) setJoints(rotors, s.joints);
+    if (s.joints) {
+      for (let j = 0; j < 6; j++) {
+        if (typeof s.joints[j] === "number") curJoints[j] = s.joints[j];
+      }
+      setJoints(rotors, s.joints);
+    }
     if (s.target) { setJoints(rotorsT, s.target); lastTarget = s.target; }
     // Push the core's resolved hydra patch onto the tool screen (the robot's screen
     // follows the live state); only re-eval when the code actually changes.
@@ -977,6 +986,12 @@ const Robot3D = (() => {
   function setTarget(pose) {
     if (!running || !pose) return;
     setJoints(rotorsT, pose);
+  }
+
+  // The real arm's current concrete joint angles (deg). Callers resolve a pose's frozen
+  // ("x") axes against this so they never drive or check a NaN angle.
+  function getJoints() {
+    return curJoints.slice();
   }
 
   // The active tool-screen resolution [width, height] (the size hydra screen content is
@@ -1051,7 +1066,9 @@ const Robot3D = (() => {
   // shape as collisions() but under the given joint angles, not the live arm.
   function checkPoseCollision(poseDeg) {
     if (!collWorld || !poseDeg) return null;
-    const rad = poseDeg.map((d) => d * Math.PI / 180);
+    // A frozen ("x") axis holds the real arm's current value; resolve it so the scratch
+    // FK never runs on a NaN angle.
+    const rad = poseDeg.map((d, j) => (d === "x" ? curJoints[j] : d) * Math.PI / 180);
     const mats = [IDENT_MAT.slice()];
     for (let j = 0; j < 6; j++) {
       const jt = JOINTS[j];
@@ -1176,5 +1193,5 @@ const Robot3D = (() => {
     console.log("[collision] " + (collisionOn ? "enabled" : "disabled") + " (runtime)");
   }
 
-  return { init, update, setTarget, screenResolution, setGhostVisible, setRobotRealVisible, setRobotCollisionVisible, setToolCollisionVisible, setEnvRealVisible, setEnvCollisionVisible, setCameraFovVisible, setCameraRigVisible, setCameraView, setCameraViewLens, getCamViewLens, collisions, checkPoseCollision, reloadEnv, diagCollision, diagEnv, setCollisionEnabled };
+  return { init, update, setTarget, getJoints, screenResolution, setGhostVisible, setRobotRealVisible, setRobotCollisionVisible, setToolCollisionVisible, setEnvRealVisible, setEnvCollisionVisible, setCameraFovVisible, setCameraRigVisible, setCameraView, setCameraViewLens, getCamViewLens, collisions, checkPoseCollision, reloadEnv, diagCollision, diagEnv, setCollisionEnabled };
 })();

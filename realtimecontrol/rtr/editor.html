@@ -2546,9 +2546,10 @@ function buildBrainForm() {
     el.appendChild(card);
     return card;
   };
-  const mkSub = (card, text) => {
+  const mkSub = (card, text, title) => {
     const h = document.createElement("h3");
     h.textContent = text;
+    if (title) h.title = title;
     card.appendChild(h);
   };
   const mkRow = (card, label, input) => {
@@ -2747,6 +2748,28 @@ function buildBrainForm() {
   behSep.className = "brainSep";
   behSep.textContent = "behaviors";
   el.appendChild(behSep);
+  // Elaborated help for the per-behavior next-selection (stay / triggers) block:
+  // what the triggers are, the stay probability, the strong external events, and the
+  // re-arm / lock-tracking bookkeeping. Full-width + collapsible, the same pattern as
+  // the camera-group and zone-class help blocks.
+  {
+    const det = document.createElement("details");
+    det.className = "brainDetails";
+    const sum = document.createElement("summary");
+    sum.textContent = "how triggers + next-selection work (stay / dwell / new_lock / lost_lock / lock_duration)";
+    det.appendChild(sum);
+    const mkP = (text) => { const p = document.createElement("p"); p.textContent = text; det.appendChild(p); };
+    mkP("Every behavior card has a next-selection block. In auto mode, when autonomy is on and the current action loops, the brain periodically decides whether to STAY (keep looping the current action) or to ADVANCE (follow the action's next link to a random valid next). Triggers are the events that prompt that decision; the stay probability decides the outcome.");
+    mkP("The four triggers (check any combination; the brain checks them all every tick): "
+      + "dwell = fires when the action has run for dwell_s (the per-behavior dwell_s below overrides the global autonomy dwell, which can itself be overridden per-action or per-zone-group; this is the default when no trigger is checked). "
+      + "new_lock = fires on the edge from no camera lock to a new lock (the moment the wide camera acquires a person lock). "
+      + "lost_lock = fires on the edge from a camera lock to no lock (the moment the lock is lost). "
+      + "lock_duration = fires when the current lock has been held for lock_duration_s (an empty lock_duration_s below means the trigger never fires).");
+    mkP("stay (0-1): when a trigger fires, the brain rolls the dice. With probability stay it STAYS (keeps looping and re-arms the timers); otherwise it ADVANCES to a random valid next. stay=0 always advances; stay=1 always stays (except strong external events).");
+    mkP("Strong external events: the global card's events.midi / events.camera / events.websocket (a MIDI note-on, a camera detect/hunt lock, or the websocket 'proceed') bypass the stay probability and ALWAYS advance (operator / external control).");
+    mkP("When the brain stays it re-arms the timers (resets the dwell timer, and the lock timer if a lock is active) so it re-evaluates on the next trigger instead of re-firing every tick. It also tracks the lock state between ticks (previous lock id, lock start time), so the edge/duration triggers are evaluated against a consistent baseline.");
+    el.appendChild(det);
+  }
   // The camera-servo behaviors (locked/intent/curious = wide, gentle = close) are
   // grouped + colorcoded: a full-width group header + a "how the params work" help
   // link appear before the first behavior of each camera group.
@@ -2798,7 +2821,10 @@ function buildBrainForm() {
       if (val === null) delete behParams[name][key];
       else behParams[name][key] = val;
     };
-    mkSub(card, "next-selection (stay / triggers)");
+    mkSub(card, "next-selection (stay / triggers)",
+      "How the brain decides to STAY (keep looping) or ADVANCE (follow the next link) for this behavior. "
+      + "triggers = the events that prompt the decision; stay = the probability it rolls on. "
+      + "See the elaborated help at the top of the behaviors section.");
     const nStayInp = mkNum("brainBh" + cap(name) + "Stay",
       (typeof nEntry.stay === "number") ? nEntry.stay : 0.0, "0.05", "0",
       "Probability (0-1) this action STAYS (keeps looping) when a trigger fires; otherwise it advances to a random valid next. External events (midi/camera/websocket) are a strong trigger and always advance, bypassing this.");
@@ -2806,10 +2832,10 @@ function buildBrainForm() {
     mkRow(card, "stay (loop probability)", nStayInp);
     const nTrigs = new Set(Array.isArray(nEntry.triggers) ? nEntry.triggers : []);
     const TRIGS = [
-      ["dwell", "Fires when the action has run for dwell_s (falls back to the global autonomy dwell)."],
-      ["new_lock", "Fires on the edge from no camera-lock to a new lock."],
-      ["lost_lock", "Fires on the edge from a camera-lock to no lock."],
-      ["lock_duration", "Fires when the current lock has been held for lock_duration_s."],
+      ["dwell", "Fires when the action has run for dwell_s. The per-behavior dwell_s (below) overrides the global autonomy dwell. Default trigger when none are checked."],
+      ["new_lock", "Fires on the edge from no camera lock to a new lock — the moment the wide camera acquires a person lock."],
+      ["lost_lock", "Fires on the edge from a camera lock to no lock — the moment the lock is lost."],
+      ["lock_duration", "Fires when the current lock has been held for lock_duration_s. An empty lock_duration_s (below) = the trigger never fires."],
     ];
     const trigRow = document.createElement("div");
     trigRow.className = "row";
@@ -2817,6 +2843,7 @@ function buildBrainForm() {
     trigRow.style.marginBottom = "6px";
     const trigLab = document.createElement("label");
     trigLab.textContent = "triggers";
+    trigLab.title = "The events that prompt this behavior's stay-vs-advance decision. Check any combination; the brain checks them all every tick. Unchecked = the default dwell trigger.";
     trigRow.appendChild(trigLab);
     TRIGS.forEach(([t, tip]) => {
       const c = document.createElement("label");
@@ -2926,7 +2953,8 @@ function buildBrainForm() {
     + "candidates = the hunt-loop data (min_conf = the lock sensitivity; centrality_weight = how much image-center distance is penalised in the lock score; "
     + "detect/scan = the actions triggered on lock / lock-lost; attention_guard = behaviors that suppress the detect grab). "
     + "facefocus = the 'check out that human' face actions (cycled while a face is visible). "
-     + "behaviors = the per-behavior motion params (the tunable knobs of the motion policies).";
+     + "behaviors = the per-behavior motion params (the tunable knobs of the motion policies). "
+     + "next-selection (stay / triggers) = per-behavior: the events (dwell / new_lock / lost_lock / lock_duration) that prompt the brain's stay-vs-advance decision and the stay probability it rolls on; external events (midi/camera/websocket) are a strong trigger that always advances. See the elaborated help at the top of the behaviors section.";
 }
 
 // Build the cam tab's brain cards (Candidates + facefocus) into #camBrainCards.
@@ -5133,6 +5161,15 @@ function runValidateScan(mode) {
 // passes through. A 2-pose action scans 2 + ACTION_SCAN_PATH_STEPS poses.
 const ACTION_SCAN_PATH_STEPS = 8;
 
+// Resolve a pose's frozen ("x") axes to the robot's current joint values, producing a
+// concrete 6-value pose. A frozen axis holds where the axis is, so it resolves to the
+// real arm's current value. This keeps the scan's path sampling (and any arithmetic on
+// the pose) from producing a NaN — "x" * a number is NaN, which blanks the arm.
+function resolvePose(pose) {
+  const cur = Robot3D.getJoints();
+  return pose.map((v, j) => (v === "x" ? (typeof cur[j] === "number" ? cur[j] : 0) : v));
+}
+
 // Validate the selected action: step through its `poses` in order, checking each
 // anchor pose AND the sampled path between consecutive anchors for collisions
 // (self + environment). This tests a bridge action (or any action) after tweaking
@@ -5146,11 +5183,14 @@ function runActionScan() {
     $("valResult").innerHTML = `<span style="color:var(--dim)">selected action has no poses</span>`;
     return;
   }
+  // Resolve frozen ("x") axes to the robot's current values so every scanned pose is
+  // concrete (a frozen axis holds where the axis is; sampling over an "x" would be NaN).
+  const rp = ps.map((p) => resolvePose(p));
   const poses = [];
-  for (let i = 0; i < ps.length; i++) {
-    poses.push(ps[i].slice());
-    if (i < ps.length - 1) {
-      const from = ps[i], to = ps[i + 1];
+  for (let i = 0; i < rp.length; i++) {
+    poses.push(rp[i].slice());
+    if (i < rp.length - 1) {
+      const from = rp[i], to = rp[i + 1];
       for (let s = 1; s <= ACTION_SCAN_PATH_STEPS; s++) {
         const t = s / (ACTION_SCAN_PATH_STEPS + 1);
         poses.push(from.map((fv, j) => fv + (to[j] - fv) * t));
@@ -5246,8 +5286,9 @@ function stopValidateScan() {
 }
 
 function checkValidateNow() {
-  const pose = currentGhostPose();
-  if (!pose) { $("valResult").innerHTML = `<span style="color:var(--dim)">no pose to check</span>`; return; }
+  const raw = currentGhostPose();
+  if (!raw) { $("valResult").innerHTML = `<span style="color:var(--dim)">no pose to check</span>`; return; }
+  const pose = resolvePose(raw);  // frozen ("x") axes -> concrete, so display/check never hit NaN
   const res = Robot3D.checkPoseCollision(pose);
   if (!res) { $("valResult").innerHTML = `<span style="color:var(--dim)">collision engine not ready</span>`; return; }
   if (res.bodies.length === 0) {
@@ -5642,7 +5683,9 @@ function currentGhostPose() {
 function updateGhost() {
   const pose = currentGhostPose();
   const z = TABLE.zones[selectedZone];
-  if (pose) Robot3D.setTarget(pose);
+  // Resolve frozen ("x") axes to the robot's current value so the ghost shows a concrete
+  // pose (an "x" driven straight to the engine would blank the arm — see resolvePose).
+  if (pose) Robot3D.setTarget(resolvePose(pose));
   const ps = ghostPoses(selectedAction);
   $("ghostInfo").textContent = pose
     ? (ps.length > 1 ? `${selectedAction} anchor ${ghostIndex % ps.length}` : `${selectedAction} (anchor)`)
