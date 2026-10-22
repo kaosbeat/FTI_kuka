@@ -9,7 +9,7 @@
     }
   },
   "zone_groups": {
-    "event-sit-back": {
+    "museum-closed": {
       "zones": [
         "resting",
         "sleeping",
@@ -19,8 +19,22 @@
       "behaviors": [],
       "enabled": true,
       "params": {
-        "speed": 20,
-        "dwell_s": 300
+        "speed": 10,
+        "dwell_s": 60
+      }
+    },
+    "event-sit-back": {
+      "zones": [
+        "stretching",
+        "hunting",
+        "examining",
+        "performing"
+      ],
+      "behaviors": [],
+      "enabled": true,
+      "params": {
+        "speed": 40,
+        "dwell_s": 30
       }
     },
     "stage-takeover": {
@@ -33,42 +47,8 @@
       "behaviors": [],
       "enabled": true,
       "params": {
-        "speed": 100,
-        "dwell_s": 15
-      }
-    },
-    "circus-closed": {
-      "zones": [
-        "resting",
-        "sleeping",
-        "resting_sleeping_bridge"
-      ],
-      "behaviors": [],
-      "enabled": true,
-      "params": {
-        "speed": 10,
-        "dwell_s": 600
-      }
-    },
-    "installation-active": {
-      "zones": [
-        "cuddling",
-        "purring",
-        "stretching",
-        "hunting",
-        "examining",
-        "performing",
-        "roaring",
-        "growling",
-        "clawing",
-        "leaping",
-        "stretching_hunting_bridge"
-      ],
-      "behaviors": [],
-      "enabled": true,
-      "params": {
         "speed": 80,
-        "dwell_s": 25
+        "dwell_s": 15
       }
     }
   },
@@ -394,41 +374,6 @@
       "active": "wide",
       "mode": "track",
       "lock": "auto"
-    },
-    "resting_sleeping_bridge/bridge": {
-      "active": "wide",
-      "mode": "idle",
-      "lock": "none"
-    },
-    "stretching_hunting_bridge/bridge": {
-      "active": "wide",
-      "mode": "idle",
-      "lock": "none"
-    },
-    "clawing/lock_target": {
-      "active": "wide",
-      "mode": "track",
-      "lock": "none"
-    },
-    "testing/locked": {
-      "active": "wide",
-      "mode": "track",
-      "lock": "auto"
-    },
-    "testing/intent": {
-      "active": "wide",
-      "mode": "track",
-      "lock": "auto"
-    },
-    "testing/curious": {
-      "active": "wide",
-      "mode": "track",
-      "lock": "auto"
-    },
-    "testing/gentle": {
-      "active": "close",
-      "mode": "analyze",
-      "lock": "auto"
     }
   },
   "behaviors": {
@@ -485,34 +430,9 @@
       "triggers": [
         "dwell"
       ]
->>>>>>> 52e78c23474af5aeb1b8ccec3ac4ec4d6891be36
     },
-    "spontaneous": {},
     "soothing": {
       "freq": 0.5,
-<<<<<<< HEAD
-      "amp_scale": 0.1
-    },
-    "agitated": {
-      "freq": 1,
-      "amp_scale": 0.5
-    },
-    "aggressive": {
-      "freq": 1,
-      "amp_scale": 0.3
-    },
-    "exhilarated": {
-      "freq": 2,
-      "amp_scale": 0.5
-    },
-    "impatient": {
-      "freq": 1,
-      "amp_scale": 0.3
-    },
-    "drowsy": {
-      "freq": 0.3,
-      "amp_scale": 0.2
-=======
       "amp_scale": 0.1,
       "stay": 0,
       "triggers": [
@@ -521,7 +441,7 @@
     },
     "agitated": {
       "freq": 1,
-      "amp_scale": 0.5,
+      "amp_scale": 0.3,
       "stay": 0,
       "triggers": [
         "lock_duration",
@@ -566,7 +486,6 @@
       "triggers": [
         "dwell"
       ]
->>>>>>> 52e78c23474af5aeb1b8ccec3ac4ec4d6891be36
     }
   }
 }
