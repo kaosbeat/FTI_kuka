@@ -195,8 +195,8 @@
   .aeHead h2 { margin: 0; color: var(--text); text-transform: none; letter-spacing: 0; font-size: 15px; }
   .aeSec { margin-bottom: 14px; border-bottom: 1px solid #20242d; padding-bottom: 10px; }
   .aeSec h3 { margin: 0 0 8px; }
-  .aePoseRow { display: grid; grid-template-columns: repeat(6, 52px) 56px 84px; gap: 4px;
-                 margin-bottom: 4px; align-items: center; }
+  .aePoseRow { display: grid; grid-template-columns: repeat(6, 52px) 110px 84px; gap: 4px;
+                  margin-bottom: 4px; align-items: center; }
   .aePoseRow input[type=number] { padding: 2px 4px; }
   .aePoseRow input[type=text] { padding: 2px 4px; text-align: center; }
   .aePoseRow input.oob { border-color: #e0a030; color: #e0a030; }
@@ -4367,34 +4367,49 @@ function buildActionEditor() {
       bandGrid.appendChild(mkBandInput(1, "max"));
     }
     psec.appendChild(bandGrid);
-    // Single anchor pose row (the robot's starting position within the band)
+    // Anchor pose rows (the robot's starting position within the band). One row per
+    // pose, each with a delete button — consistent with the variable_axes branch.
     psec.appendChild(h3("anchor pose"));
     const anchorHelp = document.createElement("div");
     anchorHelp.className = "hint";
     anchorHelp.textContent = "The robot's starting position. The servo roams from here within the band.";
     psec.appendChild(anchorHelp);
-    const anchorRow = document.createElement("div");
-    anchorRow.className = "row";
-    const p = a.poses[0] || [0,0,0,0,0,0];
-    for (let i = 0; i < 6; i++) {
-      const inp = document.createElement("input");
-      inp.type = "number"; inp.step = "0.1";
-      inp.value = p[i] != null ? p[i] : 0;
-      if (z.safezone) {
-        const [lo, hi] = z.safezone[i];
-        if (p[i] < lo || p[i] > hi) inp.className = "oob";
-      }
-      inp.oninput = () => {
-        a.poses[0][i] = parseFloat(inp.value);
+    a.poses.forEach((pose, pi) => {
+      const row = document.createElement("div");
+      row.className = "row";
+      const p = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
+      for (let i = 0; i < 6; i++) {
+        const inp = document.createElement("input");
+        inp.type = "number"; inp.step = "0.1";
+        inp.value = p[i] != null ? p[i] : 0;
         if (z.safezone) {
           const [lo, hi] = z.safezone[i];
-          inp.className = (a.poses[0][i] < lo || a.poses[0][i] > hi) ? "oob" : "";
+          if (p[i] < lo || p[i] > hi) inp.className = "oob";
         }
-        renderPrev(getAnchor());  // keep the preview in sync while editing the anchor
+        inp.oninput = () => {
+          a.poses[pi][i] = parseFloat(inp.value);
+          if (z.safezone) {
+            const [lo, hi] = z.safezone[i];
+            inp.className = (a.poses[pi][i] < lo || a.poses[pi][i] > hi) ? "oob" : "";
+          }
+          renderPrev(getAnchor());  // keep the preview in sync while editing the anchor
+        };
+        row.appendChild(inp);
+      }
+      const del = document.createElement("button");
+      del.className = "small";
+      del.textContent = "×";
+      del.title = "delete this pose";
+      del.onclick = () => {
+        a.poses.splice(pi, 1);
+        if (Array.isArray(a.pose_imgs)) a.pose_imgs.splice(pi, 1);
+        const s = SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an];
+        if (s && Array.isArray(s.poses)) s.poses.splice(pi, 1);
+        buildActionEditor();
       };
-      anchorRow.appendChild(inp);
-    }
-    psec.appendChild(anchorRow);
+      row.appendChild(del);
+      psec.appendChild(row);
+    });
     renderPrev(getAnchor());  // seed the sticky preview with the anchor pose
   } else {
     // --- variable_axes (checkboxes over the six axes) ---
