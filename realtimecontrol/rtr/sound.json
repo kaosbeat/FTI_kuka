@@ -154,6 +154,13 @@
         "note": 60,
         "velocity": 60
       }
+    },
+    "cuddling_stretching_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
     }
   },
   "actions": {
@@ -771,6 +778,10 @@
           "velocity": 60
         },
         "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
           {
             "note": 60,
             "velocity": 60
