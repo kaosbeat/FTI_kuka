@@ -9,9 +9,17 @@ unchanged: ``get_curjpos`` / ``get_curpos`` read the pose, ``move`` sends a targ
 controller interpolates.
 """
 
+import threading
 from typing import List
 
 from .base import RobotBase
+
+# Continuous-positioning percentage for stream (non-blocking) moves. The KUKAPY
+# server treats ``cmd_cnt > 0`` as a continuous move (``PTP ... C_PTP`` /
+# ``LIN ... C_DIS``): the KRL issues the move and answers immediately instead of
+# holding until arrival, so the 20 Hz retarget stream keeps flowing. Block moves
+# use cnt 0 (exact, blocking PTP).
+STREAM_CNT = 10
 
 
 class KukaRobot(RobotBase):
@@ -27,6 +35,12 @@ class KukaRobot(RobotBase):
         self._port = port
         self._robot = None
         self._joint_offsets = list(joint_offsets) if joint_offsets else [0.0] * 6
+        # Serializes every EKI (kukapy) call. The KUKAPY server is a strict
+        # single-flight request/response loop (KUKAPY_SERVER.SRC: ``WAIT FOR
+        # $FLAG[1]`` -> one command -> one <Res>). Concurrent send/recv on the
+        # socket from the stream-move thread and the tick loop desyncs it and
+        # strands the KRL at "WAIT FOR $FLAG[1]" (the "waiting for flag" error).
+        self._lock = threading.Lock()
 
     def connect(self) -> None:
         try:
@@ -47,11 +61,13 @@ class KukaRobot(RobotBase):
                 self._robot = None
 
     def get_curjpos(self) -> List[float]:
-        raw = list(self._robot.get_curjpos())
+        with self._lock:
+            raw = list(self._robot.get_curjpos())
         return [raw[i] + self._joint_offsets[i] for i in range(len(raw))]
 
     def get_curpos(self) -> List[float]:
-        return list(self._robot.get_curpos())
+        with self._lock:
+            return list(self._robot.get_curpos())
 
     def move_joint(self, pose: List[float], speed: float, blocking: bool = True) -> None:
         shifted = [pose[i] - self._joint_offsets[i] for i in range(len(pose))]
@@ -68,30 +84,33 @@ class KukaRobot(RobotBase):
               blocking: bool, linear: bool) -> None:
         """Issue a move to the controller.
 
-        ``blocking=True`` (the legacy behaviour): the classic kukapy ``move`` polls
-        until the robot arrives, so the caller blocks for the whole move.
+        ``blocking=True`` (the legacy behaviour): exact positioning (cnt 0), so the
+        KRL's PTP holds until the robot arrives and the caller blocks for the whole
+        move.
 
-        ``blocking=False`` (stream): run the same blocking kukapy ``move`` on a
-        daemon thread and return immediately, so the 20 Hz engine loop keeps
-        streaming a fresh target each tick and the robot retargets mid-move,
-        like the sim. Each tick's move call re-targets the in-flight move.
+        ``blocking=False`` (stream): continuous positioning (``STREAM_CNT`` > 0), so
+        the KRL answers immediately (``PTP ... C_PTP``) and the move runs on a daemon
+        thread. The 20 Hz engine loop keeps streaming a fresh target each tick and
+        the robot retargets mid-move, like the sim.
 
-        NOTE: this relies on kukapy's EKI socket being safe to poll for the
-        current pose (``get_curjpos``) while a background ``move`` is also
-        polling it. That is not exercised in the sim and must be verified on
-        the robot before relying on stream mode.
+        Every kukapy call (this move, and the tick loop's ``get_curjpos`` /
+        ``get_curpos``) runs under :attr:`_lock`: the KUKAPY server is a strict
+        single-flight request/response loop, so the EKI traffic must be serialized
+        or the socket desyncs and the KRL strands at "WAIT FOR $FLAG[1]".
         """
+        cnt = 0 if blocking else STREAM_CNT
+
         def _do() -> None:
             # Preserve the exact legacy call forms: the joint move is issued
             # without a ``linear`` kwarg; the cartesian move with ``linear=True``.
-            if linear:
-                self._robot.move("pose", list(pose), speed, linear=True)
-            else:
-                self._robot.move("joint", list(pose), speed)
+            with self._lock:
+                if linear:
+                    self._robot.move("pose", list(pose), speed, linear=True, cnt_val=cnt)
+                else:
+                    self._robot.move("joint", list(pose), speed, cnt_val=cnt)
 
         if blocking:
             _do()
             return
-        import threading
         t = threading.Thread(target=_do, daemon=True)
         t.start()
