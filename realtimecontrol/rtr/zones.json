@@ -80,6 +80,7 @@
           ],
           "variable_axes": [
             1,
+            3,
             4
           ],
           "behavior": "restless",

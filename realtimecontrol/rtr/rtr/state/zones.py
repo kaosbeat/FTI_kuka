@@ -47,7 +47,7 @@ LIMITS: List[Tuple[float, float]] = [
 HARDWARE_LIMITS: List[Tuple[float, float]] = [
     (-185, 185),   # A1
     (-135, 35),    # A2
-    (-95, 158),    # A3
+    (-95, 158),    # A3 
     (-180, 180),    # A4
     (-55, 100),    # A5
     (-150, 150),    # A6 (rotary wrist, now limited)
