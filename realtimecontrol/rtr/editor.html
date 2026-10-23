@@ -784,12 +784,12 @@ const SOUND_FALLBACK = {
 // clamps every pose to. Fallback mirrors the xacro; over HTTP it is replaced by
 // GET /api/limits (same pattern as the zones/sound fallbacks).
 const HW_LIMITS_FALLBACK = [
-  [-185, 185],   // A1
-  [-135, 35],    // A2
-  [-120, 158],   // A3
-  [-350, 350],   // A4
-  [-119, 119],   // A5
-  [-350, 350],   // A6
+  [-185, 185], //[-185, 185],   // A1
+  [-135, 35],  // [-135, 35],    // A2
+  [-95, 158],  //[-120, 158],   // A3
+  [-180, 180], //[-350, 350],   // A4
+  [-55, 100],  //[-119, 119],   // A5
+  [-150, 150], //[-350, 350],   // A6
 ];
 let HW_LIMITS = HW_LIMITS_FALLBACK.slice();
 
