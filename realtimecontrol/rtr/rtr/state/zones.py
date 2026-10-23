@@ -32,12 +32,12 @@ from typing import Dict, List, Optional, Tuple
 
 # Per-axis software limits (the union of every zone's safezone, used as a hard clamp).
 SOFTWARE_LIMITS: List[Tuple[float, float]] = [
-    (-95, 123), (-135, 35), (-120, 158), (-350, 350), (-119, 119), (-358, 358),
+    (-185, 185), (-135, 35), (-95, 158), (-180, 180), (-55, 100), (-150, 150),
 ]
 
 # Default clamp used when a command does not name a zone.
 LIMITS: List[Tuple[float, float]] = [
-    (-94, 122), (-134, 34), (-119, 157), (-349, 349), (-118, 118), (-357, 357),
+    (-94, 122), (-134, 34), (-95, 157),(-180, 180), (-55, 100), (-150, 150),
 ]
 
 # Per-axis *hardware* limits (degrees), from the ``kr60ha_macro.xacro`` joint
@@ -47,10 +47,10 @@ LIMITS: List[Tuple[float, float]] = [
 HARDWARE_LIMITS: List[Tuple[float, float]] = [
     (-185, 185),   # A1
     (-135, 35),    # A2
-    (-120, 158),    # A3
-    (-350, 350),    # A4
-    (-119, 119),    # A5
-    (-350, 350),    # A6 (rotary wrist, now limited)
+    (-95, 158),    # A3
+    (-180, 180),    # A4
+    (-55, 100),    # A5
+    (-150, 1),    # A6 (rotary wrist, now limited)
 ]
 
 # Behavior names: the policies that drive variable axes.
@@ -110,7 +110,7 @@ def find_shared_pose(poses_a: List[List[float]], poses_b: List[List[float]],
 
 def effective_limits(zone_safezone: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
     """Per-axis intersection of a zone's safezone and the hardware limits.
-
+350
     The effective range for each axis is ``[max(sz_lo, hw_lo), min(sz_hi, hw_hi)]``.
     """
     return [
