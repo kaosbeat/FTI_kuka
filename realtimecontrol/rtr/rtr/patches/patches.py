@@ -183,6 +183,11 @@ class Patches:
         # zone+action+behavior system). code_for branches on it.
         self._patch_mode_provider = patch_mode_provider
         self._data: dict = builtin_patches_data()
+        # The last video template produced in video mode (the "current patch"). code_for
+        # is called on every state frame; when a zone transition lands on a state with
+        # no per-pose video, this is what the screens keep showing instead of flashing
+        # a legacy / default patch. Reset whenever a new video is produced.
+        self._last_video: str | None = None
         # A manual screen override (set by the SET_SCREEN_PATCH command): when non-None,
         # it is what the tool screen / render page show, taking precedence over the
         # zone/mode/action match. It is a live control (not persisted to patches.json);
@@ -224,9 +229,11 @@ class Patches:
         override). Otherwise the resolution depends on the patch mode (robot config):
 
         - **"video"** (new, default): action-only. The current pose's video (if any)
-          replaces the patch with a fullscreen video template; otherwise the action's base
-          patch (or :data:`DEFAULT_HYDRA_CODE`). No zone / behavior layering, no pose-index
-          variable. See :meth:`_video_code`.
+          replaces the patch with a fullscreen video template; a state with no video keeps
+          the current patch (the last video) playing, so zone transitions do not flash a
+          legacy / default patch. Only before any video has been produced does it fall back
+          to the action's base patch (or :data:`DEFAULT_HYDRA_CODE`). No zone / behavior
+          layering, no pose-index variable. See :meth:`_video_code`.
         - **"complex"** (legacy): the three parts are concatenated in order:
           1. **Zone patch** (``zones[zone]``) — renders to ``o0``.
           2. **Action/default patch** (``actions[zone][action]`` or ``default``) —
@@ -275,12 +282,15 @@ class Patches:
             return "video"
 
     def _video_code(self, zone, action, pose_index) -> str:
-        """The new action-only patch: the current pose's video (if any) fullscreen, else base.
+        """The new action-only patch: the current pose's video (if any) fullscreen.
 
         A per-pose video (from the zones state) replaces the patch with the 3-line video
-        template for that pose. Without a video for the current pose, the action's base
-        patch is used (falling back to :data:`DEFAULT_HYDRA_CODE`). No zone / behavior
-        layering and no pose-index variable in this mode.
+        template for that pose. Without a video for the current state, the **current
+        patch** (the last video produced) keeps playing, so a zone transition that lands
+        on a state with no video does not flash a legacy / default patch. Only when no
+        video has ever been produced does it fall back to the action's base patch (then
+        :data:`DEFAULT_HYDRA_CODE`). No zone / behavior layering and no pose-index
+        variable in this mode.
         """
         vids = self._pose_videos(zone, action)
         if vids:
@@ -289,7 +299,13 @@ class Patches:
             except (TypeError, ValueError):
                 idx = None
             if idx is not None and vids[idx]:
-                return video_template(vids[idx])
+                code = video_template(vids[idx])
+                self._last_video = code
+                return code
+        # No video for the current state: keep the current patch (last video) playing
+        # instead of recomputing the legacy / default fallback on a zone transition.
+        if self._last_video is not None:
+            return self._last_video
         action_code = None
         if zone and action:
             action_code = (self._data.get("actions") or {}).get(zone, {}).get(action)

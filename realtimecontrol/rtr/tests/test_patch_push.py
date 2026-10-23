@@ -251,10 +251,40 @@ def test_video_mode_current_pose_video_middle():
 
 
 def test_video_mode_pose_without_video_uses_base_patch():
-    """A pose without a video falls back to the action's base patch (no zone/behavior)."""
+    """A pose without a video (before any video has played) falls back to the base patch."""
     p = _video_patches(["p0.mp4", None, "p2.mp4"])
     frame = _frame_for("wander", "action", "look", p, behavior="calm", action_index=1)
     assert frame["patch"] == "ACTION_CODE"
+
+
+def test_video_mode_holds_last_video_for_pose_without_video():
+    """After a video has played, a pose without a video keeps the current patch (last video)."""
+    p = _video_patches(["p0.mp4", None, "p2.mp4"])
+    frame1 = _frame_for("wander", "action", "look", p, behavior="calm", action_index=0)
+    assert frame1["patch"] == video_template("p0.mp4")
+    # Pose 1 has no video: the current patch (the p0 video) keeps playing, not the base patch.
+    frame2 = _frame_for("wander", "action", "look", p, behavior="calm", action_index=1)
+    assert frame2["patch"] == video_template("p0.mp4")
+    assert frame2["patch"] != "ACTION_CODE"
+
+
+def test_video_mode_holds_video_when_action_ends():
+    """When the action ends (no action), the last video keeps playing instead of the default."""
+    p = _video_patches(["p0.mp4", "p1.mp4"])
+    frame1 = _frame_for("wander", "action", "look", p, behavior="calm", action_index=0)
+    assert frame1["patch"] == video_template("p0.mp4")
+    frame2 = _frame_for("wander", "action", None, p, behavior="calm")
+    assert frame2["patch"] == video_template("p0.mp4")
+
+
+def test_video_mode_holds_video_across_zone_transition():
+    """A zone transition that lands on a state with no video keeps the current patch playing."""
+    p = _video_patches(["p0.mp4", None])
+    frame1 = _frame_for("wander", "action", "look", p, behavior="calm", action_index=0)
+    assert frame1["patch"] == video_template("p0.mp4")
+    # Move to a different zone/action whose current pose has no video -> hold the p0 video.
+    frame2 = _frame_for("rest", "action", "rest", p, behavior="calm", action_index=1)
+    assert frame2["patch"] == video_template("p0.mp4")
 
 
 def test_video_mode_no_action_uses_default():
@@ -315,6 +345,9 @@ def main():
         ("test_video_mode_current_pose_video", test_video_mode_current_pose_video),
         ("test_video_mode_current_pose_video_middle", test_video_mode_current_pose_video_middle),
         ("test_video_mode_pose_without_video_uses_base_patch", test_video_mode_pose_without_video_uses_base_patch),
+        ("test_video_mode_holds_last_video_for_pose_without_video", test_video_mode_holds_last_video_for_pose_without_video),
+        ("test_video_mode_holds_video_when_action_ends", test_video_mode_holds_video_when_action_ends),
+        ("test_video_mode_holds_video_across_zone_transition", test_video_mode_holds_video_across_zone_transition),
         ("test_video_mode_no_action_uses_default", test_video_mode_no_action_uses_default),
         ("test_video_mode_clamps_out_of_range_pose_index", test_video_mode_clamps_out_of_range_pose_index),
         ("test_video_mode_ignores_zone_and_behavior_layers", test_video_mode_ignores_zone_and_behavior_layers),

@@ -1,5 +1,52 @@
 # Task Handoff Log
 
+## 2026-10-23 — Video mode: hold the current patch on no-video states instead of flashing legacy/default
+
+### Status
+
+Completed. Root cause identified and fixed; verified by the patch test suite (35 passed, 2 pre-existing skips).
+
+### Summary
+
+In the new `"video"` patch mode, the patch the screens show is resolved by `Patches.code_for()` → `_video_code()` on **every** state frame, and that method was **stateless**. When the robot moved between zones and landed on a state with no per-pose video (a pose whose `pose_videos` entry is `null`, an action that has no videos at all, or the brief moment an action has ended), `_video_code` recomputed its fallback — the action's base patch, the `default` patch, or `DEFAULT_HYDRA_CODE` — so the screen briefly showed a legacy/default patch mid-transition. The user wants the **current patch** (the video already playing) to keep playing in that case.
+
+The fix makes the video path remember the last video it produced and hold it when the next state has no video. `code_for` is invoked per frame by `Display._patch_for()` (`display.py:95`), and the render page renders the core-pushed `patch` field verbatim when it is a string (`render.html:178`), so a core-side change is sufficient — no client change needed.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/patches/patches.py`:
+  - `Patches.__init__`: added `self._last_video: str | None = None` (the "current patch" for video mode).
+  - `Patches._video_code`: when a pose has a video, store its template in `self._last_video` before returning it. When the current state has **no** video, return `self._last_video` if one has been produced (hold the current patch); only fall back to the action base patch / `default` / `DEFAULT_HYDRA_CODE` when no video has ever been produced.
+  - Updated the `code_for` and `_video_code` docstrings to document the hold behavior.
+- `realtimecontrol/rtr/tests/test_patch_push.py`: added three tests — `test_video_mode_holds_last_video_for_pose_without_video`, `test_video_mode_holds_video_when_action_ends`, `test_video_mode_holds_video_across_zone_transition` — and registered them in `main()`. Adjusted the `test_video_mode_pose_without_video_uses_base_patch` docstring to clarify the base-patch fallback only applies before any video has played.
+
+### Documentation
+
+- Handoff entry (this). No other docs affected.
+
+### Architecture
+
+- No architectural change. `code_for` already runs per state frame; the change adds a single piece of in-memory state (`_last_video`) to the `Patches` adapter so the video path is idempotent across no-video frames. The core remains the single source of truth and the render page continues to render the pushed `patch` field.
+
+### Validation
+
+- `python -m pytest tests/test_patch_push.py tests/test_patch_override.py tests/test_zone_scoped_actions.py -q` → **35 passed, 2 skipped**.
+- Full suite (`python -m pytest tests/ -q`) shows failures in `test_remote_sdl.py`, `test_state_machine.py`, `test_transition.py`; confirmed **pre-existing** by stashing the change and re-running — they fail identically without it and are unrelated to patches.
+
+### Decisions and Caveats
+
+- The hold is scoped to video mode only; `"complex"` mode still concatenates zone + action + behavior unchanged.
+- `_last_video` persists in memory for the life of the `Patches` adapter. If the mode flips to `"complex"` and back to `"video"`, the first no-video frame resumes the last video seen before the flip (acceptable; the operator is explicitly choosing video mode). A manual screen override still wins over everything, as before.
+- The base-patch / default fallback is preserved for the **initial** state (before any video has played), so existing behavior for a cold start is unchanged.
+
+### Next Task
+
+No immediate next task identified. Optionally, confirm in a live session that moving between zones no longer flashes a legacy/default patch and that the last video keeps playing until the next pose with a video takes over.
+
+### Instructions for the Next Task
+
+The core logic is in `Patches._video_code` (`rtr/patches/patches.py`). The state is `self._last_video`. To adjust the hold semantics (e.g. reset on mode change, or to hold a non-video base patch instead), edit that method and the `__init__` field. Tests live in `tests/test_patch_push.py` (video-mode section); the `_frame_for` helper reuses the same `Patches` object across frames, so consecutive calls accumulate `_last_video` state — use it to assert hold behavior.
+
 ## 2026-10-23 — Fix: active group not reflected in client after clicking a zone group
 
 ### Status
