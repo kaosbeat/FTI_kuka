@@ -1,5 +1,47 @@
 # Task Handoff Log
 
+## 2026-10-23 — Fix: active group not reflected in client after clicking a zone group
+
+### Status
+
+Completed. Root cause identified and fixed; verified by the existing test suite (38 passed) and an end-to-end frame check.
+
+### Summary
+
+Diagnosed why clicking a zone-group button in `client.html` never updated the active-group indicator. The full chain is otherwise intact: the client sends `{cmd:"enable_group", group}`; the brain sets `self.active_group` and exposes it via `autonomy_info()`; the engine copies it into `Snapshot.active_group`; and `Snapshot.to_dict()` serializes it. The break was the last hop: the `Display` adapter's `_frame()` builds the broadcast state frame but **never read `snap.active_group`**, so the field never reached the client. `client.html` reads `s.active_group` (line 690), which was always `undefined`, so the indicator stayed at "—" and no group button ever lit up — for every group, regardless of whether the enable actually succeeded.
+
+The fix forwards the field in `_frame()`, alongside the related autonomy fields.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/display/display.py`: in `Display._frame()`, added `if snap.active_group is not None: frame["active_group"] = snap.active_group` directly after the `autonomy_enabled_groups` block (lines 185-186), matching the existing optional-field pattern.
+
+### Documentation
+
+- Handoff entry (this). No other docs affected — the client already reads the field; it just was never sent.
+
+### Architecture
+
+- No architectural change. The data path (brain → engine Snapshot → Display frame → WS broadcast → client) already existed; only the Display adapter's field-forwarding list was incomplete. The fix completes an existing, intended data flow.
+
+### Validation
+
+- `python -m pytest tests/test_patch_push.py tests/test_zone_groups.py -q` → **38 passed**. (These exercise `Display._frame()` and the brain group logic.)
+- End-to-end check: published a `Snapshot` with `active_group="museum-closed"` → broadcast frame contains `active_group: "museum-closed"`; published one with `active_group=None` → field absent (client shows "—").
+
+### Decisions and Caveats
+
+- Used the same "omit when None" convention as the other optional frame fields, so a cleared group produces no field rather than an explicit `null` — consistent with `client.html`'s `s.active_group || null` handling.
+- This fix makes the indicator reflect the *currently active* group. If a specific group still fails to activate after this, that is a separate, group-specific issue (unknown group name, no enabled target nodes, no safe path from the current zone/action, or manual-mode interlock) and will be visible in the server log as a `[brain] enable_group:` line. Those paths set/revert `active_group` correctly; they were previously masked because the client never saw the value at all.
+
+### Next Task
+
+No immediate next task identified. Optionally, confirm in a live session that clicking a group now lights the button and shows the group name, and that switching to manual mode clears the indicator.
+
+### Instructions for the Next Task
+
+The state frame the client receives now includes `active_group` whenever one is set. To verify live: start the server, click a zone-group button in `client.html`, and confirm (a) the `#activeGroup` label shows the group name and the matching button gets the `active` class, and (b) switching control mode to `manual` clears it back to "—". If a group still doesn't activate, check the server log for a `[brain] enable_group:` line (unknown group / no enabled nodes / no safe path) and confirm the group's target zones are `enabled` in the live `zones.json`.
+
 ## 2026-10-23 — Simplify patch system: frontend (editor.html) + tests + end-to-end verification
 
 ### Status

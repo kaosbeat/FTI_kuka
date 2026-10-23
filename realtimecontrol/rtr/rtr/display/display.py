@@ -182,6 +182,8 @@ class Display:
             frame["autonomy_enabled"] = snap.autonomy_enabled
         if snap.autonomy_enabled_groups is not None:
             frame["autonomy_enabled_groups"] = snap.autonomy_enabled_groups
+        if snap.active_group is not None:
+            frame["active_group"] = snap.active_group
         if snap.performance_mode is not None:
             frame["performance_mode"] = snap.performance_mode
         if snap.autonomy_dwell_remaining is not None:
