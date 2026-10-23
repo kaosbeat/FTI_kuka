@@ -6,8 +6,8 @@
       "mode_group": "museum-closed",
       "safezone": [
         [
-          -94,
-          122
+          -190,
+          190
         ],
         [
           -105,
@@ -142,8 +142,8 @@
       "mode_group": "museum-closed",
       "safezone": [
         [
-          -5,
-          5
+          -190,
+          190
         ],
         [
           -134,
@@ -249,6 +249,13 @@
             null,
             null,
             null
+          ],
+          "pose_videos": [
+            "MiniMax_H3_00075_..mp4",
+            "MiniMax_H3_00076_..mp4",
+            "MiniMax_H3_00076_..mp4",
+            "MiniMax_H3_00077_..mp4",
+            "MiniMax_H3_00078_..mp4"
           ]
         },
         "snore": {
@@ -325,8 +332,8 @@
       "mode_group": "museum-closed",
       "safezone": [
         [
-          -5,
-          350
+          -190,
+          190
         ],
         [
           -134,
@@ -451,8 +458,8 @@
       "mode_group": "museum-closed",
       "safezone": [
         [
-          -5,
-          5
+          -190,
+          190
         ],
         [
           -134,
@@ -572,8 +579,8 @@
       "mode_group": "event-sit-back",
       "safezone": [
         [
-          -94,
-          122
+          -190,
+          190
         ],
         [
           -98,
@@ -596,7 +603,7 @@
           357
         ]
       ],
-      "speed": 100,
+      "speed": 60,
       "exits": [
         [
           "hunting",
@@ -768,7 +775,7 @@
           35
         ]
       ],
-      "speed": 100,
+      "speed": 60,
       "exits": [
         [
           "examining",
@@ -929,8 +936,8 @@
       "mode_group": "event-sit-back",
       "safezone": [
         [
-          -20,
-          20
+          -190,
+          190
         ],
         [
           -65,
@@ -1279,16 +1286,16 @@
       "mode_group": "stage-takeover",
       "safezone": [
         [
-          -94,
-          122
+          -190,
+          190
         ],
         [
           -134,
-          -123
+          -100
         ],
         [
-          136,
-          157
+          99,
+          100
         ],
         [
           -23,
@@ -1323,9 +1330,9 @@
           "enabled": true,
           "poses": [
             [
-              -3,
-              -134,
-              156,
+              "x",
+              -100,
+              100,
               -2,
               90,
               0
@@ -1340,7 +1347,13 @@
           "next": {
             "zone": "growling",
             "action": "snarl"
-          }
+          },
+          "pose_imgs": [
+            null
+          ],
+          "pose_videos": [
+            null
+          ]
         },
         "snarl": {
           "enabled": true,
@@ -1530,7 +1543,7 @@
           357
         ]
       ],
-      "speed": 100,
+      "speed": 80,
       "exits": [
         [
           "roaring",
@@ -2553,10 +2566,10 @@
       }
     },
     "view": {
-      "x": 1761.2836273215953,
-      "y": 6.264407561114126,
-      "w": 970.8982683231177,
-      "h": 138.60635211077502
+      "x": 1956.6148239838649,
+      "y": 29.90506854563475,
+      "w": 638.3813714625572,
+      "h": 91.1359264310183
     },
     "key": "clawing,cuddling,cuddling_purring_bridge,cuddling_stretching_bridge,examining,examining_performing_bridge,growling,hunting,hunting_examining_bridge,leaping,performing,performing_roaring_bridge,purring,resting,resting_sleeping_bridge,resting_testing_bridge,roaring,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge,testing"
   }

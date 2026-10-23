@@ -20,7 +20,10 @@
     "testing_sleeping_bridge": "osc(4, 0.1, 1.2).out(o0)",
     "cuddling_purring_bridge": "osc(4, 0.1, 1.2).out()",
     "examining_performing_bridge": "osc(4, 0.1, 1.2).out()",
-    "cuddling_stretching_bridge": "osc(4, 0.1, 1.2).out()"
+    "cuddling_stretching_bridge": "osc(4, 0.1, 1.2).out()",
+    "stretching_hunting_bridge": "osc(4, 0.1, 1.2).out()",
+    "hunting_examining_bridge": "osc(4, 0.1, 1.2).out()",
+    "performing_roaring_bridge": "osc(4, 0.1, 1.2).out()"
   },
   "modes": {
     "calm": "osc(1, 0.08, 1.2)\n.posterize(4)\n.diff(src(o0).rotate(1.5))\n.out(o3)",
@@ -121,6 +124,15 @@
       "bridge": "osc(4, 0.1, 1.2).out()"
     },
     "cuddling_stretching_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
+    },
+    "stretching_hunting_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
+    },
+    "hunting_examining_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
+    },
+    "performing_roaring_bridge": {
       "bridge": "osc(4, 0.1, 1.2).out()"
     }
   }

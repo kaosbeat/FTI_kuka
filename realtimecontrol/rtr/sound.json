@@ -140,6 +140,27 @@
         "note": 60,
         "velocity": 60
       }
+    },
+    "stretching_hunting_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "hunting_examining_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "performing_roaring_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
     }
   },
   "actions": {
@@ -545,7 +566,12 @@
           "note": 56,
           "velocity": 80
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       },
       "snarl": {
         "start": {
@@ -899,6 +925,15 @@
             "velocity": 60
           }
         ]
+      }
+    },
+    "hunting_examining_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
       }
     }
   },
