@@ -8,7 +8,10 @@ let playing = false;
 let completion;
 let idx=0
 
-let libs = ['https://unpkg.com/hydra-synth', 'includes/libs/hydra-synth.js',  "https://unpkg.com/ml5@1/dist/ml5.js"]
+let libs = ['https://unpkg.com/hydra-synth', 
+            'includes/libs/hydra-synth.js',  
+          // "https://unpkg.com/ml5@1/dist/ml5.js"
+  ]
 
 let handPose;
 let hands = [];
@@ -16,8 +19,8 @@ let hands = [];
 let hc = document.createElement('canvas')
 // hc.width = window.innerWidth
 // hc.height = window.innerHeight
-hc.width=1080
-hc.height=1080
+hc.width=768
+hc.height=768
 document.body.appendChild(hc)
 let hydra = new Hydra({ detectAudio: true, canvas: hc })
 // hydra.setResolution(window.innerWidth*2, window.innerHeight*2) // retina res
@@ -40,7 +43,7 @@ src(o0)
 
 
 function preload() {
-  handPose = ml5.handPose()
+  // handPose = ml5.handPose()
     vid = createVideo("img/allhands.mp4", VIDEO);
 }
 
@@ -50,7 +53,7 @@ function preload() {
 
 
 function setup() {
-  createCanvas(1080, 1080, WEBGL);
+  createCanvas(768, 768, WEBGL);
   setupMidi(0, 0)
   
   pg = createGraphics(hc.width, hc.height)
@@ -58,7 +61,7 @@ function setup() {
   //midi5.debug = ['note', 'controlchange'] 
 
   //vid = createVideo("img/hand.mp4");
-  vid.size(1080, 1080);
+  vid.size(768, 768);
   vid.hide()
   vid.play();
   vid.volume(0);
@@ -79,22 +82,18 @@ function setup() {
 		// 
 	}
 	midi5.noteOff = (note) => {
-			vid.pause(); 
+			// vid.pause(); 
 		}
 	
 }
 
-function gotHands(results) {
-  // Save the output to the hands variable
-  hands = results;
-}
 
 
 function draw() {
 	updateMidi()
 	pg.drawingContext.drawImage(hc, 0, 0, pg.width, pg.height)
   //background(vid.volume()*255);
-  console.log()
+  // console.log()
   //if (frameCount % 40 == 0) {
   //   vid.pause();
   //}
@@ -107,19 +106,10 @@ function draw() {
   //  50, 20, 20);
    push()
    scale(1)
-  translate(-540,-540)
+  translate(-768/2,-768/2)
   image(vid,0,0)
    pop()
    
-  // Draw all the tracked hand points
-  for (let i = 0; i < hands.length; i++) {
-    let hand = hands[i];
-    for (let j = 0; j < hand.keypoints.length; j++) {
-      let keypoint = hand.keypoints[j];
-      fill(0, 255, 0);
-      noStroke();
-      circle(keypoint.x, keypoint.y, 10);
-    }
-  }
+
 
 }

@@ -1,5 +1,257 @@
 # Task Handoff Log
 
+## 2026-10-23 — Multi-video MIDI patch: full handoff (multipatch.js — preload ALL videos, configurable note→video map)
+
+### Status
+
+Completed. `multipatch.js` implemented, syntax-checked, and logic-tested (25/25 passed). The user edited the CONFIG section in parallel to set the real clip set (`vid/hands/hand01–08.mp4`); that config is in place and respected.
+
+### Summary
+
+Built a new P5LIVE + Hydra display patch (`output_display/multipatch.js`) modeled on `oldpatch.js`'s video+MIDI pattern, fulfilling the user's three requirements:
+
+1. **Load a whole bunch of videos** — every entry in the `VIDS` list becomes a raw HTML5 `<video>` element (the P5LIVE-safe approach; P5LIVE's trimmed p5 has `createVideo` but no `loadVideo`).
+2. **Easy configuration of which MIDI note plays which video** — one CONFIG section at the top: `VID_BASE` (clip folder), `VIDS` (the clips), `NOTE_TO_VID` (explicit `note: index` table, e.g. `47: 0`), plus `FIRST_NOTE`/`AUTO_FALLBACK` for a sequential fallback (`FIRST_NOTE + i → VIDS[i]`, wrapping) and `LOOP`/`DEBUG` toggles. Editing the table is the only thing needed to reassign notes.
+3. **Preload ALL videos** — `preload()` gives every clip `preload='auto'` + `load()`, so all clips buffer before the first note is played (paused until triggered; only the active clip plays).
+
+**Runtime behavior:** `midi5.noteOn` (oldpatch.js's trigger style) → `videoForNote(note.number)` → `playVideo(idx)` (restarts the clip at 0, pauses the previous one). Unmapped notes play nothing. The active clip draws onto a hidden p5 canvas → Hydra `s0` (dynamic) → pass-through graph → fullscreen Hydra canvas. A small HUD shows the active clip and total preloaded.
+
+**User's parallel edit (kept):** `VID_BASE = 'vid/hands/'`, `VIDS = hand01.mp4 … hand08.mp4` (8 clips), `NOTE_TO_VID = {47:0, 48:1, 49:2}`.
+
+### Changes Made
+
+- `output_display/multipatch.js` (new): the multi-video MIDI patch (~220 lines).
+- `output_display/test_multipatch.js` (new): Node vm logic test, config-driven (derives expectations from the patch's own config).
+- `oldpatch.js` and `patch.js` untouched (kept as references).
+
+### Documentation
+
+- `multipatch.js` header: how to configure (vids location, VIDS list, NOTE_TO_VID, auto mapping) and how to run (P5LIVE + Web MIDI).
+- This handoff file: 4 per-task entries (analyse, research, implement, test) + this full entry.
+
+### Architecture
+
+No architectural change to the core. The new sketch reuses the established P5LIVE+Hydra display pattern from `patch.js` (hidden p5 canvas → `s0` dynamic → Hydra chain → fullscreen `hc` canvas, `detectAudio: false` / `enableStreamCapture: false`).
+
+### Validation
+
+- `node --check output_display/multipatch.js` → SYNTAX OK (verified after the user's parallel edit).
+- `node --check output_display/test_multipatch.js` → SYNTAX OK.
+- `node output_display/test_multipatch.js` → **25 passed, 0 failed**: all-VIDS preload (one buffered `<video>` per entry, muted, correct src), every explicit `NOTE_TO_VID` entry, auto-fallback wrapping, unmapped-note → nothing, MIDI note-on plays mapped clip from 0, note switch pauses previous, noteoff/unmapped leave playback untouched.
+
+### Decisions and Caveats
+
+- Raw HTML5 `<video>` preload instead of many p5 `createVideo` objects (lighter; same rationale as patch.js).
+- Hydra graph defaults to a plain pass-through (`src(s0).out(o0)`); `oldpatch.js`'s treatment chain is referenced in a comment for when a visual effect is wanted.
+- Caveat: the clips are not yet at `output_display/vid/hands/` (the folder doesn't exist) — live playback needs the 8 clips placed there (or `VID_BASE` pointed elsewhere).
+- Caveat: the vm test covers mapping/playback logic only; live browser verification (buffering, Web MIDI, Hydra render) is the remaining manual step.
+
+### Next Task
+
+Optional live check: copy the 8 `hand*.mp4` clips into `output_display/vid/hands/`, open `multipatch.js` in P5LIVE, enable Web MIDI, and confirm notes 47/48/49 play hand01/hand02/hand03 and notes 50–54 auto-map to hand04–hand08.
+
+### Instructions for the Next Task
+
+- Place clips at `output_display/vid/hands/` (`VID_BASE` is `vid/hands/`). To reassign a note, edit `NOTE_TO_VID` in `multipatch.js` (e.g. `50: 3` → note 50 plays `VIDS[3]` = hand04.mp4). To change the sequential range, edit `FIRST_NOTE`; to make unmapped notes silent, set `AUTO_FALLBACK = false`. Re-run `node output_display/test_multipatch.js` after config edits — it is config-driven and will validate the new table.
+
+## 2026-10-23 — Multi-video MIDI patch: test (syntax + config-driven mapping logic test)
+
+### Status
+
+Completed. `node --check` OK on both files; `node test_multipatch.js` → **25 passed, 0 failed**.
+
+### Summary
+
+Verified the new patch. The first test run had 3 failures — all caused by the test hardcoding assumptions (the `'vids/'` base path and a 3-clip wrap arithmetic) that broke when the **user edited `multipatch.js` in parallel**, replacing the seed config with the real set (`VID_BASE = 'vid/hands/'`, 8 clips `hand01–08.mp4`). The patch code itself was correct; the test was rewritten to be **config-driven** — it derives every expectation from the patch's own exported `VID_BASE / VIDS / NOTE_TO_VID / FIRST_NOTE / AUTO_FALLBACK`, so it keeps working as the user edits the CONFIG section.
+
+**What the test covers** (`output_display/test_multipatch.js`, Node `vm` sandbox with stubbed DOM/p5/Hydra):
+1. `preload()` creates exactly one `<video>` per `VIDS` entry, all told to `load()` (buffered now), all muted, all pointing at `VID_BASE + filename` — i.e. ALL videos preloaded.
+2. Every explicit `NOTE_TO_VID` entry maps to the right index.
+3. Auto fallback: unmapped notes at/above `FIRST_NOTE` wrap over `VIDS` (`(n - FIRST_NOTE) % VIDS.length`).
+4. Unmapped notes below `FIRST_NOTE` → `-1` (play nothing).
+5. `midi5.noteOn({type:'noteon'})` plays the mapped clip from position 0.
+6. Switching notes pauses the previous clip.
+7. `noteoff` and unmapped notes leave playback untouched.
+
+### Changes Made
+
+- `output_display/test_multipatch.js`: rewritten config-driven (exports `VID_BASE` from the patch via a `__exports` footer appended to the evaluated source; expectations derived from the live config instead of hardcoded).
+
+### Documentation
+
+- This handoff entry.
+
+### Architecture
+
+No architectural impact.
+
+### Validation
+
+- `node --check multipatch.js` → SYNTAX OK (after the user's parallel edit).
+- `node --check test_multipatch.js` → SYNTAX OK.
+- `node test_multipatch.js` → **25 passed, 0 failed** (first run: 15 passed / 3 failed, all 3 due to the test's stale hardcoded config assumptions, fixed as above).
+
+### Decisions and Caveats
+
+- The test evaluates the patch source in a `vm` context with a `__exports` footer capturing the file's `const`/`let` bindings (vm top-level `const`/`let` do not attach to the sandbox global object).
+- Caveat: the vm test verifies mapping/playback logic, not browser behavior (actual buffering, MIDI hardware, Hydra rendering). Live browser verification remains the user's step.
+
+### Next Task
+
+Write the full handoff entry.
+
+### Instructions for the Next Task
+
+- The patch is complete and logic-tested. The user's real clips must be placed at `output_display/vid/hands/` (the `VID_BASE` they set) before live playback works.
+
+## 2026-10-23 — Multi-video MIDI patch: implement multipatch.js
+
+### Status
+
+Completed (then further edited by the user in parallel — see Decisions).
+
+### Summary
+
+Created `output_display/multipatch.js`: a P5LIVE + Hydra patch that preloads **all** listed videos and plays the mapped video on MIDI note-on, with one editable CONFIG section.
+
+**Design (per the user's ask, modeled on oldpatch.js):**
+- **Preload ALL videos:** `preload()` builds one raw HTML5 `<video>` per `VIDS` entry (`preload='auto'` + `load()` = buffered but paused). Raw elements instead of p5 `createVideo` because P5LIVE's trimmed p5 lacks `loadVideo` and raw elements keep many clips cheaply ready (same rationale as patch.js).
+- **Easy note→video config:** the CONFIG section holds `VID_BASE` (one line), `VIDS` (the clip list — every entry preloaded), `NOTE_TO_VID` (explicit `note: index` table), `FIRST_NOTE` + `AUTO_FALLBACK` (sequential mapping for unmapped notes: `FIRST_NOTE + i → VIDS[i]`, wrapping), `LOOP`, `DEBUG`.
+- **Trigger:** oldpatch.js's `midi5.noteOn` callback style (`note.type === 'noteon'` → `videoForNote(note.number)` → `playVideo(idx)`), which restarts the clip at 0 and pauses the previous one. Unmapped notes play nothing.
+- **Display:** hidden p5 canvas → Hydra `s0` (dynamic) → static pass-through graph `src(s0).out(o0)` → fullscreen `hc` canvas; robust Hydra flags (`detectAudio: false`, `enableStreamCapture: false`) from patch.js; small HUD shows the active clip + total preloaded.
+
+### Changes Made
+
+- `output_display/multipatch.js` (new): the multi-video MIDI patch, ~220 lines.
+- `output_display/test_multipatch.js` (new, written in the test task): vm logic test.
+
+### Documentation
+
+- Header comment in `multipatch.js` documents how to configure (vids location, VIDS list, NOTE_TO_VID table, auto mapping).
+
+### Architecture
+
+No architectural change to the core; the new sketch reuses the established P5LIVE+Hydra display pattern (hidden p5 canvas → s0 → Hydra chain → on-screen canvas).
+
+### Validation
+
+- `node --check multipatch.js` → SYNTAX OK. (Logic test in the next task.)
+
+### Decisions and Caveats
+
+- **The user edited `multipatch.js` in parallel** while implementation was in progress, replacing the seed config with the real set: `VID_BASE = 'vid/hands/'` and `VIDS = hand01.mp4 … hand08.mp4` (8 clips). This edit was **respected and kept** — the test was made config-driven to match. The clips themselves are not yet at `output_display/vid/hands/` (no such folder exists yet), so live playback needs the files placed there.
+- Hydra graph is a plain pass-through by default; the oldpatch.js chain is referenced in a comment for when a visual treatment is wanted.
+
+### Next Task
+
+Test: syntax check + logic test of the note→video mapping.
+
+### Instructions for the Next Task
+
+- Run `node --check output_display/multipatch.js`, then build/run a Node vm test that stubs DOM/p5/Hydra, calls `preload()` + `setup()`, and asserts the mapping + MIDI trigger behavior.
+
+## 2026-10-23 — Multi-video MIDI patch: research video assets and VID_BASE layout
+
+### Status
+
+Completed
+
+### Summary
+
+Located the video files available for the new multi-video patch and decided the asset layout.
+
+**Findings:**
+- `output_display/` has **no** `vids/` or `img/` subfolder — the assets oldpatch.js (`img/allhands.mp4`) and patch.js (`vids/MiniMax_H3_*.mp4`) reference are not present in the sketch folder.
+- The only real clips in the repo: `realtimecontrol/rtr/assets/vid/` → `test1.mp4` (364K), `test2.mp4` (424K), `hand08.mp4` (948K).
+- No P5LIVE web-root config found (`.kilo/kilo.jsonc` only sets `snapshot: false`); the sketch folder (`output_display/`) is what P5LIVE serves, so clips must be placed there (or `VID_BASE` pointed elsewhere).
+
+**Decision:**
+- New patch file: `output_display/multipatch.js`.
+- `VID_BASE = 'vids/'` as a one-line config constant (same convention as patch.js). The user drops clips into `output_display/vids/` (or edits `VID_BASE`).
+- `VIDS` seeded with the 3 real clip filenames (`test1.mp4`, `test2.mp4`, `hand08.mp4`) so the patch works out of the box once those files are copied into `vids/`; the user extends the list with their own clips.
+
+### Changes Made
+
+- None (research only).
+
+### Documentation
+
+- This handoff entry records the asset layout decision.
+
+### Architecture
+
+No architectural impact.
+
+### Validation
+
+- `ls -la realtimecontrol/rtr/assets/vid/` + `du -sh` → 3 clips confirmed with sizes.
+- `glob` for `**/*.mp4` across the repo → no other display-relevant clips.
+
+### Decisions and Caveats
+
+- Caveat: the 3 seed clips are not yet in `output_display/vids/`; the patch will 404 until they are copied there (or `VID_BASE` is edited). This is expected — the user's real display set is larger and user-supplied.
+
+### Next Task
+
+Implement `output_display/multipatch.js`.
+
+### Instructions for the Next Task
+
+- Build on the patterns from the analysis entry: raw HTML5 `<video>` preload in `preload()` (all clips, buffered-but-paused), `midi5.noteOn` trigger with an editable note→video table, hidden p5 canvas → `s0` → Hydra → fullscreen `hc` canvas.
+- Config section at the top of the file: `VID_BASE`, `VIDS`, `FIRST_NOTE`, `NOTE_TO_VID` (explicit note→index map), `AUTO_FALLBACK` (sequential mapping for unmapped notes). All entries in `VIDS` are preloaded.
+
+## 2026-10-23 — Multi-video MIDI patch: analyse oldpatch.js video+MIDI pattern and P5LIVE constraints
+
+### Status
+
+Completed
+
+### Summary
+
+Analysed `output_display/oldpatch.js` (the user's reference for preloading videos and playing them on MIDI notes) and `output_display/patch.js` (the project's newer P5LIVE+Hydra patch) to extract the working patterns for a new multi-video patch.
+
+**oldpatch.js video+MIDI pattern (the model to follow):**
+- `preload()`: `createVideo("img/allhands.mp4", VIDEO)` — p5 video load before first frame.
+- `setup()`: `vid.size(768,768); vid.hide(); vid.play(); vid.volume(0);` + `setupMidi(0, 0)` + overriding `midi5.noteOn`.
+- `midi5.noteOn = (note) => { if (note.type == "noteon") { if (note.number == 47) { vid.play(); vid.time(0); } ... } }` — explicit note-number → video-action table (47/48/49 → restart at 0/2/5s).
+- `draw()`: `updateMidi()` each frame; video drawn onto the p5 canvas, which Hydra source `s0` reads.
+
+**P5LIVE constraints (documented in patch.js, same runtime):**
+- P5LIVE's bundled p5 (v1.11.9) is trimmed: it has `createVideo` but **no** `loadVideo`. Raw HTML5 `<video>` elements are the reliable way to preload many clips: `document.createElement('video')`, `v.src`, `v.muted = true`, `v.preload = 'auto'`, `v.playsInline = true`, `v.load()` (buffers without playing), drawn later with `drawingContext.drawImage(v, 0, 0, width, height)`.
+- MIDI: `setupMidi(0, 0)` in setup, `updateMidi()` in draw, `midi5.noteOn` callback receives a note object with `.type` (`"noteon"`) and `.number`.
+- Hydra: build own instance `new Hydra({ detectAudio: false, enableStreamCapture: false, makeGlobal: true, autoLoop: true, canvas: hc })` (the old `detectAudio: true` trips P5LIVE with a mic getUserMedia); feed the hidden p5 canvas into `s0.init({ src: drawingContext.canvas, dynamic: true })`; show the Hydra canvas (`hc`) fullscreen with `zIndex`, hide the p5 canvas. Alias `noize = hydra.synth.noise` (p5 owns `noise`).
+
+**Design decision for the new patch:** use the raw-HTML5-video preload (proven in patch.js in this exact runtime) rather than many `createVideo` objects — lighter, and each clip stays buffered-but-paused. Keep oldpatch.js's `midi5.noteOn` trigger style, but replace its 3 hardcoded note checks with one editable note→video table.
+
+### Changes Made
+
+- None (analysis only).
+
+### Documentation
+
+- This handoff entry records the analysed patterns.
+
+### Architecture
+
+No architectural impact. The new patch will reuse the existing P5LIVE+Hydra architecture (hidden p5 canvas → s0 → Hydra chain → on-screen canvas).
+
+### Validation
+
+- Read `output_display/oldpatch.js` (115 lines), `output_display/patch.js` (351 lines), `output_display/output.md`.
+
+### Decisions and Caveats
+
+- Chose raw HTML5 `<video>` preload over p5 `createVideo` for the multi-clip case (same choice patch.js made, with the runtime justification above).
+- Caveat: the exact `setupMidi`/`midi5` API is P5LIVE-specific and could differ between P5LIVE builds; oldpatch.js's usage (`setupMidi(0,0)`, `midi5.noteOn`, `note.type`, `note.number`) is the known-good baseline for this project.
+
+### Next Task
+
+Research: locate the actual video files available for the VIDS list and decide the `VID_BASE` asset layout.
+
+### Instructions for the Next Task
+
+- `output_display/` currently has **no** `vids/` or `img/` subfolder (oldpatch.js's `img/allhands.mp4` and patch.js's `vids/MiniMax_*` are both absent). Real clips exist at `realtimecontrol/rtr/assets/vid/` (`test1.mp4`, `test2.mp4`, `hand08.mp4`). Make `VID_BASE` a one-line config constant and seed `VIDS` with placeholder filenames the user swaps for their own.
+
 ## 2026-10-23 — Video mode: hold the current patch on no-video states instead of flashing legacy/default
 
 ### Status
