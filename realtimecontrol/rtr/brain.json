@@ -76,6 +76,7 @@
     "zones": [
       "hunting"
     ],
+    "behaviors": [],
     "enabled": true,
     "params": {
       "lost_s": 2,
@@ -101,6 +102,7 @@
     "zones": [
       "stretching"
     ],
+    "behaviors": [],
     "enabled": true,
     "params": {
       "actions": [
@@ -397,52 +399,113 @@
   "behaviors": {
     "locked": {
       "gain": 0.3,
-      "sweep_amp": 0.5
+      "sweep_amp": 0.5,
+      "stay": 1,
+      "triggers": [
+        "dwell"
+      ]
     },
     "curious": {
       "gain": 0.3,
       "look_factor": 0.5,
-      "sweep_amp": 0.5
+      "sweep_amp": 0.5,
+      "stay": 1,
+      "triggers": [
+        "dwell"
+      ]
     },
     "intent": {
       "gain": 0.3,
-      "sweep_amp": 0.5
+      "sweep_amp": 0.5,
+      "stay": 1,
+      "triggers": [
+        "dwell"
+      ]
     },
     "gentle": {
       "gain": 0.3,
       "face_factor": 0.5,
-      "sweep_amp": 0.5
+      "sweep_amp": 0.5,
+      "stay": 1,
+      "triggers": [
+        "dwell"
+      ]
     },
     "vigilant": {
-      "freq": 1
+      "freq": 1,
+      "stay": 0,
+      "triggers": [
+        "dwell"
+      ]
     },
     "restless": {
-      "wander_adj": 5
+      "wander_adj": 5,
+      "stay": 0.7,
+      "triggers": [
+        "dwell"
+      ]
     },
-    "spontaneous": {},
+    "spontaneous": {
+      "stay": 0,
+      "triggers": [
+        "dwell"
+      ]
+    },
     "soothing": {
       "freq": 0.5,
-      "amp_scale": 0.1
+      "amp_scale": 0.1,
+      "stay": 0,
+      "triggers": [
+        "dwell"
+      ]
     },
     "agitated": {
       "freq": 1,
-      "amp_scale": 0.3
+      "amp_scale": 0.3,
+      "stay": 0,
+      "triggers": [
+        "lock_duration",
+        "dwell"
+      ],
+      "lock_duration_s": 1
     },
     "aggressive": {
       "freq": 1,
-      "amp_scale": 0.3
+      "amp_scale": 0.3,
+      "stay": 0,
+      "triggers": [
+        "lock_duration",
+        "dwell"
+      ],
+      "lock_duration_s": 1
     },
     "exhilarated": {
       "freq": 2,
-      "amp_scale": 0.5
+      "amp_scale": 0.5,
+      "stay": 0,
+      "triggers": [
+        "lock_duration",
+        "dwell"
+      ],
+      "lock_duration_s": 1
     },
     "impatient": {
       "freq": 1,
-      "amp_scale": 0.3
+      "amp_scale": 0.3,
+      "stay": 0,
+      "triggers": [
+        "lock_duration",
+        "dwell"
+      ],
+      "lock_duration_s": 1
     },
     "drowsy": {
       "freq": 0.3,
-      "amp_scale": 0.2
+      "amp_scale": 0.2,
+      "stay": 0,
+      "triggers": [
+        "dwell"
+      ]
     }
   }
 }

@@ -1,5 +1,134 @@
 # Task Handoff Log
 
+## 2026-10-23 — Convert rtr/zones.json → kukart/robotstatesFTI.py (legacy zone schema)
+
+### Status
+
+Completed
+
+### Summary
+
+Converted `realtimecontrol/rtr/zones.json` (29 zones, the runtime "unified" form) into the legacy `robotstates.py` zone-dict format used by the old kukart stack, emitting `realtimecontrol/kukart/robotstatesFTI.py`. The new module exposes a top-level `kukastate` dict (mirroring `robotstates.py`) whose `zones` table is the converted data, so `from robotstatesFTI import kukastate` works the same way `from robotstates import kukastate` does in `tidalkuka_v01.py`.
+
+**Per-zone field mapping (zones.json → robotstates.py):**
+- `safezone`: JSON `[[lo,hi],...]` → Python `[(lo,hi),...]` (arrays → tuples)
+- `speed`: direct copy (number)
+- `exits`: JSON `[[zone,action],...]` → `[zone,...]` (action half dropped, dedup, order kept); zones with **no** explicit `exits` field derive it from the last action's `next` target
+- `actions.name.pos`: from `poses` (`"x"` frozen-axis placeholders kept verbatim)
+- `actions.name.speed`: single number repeated per pose → list; actions with **no** `speed` → `[None]*n`
+- `startpos` (absent in zones.json): **derived** = first anchor of the zone's first action
+- `exitpos` (absent in zones.json): **derived** = last anchor of the zone's last action
+
+**Top-level `kukastate`**: `robot`, `modechange`, `mode`, `currentaction`, `actionindex`, `currentzone: "resting"`, `speed: 100`, `zones`. Dynamic state fields from `robotstates.py` (`nextjpos`, `curjpos`, `nextpos`, `curpos`, `linposes`, `poses`, `dynposes`, `limits`, `softwarelimits`) are omitted — they are runtime state, not config.
+
+**Fields dropped** (present in zones.json, no slot in the legacy zone schema):
+- zone-level: `class`, `mode_group`, `enabled`
+- action-level: `variable_axes`, `behavior`, `loop`, `next`, `pose_imgs`, `pose_videos`, `engine`, `sweep`, `axis_bands`, `enabled`
+- top-level: `layout` (UI x/y positions)
+
+### Changes Made
+
+- `realtimecontrol/kukart/robotstatesFTI.py` (new, 363 lines): generated `kukastate` dict with all 29 zones converted.
+- `/tmp/kilo/convert_zones.py` (scratch, outside repo): reads `zones.json`, applies the mapping + derivations, emits the file, prints the missing-fields report.
+
+### Documentation
+
+- None required beyond this handoff entry; the generated file carries a header comment explaining the conversion and the `"x"` placeholder convention.
+
+### Architecture
+
+- No architectural change. This is a data-format bridge: the legacy kukart stack (`robothelpers.py`) reads `kukastate["zones"][z]` for `safezone`/`startpos`/`exitpos`/`speed` and `actions[a]` for `pos`/`speed`, and `robotstatesFTI.py` provides exactly that shape. The runtime `rtr/state/zones.py` continues to read `zones.json` directly — the two consumers are independent.
+
+### Validation
+
+- `python3 /tmp/kilo/convert_zones.py` → "Converted 29 zones".
+- Import + structural test: `import robotstatesFTI` OK; `len(zones) == 29`; every zone has all required keys (`startpos`, `safezone`, `actions`, `exitpos`, `exits`, `speed`); all `safezone` entries are 2-tuples; `pos`/`speed` list lengths match per action; all speeds are numeric or `None` (where the source action had no speed).
+- Spot checks: `resting` startpos/exitpos `[−60,−90,90,0,15,0]`, safezone `[(-185,185),(-105,-65),(89,115),(-15,15),(-15,45),(-3,3)]`, speed 20, exits `['sleeping','cuddling','stretching','hunting']`; `resting.hold` speed `[20,20,20]`; `sleeping.breathe` speed `[None,None,None,None,None]` (source action has no speed).
+
+### Decisions and Caveats
+
+- **`"x"` placeholders** are kept verbatim in poses (and in derived `startpos`/`exitpos`). They mark frozen/variable axes in the new runtime and have no fixed joint value in the legacy schema. Affected: `cuddling` exitpos, `purring` startpos, `hunting` startpos, `growling` startpos, `clawing.grab[0]`, `testing` startpos, `resting_testing_bridge` startpos, `cuddling_purring_bridge` startpos+exitpos, `cuddling_stretching_bridge` startpos+exitpos, `grabbing` startpos, `roaring_grabbing_bridge` exitpos, `hunting_scanning_bridge` startpos, `purring_hunting_bridge` exitpos, `roaring_growling_bridge` exitpos. The legacy `robothelpers.py` would choke on `"x"` in a `fitlimits`/numeric context — if the old stack must run these zones, the `"x"` axes need to be resolved to concrete values (e.g. the current joint value or a band midpoint) at load time.
+- **`startpos`/`exitpos` are derived**, not stored in zones.json. The derivation (first anchor of first action / last anchor of last action) matches how the old stack uses them (entry pose on zone activation, exit pose on zone deactivation). If a zone's first/last action pose is not a good stand-in for the true entry/exit anchor, those two fields should be overridden by hand.
+- **Disabled actions are still emitted** (`grabbing.grab` has `enabled: false`). The legacy schema has no `enabled` slot; the old stack will attempt to play it. If it must be excluded, drop the action from the dict or add a guard in the consumer.
+- **Actions with no `speed`** produce `[None]*n` speed lists: `sleeping.breathe`, `sleeping.snore`, `cuddling.breathe`, `stretching.look`, `hunting.track`, `hunting.track2`, `performing.trick`, `performing.bow`, `roaring.roar`, `roaring.snarl`, `growling.snarl`, `leaping.leap`, `leaping.pacing`, `resting_sleeping_bridge.bridge`. The legacy `doAction` reads `speed[actionindex]` and would `NoneType` on these — a default speed must be supplied (e.g. the zone speed) before the old stack runs them.
+- `exits` for 16 zones were derived from the last action's `next` (those zones have no explicit `exits` field). The derived value is a single zone name; if a zone can exit to multiple zones, an explicit `exits` list should be added to zones.json.
+
+### Next Task
+
+Wire `robotstatesFTI` into the legacy kukart stack (replace `from robotstates import kukastate` with `from robotstatesFTI import kukastate` in `tidalkuka_v01.py` and any other importers), and resolve the `"x"` placeholders + `None` speeds before the old stack is expected to drive the FTI zones.
+
+### Instructions for the Next Task
+
+1. Grep for `from robotstates import` / `import robotstates` in `realtimecontrol/kukart/` and `realtimecontrol/` to find all importers of the old zone table.
+2. For each importer that should run the FTI zones, swap the import to `robotstatesFTI`.
+3. Before the old stack touches a zone, resolve `"x"` axes: for each pose containing `"x"`, substitute the live joint value (or a per-axis default) at load or activation time. The `"x"` axes are exactly those listed in the caveats above.
+4. Supply a default speed for the 14 actions with `None` speed lists (zone speed is the natural default).
+5. Re-run the import + structural test to confirm the swapped module loads cleanly.
+
+## 2026-10-23 — Assertive mode: analysis of existing auto/manual architecture + safety seams
+
+### Status
+
+Completed
+
+### Summary
+
+Read the core in full to locate the seams for the third **"assertive"** control mode (assertively switches behaviors/programs, wanders inside safezones, varies speed, plays random patches, optionally tracks people).
+
+**Current mode architecture:**
+- `machine.control_mode`: `"auto"` | `"manual"` (`state/machine.py:111`), set via `Cmd.SET_CONTROL_MODE` → `brain.on_command` (`brain/brain.py:434`) → `machine.set_control_mode` (`machine.py:246`). Manual freezes the robot (clears action + transition, holds the current pose).
+- Auto mode: `brain._autonomy_tick` (`brain.py:934`) — dwell timeout + behavior triggers (dwell/new_lock/lost_lock/lock_duration) + external events (midi/camera/websocket = strong triggers) → `_autonomy_decide` → stay probability or advance to a random valid candidate from the action's `next` list restricted to `_allowed_zones` (enabled-group union / active group). `_random_valid_next` (`brain.py:832`) is the existing random-selection base.
+- Group navigation: `active_group` + `group_nav` waypoints via `flow.find_safe_path_to_any`; walked hop-by-hop while idle (`_group_tick`).
+- Hunt loop (auto only): scan→track→farfocus→approach→facefocus→retreat; camera presets per class (`zone_classes` in brain.json); feral = 3+ losts in 30 s.
+- `forced_behavior` (ENABLE_BEHAVIOR) = per-behavior live test override; `test_mode` = scripted nav + behavior.
+
+**Safety seams (assertive mode must stay inside safezones):**
+- `trigger_action`/`play_action` route through the safety gate: `_pending` "check" phase → engine resolves (conflict + collision) → commit/discard; operator confirm/cancel in "confirm" phase.
+- `SafetyGate.check_conflict` (`safety/gate.py`): red-link conflict = safezone overlap (cross-zone) + shared-pose continuity (cross-zone) / pose-outside-safezone (intra-zone). Collision = SAT self-collision via the Node worker.
+- Every behavior policy clamps to the effective floor (safezone ∩ hardware) — `behavior.clamp`, `_servo`, `_apply_wander`, `_apply_oscillation`; transition targets are hardware-clamped only.
+
+**Behavior inventory (the random-selection pool):** locked/intent/curious (camera servo, image Jacobian), gentle (face servo), vigilant (sine sweep), restless (continuous random drift, `wander_adj`), spontaneous (random jumps), six oscillations (soothing/agitated/aggressive/exhilarated/impatient/drowsy, freq/amp_scale), calm/bridge (no-op). All roaming policies stay within the safezone.
+
+**Patches:** deterministic per state (`patches.py:code_for`, called per state frame from `display.py`); video mode (default, action-only, per-pose video, holds last video on no-video frames) vs complex (zone+action+behavior layers). **No random patch selection exists** — "play a random patch" needs a new hook (the existing `set_screen_override` is the manual-override seam).
+
+**Speed:** `machine._current_speed()` (`machine.py:700`): transition → target zone speed; action speed; zone speed. Group `params.speed`/`dwell_s` in brain.json (stage-takeover: speed 80, dwell 15 s) — dwell is consumed by `_autonomy_dwell_s`; **`params.speed` is not read by the brain** (speed variance needs a new read or field).
+
+**brain.json state:** autonomy enabled (dwell 30 s, events midi/camera/websocket on); stage-takeover group enabled (includes bridge zones + grabbing/scanning); museum-closed + event-sit-back disabled; hunt enabled (hunting zone); facefocus enabled (stretching); per-action `cam_control` map; per-behavior params.
+
+### Changes Made
+
+- None (analysis only).
+
+### Documentation
+
+- This handoff entry records the seams for the design task.
+
+### Architecture
+
+- No architectural change yet; this entry is the input to the design task.
+
+### Validation
+
+- Read-only: `state/machine.py` (772 lines), `brain/brain.py` (1297), `state/zones.py` (907), `state/behavior.py` (642), `patches/patches.py` (373), `safety/gate.py` (169), `camera/camera.py` (98), `brain.json` (448); `main.py` + `zones.json` partially read in the prior turn.
+
+### Decisions and Caveats
+
+- The third mode plugs into `machine.control_mode` + `brain._autonomy_tick`: assertive = faster dwell, more random selection, speed variance. The safety gate stays in front of every move — assertive changes *which* candidate is picked and *how fast*, never bypasses the gate.
+- Caveat: "random patch" has no existing hook — patch resolution is state-deterministic; the design must add a selection hook without breaking the video-mode hold logic.
+- Caveat: group `params.speed` is configured but not read by the brain (only `dwell_s` is); speed variance needs a new read or a new field.
+
+### Next Task
+
+Design the assertive mode: exact semantics, config shape (brain.json), machine/brain changes, the random-patch hook, the tracking toggle, the UI seam (client.html/editor.html mode selector), and a test plan.
+
+### Instructions for the Next Task
+
+- Mode seam: `machine.set_control_mode` (machine.py:246) accepts only "auto"/"manual"; the brain's `_autonomy_tick` (brain.py:934) is where decisions are made; `_random_valid_next` (brain.py:832) already does random candidate selection (good base for assertive).
+- Safety: never bypass `_pending` resolution; assertive moves still go through `trigger_action`/`play_action`.
+- Patches: `patches.py:code_for` is called per state frame from `display.py`; add a brain-driven random-patch hook (`set_screen_override` is the existing manual-override seam).
+- Tracking toggle: the hunt loop is gated by `hunt.enabled` (brain.json) + `control_mode != "manual"`; the assertive toggle maps to that gate.
+- UI: the SET_CONTROL_MODE command payload is `{mode}` (brain.py:434); the client/editor send it — add the third option there.
+
 ## 2026-10-23 — Multi-video MIDI patch: full handoff (multipatch.js — preload ALL videos, configurable note→video map)
 
 ### Status

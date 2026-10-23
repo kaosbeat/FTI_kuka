@@ -50,7 +50,7 @@ HARDWARE_LIMITS: List[Tuple[float, float]] = [
     (-95, 158),    # A3
     (-180, 180),    # A4
     (-55, 100),    # A5
-    (-150, 1),    # A6 (rotary wrist, now limited)
+    (-150, 150),    # A6 (rotary wrist, now limited)
 ]
 
 # Behavior names: the policies that drive variable axes.

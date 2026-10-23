@@ -199,7 +199,7 @@
           "enabled": true,
           "poses": [
             [
-              -3,
+              "x",
               -133,
               156,
               -2,
@@ -207,7 +207,7 @@
               0
             ],
             [
-              -3,
+              "x",
               -133,
               156,
               -2,
@@ -215,7 +215,7 @@
               0
             ],
             [
-              -5,
+              "x",
               -130,
               155,
               0,
@@ -223,23 +223,22 @@
               0
             ],
             [
-              0,
+              "x",
               -134,
               157,
               3,
               0,
               0
-            ],
-            [
-              -3,
-              -133,
-              156,
-              -2,
-              0,
-              0
             ]
           ],
-          "variable_axes": [],
+          "variable_axes": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
           "behavior": "calm",
           "loop": true,
           "next": [
@@ -256,15 +255,13 @@
             null,
             null,
             null,
-            null,
             null
           ],
           "pose_videos": [
             "MiniMax_H3_00075_..mp4",
             "MiniMax_H3_00076_..mp4",
             "MiniMax_H3_00076_..mp4",
-            "MiniMax_H3_00077_..mp4",
-            "MiniMax_H3_00078_..mp4"
+            "MiniMax_H3_00077_..mp4"
           ]
         },
         "snore": {
@@ -321,10 +318,20 @@
               -2,
               0,
               0
+            ],
+            [
+              "x",
+              -134,
+              157,
+              3,
+              0,
+              0
             ]
           ],
           "variable_axes": [
             0,
+            2,
+            3,
             4
           ],
           "behavior": "vigilant",
@@ -342,18 +349,20 @@
           ],
           "pose_imgs": [
             null,
+            null,
             null
           ],
           "pose_videos": [
-            null,
-            null
+            "MiniMax_H3_00061_..mp4",
+            "MiniMax_H3_00110_..mp4",
+            "MiniMax_H3_00116_..mp4"
           ]
         }
       }
     },
     "cuddling": {
       "enabled": true,
-      "class": "scan",
+      "class": "track",
       "mode_group": "museum-closed",
       "safezone": [
         [
@@ -401,7 +410,15 @@
           "enabled": true,
           "poses": [
             [
-              -3,
+              "x",
+              -134,
+              157,
+              3,
+              0,
+              0
+            ],
+            [
+              -90,
               -133,
               156,
               -2,
@@ -409,7 +426,7 @@
               0
             ],
             [
-              -2,
+              -120,
               -132,
               156,
               -2,
@@ -417,7 +434,7 @@
               0
             ],
             [
-              -4,
+              -170,
               -134,
               156,
               -2,
@@ -435,9 +452,11 @@
           "pose_imgs": [
             null,
             null,
+            null,
             null
           ],
           "pose_videos": [
+            null,
             "MiniMax_H3_00051_..mp4",
             "MiniMax_H3_00049_..mp4",
             "MiniMax_H3_00048_..mp4"
@@ -624,7 +643,7 @@
     },
     "stretching": {
       "enabled": true,
-      "class": "facefocus",
+      "class": "track",
       "mode_group": "event-sit-back",
       "safezone": [
         [
@@ -1898,6 +1917,14 @@
           "behavior": "bridge",
           "poses": [
             [
+              "x",
+              -134,
+              157,
+              3,
+              0,
+              0
+            ],
+            [
               -3,
               -133,
               156,
@@ -1922,9 +1949,11 @@
           },
           "pose_imgs": [
             null,
+            null,
             null
           ],
           "pose_videos": [
+            null,
             "MiniMax_H3_00054_..mp4",
             "MiniMax_H3_00053_..mp4"
           ]
@@ -3185,8 +3214,8 @@
         "y": 40
       },
       "sleeping_stretching_bridge": {
-        "x": 670,
-        "y": 158
+        "x": 654.6218872070312,
+        "y": 182.4652099609375
       },
       "stretching": {
         "x": 880,
@@ -3278,10 +3307,10 @@
       }
     },
     "view": {
-      "x": 471.02410724439454,
-      "y": 23.3467530590338,
-      "w": 4760.99999999997,
-      "h": 560.7399999999985
+      "x": 1219.7134683487714,
+      "y": 26.355605219121948,
+      "w": 1938.2435025603834,
+      "h": 304.97647984285044
     },
     "key": "clawing,cuddling,cuddling_purring_bridge,cuddling_stretching_bridge,examining,examining_cuddling_bridge,examining_performing_bridge,grabbing,growling,hunting,hunting_examining_bridge,hunting_scanning_bridge,leaping,performing,performing_roaring_bridge,purring,purring_hunting_bridge,resting,resting_sleeping_bridge,resting_testing_bridge,roaring,roaring_grabbing_bridge,roaring_growling_bridge,scanning,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge,testing"
   }
