@@ -41,7 +41,10 @@ def _patches():
         "modes": {"calm": "BEHAVIOR_CODE"},
         "actions": {"wander": {"look": "ACTION_CODE"}},
     }
-    return Patches(StateBus(), patches_loader=lambda: table)
+    # These tests exercise the legacy layered concatenation, so pin the mode to
+    # "complex" (the default patch mode is now "video" — the new action-only system).
+    return Patches(StateBus(), patches_loader=lambda: table,
+                   patch_mode_provider=lambda: "complex")
 
 
 def _snap(zone, mode, action, action_index=None):
@@ -148,7 +151,7 @@ def test_pose_injection_in_frame():
     p = Patches(StateBus(), patches_loader=lambda: {
         "default": "osc(4, 0.1, 1.2).out()",
         "actions": {"wander": {"look": "s0.initImage(poseindex[pose])"}},
-    }, poses_provider=lambda: _MockZones(imgs))
+    }, poses_provider=lambda: _MockZones(imgs), patch_mode_provider=lambda: "complex")
     sent = []
     bus = StateBus()
     machine = _MockMachine("calm")
@@ -171,7 +174,7 @@ def test_no_pose_injection_without_action_index():
     p = Patches(StateBus(), patches_loader=lambda: {
         "default": "osc(4, 0.1, 1.2).out()",
         "actions": {"wander": {"look": "s0.initImage(poseindex[pose])"}},
-    }, poses_provider=lambda: _MockZones(imgs))
+    }, poses_provider=lambda: _MockZones(imgs), patch_mode_provider=lambda: "complex")
     sent = []
     bus = StateBus()
     machine = _MockMachine("calm")
@@ -188,7 +191,7 @@ def test_no_pose_injection_without_pose_imgs():
     p = Patches(StateBus(), patches_loader=lambda: {
         "default": "osc(4, 0.1, 1.2).out()",
         "actions": {"wander": {"look": "ACTION_CODE"}},
-    }, poses_provider=lambda: _MockZones(None))
+    }, poses_provider=lambda: _MockZones(None), patch_mode_provider=lambda: "complex")
     sent = []
     bus = StateBus()
     machine = _MockMachine("calm")
@@ -198,6 +201,102 @@ def test_no_pose_injection_without_pose_imgs():
                     speed=20.0, moving=False, action_index=0)
     bus.publish(Event.SNAPSHOT, snap)
     assert sent[0]["patch"] == "ACTION_CODE"
+
+
+# ---------------------------------------------------------------------------
+# The new "video" patch mode (action-only, per-pose video). The core resolves the
+# current pose's video to a fullscreen template; otherwise the action base patch.
+# No zone / behavior layering and no pose-index variable in this mode.
+# ---------------------------------------------------------------------------
+from rtr.patches.patches import video_template  # noqa: E402
+
+
+class _MockZonesVideos:
+    """A duck-typed zones object exposing ``action_pose_videos`` for the video level."""
+    def __init__(self, videos, imgs=None):
+        self._vids = videos
+        self._imgs = imgs
+
+    def action_pose_videos(self, zone, action):
+        return self._vids
+
+    def action_pose_imgs(self, zone, action):
+        return self._imgs
+
+
+def _video_patches(vids, mode="video", table=None):
+    table = table or {
+        "default": "osc(4, 0.1, 1.2).out()",
+        "zones": {"wander": "ZONE_CODE"},
+        "modes": {"calm": "BEHAVIOR_CODE"},
+        "actions": {"wander": {"look": "ACTION_CODE"}},
+    }
+    return Patches(StateBus(), patches_loader=lambda: table,
+                   poses_provider=lambda: _MockZonesVideos(vids),
+                   patch_mode_provider=lambda: mode)
+
+
+def test_video_mode_current_pose_video():
+    """In video mode, the current pose's video replaces the patch with the template."""
+    p = _video_patches(["p0.mp4", None, "p2.mp4"])
+    frame = _frame_for("wander", "action", "look", p, behavior="calm", action_index=0)
+    assert frame["patch"] == video_template("p0.mp4")
+
+
+def test_video_mode_current_pose_video_middle():
+    """The video is taken from the CURRENT pose index (pose 2 here)."""
+    p = _video_patches(["p0.mp4", None, "p2.mp4"])
+    frame = _frame_for("wander", "action", "look", p, behavior="calm", action_index=2)
+    assert frame["patch"] == video_template("p2.mp4")
+
+
+def test_video_mode_pose_without_video_uses_base_patch():
+    """A pose without a video falls back to the action's base patch (no zone/behavior)."""
+    p = _video_patches(["p0.mp4", None, "p2.mp4"])
+    frame = _frame_for("wander", "action", "look", p, behavior="calm", action_index=1)
+    assert frame["patch"] == "ACTION_CODE"
+
+
+def test_video_mode_no_action_uses_default():
+    """Without an action, video mode uses the default patch (not a video template)."""
+    p = _video_patches(["p0.mp4"])
+    frame = _frame_for("wander", "action", None, p, behavior="calm")
+    assert frame["patch"] == "osc(4, 0.1, 1.2).out()"
+
+
+def test_video_mode_clamps_out_of_range_pose_index():
+    """An out-of-range pose index clamps to the last pose (no crash, uses its video)."""
+    p = _video_patches(["p0.mp4", None, "p2.mp4"])
+    frame = _frame_for("wander", "action", "look", p, behavior="calm", action_index=99)
+    assert frame["patch"] == video_template("p2.mp4")
+
+
+def test_video_mode_ignores_zone_and_behavior_layers():
+    """Video mode does not concatenate the zone or behavior layers (action-only)."""
+    p = _video_patches(None)  # no videos -> base patch, but still no zone/behavior
+    frame = _frame_for("wander", "action", "look", p, behavior="calm", action_index=0)
+    assert frame["patch"] == "ACTION_CODE"
+    assert "ZONE_CODE" not in frame["patch"]
+    assert "BEHAVIOR_CODE" not in frame["patch"]
+
+
+def test_complex_mode_still_concatenates():
+    """Complex mode keeps the legacy zone + action + behavior concatenation."""
+    p = _video_patches(["p0.mp4"], mode="complex")
+    frame = _frame_for("wander", "action", "look", p, behavior="calm", action_index=0)
+    # Complex mode uses the action base patch (no video templating) + zone + behavior.
+    assert "ZONE_CODE" in frame["patch"]
+    assert "ACTION_CODE" in frame["patch"]
+    assert "BEHAVIOR_CODE" in frame["patch"]
+    assert "initVideo" not in frame["patch"]
+
+
+def test_screen_override_wins_in_video_mode():
+    """A manual screen override (live-mode manual override) wins over video resolution."""
+    p = _video_patches(["p0.mp4"])
+    p.set_screen_override("OVERRIDE_CODE")
+    frame = _frame_for("wander", "action", "look", p, behavior="calm", action_index=0)
+    assert frame["patch"] == "OVERRIDE_CODE"
 
 
 def main():
@@ -213,6 +312,14 @@ def main():
         ("test_pose_injection_in_frame", test_pose_injection_in_frame),
         ("test_no_pose_injection_without_action_index", test_no_pose_injection_without_action_index),
         ("test_no_pose_injection_without_pose_imgs", test_no_pose_injection_without_pose_imgs),
+        ("test_video_mode_current_pose_video", test_video_mode_current_pose_video),
+        ("test_video_mode_current_pose_video_middle", test_video_mode_current_pose_video_middle),
+        ("test_video_mode_pose_without_video_uses_base_patch", test_video_mode_pose_without_video_uses_base_patch),
+        ("test_video_mode_no_action_uses_default", test_video_mode_no_action_uses_default),
+        ("test_video_mode_clamps_out_of_range_pose_index", test_video_mode_clamps_out_of_range_pose_index),
+        ("test_video_mode_ignores_zone_and_behavior_layers", test_video_mode_ignores_zone_and_behavior_layers),
+        ("test_complex_mode_still_concatenates", test_complex_mode_still_concatenates),
+        ("test_screen_override_wins_in_video_mode", test_screen_override_wins_in_video_mode),
     ]:
         try:
             fn()

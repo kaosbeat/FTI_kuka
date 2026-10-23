@@ -25,6 +25,7 @@ from rtr.robot import (
     builtin_robot_config,
     load_robot_config,
     robot_config_offsets,
+    robot_config_patch_mode,
 )
 from rtr.camera.geometry import load_camera_geometry
 from rtr.camera.snapshot_grab import SnapshotGrabber
@@ -211,10 +212,15 @@ async def run(cfg: Config) -> None:
     sound = make_sound(bus, sound_loader=lambda: load_sound_data_fallback(cfg.sound_path),
                        enabled=cfg.enable_sound,
                        out_port=cfg.midi_out_port, out_device=cfg.midi_out_device)
+    # The robot config holder (a mutable list so the reload hook can swap in a new
+    # config without rebinding the local). The patches adapter reads the patch mode
+    # from it (video = new action-only system, complex = legacy layered system).
+    robot_cfg_holder = [robot_cfg]
     # The hydra patches (tool screen) are data-driven too; the engine holds the
     # reload hook so a POST /api/patches hot-reloads the running table.
     patches = Patches(bus, patches_loader=lambda: load_patches_data_fallback(cfg.patches_path),
-                      poses_provider=lambda: machine.zones)
+                      poses_provider=lambda: machine.zones,
+                      patch_mode_provider=lambda: robot_config_patch_mode(robot_cfg_holder[0]))
     # The MIDI-in learned mapping is data-driven as well; created before the engine
     # so the engine can hold its reload hook (POST /api/midi hot-reloads the table).
     midi = MidiInput(bus, in_port=cfg.midi_in_port,
@@ -225,7 +231,6 @@ async def run(cfg: Config) -> None:
                       brain=brain)
     # The robot calibration reload hook re-reads the file and applies the new
     # offsets to the physical robot (guarded: the sim has no such method).
-    robot_cfg_holder = [robot_cfg]
 
     def _reload_robot_config():
         new_cfg = load_robot_config_fallback(cfg.robot_config_path)

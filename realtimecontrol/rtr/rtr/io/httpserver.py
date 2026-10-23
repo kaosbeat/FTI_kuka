@@ -229,6 +229,8 @@ class HttpServer:
         self.root = os.path.abspath(root)
         # Pose reference images live under the static assets dir (assets/imgs/).
         self.imgs_path = os.path.join(self.root, "assets", "imgs")
+        # Per-pose videos (the new action-only patch system) live under assets/videos/.
+        self.videos_path = os.path.join(self.root, "assets", "videos")
         self.host = host
         self.port = port
         self.enabled = enabled
@@ -322,6 +324,8 @@ def _make_handler(server: HttpServer):
                 self._post_robotconfig()
             elif path == "/api/imgs":
                 self._post_imgs()
+            elif path == "/api/videos":
+                self._post_videos()
             else:
                 self._send_text(404, "not found")
 
@@ -329,6 +333,8 @@ def _make_handler(server: HttpServer):
             path = self.path.split("?", 1)[0]
             if path.startswith("/api/imgs/"):
                 self._delete_img()
+            elif path.startswith("/api/videos/"):
+                self._delete_video()
             else:
                 self._send_text(404, "not found")
 
@@ -729,6 +735,70 @@ def _make_handler(server: HttpServer):
                 os.remove(full)
             except OSError as exc:
                 self._send_json(500, {"error": f"could not delete image: {exc}"})
+                return
+            self._send_json(200, {"ok": True})
+
+        # ------------------------------------------------------------------
+        # Per-pose videos API (the new action-only patch system). Videos are stored
+        # as-is (no re-encoding) under assets/videos/; the patch that references a
+        # pose's video is built by the core (patches.code_for) in "video" mode.
+        # ------------------------------------------------------------------
+        def _post_videos(self):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                length = 0
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                req = json.loads(body)
+            except (ValueError, json.JSONDecodeError):
+                self._send_json(400, {"error": "invalid json"})
+                return
+            b64 = req.get("video")
+            if not isinstance(b64, str):
+                self._send_json(400, {"error": "missing video"})
+                return
+            try:
+                data = base64.b64decode(b64)
+            except (ValueError, TypeError) as exc:
+                self._send_json(400, {"error": f"bad video data: {exc}"})
+                return
+            name = req.get("name")
+            if not (isinstance(name, str)
+                    and re.fullmatch(r"[A-Za-z0-9_.\-]+", name)):
+                name = f"pose_{int(time.time() * 1000)}_{secrets.token_hex(4)}"
+            # Preserve a real video extension if the client sent one; else default to .mp4.
+            if "." not in name:
+                name += ".mp4"
+            try:
+                os.makedirs(server.videos_path, exist_ok=True)
+                tmp = os.path.join(server.videos_path, name + ".tmp")
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                os.replace(tmp, os.path.join(server.videos_path, name))
+            except OSError as exc:
+                self._send_json(500, {"error": f"could not save video: {exc}"})
+                return
+            self._send_json(200, {"ok": True, "name": name,
+                                    "url": f"/assets/videos/{name}"})
+
+        def _delete_video(self):
+            fname = self.path.split("?", 1)[0][len("/api/videos/"):]
+            if not re.fullmatch(r"[A-Za-z0-9_.\-]+", fname):
+                self._send_text(400, "bad name")
+                return
+            base = os.path.realpath(server.videos_path)
+            full = os.path.realpath(os.path.join(server.videos_path, fname))
+            if not (full == base or full.startswith(base + os.sep)):
+                self._send_text(403, "forbidden")
+                return
+            if not os.path.isfile(full):
+                self._send_json(404, {"error": "no such video"})
+                return
+            try:
+                os.remove(full)
+            except OSError as exc:
+                self._send_json(500, {"error": f"could not delete video: {exc}"})
                 return
             self._send_json(200, {"ok": True})
 

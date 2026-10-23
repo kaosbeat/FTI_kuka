@@ -42,7 +42,10 @@ def _patches():
         "modes": {"calm": "BEHAVIOR_CODE"},
         "actions": {"wander": {"look": "ACTION_CODE"}},
     }
-    return Patches(StateBus(), patches_loader=lambda: table)
+    # These tests exercise the legacy layered concatenation, so pin the mode to
+    # "complex" (the default patch mode is now "video" — the new action-only system).
+    return Patches(StateBus(), patches_loader=lambda: table,
+                   patch_mode_provider=lambda: "complex")
 
 
 def _snap(zone, mode, action):

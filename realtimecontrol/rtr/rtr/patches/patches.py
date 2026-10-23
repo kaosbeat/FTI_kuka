@@ -145,6 +145,20 @@ def inject_pose_globals(code: str, pose_index, pose_imgs) -> str:
     return header + code
 
 
+def video_template(name: str) -> str:
+    """The 3-line hydra patch that plays a stored video fullscreen (the new video system).
+
+    ``name`` is the filename under ``assets/videos/`` (served at ``/assets/videos/<name>``).
+    The patch sets a 768×768 resolution, initialises ``s0`` with the video, and routes it
+    to the output — so the render page plays the video fullscreen for that pose.
+    """
+    return (
+        "setResolution(768, 768)\n"
+        f's0.initVideo("/assets/videos/{name}")\n'
+        "src(s0).out()"
+    )
+
+
 # ---------------------------------------------------------------------------
 # The adapter.
 # ---------------------------------------------------------------------------
@@ -157,12 +171,17 @@ class Patches:
     :data:`Event.PATCHES_CHANGED` so the display can tell the pages to re-fetch.
     """
 
-    def __init__(self, bus: StateBus, patches_loader, poses_provider=None):
+    def __init__(self, bus: StateBus, patches_loader, poses_provider=None,
+                 patch_mode_provider=None):
         self.bus = bus
         self._patches_loader = patches_loader
         # A callable that returns the zones table (or None); used to look up the current
         # action's per-pose images so code_for can inject the pose globals (pose level).
         self._poses_provider = poses_provider
+        # A callable that returns the patch mode from the robot config ("video" = the new
+        # action-only, video-per-pose system (default); "complex" = the legacy layered
+        # zone+action+behavior system). code_for branches on it.
+        self._patch_mode_provider = patch_mode_provider
         self._data: dict = builtin_patches_data()
         # A manual screen override (set by the SET_SCREEN_PATCH command): when non-None,
         # it is what the tool screen / render page show, taking precedence over the
@@ -200,21 +219,28 @@ class Patches:
     def code_for(self, zone, mode, action, pose_index=None, behavior=None) -> str:
         """The hydra code for a state (used by the state frame and the /api/screen endpoint).
 
-        A manual screen override (set via :meth:`set_screen_override`) wins over the
-        concatenation — it is the patch the operator has pushed to the screens.
-        Otherwise the three parts are concatenated in order:
+        A manual screen override (set via :meth:`set_screen_override`) wins over everything
+        — it is the patch the operator has pushed to the screens (the live-mode manual
+        override). Otherwise the resolution depends on the patch mode (robot config):
 
-        1. **Zone patch** (``zones[zone]``) — renders to ``o0``.
-        2. **Action/default patch** (``actions[zone][action]`` or ``default``) —
-           renders to ``o1``, with the pose globals (``pose`` + ``poseindex``)
-           injected when the state is inside an action that has per-pose images.
-        3. **Behavior patch** (``modes[behavior]``) — renders to ``o3``.
+        - **"video"** (new, default): action-only. The current pose's video (if any)
+          replaces the patch with a fullscreen video template; otherwise the action's base
+          patch (or :data:`DEFAULT_HYDRA_CODE`). No zone / behavior layering, no pose-index
+          variable. See :meth:`_video_code`.
+        - **"complex"** (legacy): the three parts are concatenated in order:
+          1. **Zone patch** (``zones[zone]``) — renders to ``o0``.
+          2. **Action/default patch** (``actions[zone][action]`` or ``default``) —
+             renders to ``o1``, with the pose globals (``pose`` + ``poseindex``)
+             injected when the state is inside an action that has per-pose images.
+          3. **Behavior patch** (``modes[behavior]``) — renders to ``o3``.
 
         Missing parts are omitted; the parts are joined by newlines. When no part
         is available, :data:`DEFAULT_HYDRA_CODE` is returned.
         """
         if self._screen_override:
             return self._screen_override
+        if self._patch_mode() == "video":
+            return self._video_code(zone, action, pose_index)
         parts = []
         # 1. Zone patch (o0)
         if zone:
@@ -238,6 +264,41 @@ class Patches:
             return DEFAULT_HYDRA_CODE
         return "\n".join(parts)
 
+    def _patch_mode(self) -> str:
+        """The current patch mode from the robot config ("video" default / "complex")."""
+        if self._patch_mode_provider is None:
+            return "video"
+        try:
+            m = self._patch_mode_provider()
+            return m if m in ("video", "complex") else "video"
+        except Exception:  # noqa: BLE001 - a bad provider must not break patch resolution
+            return "video"
+
+    def _video_code(self, zone, action, pose_index) -> str:
+        """The new action-only patch: the current pose's video (if any) fullscreen, else base.
+
+        A per-pose video (from the zones state) replaces the patch with the 3-line video
+        template for that pose. Without a video for the current pose, the action's base
+        patch is used (falling back to :data:`DEFAULT_HYDRA_CODE`). No zone / behavior
+        layering and no pose-index variable in this mode.
+        """
+        vids = self._pose_videos(zone, action)
+        if vids:
+            try:
+                idx = max(0, min(int(pose_index), len(vids) - 1))
+            except (TypeError, ValueError):
+                idx = None
+            if idx is not None and vids[idx]:
+                return video_template(vids[idx])
+        action_code = None
+        if zone and action:
+            action_code = (self._data.get("actions") or {}).get(zone, {}).get(action)
+        if not (isinstance(action_code, str) and action_code):
+            action_code = self._data.get("default")
+        if isinstance(action_code, str) and action_code:
+            return action_code
+        return DEFAULT_HYDRA_CODE
+
     def _pose_imgs(self, zone, action):
         """The current action's per-pose image filenames, or None (duck-typed lookup)."""
         if not zone or not action or self._poses_provider is None:
@@ -246,6 +307,17 @@ class Patches:
             zones = self._poses_provider()
             imgs = zones.action_pose_imgs(zone, action) if zones is not None else None
             return imgs if isinstance(imgs, list) and imgs else None
+        except Exception:  # noqa: BLE001 - a bad provider must not break patch resolution
+            return None
+
+    def _pose_videos(self, zone, action):
+        """The current action's per-pose video filenames, or None (duck-typed lookup)."""
+        if not zone or not action or self._poses_provider is None:
+            return None
+        try:
+            zones = self._poses_provider()
+            vids = zones.action_pose_videos(zone, action) if zones is not None else None
+            return vids if isinstance(vids, list) and vids else None
         except Exception:  # noqa: BLE001 - a bad provider must not break patch resolution
             return None
 
@@ -279,5 +351,7 @@ class Patches:
         return dict(self._render_ui)
 
 
-def make_patches(bus: StateBus, patches_loader, poses_provider=None) -> Patches:
-    return Patches(bus, patches_loader, poses_provider=poses_provider)
+def make_patches(bus: StateBus, patches_loader, poses_provider=None,
+                 patch_mode_provider=None) -> Patches:
+    return Patches(bus, patches_loader, poses_provider=poses_provider,
+                   patch_mode_provider=patch_mode_provider)

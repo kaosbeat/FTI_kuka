@@ -85,6 +85,18 @@
   /* The camera-behavior card accents (wide = track blue, close = facefocus pink). */
   .brainCard.camWide { border-left: 3px solid #2e6fd0; }
   .brainCard.camClose { border-left: 3px solid #d9489a; }
+  /* Roaming indicator: a small icon in the top-left corner of a behavior card.
+     Roam = the behavior drives the variable axes (roams within the zone safezone);
+     fixed = it holds a strict pose (the variable axes are held, no roaming). */
+  .brainCard.roamCard { position: relative; }
+  .roamBadge { position: absolute; top: 11px; left: 10px; width: 20px; height: 20px;
+               border-radius: 50%; display: flex; align-items: center; justify-content: center;
+               font-size: 12px; line-height: 1; cursor: default; }
+  .roamBadge.roam { background: #16351f; }
+  .roamBadge.fixed { background: #3a1a1a; }
+  .brainCard.roamCard h2 { padding-left: 26px; }
+  /* The one-line roaming legend at the top of the behaviors section (full-width). */
+  .roamLegend { grid-column: 1 / -1; font-size: 12px; color: var(--dim); margin: 0 0 4px; line-height: 1.5; }
   /* Collapsible help text (the "how the params work" links). */
   .brainDetails { font-size: 12px; color: var(--dim); margin: 0 0 8px; }
   .brainDetails summary { cursor: pointer; color: var(--accent); font-size: 12px; list-style-position: inside; }
@@ -195,8 +207,8 @@
   .aeHead h2 { margin: 0; color: var(--text); text-transform: none; letter-spacing: 0; font-size: 15px; }
   .aeSec { margin-bottom: 14px; border-bottom: 1px solid #20242d; padding-bottom: 10px; }
   .aeSec h3 { margin: 0 0 8px; }
-  .aePoseRow { display: grid; grid-template-columns: repeat(6, 52px) 110px 84px; gap: 4px;
-                  margin-bottom: 4px; align-items: center; }
+  .aePoseRow { display: grid; grid-template-columns: repeat(6, 52px) 110px 84px 84px; gap: 4px;
+                   margin-bottom: 4px; align-items: center; }
   .aePoseRow input[type=number] { padding: 2px 4px; }
   .aePoseRow input[type=text] { padding: 2px 4px; text-align: center; }
   .aePoseRow input.oob { border-color: #e0a030; color: #e0a030; }
@@ -218,9 +230,36 @@
                          justify-content: center; }
   .aePoseImg .aeImgAdd:hover { border-color: var(--accent); color: var(--accent); }
   .aePoseImg .aeImgX { position: absolute; top: -6px; right: -6px; width: 16px; height: 16px;
-                       border-radius: 50%; background: #333a44; color: #fff; border: none;
-                       font-size: 12px; line-height: 1; cursor: pointer; padding: 0; }
+                        border-radius: 50%; background: #333a44; color: #fff; border: none;
+                        font-size: 12px; line-height: 1; cursor: pointer; padding: 0; }
   .aePoseImg .aeImgX:hover { background: #e04040; }
+  /* Per-pose video (col 9 of the pose row): a thumbnail (click to replace) with a
+     small "×" to remove, or a dashed "+" placeholder (click to add). Stored as-is
+     under assets/videos/; the core plays it fullscreen when the pose is active. */
+  .aePoseVideo { width: 84px; height: 40px; position: relative; display: flex;
+                 align-items: center; justify-content: center; }
+  .aePoseVideo .aeVidThumb { width: 40px; height: 40px; object-fit: cover;
+                              border-radius: 4px; border: 1px solid var(--border);
+                              cursor: pointer; background: #0d0f13; }
+  .aePoseVideo .aeVidAdd { width: 40px; height: 40px; border-radius: 4px;
+                            border: 1px dashed var(--border); color: var(--dim);
+                            background: #0d0f13; font-size: 18px; line-height: 1;
+                            cursor: pointer; display: flex; align-items: center;
+                            justify-content: center; }
+  .aePoseVideo .aeVidAdd:hover { border-color: var(--accent); color: var(--accent); }
+  .aePoseVideo .aeVidX { position: absolute; top: -6px; right: -6px; width: 16px; height: 16px;
+                          border-radius: 50%; background: #333a44; color: #fff; border: none;
+                          font-size: 12px; line-height: 1; cursor: pointer; padding: 0; }
+  .aePoseVideo .aeVidX:hover { background: #e04040; }
+  /* Pose video preview (shown in the action editor's patch section). */
+  .aePoseVideos { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; align-items: center; }
+  .aePoseVideosLabel { font-size: 11px; color: var(--dim); }
+  .aeVidThumbBig { width: 48px; height: 48px; object-fit: cover; border: 2px solid var(--border);
+                   border-radius: 4px; cursor: pointer; background: #0d0f13; }
+  .aeVidThumbBig:hover { border-color: var(--accent); }
+  .aeVidPreview { width: 100%; max-width: 380px; margin: 6px 0; border-radius: 4px;
+                  border: 1px solid var(--border); background: #000; display: none; }
+  .aeVidPreview.show { display: block; }
   /* Crop editor modal: a manual square-crop editor over the uploaded image. */
   #cropEditor { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none; z-index: 40; }
   #cropEditor.open { display: block; }
@@ -560,9 +599,23 @@
        back to the read pose, so the core's arrival check keeps firing.
        <b>A6</b> is the axis you tune; the others default to 0 (no change) and are kept so
        more axes can be calibrated later.</p>
-    <div id="robotConfigForm"></div>
+     <div id="robotConfigForm"></div>
     <div class="row" style="margin-top:12px">
       <button id="robotConfigReset" class="small">reset to zero</button>
+    </div>
+  </section>
+  <section>
+    <h2>patch config</h2>
+    <p class="midiHelp">How the on-screen patch is resolved.
+      <b>video</b> — the new action-only system: each pose of an action can hold a video, played
+      fullscreen on the render page when that pose is active. Only actions have a patch; the
+      zone / behavior layers are off.
+      <b>complex</b> — the legacy layered system: zone → action → behavior patches are combined,
+      with per-pose reference images and the <code>poseindex</code> variable.
+      Switching applies on the next save + hot-reload.</p>
+    <div class="row" style="margin-top:8px">
+      <label>patch mode</label>
+      <select id="patchModeSel"></select>
     </div>
   </section>
 </main>
@@ -627,6 +680,8 @@
     </div>
     <div class="aeSec"><h3>patch</h3>
       <div id="aePoseImgs" class="aePoseImgs"></div>
+      <div id="aePoseVideos" class="aePoseVideos"></div>
+      <video id="aeVidPreview" class="aeVidPreview" controls muted></video>
       <textarea id="aePatchCode" class="aePatch" spellcheck="false"></textarea>
       <div id="aePreview" class="aePreview"></div>
       <div id="aePatchStatus" class="aeStatus"></div></div>
@@ -2352,6 +2407,12 @@ const BEHAVIOR_DESCRIPTIONS = {
   drowsy: "very slow, low-amplitude oscillation (sleepy swaying).",
 };
 
+// Behaviors that hold a strict pose (no motion on the variable axes): the no-op
+// policies in rtr/state/behavior.py (_apply_behavior returns early for these). Every
+// other behavior drives the variable axes and roams within the zone safezone. Used to
+// badge the behavior cards (roam vs. fixed) in the top-left corner.
+const NO_ROAM_BEHAVIORS = new Set(["calm", "bridge"]);
+
 // The camera intent vocabulary (mirrors rtr/brain/config.py CAMERA_CHOICES / CAMERA_MODES).
 const CAMERA_CHOICES = ["wide", "close", "both"];
 const CAMERA_MODES = ["idle", "track", "analyze"];
@@ -2748,6 +2809,11 @@ function buildBrainForm() {
   behSep.className = "brainSep";
   behSep.textContent = "behaviors";
   el.appendChild(behSep);
+  // One-line legend for the roaming icon (top-left of each behavior card).
+  const roamLegend = document.createElement("div");
+  roamLegend.className = "roamLegend";
+  roamLegend.textContent = "Icon (top-left of each card): \uD83D\uDEB6 roams the zone safezone (drives the variable axes) \u00b7 \uD83D\uDCCD fixed pose (variable axes held, no roaming).";
+  el.appendChild(roamLegend);
   // Elaborated help for the per-behavior next-selection (stay / triggers) block:
   // what the triggers are, the stay probability, the strong external events, and the
   // re-arm / lock-tracking bookkeeping. Full-width + collapsible, the same pattern as
@@ -2802,6 +2868,19 @@ function buildBrainForm() {
     lastCamGroup = camGroup;
     const card = mkCard(name, BEHAVIOR_DESCRIPTIONS[name]);
     if (camGroup) card.classList.add(CAMERA_BEHAVIOR_GROUPS[camGroup].accent);
+    // Roaming indicator (top-left corner): roam = drives the variable axes (roams
+    // within the zone safezone); fixed = holds a strict pose (no roaming).
+    {
+      const roam = !NO_ROAM_BEHAVIORS.has(name);
+      card.classList.add("roamCard");
+      const badge = document.createElement("span");
+      badge.className = "roamBadge " + (roam ? "roam" : "fixed");
+      badge.textContent = roam ? "\uD83D\uDEB6" : "\uD83D\uDCCD";
+      badge.title = roam
+        ? "roams: drives the variable axes (roams within the zone safezone)"
+        : "fixed: holds a strict pose (the variable axes are held, no roaming)";
+      card.appendChild(badge);
+    }
     const defaults = BEHAVIOR_PARAMS[name] || {};
     const keys = Object.keys(defaults);
     if (keys.length) {
@@ -3339,7 +3418,10 @@ function normalizeRobotConfig(data) {
   const arr = (Array.isArray(d.joint_offsets_deg) && d.joint_offsets_deg.length === 6)
     ? d.joint_offsets_deg.slice()
     : ROBOT_CONFIG_FALLBACK.joint_offsets_deg.slice();
-  return Object.assign({}, d, { joint_offsets_deg: arr });
+  // The patch system mode: "video" (new, action-only, per-pose video — the default)
+  // or "complex" (the legacy zone + behavior + action layered system).
+  const mode = (d.patch_mode === "complex" || d.patch_mode === "video") ? d.patch_mode : "video";
+  return Object.assign({}, d, { joint_offsets_deg: arr, patch_mode: mode });
 }
 
 async function loadRobotConfig() {
@@ -3384,6 +3466,18 @@ function buildRobotConfigForm() {
   $("robotConfigReset").onclick = () => {
     el.querySelectorAll("input[type=number]").forEach((inp) => { inp.value = 0; });
   };
+  // The patch mode selector (video = new action-only system, complex = legacy layered system).
+  const modeSel = $("patchModeSel");
+  modeSel.innerHTML = "";
+  const modes = [["video", "video (action-only, per-pose)"], ["complex", "complex (zone + action + behavior)"]];
+  modes.forEach(([val, label]) => {
+    const opt = document.createElement("option");
+    opt.value = val;
+    opt.textContent = label;
+    modeSel.appendChild(opt);
+  });
+  modeSel.value = ROBOT_CONFIG.patch_mode;
+  modeSel.onchange = () => { ROBOT_CONFIG.patch_mode = modeSel.value; };
 }
 
 function saveRobotConfig() {
@@ -3399,16 +3493,19 @@ function saveRobotConfig() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   }).then((r) => r.json().then((body) => ({ ok: r.ok, status: r.status, body })))
-   .then(({ ok, status, body }) => {
-    if (ok) {
-      ROBOT_CONFIG = normalizeRobotConfig(payload);
-      $("saveMsg").textContent = "saved";
-      $("saveMsg").className = "";
-    } else {
-      $("saveMsg").textContent = "save failed: " + (body.error || status);
-      $("saveMsg").className = "err";
-    }
-  }).catch((e) => { $("saveMsg").textContent = "save failed: " + e; $("saveMsg").className = "err"; });
+    .then(({ ok, status, body }) => {
+      if (ok) {
+        ROBOT_CONFIG = normalizeRobotConfig(payload);
+        $("saveMsg").textContent = "saved";
+        $("saveMsg").className = "";
+        // A patch-mode change re-shapes the patches tab (video hides the zone/behavior
+        // layers); rebuild it if we're in that view.
+        if (patchView) buildPatchesForm();
+      } else {
+        $("saveMsg").textContent = "save failed: " + (body.error || status);
+        $("saveMsg").className = "err";
+      }
+    }).catch((e) => { $("saveMsg").textContent = "save failed: " + e; $("saveMsg").className = "err"; });
 }
 
 // Live brain state from the state frame (hunt state + lock + camera intent + cam telemetry).
@@ -3560,6 +3657,7 @@ function evalPatchPreview(code) {
 function buildPatchesForm() {
   const listEl = $("patchList");
   listEl.innerHTML = "";
+  const videoMode = ROBOT_CONFIG && ROBOT_CONFIG.patch_mode !== "complex";
   const addGroup = (label) => {
     const g = document.createElement("div");
     g.className = "grp"; g.textContent = label;
@@ -3579,12 +3677,16 @@ function buildPatchesForm() {
   };
   addGroup("default");
   addSlot("default", "default");
-  addGroup("zones");
-  Object.keys(TABLE.zones).forEach((n) => addSlot("zones." + n, n));
-  // The data scope key stays "modes" (the core patch table retains it); the slots
-  // are the behavior policies.
-  addGroup("behaviors");
-  BEHAVIORS.forEach((m) => addSlot("modes." + m, m));
+  // In the new "video" mode only actions have a patch (the zone + behavior layers
+  // are off); the legacy layered slots are hidden. In "complex" mode they return.
+  if (!videoMode) {
+    addGroup("zones");
+    Object.keys(TABLE.zones).forEach((n) => addSlot("zones." + n, n));
+    // The data scope key stays "modes" (the core patch table retains it); the slots
+    // are the behavior policies.
+    addGroup("behaviors");
+    BEHAVIORS.forEach((m) => addSlot("modes." + m, m));
+  }
   addGroup("actions");
   Object.keys(TABLE.zones).forEach((zn) => {
     if (!PATCHES.actions[zn]) PATCHES.actions[zn] = {};
@@ -3594,7 +3696,9 @@ function buildPatchesForm() {
   const code = getPatchCode(selectedPatch);
   $("patchCode").value = code;
   $("patchTitle").textContent = "patch: " + selectedPatch;
-  $("patchInfo").textContent = "layers: zone (o0) + action/default (o1) + behavior (o3)";
+  $("patchInfo").textContent = videoMode
+    ? "video mode: per-pose video (action editor) or the action base patch — no zone/behavior layers"
+    : "layers: zone (o0) + action/default (o1) + behavior (o3)";
   evalPatchPreview(code);
 }
 
@@ -3794,6 +3898,52 @@ function buildAePoseImgs(zn, an) {
   });
 }
 
+// Build the pose-video thumbnails in the action editor's patch section (mirrors
+// buildAePoseImgs). Each thumbnail is clickable to show that pose's video in the
+// #aeVidPreview element. Shown only when the action has at least one video.
+function buildAePoseVideos(zn, an) {
+  const el = $("aePoseVideos");
+  el.innerHTML = "";
+  const a = TABLE.zones[zn].actions[an];
+  const vids = reconcileActionVideos(zn, an);
+  const hasVids = vids.some((v) => v);
+  if (!hasVids) return;
+  const label = document.createElement("span");
+  label.className = "aePoseVideosLabel";
+  label.textContent = "pose videos:";
+  el.appendChild(label);
+  vids.forEach((name, pi) => {
+    if (!name) return;
+    const thumb = document.createElement("video");
+    thumb.className = "aeVidThumbBig";
+    thumb.src = "/assets/videos/" + name;
+    thumb.muted = true;
+    thumb.title = "pose " + (pi + 1) + " — click to show in preview";
+    thumb.onclick = () => { showAeVidPreview(zn, an, pi); };
+    el.appendChild(thumb);
+  });
+}
+
+// Show pose (zn, an, pi)'s video in the #aeVidPreview element (the live preview).
+// The video template the core resolves for this pose (setResolution/initVideo/src(s0).out())
+// is a RUNTIME resolution, not stored data — the base-patch textarea keeps the action's
+// base patch (used for poses without a video). So this only drives the preview element.
+function showAeVidPreview(zn, an, pi) {
+  const name = poseVideoAt(zn, an, pi);
+  const el = $("aeVidPreview");
+  if (!name) { hideAeVidPreview(); return; }
+  el.src = "/assets/videos/" + name;
+  el.classList.add("show");
+}
+
+// Hide the video preview (e.g. after deleting a video).
+function hideAeVidPreview() {
+  const el = $("aeVidPreview");
+  el.classList.remove("show");
+  el.removeAttribute("src");
+  try { el.pause(); } catch (e) {}
+}
+
 // Swap two anchor poses (and their sound entries) in place, so reordering keeps the
 // per-pose sound aligned. Mirrors the zones-tab pose handling but also swaps sound.
 function aeSwapPoses(zn, an, i, j) {
@@ -3807,9 +3957,13 @@ function aeSwapPoses(zn, an, i, j) {
   };
   swap(a.poses);
   if (Array.isArray(a.pose_imgs)) swap(a.pose_imgs);
+  if (Array.isArray(a.pose_videos)) swap(a.pose_videos);
   const s = SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an];
   if (s && Array.isArray(s.poses)) swap(s.poses);
   buildActionEditor();
+  buildAePoseImgs(zn, an);
+  buildAePoseVideos(zn, an);
+  preloadAePoseImgs(zn, an);
 }
 
 // Ensure SOUND.actions[zn][an] exists with a start message and a poses array whose
@@ -3853,6 +4007,29 @@ function poseImgAt(zn, an, i) {
   return (Array.isArray(a.pose_imgs) && a.pose_imgs[i]) ? a.pose_imgs[i] : null;
 }
 
+// Per-pose videos: ``a.pose_videos`` is a list aligned with ``a.poses`` (each entry
+// is a filename string or ``null`` for "no video"). Stored as-is under assets/videos/
+// (no crop/resize); the core plays the current pose's video fullscreen when active.
+// Reconciles ``a.pose_videos`` to the current pose count (pad with ``null``, truncate
+// extras). Mirrors reconcileActionImgs.
+function reconcileActionVideos(zn, an) {
+  const z = TABLE.zones[zn];
+  if (!z || !z.actions || !z.actions[an]) return;
+  const a = z.actions[an];
+  const n = actionPoses(a).length;
+  if (!Array.isArray(a.pose_videos)) a.pose_videos = [];
+  while (a.pose_videos.length < n) a.pose_videos.push(null);
+  if (a.pose_videos.length > n) a.pose_videos.length = n;
+  return a.pose_videos;
+}
+// The video filename (or ``null``) for the i-th pose of an action.
+function poseVideoAt(zn, an, i) {
+  const z = TABLE.zones[zn];
+  if (!z || !z.actions || !z.actions[an]) return null;
+  const a = z.actions[an];
+  return (Array.isArray(a.pose_videos) && a.pose_videos[i]) ? a.pose_videos[i] : null;
+}
+
 // ---------------------------------------------------------------------------
 // Per-pose reference image control + manual square-crop editor.
 //
@@ -3889,6 +4066,38 @@ function buildPoseImgControl(zn, an, pi) {
     add.textContent = "+";
     add.title = "add reference image";
     add.onclick = (e) => { e.stopPropagation(); openCropEditor(zn, an, pi); };
+    ctl.appendChild(add);
+  }
+  return ctl;
+}
+
+// The col-9 control of a pose row: the per-pose video. A thumbnail (click to
+// replace) with a small "×" to remove, or a dashed "+" placeholder (click to add).
+// Unlike images there is no crop step — the file is uploaded as-is to /api/videos.
+function buildPoseVideoControl(zn, an, pi) {
+  const ctl = document.createElement("div");
+  ctl.className = "aePoseVideo";
+  const name = poseVideoAt(zn, an, pi);
+  if (name) {
+    const thumb = document.createElement("video");
+    thumb.className = "aeVidThumb";
+    thumb.src = "/assets/videos/" + name;
+    thumb.muted = true;
+    thumb.title = "replace video";
+    thumb.onclick = (e) => { e.stopPropagation(); openVideoPicker(zn, an, pi); };
+    ctl.appendChild(thumb);
+    const x = document.createElement("button");
+    x.className = "aeVidX";
+    x.textContent = "×";
+    x.title = "remove video";
+    x.onclick = (e) => { e.stopPropagation(); deletePoseVideo(zn, an, pi); };
+    ctl.appendChild(x);
+  } else {
+    const add = document.createElement("button");
+    add.className = "aeVidAdd";
+    add.textContent = "+";
+    add.title = "add video";
+    add.onclick = (e) => { e.stopPropagation(); openVideoPicker(zn, an, pi); };
     ctl.appendChild(add);
   }
   return ctl;
@@ -4088,6 +4297,70 @@ function deletePoseImg(zn, an, pi) {
   buildActionEditor();
   buildAePoseImgs(zn, an);
   preloadAePoseImgs(zn, an);
+}
+
+// Shared file picker for per-pose videos (one hidden <input type=file> reused for
+// every pose row, like the crop editor's #cropFile). Opens the picker for pose
+// (zn, an, pi), then uploads the chosen video as-is to /api/videos.
+let _videoFileInput = null;
+function openVideoPicker(zn, an, pi) {
+  if (!_videoFileInput) {
+    _videoFileInput = document.createElement("input");
+    _videoFileInput.type = "file";
+    _videoFileInput.accept = "video/*";
+    _videoFileInput.style.display = "none";
+    document.body.appendChild(_videoFileInput);
+  }
+  _videoFileInput.value = "";
+  _videoFileInput.onchange = (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    uploadPoseVideo(f, zn, an, pi);
+  };
+  _videoFileInput.click();
+}
+
+// Read the video as base64 and POST {video, name} to /api/videos. The server stores
+// it as-is under assets/videos/ and returns {ok, name, url}. The original filename
+// (sanitized) is used as the name so the patch template's video name is stable.
+function uploadPoseVideo(file, zn, an, pi) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const b64 = reader.result.split(",")[1];
+    // Sanitize the original filename to the server's accepted charset [A-Za-z0-9_.-]+.
+    const base = (file.name || "video").replace(/\.[^./]+$/, "");
+    const safe = base.replace(/[^A-Za-z0-9_.\-]/g, "");
+    const name = safe ? safe + (file.name.match(/\.[^./]+$/) ? "." + file.name.match(/\.[^./]+$/)[0] : ".mp4") : null;
+    fetch("/api/videos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ video: b64, name: name }),
+    }).then((r) => r.json()).then((res) => {
+      if (res.ok && res.name) {
+        const a = TABLE.zones[zn].actions[an];
+        if (!Array.isArray(a.pose_videos)) a.pose_videos = reconcileActionVideos(zn, an);
+        a.pose_videos[pi] = res.name;
+        buildActionEditor();
+        buildAePoseVideos(zn, an);
+        showAeVidPreview(zn, an, pi);
+      } else {
+        alert("video upload failed: " + (res.error || "unknown error"));
+      }
+    }).catch((e) => alert("video upload failed: " + e));
+  };
+  reader.readAsDataURL(file);
+}
+
+// Remove the pose's video: clear pose_videos[pi] and DELETE the file.
+function deletePoseVideo(zn, an, pi) {
+  const a = TABLE.zones[zn].actions[an];
+  const name = Array.isArray(a.pose_videos) ? a.pose_videos[pi] : null;
+  if (!name) return;
+  a.pose_videos[pi] = null;
+  fetch("/api/videos/" + encodeURIComponent(name), { method: "DELETE" }).catch(() => {});
+  buildActionEditor();
+  buildAePoseVideos(zn, an);
+  hideAeVidPreview();
 }
 
 // Schematic preview of a single pose, drawn in the action editor's right column.
@@ -4431,6 +4704,7 @@ function buildActionEditor() {
       del.onclick = () => {
         a.poses.splice(pi, 1);
         if (Array.isArray(a.pose_imgs)) a.pose_imgs.splice(pi, 1);
+        if (Array.isArray(a.pose_videos)) a.pose_videos.splice(pi, 1);
         const s = SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an];
         if (s && Array.isArray(s.poses)) s.poses.splice(pi, 1);
         buildActionEditor();
@@ -4529,14 +4803,16 @@ function buildActionEditor() {
     del.onclick = () => {
       a.poses.splice(pi, 1);
       if (Array.isArray(a.pose_imgs)) a.pose_imgs.splice(pi, 1);
+      if (Array.isArray(a.pose_videos)) a.pose_videos.splice(pi, 1);
       const s = SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an];
       if (s && Array.isArray(s.poses)) s.poses.splice(pi, 1);
       buildActionEditor();
     };
-     ctl.appendChild(up); ctl.appendChild(down); ctl.appendChild(cp); ctl.appendChild(del);
-     pr.appendChild(ctl);
-     pr.appendChild(buildPoseImgControl(zn, an, pi));
-     plist.appendChild(pr);
+      ctl.appendChild(up); ctl.appendChild(down); ctl.appendChild(cp); ctl.appendChild(del);
+      pr.appendChild(ctl);
+      pr.appendChild(buildPoseImgControl(zn, an, pi));
+      pr.appendChild(buildPoseVideoControl(zn, an, pi));
+      plist.appendChild(pr);
   });
   // Paste the clipboard pose into this action's `poses` list (appends; use ▲▼ to
   // position it).
@@ -4552,6 +4828,8 @@ function buildActionEditor() {
     a.poses.push([0,0,0,0,0,0]);
     if (!Array.isArray(a.pose_imgs)) a.pose_imgs = [];
     a.pose_imgs.push(null);
+    if (!Array.isArray(a.pose_videos)) a.pose_videos = [];
+    a.pose_videos.push(null);
     const s = SOUND && SOUND.actions && SOUND.actions[zn] && SOUND.actions[zn][an];
     if (s) { s.poses = s.poses || []; s.poses.push({ note: 60, velocity: 60 }); }
     buildActionEditor();
@@ -4836,8 +5114,10 @@ function pastePose(zn, an, index) {
   if (!Array.isArray(a.poses) || !a.poses.length) a.poses = [[0,0,0,0,0,0]];
   const at = (index == null || index < 0 || index > a.poses.length) ? a.poses.length : index;
   if (!Array.isArray(a.pose_imgs)) a.pose_imgs = a.poses.map(() => null);
+  if (!Array.isArray(a.pose_videos)) a.pose_videos = a.poses.map(() => null);
   a.poses.splice(at, 0, POSE_CLIP.slice());
   a.pose_imgs.splice(at, 0, null);
+  a.pose_videos.splice(at, 0, null);
   return true;
 }
 
@@ -4847,10 +5127,14 @@ function openActionEditor(zn, an) {
   AE.zone = zn; AE.action = an;
   $("actionEditor").classList.add("open");
   $("aeTitle").textContent = zn + " / " + an;
+  const videoMode = ROBOT_CONFIG && ROBOT_CONFIG.patch_mode !== "complex";
   const cur = getPatchCode("actions." + zn + "." + an);
   const imgs = reconcileActionImgs(zn, an);
   const hasImgs = imgs && imgs.some((im) => im);
-  if (hasImgs && cur.indexOf("poseindex") < 0) {
+  // The poseindex variable mechanism only applies in the legacy "complex" mode.
+  // In "video" mode the core resolves per-pose (current pose's video -> template,
+  // else the action base patch), so the textarea holds the action's base patch only.
+  if (!videoMode && hasImgs && cur.indexOf("poseindex") < 0) {
     // First time: prepend the pose mechanism (poseindex array + s0.initImage) to
     // the existing patch. The existing patch is preserved; the user adds src(s0)
     // usage themselves. Use the first pose that has an image as the initial index.
@@ -4863,6 +5147,8 @@ function openActionEditor(zn, an) {
   }
   if (hasImgs) preloadAePoseImgs(zn, an);  // build the JS texture array (s1-s3 stay free)
   buildAePoseImgs(zn, an);
+  buildAePoseVideos(zn, an);
+  hideAeVidPreview();
   if (BRAIN) { buildActionEditor(); }
   else { loadBrain().then(() => buildActionEditor()); }
   evalAePatchPreview($("aePatchCode").value);

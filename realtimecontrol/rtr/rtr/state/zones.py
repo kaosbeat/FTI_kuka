@@ -503,6 +503,16 @@ def _validate_action(name: str, a: dict, all_zone_names: set) -> None:
                 and all(e is None or (isinstance(e, str) and e) for e in pimgs)):
             raise ValueError(f"action {name!r}: pose_imgs must be a list matching the pose count (filename or null)")
 
+    # Optional per-pose videos (the new action-only patch system): a list aligned
+    # with ``poses`` (each entry is a filename string or ``null`` for "no video").
+    # When present it must match the pose count exactly so the two stay in lock-step,
+    # exactly like ``pose_imgs``. A pose with a video renders that video fullscreen.
+    pvids = a.get("pose_videos")
+    if pvids is not None:
+        if not (isinstance(pvids, list) and len(pvids) == len(poses)
+                and all(e is None or (isinstance(e, str) and e) for e in pvids)):
+            raise ValueError(f"action {name!r}: pose_videos must be a list matching the pose count (filename or null)")
+
     va = a.get("variable_axes", [])
     if not (isinstance(va, list) and all(
             isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= 5
@@ -873,6 +883,17 @@ class Zones:
             return None
         imgs = self.get(zone_name)._action(action_name).get("pose_imgs")
         return imgs if isinstance(imgs, list) else None
+
+    def action_pose_videos(self, zone_name: str, action_name: str) -> Optional[List]:
+        """The action's per-pose video filenames (aligned with ``poses``), or None.
+
+        Each entry is a filename string or ``None`` (a pose with no video). Used by the
+        patches adapter to build the video patch (the new action-only patch system).
+        """
+        if not self.has(zone_name):
+            return None
+        vids = self.get(zone_name)._action(action_name).get("pose_videos")
+        return vids if isinstance(vids, list) else None
 
     def mode_groups(self) -> Dict[str, List[str]]:
         """Zones grouped by mode_group: ``{group_name: [zone_names]}``.

@@ -1,5 +1,236 @@
 # Task Handoff Log
 
+## 2026-10-23 — Simplify patch system: frontend (editor.html) + tests + end-to-end verification
+
+### Status
+
+Completed. Frontend UI, per-pose video controls, complex-mode gating, video-mode tests, and end-to-end HTTP verification are all done. Remaining optional item: live browser playback of an uploaded video on the 3D tool screen (see Caveats).
+
+### Summary
+
+Implemented the frontend half of the simplified patch system in `editor.html` and closed the loop with tests and an end-to-end HTTP check. The editor now: (1) exposes a **patch config card** in the robotconfig tab with a `patch_mode` selector (video / complex); (2) shows a **per-pose video control** in the action editor (upload / preview / delete, parallel to the image control) that POSTs to `/api/videos` and writes `pose_videos[pi]`; (3) **gates the legacy layered UI** — the patches tab's zone/behavior groups and the pose-index `pose_imgs` augmentation are hidden in `video` mode and restored in `complex` mode. The video-mode branch of the core (backend, prior entry) is now covered by dedicated tests, and the existing legacy tests were re-pinned to `complex` mode so they keep asserting the layered concatenation now that `video` is the default.
+
+**What changed:**
+- **`editor.html`** (all client-side; no backend change needed beyond the prior entry):
+  - `normalizeRobotConfig` defaults `patch_mode` to `"video"`; `saveRobotConfig` includes `patch_mode` in the `/api/robotconfig` payload and rebuilds the patches form on success.
+  - Robotconfig section: `#patchModeSel` (video / complex) wired to `ROBOT_CONFIG.patch_mode`.
+  - Action editor: `#aePoseVideos` + `<video id="aeVidPreview">`; new helpers `reconcileActionVideos`, `poseVideoAt`, `buildPoseVideoControl`, `openVideoPicker`, `uploadPoseVideo` (POSTs `{video, name}` → sets `pose_videos[pi] = res.name`), `deletePoseVideo` (clears `pose_videos[pi]` + `DELETE /api/videos/<name>`), `buildAePoseVideos`, `showAeVidPreview`, `hideAeVidPreview`. Pose-row grid widened to `repeat(6, 52px) 110px 84px 84px`.
+  - Pose-data consistency: delete/add/swap/paste-pose all splice/pad/swap `pose_videos` alongside the other per-pose arrays.
+  - Complex-mode gating: `openActionEditor` only augments `pose_imgs` in `complex` mode; `buildPatchesForm` hides `zones`/`behaviors` groups (keeps `default` + `actions`) in `video` mode and updates `patchInfo`.
+- **`tests/test_patch_push.py`**: added `_MockZonesVideos` (exposes `action_pose_videos`) + `_video_patches` helper and 8 video-mode tests (current-pose video template, middle-pose selection, pose-without-video → base patch, no-action → default, out-of-range clamp, ignores zone/behavior layers, complex still concatenates, screen-override wins). Re-pinned the existing legacy `_patches` helper + 3 pose-injection tests to `patch_mode_provider=lambda: "complex"` (the default is now `video`).
+- **`tests/test_patch_override.py`**: re-pinned the `_patches` helper to `complex` mode so the concatenation-fallback assertions still hold under the new `video` default.
+
+**No change needed in `render.html`** (already evals the pushed `m.patch`); the video template the core pushes plays fullscreen automatically.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`: patch config card, per-pose video controls + preview, complex-mode gating, pose-array consistency for `pose_videos`.
+- `realtimecontrol/rtr/tests/test_patch_push.py`: 8 video-mode tests + re-pinned legacy tests to `complex`.
+- `realtimecontrol/rtr/tests/test_patch_override.py`: re-pinned legacy helper to `complex`.
+
+### Documentation
+
+- Handoff entry (this). In-UI `patchInfo` copy in the editor already reflects the two modes.
+
+### Architecture
+
+- No new architectural change vs. the backend entry: the frontend consumes the existing `patch_mode` + `pose_videos` + `/api/videos` surface. The core remains the single source of truth for the on-screen patch; the editor only edits the inputs (`patch_mode`, `pose_videos`) and the legacy layered slots are shown/hidden per mode.
+
+### Validation
+
+- `python3 -m py_compile` on `main.py`, `robot/config.py`, `robot/__init__.py`, `state/zones.py`, `io/httpserver.py`, `patches/patches.py` → COMPILE OK; `python3 -c "import main"` → IMPORT OK.
+- `editor.html` inline scripts (13) → `node --check` JS SYNTAX OK.
+- `pytest tests/test_patch_push.py tests/test_patch_override.py` → **23 passed** (18 push incl. 8 new video-mode, 5 override).
+- Full `pytest tests/ --ignore=tests/test_remote_tui.py` → 249 passed, 14 skipped. **Pre-existing, unrelated failures:** `test_remote_sdl.py` (5 — TUI THEME/LAYOUT + setup-page labels, a subsystem untouched here) and a `test_remote_tui.py` collection error (urwid import path). Not caused by this change.
+- **End-to-end HTTP** (real `HttpServer` on a free port): upload → `assets/videos/test.mp4` written (bytes round-trip) → static `GET /assets/videos/test.mp4` returns exact bytes → extension-less name defaults to `.mp4` → missing `video` → 400 → unsafe name regenerated to safe `pose_*` name → delete 200 + file removed → delete-missing 404 → path-traversal delete forbidden (400/403) and parent intact. **14/14 passed.**
+
+### Decisions and Caveats
+
+- **`code_for`'s `mode` param is vestigial**; the behavior layer is driven by the separate `behavior` param from `display.py`. Unchanged.
+- **Caveat (verify in browser, optional):** confirm a real uploaded video plays fullscreen on the 3D tool screen end-to-end. The core pushes the `video_template` and `render.html` evals it; `hydra-synth.js` exposes `initVideo`. The code path is verified in-process and over HTTP, but a live playback smoke test (upload → trigger action → observe fullscreen video) is the one remaining manual check.
+- **Legacy tests re-pinned to `complex`:** because `video` is now the default patch mode, the tests asserting the legacy zone/action/behavior concatenation must opt in explicitly. This is a test-only change; production behavior is unchanged.
+
+### Next Task
+
+Optional browser smoke test: open `editor.html`, upload a pose video in the action editor, trigger the action, and confirm `render.html` plays the video fullscreen; then switch `patch_mode` to `complex` and confirm the legacy zone/behavior slots + pose-index images reappear.
+
+### Instructions for the Next Task
+
+- Boot the core (`python3 main.py`) or the existing dev server. In `editor.html`, select an action → its pose rows show a video control next to the image control. Click it, pick a file; it uploads to `/api/videos` and the pose's `pose_videos[pi]` is set (thumbnail appears). Trigger the action and open the 3D tool screen / `render.html` — the current pose's video should play fullscreen. Set `patch_mode = complex` in the robotconfig tab and the patches tab's zone/behavior groups and the pose-index image augmentation return.
+- If `initVideo` is missing on the live hydra build, the patch-status surface will show the error; `hydra-synth.js` already defines it.
+
+## 2026-10-23 — Simplify patch system: backend (videos API + pose_videos + patch_mode + core resolution)
+
+### Status
+
+Completed (backend). Frontend (editor.html UI) is the next task.
+
+### Summary
+
+Implemented the backend for the simplified patch system, per the design in the prior entry. The core now resolves the on-screen patch in one of two modes (from the robot config): **"video"** (new, default — action-only, per-pose video) or **"complex"** (the legacy layered zone+action+behavior system). Added a per-pose video store + API, a `pose_videos` field on actions, and a `patch_mode` key on the robot config. The core already resolved per-pose (`snap.action_index`), so the video branch reuses that seam.
+
+**What changed:**
+- **`robot/config.py`**: `PATCH_MODE_KEY`/`DEFAULT_PATCH_MODE="video"`/`VALID_PATCH_MODES=("video","complex")`; added to `DEFAULT_ROBOT_CONFIG` + `builtin_robot_config`; `_patch_mode` validator + normalization in `validate_robot_config` (accepts `"video"`/`"complex"`, default `"video"`); `robot_config_patch_mode(config)` accessor.
+- **`robot/__init__.py`**: exported `robot_config_patch_mode`.
+- **`state/zones.py`**: `pose_videos` validation in `_validate_action` (list matching the pose count, filename-or-null — mirrors `pose_imgs`); `action_pose_videos(zone, action)` accessor (mirrors `action_pose_imgs`).
+- **`io/httpserver.py`**: `videos_path = assets/videos` (next to `imgs_path`); `POST /api/videos` (`_post_videos`) stores the base64-decoded video as-is (no re-encode) and returns `{ok,name,url}` (appends `.mp4` if no extension); `DELETE /api/videos/<name>` (`_delete_video`); routing added in `do_POST`/`do_DELETE`. Reused the `[A-Za-z0-9_.\-]+` name guard + realpath containment check.
+- **`patches/patches.py`**: `video_template(name)` builds the 3-line patch `setResolution(768, 768)\ns0.initVideo("/assets/videos/<name>")\nsrc(s0).out()`; `Patches.__init__` takes `patch_mode_provider`; `code_for` branches on `_patch_mode()` — `"video"` → `_video_code` (current pose's video → template, else the action base patch, else `DEFAULT_HYDRA_CODE`; no zone/behavior layering, no pose-index variable), `"complex"` → the existing 3-layer concat; `_pose_videos` helper (mirrors `_pose_imgs`); `make_patches` accepts `patch_mode_provider`. A manual `set_screen_override` still wins in both modes (the live-mode manual override).
+- **`main.py`**: imported `robot_config_patch_mode`; hoisted `robot_cfg_holder = [robot_cfg]` before the `Patches` construction; wired `patch_mode_provider=lambda: robot_config_patch_mode(robot_cfg_holder[0])` (hot-reload aware).
+
+**No change needed in `render.html`:** it already evals the pushed `m.patch` (`renderCode`), so a video template pushed by the core plays fullscreen automatically.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/robot/config.py`: patch_mode key + validation + accessor.
+- `realtimecontrol/rtr/rtr/robot/__init__.py`: export `robot_config_patch_mode`.
+- `realtimecontrol/rtr/rtr/state/zones.py`: `pose_videos` validation + `action_pose_videos`.
+- `realtimecontrol/rtr/rtr/io/httpserver.py`: `videos_path`, `POST /api/videos`, `DELETE /api/videos/<name>`, routing.
+- `realtimecontrol/rtr/rtr/patches/patches.py`: `video_template`, `patch_mode_provider`, `code_for` branch, `_pose_videos`, `make_patches`.
+- `realtimecontrol/rtr/main.py`: import + `robot_cfg_holder` hoist + `patch_mode_provider` wiring.
+
+### Documentation
+
+- Handoff entry (this) + the design entry above. In-UI help for the patch config card lands with the editor task.
+
+### Architecture
+
+- **Architectural change made:** a new `patch_mode` branch in the core's patch resolution (`patches.py:code_for`) and a new `pose_videos` per-action field in the zones state. The core remains the single source of truth for the on-screen patch (it pushes the resolved code in every state frame); the new mode only changes *how* `code_for` resolves it. The manual `set_screen_override` (live-mode override) still takes precedence in both modes.
+
+### Validation
+
+- `python3 -m py_compile` on `main.py`, `robot/config.py`, `robot/__init__.py`, `state/zones.py`, `io/httpserver.py`, `patches/patches.py` → COMPILE OK.
+- Functional test (in-process `Patches`): video mode resolves per-pose (pose 0/2 → `video_template`, pose 1 → action base, no action → data default, out-of-range index clamps); complex mode still concatenates zone+action(+pose globals)+behavior; `set_screen_override` wins in both; a missing `patch_mode_provider` defaults to `"video"`. → ALL PASSED.
+- `video_template("dance.mp4")` → `setResolution(768, 768)\ns0.initVideo("/assets/videos/dance.mp4")\nsrc(s0).out()`.
+- `validate_robot_config`/`robot_config_patch_mode`: `"complex"`/`"video"` accepted, `{}` → `"video"`, bad value → `ValueError`.
+- `_validate_action` `pose_videos`: valid list (filename/null) OK; wrong length → `ValueError`; bad element → `ValueError`; absent OK.
+
+### Decisions and Caveats
+
+- **Videos are stored as-is** (no re-encode/resize) — unlike the image crop pipeline. The `setResolution(768,768)` in the template handles the display size; the source video is untouched.
+- **`code_for`'s `mode` param is vestigial** (unused in the body); the behavior layer is driven by the separate `behavior` param (passed by `display.py`). Unchanged.
+- **Caveat (verify in browser):** `render.html`'s hydra build must expose `s0.initVideo(...)`. The editor's AE hydra and the render hydra both use `new Hydra(...)`; `initVideo` is a standard hydra-synth source method, but confirm on the live page (the patch-status path will surface an error if it's missing).
+- **Caveat:** in `"video"` mode the per-pose video takes precedence for that pose; other poses fall back to the action's base patch (editable in the action editor). Images/`poseindex` still work only in `"complex"` mode (or as the action base patch content).
+
+### Next Task
+
+Frontend in `editor.html`: (1) the **patch config card** in the robotconfig tab (a `patch_mode` selector: video / complex); (2) the **per-pose video control** in the action editor (upload / preview / delete, parallel to the image control) that POSTs to `/api/videos` and writes `pose_videos[pi]`; (3) hide/grey the legacy patches tab's zone/behavior slots (and the pose-index variable) when `patch_mode == "video"`, since only actions have a patch in the new system.
+
+### Instructions for the Next Task
+
+- **Patch config card:** in `editor.html`, the robotconfig view is built by `buildRobotConfigForm()` (line ~3399) into `#robotConfigForm`; `ROBOT_CONFIG` is loaded by `loadRobotConfig()` (line ~3381) and normalized by `normalizeRobotConfig()` (line ~3373, which currently only handles `joint_offsets_deg`). Add a `patch_mode` `<select>` (options `video`/`complex`) to the robotconfig form and include it in the `saveRobotConfig()` payload (line ~3425, which currently maps only the 6 joint inputs). `normalizeRobotConfig` should default `patch_mode` to `"video"`.
+- **Per-pose video control:** mirror the image control. `buildPoseImgControl(zn, an, pi)` (line ~3905) builds the col-8 image control; add a sibling `buildPoseVideoControl(zn, an, pi)` (a `<video>` thumbnail / "+" placeholder / "×" delete) and wire it into the pose-row builder wherever `buildPoseImgControl` is called. Upload: read the file as base64 and `POST /api/videos {video, name}` (name from the original filename, sanitized to `[A-Za-z0-9_.\-]+`), then set `a.pose_videos[pi] = res.name` and refresh (mirror `uploadPoseImg` line ~4093 + `reconcileActionImgs` line ~3874 — add a `reconcileActionVideos`). Delete: `DELETE /api/videos/<name>` (mirror `deletePoseImg` line ~4118). `openActionEditor` (line ~4880) should set the `aePatchCode` textarea to `video_template` for the current pose when it has a video (else the action base patch), and preview it via `evalAePatchPreview`.
+- **Disable complex by default:** when `ROBOT_CONFIG.patch_mode == "video"`, the patches tab's zone/behavior slot groups (`buildPatchesForm` line ~3596, the `addGroup("zones")`/`addGroup("behaviors")` blocks) and the `poseindex` variable should be hidden/disabled; only the `default` + `actions` slots are meaningful. Gate on `ROBOT_CONFIG.patch_mode`.
+
+## 2026-10-23 — Simplify patch system: research + design (video-per-pose, action-only, toggle)
+
+### Status
+
+Completed (research + design). Implementation tasks follow.
+
+### Summary
+
+Researched the full patch/data flow to plan the requested simplification of the hydra patch system in `editor.html`. Goal: disable the current multi-layer system (zones + behaviors + action patches) by default, gated behind a "patch config card" in the robotconfig; make the new default **action-only** and **video-driven** (per-pose video uploads in the action editor, replacing the existing patch with a 3-line video template; played fullscreen in `render.html` on action trigger + pose change; no other trigger changes patches except a manual live override).
+
+**Architecture confirmed (the seam to build on):**
+- The core is the **single source of truth** for the on-screen patch. `display.py:_patch_for(snap)` (line 85) calls `self._patch_code(snap.zone, snap.mode, snap.action, snap.action_index, behavior=beh)` and pushes the resolved code in **every** state frame (`_frame`, line 151: `"patch": self._patch_for(snap)`). So the core **already resolves per-pose** — `snap.action_index` is the current pose index.
+- `patches.py:code_for(zone, mode, action, pose_index, behavior)` (line 200) does the layered concat: zone patch (o0) → action/default patch (o1, with `inject_pose_globals`) → behavior patch (o3). `inject_pose_globals` (line 122) is the **"variable system"** the user wants dropped for videos (prepends `var pose` + `var poseindex = [...]`). A manual `set_screen_override` (the `set_screen_patch` command, i.e. the live-mode manual override) already wins over everything — this is the existing "manual override in live mode" seam.
+- `render.html` needs **no patch-logic change**: it already evals the pushed `m.patch` via `renderCode(...)` (line 178) and re-fetches the table on `patches_changed`. Fullscreen playback of a video patch follows automatically once the core pushes `s0.initVideo(...)`.
+- Image plumbing to mirror for videos: `httpserver.py` `_post_imgs` (line 668) / `_delete_img` (line 715), `imgs_path = assets/imgs` (line 231); `zones.py` `pose_imgs` validation (line 500-504) + `action_pose_imgs` accessor (line 866-875); `editor.html` per-pose image control + crop editor + `augmentPatchWithPose` / `preloadAePoseImgs` / `swapAePoseImg` / `buildAePoseImgs`.
+- `robot/config.py` `validate_robot_config` (line 55) already **preserves unknown top-level keys**, so a new `patch_mode` key is additive; `DEFAULT_ROBOT_CONFIG` (line 31) is where the default belongs.
+
+**Chosen design (interpretation — no clarifying question needed; it satisfies every stated requirement):**
+- **`pose_videos`**: per-action list aligned with `poses` (exactly like `pose_imgs`), each entry a filename (e.g. `pose_videos.mp4`) or `null`. Stored under `assets/videos/`.
+- **`patch_mode`** (robotconfig): `"video"` = new action-only/video system (default); `"complex"` = the current layered system.
+- **Core (`patches.py:code_for`)**: when `patch_mode == "video"`, resolve per-pose: if the current action has `pose_videos[pose_index]` set → emit the concrete template `setResolution(768,768)\ns0.initVideo("<name>")\nsrc(s0).out()`; else → the action's base patch (falling back to `DEFAULT_HYDRA_CODE`). No zone/behavior layering, no `poseindex`. When `"complex"`, current behavior unchanged.
+- **Editor (`editor.html`)**: per-pose **video** control in the action editor (upload / preview / delete), parallel to the image control. On video upload for pose `pi`: set `pose_videos[pi]`, and replace the editor's patch textarea with the template (preview shows the video). The **patch config card** in the robotconfig holds the `patch_mode` selector; the complex system's patch tab (zones/behaviors) is hidden/greyed when `patch_mode == "video"`.
+- **`render.html`**: no change expected (state-frame patch already drives fullscreen). Verify `initVideo` is present in the hydra build it loads (caveat below).
+
+### Changes Made
+
+- `.kilo/task-handoff.md`: this design entry. No code changed yet in this task.
+
+### Documentation
+
+- This handoff entry is the design record. In-UI help for the patch config card will be added with the editor task.
+
+### Architecture
+
+- Architectural change **planned** (not yet made): a new `patch_mode` mode in the core's patch resolution (`patches.py:code_for`) and a new `pose_videos` per-action field in the zones state. Documented here; the architecture doc update lands with the implementation tasks.
+
+### Validation
+
+- Research only; no code changed, so no build/test run. Files read: `editor.html` (robotconfig form ~3366-3448, patch helpers 2178-2277, hydra setup 3560-3739, pose-image/crop UI 3740-4131, `openActionEditor` 4860-4919), `httpserver.py` (imgs API 660-733, `imgs_path` 231), `zones.py` (`pose_imgs` 497-504, `action_pose_imgs` 866-875), `patches.py` (`code_for` 200-239, `inject_pose_globals` 122-145), `display.py` (`_patch_for` 85-97, `_frame` 144-156), `robot/config.py` (full), `render.html` (state-frame patch 156-185).
+
+### Decisions and Caveats
+
+- **Interpretation decision:** the new system resolves the patch **per-pose** in the core (video template for the current pose's video). This is the only reading consistent with "videos per pose" + "as soon as a new pose is played, the patch is loaded and played" + "the variable system is not needed" (no `poseindex` array). If the user instead wants the video stored as a single per-action patch string, that is a smaller change — flag it and I'll adjust.
+- **Caveat:** `render.html` must load a hydra-synth build that exposes `s0.initVideo(...)`. Needs verification on the live page (the editor's AE hydra and render hydra both construct `new Hydra(...)`; the video template relies on the standard `initVideo` source method). If the CDN build lacks it, `renderCode` will show an error in the patch-status path — verify in the browser.
+- **Caveat:** the existing image `poseindex` mechanism stays intact and is only used when `patch_mode == "complex"` (or an action has images but no video). Videos and images coexist per-pose; a video takes precedence for that pose's patch in `"video"` mode.
+
+### Next Task
+
+Implement the backend: (1) `POST /api/videos` + `DELETE /api/videos/<name>` in `httpserver.py` (parallel to the imgs API, storing under `assets/videos/`); (2) `pose_videos` field in `zones.py` (validation parallel to `pose_imgs` + `action_pose_videos` accessor); (3) `patch_mode` key in `robot/config.py` (`DEFAULT_ROBOT_CONFIG` + normalization, default `"video"`).
+
+### Instructions for the Next Task
+
+- In `httpserver.py`: add `self.videos_path = os.path.join(self.root, "assets", "videos")` next to `imgs_path` (line 231); add `elif path == "/api/videos": self._post_videos()` in `do_POST` (line 323) and `elif path.startswith("/api/videos/"):` in `do_DELETE` (line 330); add `_post_videos` / `_delete_video` mirroring `_post_imgs` / `_delete_img` (lines 668-733) but writing the raw base64-decoded bytes (no Pillow crop — videos are stored as-is) and naming `<name>` (append `.mp4` if absent). Reuse the `re.fullmatch(r"[A-Za-z0-9_.\-]+", name)` guard and the realpath containment check.
+- In `zones.py`: add `pose_videos` validation right after `pose_imgs` (line 500-504) with the same list-matches-pose-count rule; add an `action_pose_videos(zone_name, action_name)` accessor mirroring `action_pose_imgs` (line 866-875).
+- In `robot/config.py`: add `PATCH_MODE_KEY = "patch_mode"`, `DEFAULT_PATCH_MODE = "video"`, add it to `DEFAULT_ROBOT_CONFIG`, and normalize it in `validate_robot_config` (accept `"video"` or `"complex"`, default `"video"`); add a `robot_config_patch_mode(config)` accessor mirroring `robot_config_offsets`.
+
+## 2026-10-22 — Add a roaming/fixed-pose indicator icon to the brain-tab behavior cards
+
+### Status
+
+Completed
+
+### Summary
+
+Added a small icon in the top-left corner of every brain-tab **behavior card** that shows whether the behavior **roams** the zone safezone (drives the variable axes) or holds a **strict/fixed pose** (variable axes held, no roaming). This answers "which behaviors allow roaming, which do not" visually.
+
+Classification (verified against `rtr/state/behavior.py`):
+
+- **Fixed / strict pose (no roaming)** — the no-op policies; `_apply_behavior` returns early and drives no variable axes: **`calm`**, **`bridge`**.
+- **Roam the zone safezone (drive the variable axes)** — every other behavior: **`locked`, `intent`, `curious`** (camera servo), **`gentle`** (face servo), **`vigilant`** (sine sweep), **`restless`** (wander), **`spontaneous`** (random jumps), **`soothing` / `agitated` / `aggressive` / `exhilarated` / `impatient` / `drowsy`** (oscillation). 13 total.
+
+The icon: a 20px circular badge, absolutely positioned at the card's top-left. Roam = green badge with a walking glyph (🚶); fixed = red badge with a pin glyph (📌). A one-line legend sits at the top of the behaviors section, and each badge carries a hover tooltip.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - CSS (after the `.brainCard.camClose` rule, ~line 88): `.brainCard.roamCard { position: relative; }`, `.roamBadge` (absolute, top-left, 20px circle), `.roamBadge.roam` (green `#16351f`) / `.roamBadge.fixed` (red `#3a1a1a`), `.brainCard.roamCard h2 { padding-left: 26px; }` (reserve space so the title clears the badge), and `.roamLegend` (full-width legend line).
+  - `NO_ROAM_BEHAVIORS = new Set(["calm", "bridge"])` (~line 2371): the no-roam set, with a comment pointing at the `_apply_behavior` early return in `behavior.py`.
+  - After `el.appendChild(behSep)` (~line 2769): a one-line `.roamLegend` explaining the icon.
+  - In the behavior-card loop (~line 2828): for each behavior card, add the `roamCard` class and append a `.roamBadge` (roam/fixed + glyph + tooltip).
+- `realtimecontrol/rtr/test_roam_badge.js` (new): a Node mini-DOM test (same pattern as `test_groups_tab.js`) that loads the editor script, runs `loadBrain` + `buildBrainForm`, and asserts one badge per behavior card with the correct class/glyph (13 roam 🚶, 2 fixed 📌) and a tooltip.
+
+### Documentation
+
+- The in-UI legend + per-badge tooltips are the documentation; no separate doc file needed.
+
+### Architecture
+
+No architectural impact. UI-only; the roaming/fixed distinction is read-only metadata derived from the existing behavior policies (it does not change which behaviors roam or the brain's data model).
+
+### Validation
+
+- `node --check` on the extracted editor inline script → SYNTAX OK.
+- `node test_roam_badge.js` → `ALL_TESTS_PASSED` (15 badges for 15 behaviors; `calm`/`bridge` = fixed 📌; the other 13 = roam 🚶; all tooltips present).
+- Confirmed the pre-existing `test_groups_tab.js` load failure is NOT caused by this change: the original `editor.html` (from `git show HEAD`) fails the same mini-DOM load (`Cannot set properties of null (setting 'onclick')`) because the test's `STATIC_IDS` list predates the `tabRobotConfig` / `liveToggle` / `ui*Toggle` / `crop*` elements. My new test uses a permissive `getElementById` (auto-creates missing elements) and calls `loadBrain` directly (avoiding `switchView`'s 3D-unmount path the stub doesn't model).
+
+### Decisions and Caveats
+
+- Chose the binary roam/fixed split that matches the core: only `calm` and `bridge` are no-op (strict); all 13 other behaviors drive the variable axes and therefore roam within `safezone ∩ hardware`. The camera-servo behaviors (locked/intent/curious/gentle) are included in "roam" because they move the variable axes within the safezone (and can additionally sweep via `sweep_amp`).
+- Used emoji glyphs (🚶 / 📌) for the icon; easy to swap for a different glyph if the user prefers.
+- Did not modify the pre-existing `test_groups_tab.js` (its stale `STATIC_IDS` is out of scope); the new test is self-contained.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+N/A — the task is complete and verified. If the user wants a different icon, change the glyph in the behavior-card loop (~line 2833, `badge.textContent`) and the legend text (~line 2772).
+
 ## 2026-10-22 — Explain the brain tab's "triggers" (stay / next-selection) in editor.html help
 
 ### Status

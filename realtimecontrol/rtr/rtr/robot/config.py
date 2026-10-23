@@ -27,15 +27,27 @@ from typing import Any, Dict, List
 
 JOINT_COUNT = 6
 JOINT_OFFSETS_KEY = "joint_offsets_deg"
+PATCH_MODE_KEY = "patch_mode"
+# The two patch systems. "video" = the new action-only, video-per-pose system
+# (only actions have a patch; a per-pose video, if present, replaces the patch
+# with a 3-line video template). "complex" = the legacy layered system (zone +
+# action/default + behavior patches concatenated, with the pose-index variable
+# mechanism). The new system is the default; the legacy one is opt-in.
+DEFAULT_PATCH_MODE = "video"
+VALID_PATCH_MODES = ("video", "complex")
 
 DEFAULT_ROBOT_CONFIG: Dict[str, Any] = {
     JOINT_OFFSETS_KEY: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    PATCH_MODE_KEY: DEFAULT_PATCH_MODE,
 }
 
 
 def builtin_robot_config() -> Dict[str, Any]:
     """A fresh copy of the built-in defaults (the fallback when no file exists)."""
-    return {JOINT_OFFSETS_KEY: list(DEFAULT_ROBOT_CONFIG[JOINT_OFFSETS_KEY])}
+    return {
+        JOINT_OFFSETS_KEY: list(DEFAULT_ROBOT_CONFIG[JOINT_OFFSETS_KEY]),
+        PATCH_MODE_KEY: DEFAULT_PATCH_MODE,
+    }
 
 
 def _num_list(value: Any, where: str, n: int, default: List[float]) -> List[float]:
@@ -52,11 +64,21 @@ def _num_list(value: Any, where: str, n: int, default: List[float]) -> List[floa
     return out
 
 
+def _patch_mode(value: Any, where: str) -> str:
+    """Coerce ``value`` to a valid patch mode, or raise ValueError."""
+    if value is None:
+        return DEFAULT_PATCH_MODE
+    if not isinstance(value, str) or value not in VALID_PATCH_MODES:
+        raise ValueError(f"'{where}' must be one of {list(VALID_PATCH_MODES)}")
+    return value
+
+
 def validate_robot_config(data: Any) -> Dict[str, Any]:
     """Validate and normalise a robot config. Returns the filled config or raises :class:`ValueError`.
 
-    ``joint_offsets_deg`` is type-checked and filled from the defaults; any other
-    top-level keys are preserved verbatim so the config can grow new parameters.
+    ``joint_offsets_deg`` is type-checked and filled from the defaults; ``patch_mode``
+    is validated against :data:`VALID_PATCH_MODES` and filled from the default; any
+    other top-level keys are preserved verbatim so the config can grow new parameters.
     """
     if not isinstance(data, dict):
         raise ValueError("data must be an object")
@@ -64,6 +86,7 @@ def validate_robot_config(data: Any) -> Dict[str, Any]:
     out[JOINT_OFFSETS_KEY] = _num_list(
         data.get(JOINT_OFFSETS_KEY), JOINT_OFFSETS_KEY, JOINT_COUNT,
         DEFAULT_ROBOT_CONFIG[JOINT_OFFSETS_KEY])
+    out[PATCH_MODE_KEY] = _patch_mode(data.get(PATCH_MODE_KEY), PATCH_MODE_KEY)
     return out
 
 
@@ -76,3 +99,9 @@ def load_robot_config(path: str) -> Dict[str, Any]:
 def robot_config_offsets(config: Dict[str, Any]) -> List[float]:
     """The 6-element joint offset list from a robot config (defaults if absent)."""
     return list(config.get(JOINT_OFFSETS_KEY, DEFAULT_ROBOT_CONFIG[JOINT_OFFSETS_KEY]))
+
+
+def robot_config_patch_mode(config: Dict[str, Any]) -> str:
+    """The patch mode from a robot config (``video`` default / ``complex``), or the default."""
+    mode = config.get(PATCH_MODE_KEY, DEFAULT_PATCH_MODE)
+    return mode if mode in VALID_PATCH_MODES else DEFAULT_PATCH_MODE
