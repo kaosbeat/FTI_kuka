@@ -402,8 +402,12 @@
       "sweep_amp": 0.5,
       "stay": 1,
       "triggers": [
-        "dwell"
-      ]
+        "dwell",
+        "new_lock",
+        "lost_lock",
+        "lock_duration"
+      ],
+      "lock_duration_s": 10
     },
     "curious": {
       "gain": 0.3,

@@ -839,7 +839,12 @@
           "note": 60,
           "velocity": 60
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       },
       "curious": {
         "start": {
@@ -862,10 +867,6 @@
           {
             "note": 60,
             "velocity": 60
-          },
-          {
-            "note": 60,
-            "velocity": 60
           }
         ]
       },
@@ -874,7 +875,12 @@
           "note": 60,
           "velocity": 60
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "resting_testing_bridge": {
@@ -1193,7 +1199,16 @@
           "note": 60,
           "velocity": 60
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     }
   },
