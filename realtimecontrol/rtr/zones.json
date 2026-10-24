@@ -1745,12 +1745,12 @@
           2
         ],
         [
-          -118,
-          118
+          -55,
+          100
         ],
         [
-          -357,
-          357
+          -35,
+          35
         ]
       ],
       "speed": 80,
@@ -1801,7 +1801,12 @@
               0
             ]
           ],
-          "variable_axes": [],
+          "variable_axes": [
+            0,
+            1,
+            2,
+            3
+          ],
           "behavior": "locked",
           "loop": true,
           "next": {
@@ -3620,10 +3625,10 @@
       }
     },
     "view": {
-      "x": 2029.0655106315548,
-      "y": -39.78365260043864,
-      "w": 1142.9126488939128,
-      "h": 174.37129217968786
+      "x": 1772.5162963657713,
+      "y": 161.4045946878998,
+      "w": 1738.2272748865282,
+      "h": 265.1969389937827
     },
     "key": "clawing,cuddling,cuddling_purring_bridge,cuddling_stretching_bridge,examining,examining_cuddling_bridge,examining_performing_bridge,grabbing,growling,growling_clawing_bridge,hunting,hunting_examining_bridge,hunting_scanning_bridge,leaping,performing,performing_roaring_bridge,purring,purring_hunting_bridge,resting,resting_sleeping_bridge,resting_testing_bridge,roaring,roaring_grabbing_bridge,roaring_growling_bridge,scanning,scanning_leaping_bridge,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge,testing,testing_cuddling_bridge"
   }
