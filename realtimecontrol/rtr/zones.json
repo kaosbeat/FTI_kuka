@@ -134,10 +134,16 @@
           "behavior": "calm",
           "speed": 20,
           "loop": true,
-          "next": {
-            "zone": "resting_sleeping_bridge",
-            "action": "bridge"
-          },
+          "next": [
+            {
+              "zone": "resting_sleeping_bridge",
+              "action": "bridge"
+            },
+            {
+              "zone": "resting",
+              "action": "hold"
+            }
+          ],
           "pose_imgs": [
             "pose_1792351954291_9fb5ceb5.png",
             "pose_1792351975693_2b5700ee.png"
@@ -253,6 +259,10 @@
             {
               "zone": "cuddling",
               "action": "breathe"
+            },
+            {
+              "zone": "sleeping",
+              "action": "yawn"
             }
           ],
           "pose_imgs": [
@@ -317,10 +327,16 @@
           "variable_axes": [],
           "behavior": "calm",
           "loop": true,
-          "next": {
-            "zone": "sleeping",
-            "action": "yawn"
-          },
+          "next": [
+            {
+              "zone": "sleeping",
+              "action": "yawn"
+            },
+            {
+              "zone": "sleeping",
+              "action": "breathe"
+            }
+          ],
           "pose_imgs": [
             null,
             null
@@ -375,6 +391,14 @@
             {
               "zone": "sleeping_stretching_bridge",
               "action": "bridge"
+            },
+            {
+              "zone": "sleeping",
+              "action": "breathe"
+            },
+            {
+              "zone": "sleeping",
+              "action": "snore"
             }
           ],
           "pose_imgs": [
@@ -527,6 +551,10 @@
             {
               "zone": "cuddling_stretching_bridge",
               "action": "bridge"
+            },
+            {
+              "zone": "cuddling",
+              "action": "breathe"
             }
           ],
           "pose_imgs": [
@@ -760,10 +788,20 @@
           "variable_axes": [],
           "behavior": "calm",
           "loop": true,
-          "next": {
-            "zone": "stretching",
-            "action": "wink"
-          },
+          "next": [
+            {
+              "zone": "stretching",
+              "action": "wink"
+            },
+            {
+              "zone": "stretching",
+              "action": "inspect"
+            },
+            {
+              "zone": "stretching",
+              "action": "call"
+            }
+          ],
           "pose_imgs": [
             null,
             null,
@@ -794,10 +832,20 @@
           "behavior": "gentle",
           "speed": 100,
           "loop": true,
-          "next": {
-            "zone": "stretching",
-            "action": "inspect"
-          },
+          "next": [
+            {
+              "zone": "stretching",
+              "action": "inspect"
+            },
+            {
+              "zone": "stretching",
+              "action": "look"
+            },
+            {
+              "zone": "stretching",
+              "action": "call"
+            }
+          ],
           "pose_imgs": [
             null
           ],
@@ -832,6 +880,14 @@
             {
               "zone": "stretching_hunting_bridge",
               "action": "bridge"
+            },
+            {
+              "zone": "stretching",
+              "action": "look"
+            },
+            {
+              "zone": "stretching",
+              "action": "wink"
             }
           ],
           "pose_imgs": [
@@ -865,6 +921,20 @@
           ],
           "pose_videos": [
             "MiniMax_H3_00099_..mp4"
+          ],
+          "next": [
+            {
+              "zone": "stretching",
+              "action": "look"
+            },
+            {
+              "zone": "stretching",
+              "action": "wink"
+            },
+            {
+              "zone": "stretching",
+              "action": "inspect"
+            }
           ]
         }
       }
@@ -951,10 +1021,24 @@
           "pose_videos": [
             null
           ],
-          "next": {
-            "zone": "hunting_scanning_bridge",
-            "action": "bridge"
-          }
+          "next": [
+            {
+              "zone": "hunting_scanning_bridge",
+              "action": "bridge"
+            },
+            {
+              "zone": "hunting",
+              "action": "track2"
+            },
+            {
+              "zone": "hunting",
+              "action": "focus"
+            },
+            {
+              "zone": "hunting",
+              "action": "scan"
+            }
+          ]
         },
         "track2": {
           "enabled": true,
@@ -1001,10 +1085,20 @@
             null,
             null
           ],
-          "next": {
-            "zone": "hunting",
-            "action": "focus"
-          },
+          "next": [
+            {
+              "zone": "hunting",
+              "action": "focus"
+            },
+            {
+              "zone": "hunting",
+              "action": "track"
+            },
+            {
+              "zone": "hunting",
+              "action": "scan"
+            }
+          ],
           "pose_videos": [
             "MiniMax_H3_00048_..mp4",
             "MiniMax_H3_00056_..mp4",
@@ -1032,10 +1126,24 @@
           "behavior": "vigilant",
           "speed": 100,
           "loop": true,
-          "next": {
-            "zone": "hunting_examining_bridge",
-            "action": "bridge"
-          },
+          "next": [
+            {
+              "zone": "hunting_examining_bridge",
+              "action": "bridge"
+            },
+            {
+              "zone": "hunting",
+              "action": "track"
+            },
+            {
+              "zone": "hunting",
+              "action": "track2"
+            },
+            {
+              "zone": "hunting",
+              "action": "scan"
+            }
+          ],
           "pose_imgs": [
             null
           ]
@@ -1064,10 +1172,20 @@
           "pose_videos": [
             null
           ],
-          "next": {
-            "zone": "hunting",
-            "action": "track"
-          }
+          "next": [
+            {
+              "zone": "hunting",
+              "action": "track"
+            },
+            {
+              "zone": "hunting",
+              "action": "track2"
+            },
+            {
+              "zone": "hunting",
+              "action": "focus"
+            }
+          ]
         }
       }
     },
@@ -1187,6 +1305,10 @@
             {
               "zone": "examining_cuddling_bridge",
               "action": "bridge"
+            },
+            {
+              "zone": "examining",
+              "action": "focus"
             }
           ],
           "pose_imgs": [
@@ -1311,10 +1433,16 @@
           "variable_axes": [],
           "behavior": "calm",
           "loop": true,
-          "next": {
-            "zone": "performing_roaring_bridge",
-            "action": "bridge"
-          }
+          "next": [
+            {
+              "zone": "performing_roaring_bridge",
+              "action": "bridge"
+            },
+            {
+              "zone": "performing",
+              "action": "trick"
+            }
+          ]
         }
       }
     },
@@ -1450,10 +1578,16 @@
           "variable_axes": [],
           "behavior": "calm",
           "loop": true,
-          "next": {
-            "zone": "roaring_growling_bridge",
-            "action": "bridge"
-          },
+          "next": [
+            {
+              "zone": "roaring_growling_bridge",
+              "action": "bridge"
+            },
+            {
+              "zone": "roaring",
+              "action": "roar"
+            }
+          ],
           "pose_imgs": [
             null,
             null
@@ -1563,10 +1697,16 @@
           "variable_axes": [],
           "behavior": "calm",
           "loop": true,
-          "next": {
-            "zone": "growling_clawing_bridge",
-            "action": "bridge"
-          },
+          "next": [
+            {
+              "zone": "growling_clawing_bridge",
+              "action": "bridge"
+            },
+            {
+              "zone": "growling",
+              "action": "growl"
+            }
+          ],
           "pose_imgs": [
             null,
             null
@@ -1646,10 +1786,16 @@
           "behavior": "agitated",
           "speed": 40,
           "loop": true,
-          "next": {
-            "zone": "clawing",
-            "action": "grab"
-          },
+          "next": [
+            {
+              "zone": "clawing",
+              "action": "grab"
+            },
+            {
+              "zone": "clawing",
+              "action": "lock_target"
+            }
+          ],
           "pose_imgs": [
             null
           ],
@@ -1685,6 +1831,16 @@
           ],
           "pose_videos": [
             null
+          ],
+          "next": [
+            {
+              "zone": "clawing",
+              "action": "claw"
+            },
+            {
+              "zone": "clawing",
+              "action": "lock_target"
+            }
           ]
         },
         "lock_target": {
@@ -1719,6 +1875,16 @@
           "pose_videos": [
             null,
             null
+          ],
+          "next": [
+            {
+              "zone": "clawing",
+              "action": "claw"
+            },
+            {
+              "zone": "clawing",
+              "action": "grab"
+            }
           ]
         }
       }
@@ -1854,7 +2020,11 @@
           ],
           "variable_axes": [],
           "behavior": "calm",
-          "loop": true
+          "loop": true,
+          "next": {
+            "zone": "leaping",
+            "action": "leap"
+          }
         }
       }
     },
@@ -2108,6 +2278,22 @@
             {
               "zone": "testing_cuddling_bridge",
               "action": "bridge"
+            },
+            {
+              "zone": "testing",
+              "action": "intent"
+            },
+            {
+              "zone": "testing",
+              "action": "curious"
+            },
+            {
+              "zone": "testing",
+              "action": "gentle"
+            },
+            {
+              "zone": "testing",
+              "action": "locked_band"
             }
           ],
           "pose_imgs": [
@@ -2138,10 +2324,28 @@
           "sweep": true,
           "speed": 20,
           "loop": true,
-          "next": {
-            "zone": "testing",
-            "action": "intent"
-          },
+          "next": [
+            {
+              "zone": "testing",
+              "action": "intent"
+            },
+            {
+              "zone": "testing",
+              "action": "locked"
+            },
+            {
+              "zone": "testing",
+              "action": "curious"
+            },
+            {
+              "zone": "testing",
+              "action": "gentle"
+            },
+            {
+              "zone": "testing",
+              "action": "locked_band"
+            }
+          ],
           "pose_imgs": [
             null
           ]
@@ -2167,10 +2371,28 @@
           "sweep": true,
           "speed": 20,
           "loop": true,
-          "next": {
-            "zone": "testing",
-            "action": "curious"
-          },
+          "next": [
+            {
+              "zone": "testing",
+              "action": "curious"
+            },
+            {
+              "zone": "testing",
+              "action": "locked"
+            },
+            {
+              "zone": "testing",
+              "action": "intent"
+            },
+            {
+              "zone": "testing",
+              "action": "gentle"
+            },
+            {
+              "zone": "testing",
+              "action": "locked_band"
+            }
+          ],
           "pose_imgs": [
             null
           ]
@@ -2195,10 +2417,28 @@
           "sweep": true,
           "speed": 20,
           "loop": true,
-          "next": {
-            "zone": "testing",
-            "action": "gentle"
-          },
+          "next": [
+            {
+              "zone": "testing",
+              "action": "gentle"
+            },
+            {
+              "zone": "testing",
+              "action": "locked"
+            },
+            {
+              "zone": "testing",
+              "action": "intent"
+            },
+            {
+              "zone": "testing",
+              "action": "curious"
+            },
+            {
+              "zone": "testing",
+              "action": "locked_band"
+            }
+          ],
           "pose_imgs": [
             null
           ]
@@ -2223,10 +2463,24 @@
           "behavior": "curious",
           "speed": 100,
           "loop": true,
-          "next": {
-            "zone": "testing",
-            "action": "locked"
-          },
+          "next": [
+            {
+              "zone": "testing",
+              "action": "locked"
+            },
+            {
+              "zone": "testing",
+              "action": "intent"
+            },
+            {
+              "zone": "testing",
+              "action": "curious"
+            },
+            {
+              "zone": "testing",
+              "action": "gentle"
+            }
+          ],
           "pose_imgs": [
             null
           ],

@@ -4963,25 +4963,6 @@ function buildActionEditor() {
   addRow.textContent = "+ add next";
   addRow.onclick = () => { targets.push({}); commitNext(targets); };
   nsec.appendChild(addRow);
-  // Pose-continuity hint: the action must share a pose with each successor so the
-  // robot can hand off there (mirrors the runtime safety gate's find_shared_pose).
-  // Intra-zone successors are exempt: the robot moves freely within a zone, so
-  // any pose inside the safezone is a valid hand-off.
-  if (a.poses.length) {
-    const diffs = targets.filter((t) => {
-      if (t.zone === zn) return false;  // intra-zone: free movement, no continuity required
-      const tgt = (t.zone && t.action && TABLE.zones[t.zone] && TABLE.zones[t.zone].actions[t.action])
-        ? actionPoses(TABLE.zones[t.zone].actions[t.action]) : [];
-      return tgt.length && findSharedPose(a.poses, tgt) === null;
-    });
-    if (diffs.length) {
-      const hint = document.createElement("div");
-      hint.className = "aeHint";
-      hint.style.cssText = "font-size:11px;color:#e0a030";
-      hint.textContent = "no shared pose with next " + diffs.map((t) => `${t.zone}/${t.action}`).join(", ");
-      nsec.appendChild(hint);
-    }
-  }
   el.appendChild(nsec);
 
   // --- sound section: start message + one per pose (reconciled to the pose count) ---
@@ -5012,9 +4993,11 @@ function buildActionEditor() {
   buildAePoseImgs(zn, an);
 }
 
-// Duplicate an action in its zone (same poses/behavior/loop, same `next`). The copy
-// gets a free name; the user then edits the copy's `next` to point elsewhere — this is
-// how one action links to multiple zones (each copy carries its own single `next`).
+// Duplicate an action in its zone (same poses/behavior/loop, same `next` as a base).
+// The copy gets a free name; `meshNewAction` then wires it into the zone's intra-zone
+// mesh (the copy points to its siblings and the original, and the siblings point back
+// to the copy). The user can still edit the copy's `next` to point elsewhere — this is
+// how one action links to multiple zones (each copy carries its own `next` list).
 function copyAction(zn, an) {
   const z = TABLE.zones[zn];
   if (!z || !z.actions || !z.actions[an]) return;
@@ -5023,6 +5006,7 @@ function copyAction(zn, an) {
   let nn = an + "_copy", i = 1;
   while (z.actions[nn]) { nn = an + "_copy" + (i++); }
   z.actions[nn] = copy;
+  meshNewAction(zn, nn);  // wire the copy into the zone's intra-zone mesh (it + siblings)
   if (flowView) { flowRender(); buildFlowDetail(); }
   else { selectedAction = nn; buildZoneForm(); buildZoneList(); }
 }
@@ -5075,6 +5059,35 @@ function cleanNextLists() {
       const list = nextList(a2).filter((t) => t.zone || t.action);
       setNext(a2, list);
     }
+  }
+}
+
+// Wire a newly-created (or copied) action `an` into its zone's intra-zone mesh: the
+// action points to every OTHER action in the zone, and every other action points back
+// to it. Additive — it preserves existing targets (so a connection the user removed
+// stays removed) and never touches inter-zone links. Called on new-action creation and
+// on copy so the full same-zone mesh is maintained as actions grow. The brain picks a
+// random valid next, so these links let the robot roam to any sibling action.
+function meshNewAction(zn, an) {
+  const z = TABLE.zones[zn];
+  if (!z || !z.actions || !z.actions[an]) return;
+  const names = Object.keys(z.actions);
+  const addMissing = (a, targets) => {
+    const list = nextList(a);
+    const have = new Set(list.map((t) => (t.zone + "/" + t.action)));
+    let changed = false;
+    for (const t of targets) {
+      const k = t.zone + "/" + t.action;
+      if (!have.has(k)) { list.push(t); have.add(k); changed = true; }
+    }
+    if (changed) setNext(a, list);
+  };
+  // The new action points to every other action in the zone.
+  addMissing(z.actions[an], names.filter((n) => n !== an).map((n) => ({ zone: zn, action: n })));
+  // Every other action points back to the new action.
+  for (const n of names) {
+    if (n === an) continue;
+    addMissing(z.actions[n], [{ zone: zn, action: an }]);
   }
 }
 
@@ -5812,6 +5825,7 @@ function buildZoneForm(containerEl, titleEl, name, onChanged, showPoses) {
     const nm = prompt("action name:", "new");
     if (!nm) return;
     z.actions[nm] = { enabled: true, poses: [[0,0,0,0,0,0]], variable_axes: [], behavior: "calm", speed: 20, loop: true };
+    meshNewAction(name, nm);
     selectedAction = nm;
     rebuild(); onChanged();
   };
@@ -6120,19 +6134,6 @@ function saveZones() {
           if (p[ax] < hlo || p[ax] > hhi) warns.push(`${name}/${an} pose ${i} axis ${AXES[ax]} outside hardware limits`);
         }
       });
-      // Pose continuity: the action must share a pose with each successor so the
-      // robot can hand off there (mirrors the runtime safety gate's find_shared_pose).
-      // Intra-zone successors are exempt: the robot moves freely within a zone, so
-      // any pose inside the safezone is a valid hand-off.
-      for (const t of nextList(a)) {
-        if (t.zone === name) continue;  // intra-zone: free movement, no continuity required
-        if (t.zone && t.action && TABLE.zones[t.zone] && TABLE.zones[t.zone].actions[t.action]) {
-          const tgt = actionPoses(TABLE.zones[t.zone].actions[t.action]);
-          if (poses.length && tgt.length && findSharedPose(poses, tgt) === null) {
-            warns.push(`${name}/${an}: no shared pose with next ${t.zone}/${t.action}`);
-          }
-        }
-      }
     }
   }
   cleanNextLists();  // drop blank draft rows before POST
@@ -6543,9 +6544,15 @@ function flowRenderEdges() {
   layer.innerHTML = "";
   innerLayer.innerHTML = "";
   // The graph is the deduplicated set of action-level connections (bidirectional).
-  // In-zone links go to the inner layer (above the nodes) so they stay visible
-  // inside the block; inter-zone links stay on the edge layer (below the nodes).
-  actionEdgeList().forEach((e) => flowAddEdge(e.from.zone === e.to.zone ? innerLayer : layer, e));
+  // In-zone (internal) links are HIDDEN from the flow view: the intra-zone full mesh
+  // lives in the `next` fields (listed in the action editor for removal) and drives
+  // the brain's roam, but the flow only draws inter-zone links. The inner layer stays
+  // empty (kept for the node-above edge path); inter-zone links stay on the edge
+  // layer (below the nodes).
+  actionEdgeList().forEach((e) => {
+    if (e.from.zone === e.to.zone) return;  // hide internal (intra-zone) connections
+    flowAddEdge(layer, e);
+  });
 }
 
 // Draw semi-transparent rounded rectangles around each zone group's zones.

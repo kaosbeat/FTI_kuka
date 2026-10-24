@@ -1,5 +1,119 @@
 # Task Handoff Log
 
+## 2026-10-24 — Intra-zone full-mesh `next` (auto-connect siblings, hidden in flow view)
+
+### Status
+
+Completed.
+
+### Summary
+
+The user wants all actions within the same zone to auto-connect to each other via their `next` field (full mesh, not just sequential), applied retroactively to `zones.json` and on new-action creation / copy. The intra-zone links drive the brain's roam (it picks a random valid next), but are HIDDEN in the flow view (to avoid the N*(N-1) edge clutter) and still LISTED in the action editor (so the user can remove a specific link).
+
+Three changes:
+1. **Retroactive migration** (`scripts/seed_intra_next.py`): a one-time, idempotent, additive pass over `zones.json` that adds the missing intra-zone `next` links (every action points to every other action in its zone). Existing targets (intra- or inter-zone) are preserved. Applied: 54 links added across 12 zones (13 multi-action zones; one already had the full mesh).
+2. **New/copy auto-connect** (`editor.html`): a `meshNewAction(zn, an)` helper wires a newly-created or copied action into the zone's intra-zone mesh (additive — never re-adds a link the user removed, never touches inter-zone links). Wired into the `+ add action` button (`buildZoneForm`) and `copyAction`.
+3. **Hide in flow view** (`editor.html`): `flowRenderEdges` now skips intra-zone edges (the inner edge layer stays empty); only inter-zone links are drawn. The action editor still lists every `next` target including the intra-zone ones (unchanged — it already lists all targets), so removal is still possible there.
+
+### Changes Made
+
+- `realtimecontrol/rtr/scripts/seed_intra_next.py` (new): one-time migration that seeds the intra-zone full mesh into `zones.json`. Additive (preserves existing targets), idempotent, `--dry-run` supported.
+- `realtimecontrol/rtr/zones.json`: 54 intra-zone `next` links added across 12 zones (the full mesh for every multi-action zone).
+- `realtimecontrol/rtr/editor.html`:
+  - `meshNewAction(zn, an)` (new, after `cleanNextLists`): wires a new/copied action into the zone's intra-zone mesh (both directions), additive.
+  - `buildZoneForm` `+ add action` handler: calls `meshNewAction(name, nm)` after creating the action.
+  - `copyAction`: calls `meshNewAction(zn, nn)` after creating the copy; doc comment updated.
+  - `flowRenderEdges`: skips intra-zone edges (hidden from the flow view).
+
+### Documentation
+
+- `scripts/seed_intra_next.py` has a module docstring explaining the migration (usage, `--dry-run`).
+- No user-facing docs updated (the README does not document the per-zone `next` mesh; the editor's inline help for the `next` section already describes the ordered target list).
+
+### Architecture
+
+- No architectural impact to the runtime. The brain already picks a random valid next from `action_next_list` (`brain.py:_valid_next_candidates`), so the added intra-zone links are valid roam candidates with no core change. The editor's flow view hides the internal links but the data model and core navigation are unchanged.
+
+### Validation
+
+- `node --check` on the extracted inline `<script>` of `editor.html`: **JS SYNTAX OK**.
+- Isolated JS test of `nextList`/`setNext`/`meshNewAction` (full mesh on new-action join, additive removal persistence, copy scenario, single-action zone): **19 passed, 0 failed**.
+- `python3 scripts/seed_intra_next.py` applied (54 links), 2nd run = 0 links (idempotent).
+- Post-migration check: every multi-action zone's full intra-zone mesh is present (**FULL MESH OK**).
+- `zones.json` validation (all `next` targets reference existing zones + string actions): **VALIDATION OK**.
+- `pytest tests/` (excluding the pre-existing `test_remote_tui.py` collection error): **7 failed, 268 passed, 14 skipped** — the SAME 7 failures occur on the ORIGINAL `zones.json` (confirmed by `git checkout zones.json` + re-run), so **zero new failures** from this change. Pre-existing failures: `test_transition.py::test_all_reachable_transitions_complete` (TypeError in `sim.py`, a `"x"` pose axis), `test_bridge_behavior.py::test_real_zones_bridge_action_is_tagged`, and 5 `test_remote_sdl.py` UI tests.
+
+### Decisions and Caveats
+
+- **Additive, not re-normalizing:** the migration and `meshNewAction` only ADD missing intra-zone links; they never remove or re-add a link the user deleted. So a removed connection stays removed (matching "list them in the action editor for removal"). A save-time re-normalization was deliberately NOT added (it would fight the user's removals).
+- **`next` list order is irrelevant to the brain** (`_random_valid_next` picks randomly), so the migration appends missing links at the end of each list (preserving existing order).
+- **Flow view hides intra-zone links** but the `flowAddEdge` inner-edge code path is left intact (the inner layer is simply never fed intra-zone edges) — reverting the one-line skip in `flowRenderEdges` restores the old rendering.
+- **`meshNewAction` assumes the zone's existing actions already have the mesh** (the migration seeds it for existing zones). If a zone was created without the migration and actions were added before this change, the existing actions may lack sibling links until a new action triggers `meshNewAction` or the migration is re-run. Re-running `scripts/seed_intra_next.py` fixes any such drift.
+- **Stale browser cache:** the user must hard-refresh the editor (Ctrl+Shift+R) to load the updated `editor.html`.
+
+### Next Task
+
+No immediate next task identified. The full-mesh auto-connect is complete (retroactive + new/copy), hidden in the flow view, and still removable in the action editor.
+
+### Instructions for the Next Task
+
+1. To re-apply the mesh to any zone that drifted (e.g., actions added before this change without the mesh), run `python3 scripts/seed_intra_next.py` (idempotent).
+2. The `meshNewAction` helper lives in `editor.html` (after `cleanNextLists`); it is called from the `+ add action` handler in `buildZoneForm` and from `copyAction`.
+3. If the user later wants the intra-zone links visible in the flow view again, remove the `if (e.from.zone === e.to.zone) return;` skip in `flowRenderEdges` (editor.html) and restore the `innerLayer` routing.
+
+## 2026-10-24 — Remove the pose-continuity editor warning (unneeded, false-positive)
+
+### Status
+
+Completed (warning removed). The single-action auto-return feature (user point 3) is pending clarification and not yet implemented.
+
+### Summary
+
+The user reported still getting "loads" of the `entry pose differs from next …` save warning and called it "literally unneeded," giving three reasons: (1) a concrete false positive `entry pose differs from next testing/locked (45, -30, 42, 0, -5, 0)`; (2) an `"x"` (frozen/copy) axis should not be a problem; (3) a zone with a single action should auto-gain a return `next` to avoid dead ends.
+
+**Root cause of "still" seeing it:** the user's browser was showing a **cached pre-`midifix` `editor.html`**. The live rtr server (PID from `main.py --sim`) serves the **main working tree** (`/home/kaos/.../realtimecontrol/rtr`), whose `editor.html` already had the newer `no shared pose with next` logic (intra-zone exempt, `findSharedPose` mirroring the runtime gate). The exact text the user quoted — `entry pose differs from next X/Y (pose)` with the pose in parentheses — only exists pre-`midifix` (and in the idle `sapphire-scraper` Agent-Manager fork). So the user was viewing stale JS, not the served file.
+
+**Fix applied:** the pose-continuity check is a non-blocking advisory that the runtime safety gate (`rtr/safety/gate.py`, via `find_shared_pose`) already performs independently, and the robot degrades gracefully at runtime (falls back to the target's entry pose when no shared pose exists). It false-positived on intra-zone links, self-loops, same-pose siblings, and `"x"` axes. Removed it entirely from both editor surfaces so the unneeded warnings stop.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html` (`saveZones`, save-time warnings loop): removed the pose-continuity `for (const t of nextList(a))` block that pushed `no shared pose with next …` warnings. The safezone/hardware-limit pose checks in the same loop are unchanged.
+- `realtimecontrol/rtr/editor.html` (`buildActionEditor`, the inline hint): removed the pose-continuity `if (a.poses.length) { const diffs = targets.filter(...) }` block that rendered the `no shared pose with next …` hint in the action editor.
+- `findSharedPose`/`poseNumeric` (editor.html:986-1000) and the runtime `find_shared_pose` (`rtr/state/zones.py:92`) are left intact: the editor warning no longer calls `findSharedPose`, but the runtime gate still uses its own `find_shared_pose` for real collision/hand-off checks. No runtime behavior changed.
+
+### Documentation
+
+- None required — the warning was an advisory with no user-facing doc; the runtime gate's real check is unchanged and already documented in `rtr/safety/gate.py`.
+
+### Architecture
+
+- No architectural impact. This is an editor-only advisory removal. The runtime state machine and safety gate are untouched; the editor no longer pre-emptively flags pose continuity, deferring entirely to the runtime gate.
+
+### Validation
+
+- `node --check` on the extracted `<script>` blocks of `editor.html`: **JS SYNTAX OK** (13 script blocks).
+- Confirmed via grep that `entry pose differs` / `no shared pose with next` no longer appear anywhere in `editor.html`; the only remaining `findSharedPose` reference is the (now-unused) function definition at editor.html:992.
+- Not run: the robot runtime / pytest (no runtime code changed; the editor change is browser-side JS with no Python test coverage).
+
+### Decisions and Caveats
+
+- **Removed, not softened:** chose full removal over adding more exemptions (self-loop, same-pose, `"x"` axes) because the user called the warning "literally unneeded" and the runtime gate already owns the real check. If a future need arises to warn on a genuinely unreachable inter-zone hand-off, the `findSharedPose` helper is still present and can be re-wired.
+- **`"x"` axes (user point 2):** resolved by removal — no pose comparison remains in the editor, so frozen axes can no longer trigger a warning. The runtime `find_shared_pose` still skips `"x"` poses and falls back to the entry pose, so runtime is unaffected.
+- **Stale browser cache:** the user must **hard-refresh** the editor (Ctrl+Shift+R) to load the updated `editor.html`; until then the cached pre-`midifix` page will keep showing the old warning text.
+- **Point 3 (single-action auto-return) NOT implemented:** ambiguous — "returning to the previous" needs a definition (which zone is "previous"? the incoming/reverse target? table order? the flow layout neighbor?) and a trigger point (on save? on zone creation? on bridge creation?). Deferred to the next task pending the user's answer.
+
+### Next Task
+
+Implement the single-action auto-return `next` (user point 3) once the user clarifies: (a) what "the previous" zone is (the reverse/incoming target of the flow, vs. table order, vs. the flow-layout neighbor), and (b) when the auto-return should be created (on save, on zone/bridge creation, or as a live editor affordance). Likely location: the flow tab's `flowBridge` (editor.html:6797) and/or a save-time pass over single-action zones, reusing `reverse_targets` from `rtr/flow.py`.
+
+### Instructions for the Next Task
+
+1. Confirm with the user the definition of "the previous" zone and the trigger for the auto-return.
+2. In `rtr/flow.py`, `reverse_targets(zones, zone)` already returns the zones that link *into* a zone — a natural source for the return target. The editor mirrors this logic via `actionEdgeList()` (editor.html:1005) and `nextList`/`setNext` (editor.html:916/927).
+3. For a zone with exactly one action, if that action's `next` is empty, append a return target pointing back to the chosen "previous" zone (and its first enabled action, per `firstEnabledAction` editor.html:899). Reuse `setNext` to write the field in the correct single-dict vs. list form.
+4. Decide whether this is a save-time normalization (in `saveZones`) or a live editor affordance (in the flow tab). Keep it non-destructive: never overwrite an existing explicit `next`.
+5. Validate with `node --check` on the extracted editor scripts and re-run the zone-table save to confirm no dead-end warnings remain.
+
 ## 2026-10-24 — Finish midi named-pose removal: stale docstring + README cleanups
 
 ### Status
