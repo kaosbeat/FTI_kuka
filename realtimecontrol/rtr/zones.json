@@ -2892,6 +2892,14 @@
               0
             ],
             [
+              -5,
+              -125,
+              116,
+              -2,
+              40,
+              0
+            ],
+            [
               "x",
               -2,
               7,
@@ -2905,7 +2913,17 @@
           "next": {
             "zone": "grabbing",
             "action": "grab"
-          }
+          },
+          "pose_imgs": [
+            null,
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null,
+            null
+          ]
         }
       }
     },
@@ -3428,10 +3446,10 @@
       }
     },
     "view": {
-      "x": -1180.3276637035065,
-      "y": -374.87541949499644,
-      "w": 4483.274999999996,
-      "h": 705.4291299629206
+      "x": 949.218029173792,
+      "y": 47.0794903831105,
+      "w": 837.9561537531247,
+      "h": 131.84974834002884
     },
     "key": "clawing,cuddling,cuddling_purring_bridge,cuddling_stretching_bridge,examining,examining_cuddling_bridge,examining_performing_bridge,grabbing,growling,hunting,hunting_examining_bridge,hunting_scanning_bridge,leaping,performing,performing_roaring_bridge,purring,purring_hunting_bridge,resting,resting_sleeping_bridge,resting_testing_bridge,roaring,roaring_grabbing_bridge,roaring_growling_bridge,scanning,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge,testing,testing_cuddling_bridge"
   }
