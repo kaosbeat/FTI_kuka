@@ -1,5 +1,275 @@
 # Task Handoff Log
 
+## 2026-10-24 — Assertive control mode: full implementation (config + machine + brain driver + UI + test)
+
+### Status
+
+Completed. The third **`assertive`** control mode is implemented end-to-end: config validation, machine support, the brain driver, the client toggle, and a 15-case test suite. All new tests pass; no regressions (6 pre-existing failures confirmed unrelated by stash).
+
+### Summary
+
+Assertive mode drives the robot to random safe destinations with a per-move speed, optional cross-zone wandering, and optional person tracking. It is a third `control_mode` alongside `auto`/`manual`. The brain picks a random `(zone, action)` destination from a pool, rolls a per-move speed in `[speed_min, speed_max]`, and drives the robot there — same-zone moves play directly, cross-zone moves walk a safe path (BFS over the action-`next` + zone-`exits` graph). A `dwell_s` gates each reselect. Person tracking (the hunt ladder) runs only when `assertive.track` is enabled.
+
+**Work split across two sessions:**
+- *Prior session:* config (`brain/config.py`, `brain.json`), `machine.py` support, and the bulk of the `brain.py` driver were implemented and verified.
+- *This session:* verified the driver end-to-end, found and fixed **two bugs** the verification surfaced, wrote the test suite, ran the full suite, and added the client toggle.
+
+**Bugs found and fixed this session (both in `brain.py`):**
+1. **Same-zone destinations had no safe path.** `_assertive_tick` routed *every* destination through `_assertive_find_path` (a `find_safe_path` BFS). Same-zone actions without a `next` link have no in-zone graph edge, so `find_safe_path` returned `None` and the driver wasted a full dwell cycle "re-evaluating". Verified against the real `zones.json`: e.g. `hunting: track → scan` and `testing: locked → intent` have no in-zone path. **Fix:** same-zone destinations now use `play_action` directly (the robot is already in the zone; no cross-zone path needed). `_assertive_tick` in `brain.py` gained a same-zone branch before the cross-zone path walk.
+2. **Pool validation raised `KeyError` on unknown zones.** `_assertive_pool` called `self.machine.zones.get(z)`, which raises `KeyError` for an unknown zone name (it does not return `None`). An explicit `pool` entry naming an unknown zone crashed the brain. **Fix:** guard with `self.machine.zones.has(z)` before `get(z)`; unknown entries are dropped.
+
+**Config (from prior session, verified this session):**
+- `brain/config.py`: `assertive` section in `DEFAULT_BRAIN_CONFIG`; `_validate_assertive_section` validates `enabled` (bool), `dwell_s` (number ≥ 0), `speed_min`/`speed_max` (numbers, `speed_min ≤ speed_max`), `wander` (bool), `track` (bool), `pool` (null or list of non-empty `"zone/action"` strings). Wired into `validate_brain_config`.
+- `brain.json`: `assertive` section with defaults (`enabled=true`, `dwell_s=8`, `speed_min=30`, `speed_max=100`, `wander=true`, `track=false`, `pool=null`).
+
+**machine.py (from prior session, verified this session):**
+- `assertive_speed: Optional[float]` field; `set_control_mode` accepts `"assertive"` and clears `assertive_speed` on exit; `_current_speed` returns `assertive_speed` first while in assertive mode.
+
+**brain.py driver (the core of the feature):**
+- State: `assertive_nav` (waypoints), `assertive_nav_index`, `assertive_prev` (last `(zone, action)`, resets the dwell timer on change), `assertive_arrived_ts`.
+- `_assertive_cfg`: reads the `assertive` config section.
+- `_assertive_pool`: explicit `pool` entries (validated) or all enabled `(zone, action)` nodes.
+- `_assertive_pick_destination`: random pool member; skips the current node and `_blocked_candidates`; `wander=false` restricts to the current zone.
+- `_assertive_roll_speed`: rolls `assertive_speed` in `[speed_min, speed_max]` (constant per move).
+- `_assertive_find_path`: `find_safe_path` from the current node to the destination (cross-zone only).
+- `_assertive_tick`: per-tick driver — dwell gate, pick, speed roll, then: no-current-action → direct trigger; same-zone → `play_action`; cross-zone → safe-path walk (waypoint nav).
+- `tick()`: assertive branch runs `_assertive_tick` then the hunt ladder only when `assertive.track` is on.
+- `_hunt_tick`/`_hunt_active`: the hunt ladder was extracted from `tick` so assertive can reuse it; `_hunt_active` returns False (manual), `track` (assertive), True (auto).
+- `SET_CONTROL_MODE`: entering assertive clears `active_group`; leaving assertive clears nav state (machine drops `assertive_speed`).
+- `_apply_lock`: attention-grab gated by `_hunt_active()` (not `control_mode != "manual"`).
+
+**client.html:** added the `cmAssertive` button to the `#controlMode` segmented toggle, the `.seg.assertive.active` CSS (amber), the three-way state-sync, and the click handler sending `set_control_mode` with `mode: "assertive"`.
+
+**test_brain_assertive.py:** 15 tests covering the pool (default/explicit/unknown-drop), destination picking (skip-current, skip-blocked, wander restriction), speed roll range, path finding (cross-zone + same-zone-None), and the end-to-end tick (no-current-action, same-zone direct play, cross-zone walk, dwell gating, leaving-clears-state).
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/brain/brain.py`:
+  - `_assertive_tick`: added the same-zone direct-`play_action` branch (before the cross-zone path walk).
+  - `_assertive_pool`: guard unknown-zone entries with `zones.has(z)` (was a `KeyError`).
+  - (Prior session, verified here: assertive state vars, `_assertive_cfg`, `_assertive_pool`, `_assertive_pick_destination`, `_assertive_roll_speed`, `_assertive_find_path`, `_assertive_tick`, `_hunt_tick`/`_hunt_active` refactor, `tick()` assertive branch, `SET_CONTROL_MODE` handling, `_apply_lock` gating.)
+- `realtimecontrol/rtr/rtr/brain/config.py`: `assertive` section in `DEFAULT_BRAIN_CONFIG` + `_validate_assertive_section` (prior session, verified here).
+- `realtimecontrol/rtr/brain.json`: `assertive` section with defaults (prior session, verified here).
+- `realtimecontrol/rtr/rtr/state/machine.py`: `assertive_speed` field, `set_control_mode` accepts `"assertive"`, `_current_speed` honors it (prior session, verified here).
+- `realtimecontrol/rtr/client.html`: `cmAssertive` toggle (button + CSS + state-sync + handler).
+- `realtimecontrol/rtr/tests/test_brain_assertive.py` (new): 15-test suite for the assertive driver.
+
+### Documentation
+
+- `brain/config.py` module docstring documents the `assertive` section.
+- `brain.py` method docstrings document the driver semantics.
+- This handoff entry.
+
+### Architecture
+
+- Extends the existing `machine.control_mode` three-way seam (`auto`/`manual`/`assertive`) and the brain's per-tick driver. Assertive moves route through `trigger_action`/`play_action` (the safety gate is never bypassed); a discarded pending move is handled by the reselect. No new modules; the brain's `tick()` gained an assertive branch.
+
+### Validation
+
+- `python tests/test_brain_assertive.py` → **15 passed, 0 failed** (pool ×3, pick ×4, speed ×1, find_path ×2, tick ×5).
+- `python -m pytest tests/ -q --ignore=tests/test_remote_tui.py` → **269 passed, 14 skipped, 6 failed**. The 6 failures (`test_remote_sdl.py` ×5, `test_transition.py::test_all_reachable_transitions_complete`) are **pre-existing** — confirmed by `git stash` of my 4 changed files and re-running: they fail identically without my changes and touch `sim.py`/remote-TUI code I did not modify. (`test_remote_tui.py` has a pre-existing collection error: imports `action_kind` from `rtr.flow`, which does not exist.)
+
+### Decisions and Caveats
+
+- **Dwell on entry:** entering assertive, the robot dwells for `dwell_s` before its first move (the dwell timer resets on the first tick because `cur != assertive_prev`). This is a deliberate "settle" delay, not a bug — but it means the first move is delayed by `dwell_s`. If an immediate first move is wanted, seed `assertive_arrived_ts` to the past on entry in the `SET_CONTROL_MODE` handler.
+- **Unreachable pool nodes:** the default pool includes all enabled nodes, but not all are reachable from the current node via the safe-path graph. When the driver picks an unreachable cross-zone node, `find_safe_path` returns `None` and it re-evaluates next dwell (graceful; it will eventually pick a reachable one). Same-zone nodes are always reachable (direct `play_action`), so no wasted cycles there.
+- **Speed is per-move, not per-tick:** `assertive_speed` is rolled once per destination and stays constant for the duration of the move (not re-rolled each tick).
+- **Tracking is opt-in:** the hunt ladder (person tracking) runs in assertive mode only when `assertive.track` is `true` (default `false`).
+
+### Next Task
+
+Optional live check: run the rtr core, switch to assertive mode from the client toggle, and confirm the robot wanders to random destinations at variable speed, that cross-zone moves walk safe paths, and that toggling `assertive.track` enables person tracking.
+
+### Instructions for the Next Task
+
+- The driver is in `brain.py::_assertive_tick` (with helpers `_assertive_pool`, `_assertive_pick_destination`, `_assertive_roll_speed`, `_assertive_find_path`). Config is the `assertive` section in `brain.json`. The toggle is `#cmAssertive` in `client.html`.
+- To tune behavior, edit the `assertive` section in `brain.json` (`dwell_s`, `speed_min`/`speed_max`, `wander`, `track`, `pool`).
+- The test suite is `tests/test_brain_assertive.py` (run directly or via pytest). It uses a synthetic 2-zone table (zone `a` with two actions and no in-zone `next` link, exiting to zone `b`), so it does not depend on `zones.json` or the sim.
+- If the dwell-on-entry delay is unwanted, edit the `SET_CONTROL_MODE` handler in `brain.py` (the `p.get("mode") == "assertive"` branch) to seed `self.assertive_arrived_ts` to a past timestamp on entry.
+
+## 2026-10-23 — Hunt red-link conflict: generic safety-aware hunt trigger (Option 1, in-place scan)
+
+### Status
+
+Completed
+
+### Summary
+
+Implemented the generic fix for the repeated `auto discarded move to hunting / scan — red-link conflict` warning. The brain's two hunt trigger sites now consult the safety gate **before** requesting a cross-zone move, so a hunt move the gate would discard is instead run **in place** (the hunt state runs in the current zone; no move is requested). The check is driven by the live safezone data, so it applies to whatever zone the robot occupies and whatever zone the hunt params name — not just the `resting`/`hunting` pair.
+
+**Change (all in `rtr/brain/brain.py`):**
+1. New helper `Brain._hunt_move_safe(zone, action)` (`brain.py:369`): returns `False` on empty zone/action; `True` when no safety gate is wired; otherwise `not safety.check_conflict(machine.current_zone, machine.current_action, zone, action)[0]`.
+2. Person-lost scan trigger (`_hunt_tick`, `brain.py:821-823`): the `trigger_action(scan.zone, scan.action)` call is now guarded by `_hunt_move_safe(...)`; `_set_class("scan")` still always runs, so the hunt state (wide-camera scan) executes in the current zone when the move is unsafe. (The hunt ladder was later extracted from `tick` into `_hunt_tick` by the concurrent assertive-mode refactor; the guard was preserved.)
+3. Attention-grab detect trigger (`_apply_lock`, `brain.py:639-640`): added `and self._hunt_move_safe(detect.zone, detect.action)` to the existing guard, so the detect move to the hunt zone is only requested when safe.
+
+**Why this is the right layer:** the brain is the decision-maker that knows a move is hunt-driven and can choose to run the hunt state in place. The machine (`trigger_action`) and engine (`_resolve_pending`) are generic and don't know about hunt classes, so they can't make this choice. The `Cmd.TRIGGER_ACTION` operator path (`brain.py:410-411`) is intentionally left untouched — that is an explicit move, and the engine already handles its conflict (manual popup / auto discard).
+
+**Behavior after the fix:**
+- Robot in `resting`, person lost → class becomes `scan`, but **no** move to `hunting` is requested (the gate would discard it on A3). The robot scans in place in `resting`. No `SAFETY_DISCARD`, no repeated warning.
+- Robot in a zone whose safezone overlaps `hunting` (e.g. `leaping`, `stretching_hunting_bridge`, `hunting_scanning_bridge`) → the hunt move to `hunting` proceeds exactly as before (safe zones are unaffected).
+- Robot already in `hunting` → intra-zone move, unchanged.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/brain/brain.py`:
+  - Added `_hunt_move_safe(zone, action)` helper (`brain.py:369`).
+  - Guarded the person-lost scan trigger in `_hunt_tick` (`brain.py:821-823`).
+  - Guarded the attention-grab detect trigger in `_apply_lock` (`brain.py:639-640`).
+
+### Documentation
+
+- None required beyond this handoff entry; the helper's docstring documents the in-place decoupling and the no-gate / empty-input behavior.
+
+### Architecture
+
+- No architectural change. This refines the existing brain→machine→engine contract: the brain now pre-filters its own hunt-driven moves through the same safety gate the engine uses, so a hunt move is never requested that the gate would discard. The machine and engine are unchanged.
+
+### Validation
+
+- `python3 -m py_compile rtr/brain/brain.py` → SYNTAX OK.
+- `python3 /tmp/kilo/test_hunt_move_safe.py` (constructs the real `Zones` from `zones.json` + `SafetyGate` + `StateMachine` + `Brain`, then exercises `_hunt_move_safe`):
+  - `resting → hunting/scan` UNSAFE (`conflict=True`, issues `['safezones do not overlap on A3', 'no shared position: resting/hold shares no pose with hunting/scan']`) → helper returns `False`. PASS.
+  - `resting → hunting/track` UNSAFE → `False`. PASS.
+  - `leaping → hunting/scan` SAFE (zero safezone gaps) → `True`. PASS.
+  - No safety gate wired → `True`. PASS.
+  - Empty zone / empty action / both empty → `False`. PASS.
+  - **RESULT: ALL PASS.**
+
+### Decisions and Caveats
+
+- The helper reuses `SafetyGate.check_conflict` (the same check the engine runs), so the brain's decision and the engine's decision are guaranteed to agree — there is no second, divergent conflict model.
+- The detect trigger (`_apply_lock`) already had guards (`control_mode`, class not tracking, behavior not in `attention_guard`, no transition, no pending); the safety check is additive and only ever suppresses a move the gate would discard.
+- When the move is unsafe the robot now scans in place in its current zone rather than logging a repeated discard. If an operator wants a one-time notice, a throttled log could be added at the guard site, but that was intentionally omitted to keep the change minimal.
+
+### Next Task
+
+No immediate next task identified. On the next live run, confirm the `red-link conflict` warning no longer repeats while the robot sits in `resting` and a person is lost, and that the robot still moves to `hunting` when it is already in an overlapping zone (e.g. `leaping`).
+
+### Instructions for the Next Task
+
+1. Run the rtr core in auto mode with `hunt.enabled=true`.
+2. Put the robot in `resting`, wait for a person to be lost → confirm the class goes to `scan` and **no** `auto discarded move to hunting / scan` warning appears.
+3. Put the robot in `leaping` (or any zone overlapping `hunting`), wait for a person detect → confirm the robot still moves to `hunting`.
+4. If a one-time operator notice is wanted, add a throttled `print` at the two guard sites in `brain.py` (the scan trigger at `tick` and the detect trigger at `_apply_lock`).
+
+## 2026-10-23 — Hunt red-link conflict: analysis of the brain → machine → engine trigger chain
+
+### Status
+
+Completed
+
+### Summary
+
+Confirmed the root cause of the repeated `auto discarded move to hunting / scan — red-link conflict` warning (raised while the robot sits in `resting`). The brain's hunt loop triggers **cross-zone** moves to the hunt zone that the safety gate then discards, and because the brain re-triggers on every lock/lost cycle the warning repeats.
+
+**The two hunt trigger sites (both in `brain/brain.py`):**
+1. **Person lost → scan** (`tick`, `brain.py:736-745`): when the locked person's `CAM_TRACK` is stale (`> lost_s`), the brain clears the lock and calls `machine.trigger_action(scan.zone, scan.action)` = `hunting/scan`, then `_set_class("scan")`.
+2. **Attention grab → detect** (`_apply_lock`, `brain.py:573-587`): when a person is locked and the robot is not already in a tracking class, the brain calls `machine.trigger_action(detect.zone, detect.action)` = `hunting/track`.
+
+**Why each move is discarded (the chain):**
+- `machine.trigger_action` (`state/machine.py:129`) stores the move as a pending move with `same_zone=False`, `from_zone=current_zone` (e.g. `resting`), `from_action=current_action`. It performs **no** conflict check itself.
+- `engine._resolve_pending` (`core/engine.py:202`) calls `safety.check_conflict(from_zone, from_action, to_zone, to_action)`.
+- `gate.check_conflict` (`safety/gate.py:41`) treats `resting → hunting` as **inter-zone**, so it runs the safezone-overlap check. The actual `zones.json` safezones conflict on **A3**:
+  - `resting` A3 = `[89, 115]`, `hunting` A3 = `[-39, -9]`.
+  - `max(89, -39) = 89 >= min(115, -9) = -9` → **no overlap** → conflict.
+  - (A1/A2/A4/A5/A6 all overlap; A3 is the only failing axis.)
+- In auto mode the engine clears the pending move, calls `brain.mark_candidate_blocked`, and publishes `SAFETY_DISCARD` → `client.html` logs the one-line warning with the generic label `"red-link conflict"`.
+
+**Why it repeats:** the person-lost branch does not consult `_valid_next_candidates`, and `mark_candidate_blocked` only affects the autonomy next-link advance — not the hunt trigger. So the cycle `detect(track) → discard → person-lost(scan) → discard → detect(track) → …` keeps firing.
+
+**Why there is no visible editor red link:** the editor flow graph (`editor.html`) is built only from the action-level `next` field; it does not render zone-level `exits`, and no `resting` action's `next` points to `hunting`. The hunt move is a **brain direct-trigger**, not a `next` edge, so no edge is drawn (let alone red).
+
+### Changes Made
+
+- None (read-only analysis; no code changed).
+
+### Documentation
+
+- None required — this is a diagnosis; the fix entry documents the change.
+
+### Architecture
+
+- No architectural change. This entry pins down the exact trigger chain and the two brain call sites that must become safety-aware.
+
+### Validation
+
+- Verified the A3 overlap arithmetic by hand against the actual `zones.json` safezones (resting A3 `[89,115]` vs hunting A3 `[-39,-9]`).
+- Confirmed `machine.trigger_action` sets `same_zone=False` and stores a pending move with no conflict check (`machine.py:171-189`).
+- Confirmed `engine._resolve_pending` runs the conflict check and discards in auto mode (`engine.py:233-282`).
+- Confirmed `gate.check_conflict`'s inter-zone rule (safezone overlap on all 6 axes + shared-pose continuity) (`gate.py:91-108`).
+
+### Decisions and Caveats
+
+- The generic fix belongs in the **brain** (the decision-maker), not the machine or engine: the brain is the only layer that knows the move is hunt-driven and can choose to run the hunt state in place instead of requesting a move.
+- The fix must be driven by the **actual safezone data** (via the safety gate), not hardcoded to `resting`/`hunting`, so it applies to any zone whose safezone does not overlap the hunt zone.
+
+### Next Task
+
+Implement the generic safety-aware hunt trigger in `brain.py`: add a `_hunt_move_safe(zone, action)` helper and guard both hunt trigger sites (scan at `tick`, detect at `_apply_lock`) so a hunt move that the safety gate would discard is instead run in place (hunt state runs in the current zone, no move requested).
+
+### Instructions for the Next Task
+
+1. Add `Brain._hunt_move_safe(zone, action)`: return `False` on empty zone/action; `True` when `machine.safety` is None (no gate); otherwise `not safety.check_conflict(machine.current_zone, machine.current_action, zone, action)[0]`.
+2. Guard the person-lost scan trigger (`tick`, `brain.py:740-741`): only `trigger_action(scan.zone, scan.action)` when `_hunt_move_safe(...)`; always still `_set_class("scan")` so the hunt state runs in place.
+3. Guard the attention-grab detect trigger (`_apply_lock`, `brain.py:587`): add `and self._hunt_move_safe(detect.zone, detect.action)` to the existing guard condition.
+4. Do NOT touch `Cmd.TRIGGER_ACTION` (the explicit operator move at `brain.py:410-411`) — that is not a hunt move and the engine already handles its conflict.
+
+## 2026-10-23 — Investigate "saved — warning: resting: safezone A6 exceeds hardware" on save
+
+### Status
+
+Completed
+
+### Summary
+
+Investigated the save-time warning `saved — warning: resting: safezone A6 exceeds hardware [-150, 1] (+68 more)` in `realtimecontrol/rtr/editor.html`. The resting zone's A6 safezone is `[-3, 3]` (zones.json) and the user expected the hardware floor to be `[-150, 150]`, so the warning looked like a false positive.
+
+**Root cause:** the warning is generated by `saveZones()` in editor.html (line ~6091), which compares each zone safezone axis against the live `HW_LIMITS` loaded from `GET /api/limits` (the core's `HARDWARE_LIMITS` in `rtr/state/zones.py`). At the time the warning fired, the core's A6 entry was `(-150, 1)` — set by commit `2e77b23` ("hardware lim its"), which changed A6 from `(-350, 350)` to `(-150, 1)`. Because `3 > 1`, the safezone `[-3, 3]` genuinely exceeded the hardware floor `[-150, 1]`, so the warning was **correct for that core state** — not a logic bug.
+
+**Resolution already in tree:** the latest commit `c1e2437` ("zones") reverted the A6 hardware limit back to `(-150, 150)`. With that value the check `slo < hlo || shi > hhi` → `-3 < -150 || 3 > 150` → false, so the warning no longer fires. All A6 references are now consistent at `(-150, 150)`:
+- core `HARDWARE_LIMITS` (zones.py:53): `(-150, 150)`
+- editor `HW_LIMITS_FALLBACK` (editor.html:792): `[-150, 150]`
+- `rtr/remote/view.py:66`: `(-150.0, 150.0)`
+- `validate_zones.js:138` SOFTWARE_LIMITS: `[-150, 150]`
+
+During the investigation I briefly edited the editor fallback to `[-150, 1]` (matching the transient `(-150, 1)` I first observed in zones.py), then **reverted** it once I confirmed the committed core value is `(-150, 150)`. Net change to the working tree from this task: **none** (the fallback is back to its original `[-150, 150]`, which already matched the core).
+
+**Action for the user:** the running core still holds the old `(-150, 1)` in memory, so the warning will keep appearing until the server is restarted to pick up the committed `(-150, 150)`. Restart the rtr core, then re-save — the A6 warning should be gone.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`: temporarily changed `HW_LIMITS_FALLBACK` A6 from `[-150, 150]` to `[-150, 1]`, then reverted it back to `[-150, 150]`. **Net: no change** (file is back to its committed state).
+- `.kilo/task-handoff.md`: added this entry.
+
+### Documentation
+
+- None required beyond this handoff entry. The `HARDWARE_LIMITS` comment in zones.py already documents A6 as "rotary wrist, now limited".
+
+### Architecture
+
+- No architectural change. The save-time warning is a non-blocking advisory (the core clamps to the safezone ∩ hardware intersection); it correctly reflects the live `HARDWARE_LIMITS` from `/api/limits`.
+
+### Validation
+
+- Confirmed all four A6 limit sources agree on `(-150, 150)` via grep across `zones.py`, `editor.html`, `view.py`, `validate_zones.js`.
+- Confirmed `git status` shows `zones.py` unmodified at the committed `(-150, 150)` and `editor.html` back to its committed fallback.
+- Traced the A6 value history with `git log -S "(-150, 1)"`: `2e77b23` set it to `(-150, 1)`, `c1e2437` reverted it to `(-150, 150)`.
+- No JS/Python test harness exercised the warning path directly (it is a UI-only advisory); validation was by code inspection + cross-file consistency check.
+
+### Decisions and Caveats
+
+- The warning logic itself (`slo < hlo || shi > hhi`) is correct and was not changed.
+- The `+68 more` in the message is expected: it aggregates other advisories (other zones' safezones / poses outside the floor), not 68 copies of the same A6 issue.
+- Caveat: if the intended A6 floor really is the tighter `(-150, 1)` (rotary-wrist restriction), then the safezone `[-3, 3]` would still need narrowing and `c1e2437` was the wrong revert. The committed history and all four sources now agree on `(-150, 150)`, so that is the current intended value.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+If the warning reappears after a server restart, confirm the running core's `HARDWARE_LIMITS[A6]` via `GET /api/limits` and compare against `zones.py:53`. If they differ, the core process is stale — restart it. If they match and the warning still fires, the safezone in `zones.json` for that zone/axis genuinely exceeds the floor and should be narrowed (or the floor widened deliberately, keeping all four sources in sync).
+
 ## 2026-10-23 — Convert rtr/zones.json → kukart/robotstatesFTI.py (legacy zone schema)
 
 ### Status

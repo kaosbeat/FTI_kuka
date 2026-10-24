@@ -21,6 +21,7 @@ Shape::
       },
       "hunt":      { "zones": [...], "enabled": true, "params": {...} },
       "facefocus": { "zones": [...], "enabled": true, "params": {...} },
+      "assertive": { "enabled": true, "dwell_s": 8.0, "speed_min": 30, "speed_max": 100, "wander": true, "track": false, "pool": null },
       "cam_control": { "home/rest": { "active": "wide", "mode": "idle", "lock": "none" }, ... }
     }
 
@@ -42,6 +43,14 @@ Shape::
 - ``facefocus`` (top-level): the "check out that human" face actions. Its
   ``params`` carry the face-cycling data (``actions``, ``action_s``,
   ``face_lost_s``).
+- ``assertive`` (top-level): the third control mode (``"assertive"``), where the
+  brain drives the robot to random safe destinations. ``enabled`` is the master
+  switch; ``dwell_s`` is the time to stay at a destination before picking the next;
+  ``speed_min`` / ``speed_max`` are the per-move speed range (rolled once per
+  destination); ``wander`` enables cross-zone wandering (when false the robot only
+  plays random actions in its current zone); ``track`` enables the person-tracking
+  (hunt) loop in assertive mode; ``pool`` is an optional list of ``"zone/action"``
+  destination overrides (null = all enabled zones/actions in the allowed union).
 - ``cam_control`` (top-level): the per-action camera baseline, keyed by
   ``"zone/action"`` (``active`` camera, ``mode``, and ``lock`` = ``"none"`` |
   ``"auto"`` | a specific id). Applied on every action change; the hunt/facefocus
@@ -131,6 +140,15 @@ DEFAULT_BRAIN_CONFIG: Dict[str, Any] = {
             "action_s": 3.0,
             "face_lost_s": 2.5,
         },
+    },
+    "assertive": {
+        "enabled": True,
+        "dwell_s": 8.0,
+        "speed_min": 30.0,
+        "speed_max": 100.0,
+        "wander": True,
+        "track": False,
+        "pool": None,
     },
     "zone_classes": {
         "ignore": {
@@ -326,6 +344,39 @@ def _validate_facefocus_params(p: dict, where: str) -> dict:
     }
 
 
+def _validate_assertive_section(data: Any) -> dict:
+    """Validate the assertive-mode section: ``{enabled, dwell_s, speed_min, speed_max, wander, track, pool}``.
+
+    ``pool`` is ``null`` (all enabled zones/actions in the allowed union) or a
+    list of ``"zone/action"`` destination strings. ``speed_min`` must be <=
+    ``speed_max``.
+    """
+    if data is not None and not isinstance(data, dict):
+        raise ValueError("'assertive' must be an object")
+    data = data or {}
+    d = DEFAULT_BRAIN_CONFIG["assertive"]
+    cfg = {
+        "enabled": _bool(data.get("enabled"), "assertive.enabled", d["enabled"]),
+        "dwell_s": _num(data.get("dwell_s"), "assertive.dwell_s", d["dwell_s"]),
+        "speed_min": _num(data.get("speed_min"), "assertive.speed_min", d["speed_min"]),
+        "speed_max": _num(data.get("speed_max"), "assertive.speed_max", d["speed_max"]),
+        "wander": _bool(data.get("wander"), "assertive.wander", d["wander"]),
+        "track": _bool(data.get("track"), "assertive.track", d["track"]),
+    }
+    pool = data.get("pool")
+    if pool is None:
+        cfg["pool"] = None
+    elif isinstance(pool, list):
+        if not all(isinstance(x, str) and x for x in pool):
+            raise ValueError("'assertive.pool' must be a list of non-empty 'zone/action' strings")
+        cfg["pool"] = list(pool)
+    else:
+        raise ValueError("'assertive.pool' must be null or a list of 'zone/action' strings")
+    if cfg["speed_min"] > cfg["speed_max"]:
+        raise ValueError("'assertive.speed_min' must be <= 'assertive.speed_max'")
+    return cfg
+
+
 def _validate_behaviors_section(data: Any) -> dict:
     """Validate the per-behavior motion params (the tunable knobs of behavior.py).
 
@@ -507,6 +558,10 @@ def validate_brain_config(data: Any) -> dict:
             ff_params if isinstance(ff_params, dict) else {}, "facefocus.params"),
     }
 
+    # --- assertive (top-level) ---------------------------------------------
+    assertive = data.get("assertive")
+    assertive_cfg = _validate_assertive_section(assertive)
+
     # --- zone_classes (top-level) -------------------------------------------
     zc = data.get("zone_classes")
     if zc is not None and not isinstance(zc, dict):
@@ -529,6 +584,7 @@ def validate_brain_config(data: Any) -> dict:
         "zone_groups": zone_groups,
         "hunt": hunt_cfg,
         "facefocus": ff_cfg,
+        "assertive": assertive_cfg,
         "zone_classes": zone_classes_cfg,
         "cam_control": cam_control,
         "behaviors": behaviors_cfg,
