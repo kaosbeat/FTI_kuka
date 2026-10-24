@@ -982,6 +982,22 @@ function actionEndPose(a) {
   const ps = actionPoses(a);
   return ps.length ? ps[ps.length - 1] : null;
 }
+// True when every axis of the pose is a concrete number (no "x" frozen/copy axes).
+function poseNumeric(p) {
+  return Array.isArray(p) && p.every((x) => typeof x === "number" && !Number.isNaN(x));
+}
+// A pose shared by both lists (within `margin` on every concrete axis), or null.
+// Mirrors rtr.state.zones.find_shared_pose: the runtime hand-off requirement for an
+// inter-zone move. "x" axes have no static value and are skipped.
+function findSharedPose(posesA, posesB, margin = 0.5) {
+  for (const pa of posesA) {
+    if (!poseNumeric(pa)) continue;
+    for (const pb of posesB) {
+      if (poseNumeric(pb) && pa.every((v, k) => Math.abs(v - pb[k]) <= margin)) return pa;
+    }
+  }
+  return null;
+}
 // The deduplicated, undirected set of action-level edges derived from `next` fields.
 // Each edge is {from: {zone, action}, to: {zone, action}}; the link between A and B is
 // the same whether A.next=B or B.next=A. Dangling `next` refs (unknown zone/action)
@@ -4947,22 +4963,22 @@ function buildActionEditor() {
   addRow.textContent = "+ add next";
   addRow.onclick = () => { targets.push({}); commitNext(targets); };
   nsec.appendChild(addRow);
-  // Pose-continuity hint: the action's entry anchor should match each successor's.
+  // Pose-continuity hint: the action must share a pose with each successor so the
+  // robot can hand off there (mirrors the runtime safety gate's find_shared_pose).
   // Intra-zone successors are exempt: the robot moves freely within a zone, so
-  // any pose inside the safezone is a valid hand-off (mirrors the safety gate).
+  // any pose inside the safezone is a valid hand-off.
   if (a.poses.length) {
     const diffs = targets.filter((t) => {
       if (t.zone === zn) return false;  // intra-zone: free movement, no continuity required
       const tgt = (t.zone && t.action && TABLE.zones[t.zone] && TABLE.zones[t.zone].actions[t.action])
         ? actionPoses(TABLE.zones[t.zone].actions[t.action]) : [];
-      // "x" axes have no static value (resolved at runtime); compare only concrete axes.
-      return tgt.length && a.poses[0].some((v, i) => v !== "x" && tgt[0][i] !== "x" && Math.abs(v - tgt[0][i]) >= 0.001);
+      return tgt.length && findSharedPose(a.poses, tgt) === null;
     });
     if (diffs.length) {
       const hint = document.createElement("div");
       hint.className = "aeHint";
       hint.style.cssText = "font-size:11px;color:#e0a030";
-      hint.textContent = "entry pose differs from next " + diffs.map((t) => `${t.zone}/${t.action} (${actionPoses(TABLE.zones[t.zone].actions[t.action])[0].join(", ")})`).join(", ");
+      hint.textContent = "no shared pose with next " + diffs.map((t) => `${t.zone}/${t.action}`).join(", ");
       nsec.appendChild(hint);
     }
   }
@@ -6104,16 +6120,16 @@ function saveZones() {
           if (p[ax] < hlo || p[ax] > hhi) warns.push(`${name}/${an} pose ${i} axis ${AXES[ax]} outside hardware limits`);
         }
       });
-      // Pose continuity: the action's entry anchor should match each successor's.
+      // Pose continuity: the action must share a pose with each successor so the
+      // robot can hand off there (mirrors the runtime safety gate's find_shared_pose).
       // Intra-zone successors are exempt: the robot moves freely within a zone, so
-      // any pose inside the safezone is a valid hand-off (mirrors the safety gate).
+      // any pose inside the safezone is a valid hand-off.
       for (const t of nextList(a)) {
         if (t.zone === name) continue;  // intra-zone: free movement, no continuity required
         if (t.zone && t.action && TABLE.zones[t.zone] && TABLE.zones[t.zone].actions[t.action]) {
           const tgt = actionPoses(TABLE.zones[t.zone].actions[t.action]);
-          // "x" axes have no static value (resolved at runtime); compare only concrete axes.
-          if (poses.length && tgt.length && poses[0].some((v, i) => v !== "x" && tgt[0][i] !== "x" && Math.abs(v - tgt[0][i]) >= 0.001)) {
-            warns.push(`${name}/${an}: entry pose differs from next ${t.zone}/${t.action}`);
+          if (poses.length && tgt.length && findSharedPose(poses, tgt) === null) {
+            warns.push(`${name}/${an}: no shared pose with next ${t.zone}/${t.action}`);
           }
         }
       }

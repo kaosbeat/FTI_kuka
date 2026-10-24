@@ -97,8 +97,6 @@ from ..sound import load_sound_data, validate_sound_data
 from .midi import load_midi_data, validate_midi_data
 from ..state.zones import (
     HARDWARE_LIMITS,
-    LIN_POSES,
-    POSES,
     load_state_data,
     validate_state_data,
 )
@@ -355,9 +353,8 @@ def _make_handler(server: HttpServer):
             try:
                 data = load_state_data(server.zones_path)
             except (OSError, ValueError):
-                # File missing/corrupt: fall back to the running zones + built-in poses.
-                data = {"zones": server.zones_provider().table(),
-                        "poses": POSES, "lin_poses": LIN_POSES}
+                # File missing/corrupt: fall back to the running zones.
+                data = {"zones": server.zones_provider().table()}
             self._send_json(200, data)
 
         def _post_zones(self):

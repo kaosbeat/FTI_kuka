@@ -109,7 +109,7 @@ starts folding commands into ticks.
 | `core/commands.py`| Command + event + Snapshot type definitions (the core's API).         |
 | `state/machine.py`| `StateMachine`: the single owner of the robot's composite state (zone, mode, action, target, speed, cadence); drives the transition and the behaviour each tick. Deterministic. |
 | `state/behavior.py`| The motion policies (wander / random / track) + clamp helpers, as free functions the machine's `step` dispatches to. |
-| `state/zones.py`  | Zone/pose data (safe areas, start/exit poses, per-edge `exitposes`, per-zone default `mode`, actions, named poses). |
+| `state/zones.py`  | Zone/pose data (safe areas, start/exit poses, per-edge `exitposes`, per-zone default `mode`, actions). |
 | `brain/brain.py`  | `Brain`: a thin **command interpreter** — maps `Command` objects onto the machine's operations; holds no robot state. The plug-in seam for the LLM / realtime control. |
 | `robot/base.py`   | `RobotBase` interface (implemented by Kuka and Sim).                  |
 | `robot/kuka.py`   | Real robot via `kukapy` (the EKI TCP server).                          |
@@ -446,9 +446,8 @@ fallback when the core is unreachable). The hydra canvas has a **configurable re
 (`SCREEN_RESOLUTION` in `rtr3d.js`, default `640x360`; overridable per view via
 `Robot3D.init`'s `screenResolution` option) — that is the size to design patches to.
 
-**`zones.json`** is the editable source of truth for zones, actions, and the named poses
-(`poses` / `lin_poses`). The built-in dicts in `state/zones.py` remain the fallback if the
-file is missing or corrupt. Each zone and action has an **`enabled`** flag (default true):
+**`zones.json`** is the editable source of truth for zones and actions. The built-in
+zone table in `state/zones.py` remains the fallback if the file is missing or corrupt. Each zone and action has an **`enabled`** flag (default true):
 a disabled zone is rejected by `goto_zone` (the UI dims it; the robot already inside keeps
 running and can still exit), and a disabled action is rejected by `play_action`. A zone may
 also declare an optional **`mode`** (its default behaviour on entry — `init`/`rest` →
@@ -772,8 +771,7 @@ default until `midi.json` supplies one.
   The index is resolved against the current zone's action table (in order), so it tracks
   hot-reloaded zone data; a bad index or a zone with no actions is a logged no-op.
 - **CC20/21/22** → `adjust_limit`; **CC30 (1/2)** → `set_mode` (`random`/`wander`).
-- **Note ch1/ch2** 61-64 → `set_joint_pose` (named poses); **ch3** → `random_wrist`;
-  **ch6** → `set_linear_pose`.
+- **Note ch3** → `random_wrist`.
 
 **Learn.** The editor captures a live controller message and writes it into the mapping.
 `POST /api/midi/learn` with `{"action": "start"}` arms the capture on the running

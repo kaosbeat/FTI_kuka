@@ -1,5 +1,121 @@
 # Task Handoff Log
 
+## 2026-10-24 — Finish midi named-pose removal: stale docstring + README cleanups
+
+### Status
+
+Completed. After the session crash, the code-side removal was already done in the working tree (`POSES`/`LIN_POSES` tables deleted from `zones.py`; imports/kwargs removed from `state/__init__.py`, `main.py`, `httpserver.py`, `midi.py`; the ch1/ch2/ch5 note→pose dispatch removed from `MidiInput._handle_note`). What remained was stale documentation describing the removed mappings: the `midi.py` module docstring still listed `Note ch1/ch2: 61-64 → set_joint_pose` and `Note ch6 → set_linear_pose`, and the README still had the same note line plus two "named poses" mentions. All three were fixed.
+
+### Summary
+
+The user's task was to remove the hardcoded MIDI mappings (the named-pose note protocol). The crashed session had completed the code changes but left the docs behind. Verified the working-tree state via `git diff` and repo-wide greps (no `POSES`/`LIN_POSES` references left in the rtr package; no test passes `poses=`/`lin_poses=` kwargs to `MidiInput`), then updated the three stale doc spots to match the actual remaining legacy protocol:
+
+- `midi.py` docstring: the legacy protocol is now CC1 (trigger_action), CC3 (play action by index), CC20/21/22 (adjust_limit), and `Note ch3 → random_wrist` only (0-based channel 2, the docstring's 1-based "ch3" convention — unchanged).
+- README legacy-fallback bullet: the note line is now just `**Note ch3** → random_wrist`.
+- README: dropped "named poses" from the `state/zones.py` module table row, and rewrote the `zones.json` paragraph (the file no longer carries `poses`/`lin_poses`; the built-in `ZONES` table is the fallback).
+
+`validate_state_data` still accepts legacy `poses`/`lin_poses` keys in a data file (decided in the crashed session: kept as generic data validation for old backups; nothing consumes them anymore). The `Cmd.SET_JOINT_POSE`/`SET_LINEAR_POSE` commands remain — they are still reachable via the WebSocket control API (`websocket.py` accepted-command list, `brain.py` handlers), which is a separate path from MIDI.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/io/midi.py`: module docstring legacy-protocol block — removed the `Note ch1/ch2: 61-64 → set_joint_pose` and `Note ch6 → set_linear_pose` lines; kept `Note ch3 → random_wrist` and the ch4/ch5/ch7 "intentionally not mapped" paragraph (still accurate).
+- `realtimecontrol/rtr/README.md`: (1) legacy-fallback note bullet reduced to `**Note ch3** → random_wrist`; (2) `state/zones.py` table row — "named poses" dropped from the description; (3) `zones.json` paragraph — now "source of truth for zones and actions" (no more `poses`/`lin_poses` mention).
+
+### Documentation
+
+- `realtimecontrol/rtr/README.md` updated as above (the in-scope doc updates for this task).
+- Pre-existing README staleness noted but intentionally not touched (separate cleanup): the legacy-fallback section still describes `CC1 → goto_zone`, `CC2 → set_mode`, `CC30 → set_mode` (the code now does CC1 → `trigger_action`, and CC2/CC30 are not handled), and the `zones.json` paragraph still mentions legacy `mode`/`exitposes`/startpos concepts.
+
+### Architecture
+
+No architectural impact. Docs-only change; runtime behavior unchanged. The `Cmd.SET_JOINT_POSE`/`SET_LINEAR_POSE`/`RANDOM_WRIST` command pipeline (commands.py → brain.py → machine.py) stays intact for the WebSocket control path.
+
+### Validation
+
+- `python -c "import main; from rtr.io.midi import MidiInput; from rtr.io.httpserver import HttpServer; from rtr.state import StateMachine, Zones"`: **imports OK**.
+- `pytest tests/test_midi_in.py tests/test_midi_brain_trigger.py tests/test_zone_groups.py -q`: **81 passed, 1 skipped**.
+- `pytest tests/ -q --ignore=tests/test_remote_tui.py`: **268 passed, 14 skipped, 7 failed** — all 7 failures pre-existing and unrelated (verified: none import the changed modules' removed symbols):
+  - `test_bridge_behavior.py::test_real_zones_bridge_action_is_tagged` — data drift: `zones.json` `resting_sleeping_bridge/bridge` has 4 poses, test expects 3.
+  - `test_remote_sdl.py` (5 failures) — TUI label drift ("THEME / LAYOUT" etc. not in `view.build_rows` output).
+  - `test_transition.py::test_all_reachable_transitions_complete` — pre-existing `"x"`-axis sim `TypeError` (documented in the previous entry).
+- `pytest tests/test_remote_tui.py`: **collection `ImportError`** (`action_kind` not in `rtr.flow`) — pre-existing, unmodified tracked files, unrelated.
+- Repo-wide grep for `POSES`/`LIN_POSES`/`named pose`/`ch1`/`ch6` in the rtr package: no remaining references (only "aarch64" false positives).
+
+### Decisions and Caveats
+
+- Kept the `validate_state_data` `poses`/`lin_poses` validation (crashed-session decision): old zone backups keep validating; the fields are simply unconsumed.
+- README CC-line staleness (CC1/CC2/CC30) left for a separate docs-cleanup pass — outside this task's scope.
+- The 7 test failures + 1 collection error predate this change; flagged, not fixed.
+
+### Next Task
+
+Optional docs cleanup: update the README legacy-fallback CC lines to match the actual code (CC1 → `trigger_action`; CC2/CC30 removed), and the `zones.json` paragraph's legacy `mode`/`exitposes`/startpos mentions. Separately, the `"x"`-axis `test_transition.py` harness fix from the previous entry.
+
+### Instructions for the Next Task
+
+For the README CC-line cleanup: in `realtimecontrol/rtr/README.md` (~line 770), the bullets read `CC1 (value 1-6) → goto_zone (...)`, `CC2 (0/1) → set_mode`, `CC30 (1/2) → set_mode`. The actual legacy handler is `MidiInput._handle_cc` in `rtr/io/midi.py`: CC1 → `Cmd.TRIGGER_ACTION` (zone + first enabled action), CC3 → play action by index, CC20/21/22 → `Cmd.ADJUST_LIMIT`. CC2/CC30 are no longer handled. Align the bullets to the code. For the `test_transition.py` fix, see the previous entry's instructions (resolve `"x"` axes before `SimRobot` construction in `_run_transition`).
+
+## 2026-10-24 — Inter-zone warning now mirrors `find_shared_pose`; dangling `POSES`/`LIN_POSES` imports removed
+
+### Status
+
+Completed. The inter-zone variant of the `entry pose differs from next` warning no longer false-positives: the editor now checks "do the two actions share any pose within `0.5`" (mirroring the runtime gate's `find_shared_pose`) instead of entry-to-entry at `0.001`. Confirmed bidirectional zone links are safe (gate checks are symmetric; both directions verified `conflict: False`). Also finished the midi named-pose removal refactor: `POSES`/`LIN_POSES` were deleted from `zones.py` in the working tree but still imported by `__init__.py`, `main.py`, and `httpserver.py` — that dangling import was the pre-existing `ImportError` blocking pytest collection.
+
+### Summary
+
+The user reported `entry pose differs from next roaring_grabbing_bridge/bridge (-5, -125, 116, -2, 80, 0)` in the `roaring` action pose editor as an unneeded warning: the exit pose toward the bridge is correct, and movement in the other direction is perfectly possible (the robot just moves to the exit pose instead of the entry pose). They asked whether **all** links should be marked bidirectional to keep the robot moving, and whether there are safety reasons not to.
+
+**Root cause (editor false positive):** The editor's save-time check and action-editor hint compared the action's entry anchor against each inter-zone successor's entry anchor at `0.001`. But the runtime safety gate's inter-zone rule is "any shared pose within `0.5`" (`find_shared_pose`, `rtr/state/zones.py:92`) — the hand-off happens at *any* shared anchor, not specifically the entries. In the reported case `roaring/roar`'s exit `[-5,-125,116,-2,80,0]` **is** `roaring_grabbing_bridge/bridge`'s entry, so the gate passes (`conflict: False`) while the old editor check warned on the non-equal entries (`roar` entry `[-3,-134,116,-2,80,0]` vs `bridge` entry).
+
+**Bidirectional links — safe.** The inter-zone gate checks (safezone overlap + shared pose) are symmetric: the same `find_shared_pose` call applies regardless of direction, and the collision check is per-target-entry-pose, independent per direction. Verified with real `zones.json` data: `roaring/roar → roaring_grabbing_bridge/bridge` **and** the reverse both give `conflict: False`, shared pose `[-5,-125,116,-2,80,0]` (roar exit index 2 == bridge entry index 0). No safety reason to restrict links to one direction; marking both directions keeps the robot moving and gives it options.
+
+**Pre-existing import blocker (fixed):** The working-tree `zones.py` refactor removed the `POSES`/`LIN_POSES` constants (the midi named-pose tables, part of the midi.py change that dropped the ch1/ch5 note protocol), but three consumers still imported them, so `import rtr.state` raised `ImportError` and blocked all pytest collection:
+- `rtr/state/__init__.py` (re-export),
+- `main.py` (line 33 import + fallback dict + `data.get("poses", POSES)` + `poses=`/`lin_poses=` kwargs on `MidiInput`, which no longer accepts them — a runtime `TypeError` waiting to happen),
+- `rtr/io/httpserver.py` (import + GET `/api/zones` fallback dict).
+
+`zones.json` no longer carries `poses`/`lin_poses` keys (only `zones` + `layout`), and `validate_state_data` still accepts them optionally for legacy files, so nothing data-level depends on the constants anymore.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html:985-999`: added `poseNumeric(p)` and `findSharedPose(posesA, posesB, margin = 0.5)` JS helpers — the JS mirror of `rtr.state.zones.find_shared_pose` (any pose shared within `0.5` on every concrete axis; `"x"` frozen axes skipped).
+- `realtimecontrol/rtr/editor.html:6128-6134` (`saveZones`): the inter-zone branch now warns only when `findSharedPose(poses, tgt) === null`; message is now `no shared pose with next ${t.zone}/${t.action}`. The intra-zone `continue` exemption from the previous task is preserved.
+- `realtimecontrol/rtr/editor.html:4968-4976` (`buildActionEditor` hint): same change — the inline hint now fires only when `findSharedPose(a.poses, tgt) === null`.
+- `realtimecontrol/rtr/rtr/state/__init__.py`: removed `POSES`/`LIN_POSES` from the `.zones` import and `__all__`.
+- `realtimecontrol/rtr/main.py`: import reduced to `from rtr.state.zones import ZONES, load_state_data`; `load_zones_data` fallback is now `{"zones": ZONES}`; dropped the `poses`/`lin_poses` locals and the `poses=`/`lin_poses=` kwargs on the `MidiInput` call (the signature no longer has them).
+- `realtimecontrol/rtr/rtr/io/httpserver.py`: removed `LIN_POSES`/`POSES` from the `.state.zones` import; GET `/api/zones` fallback is now `{"zones": server.zones_provider().table()}`.
+
+### Documentation
+
+None required — the editor advisory now matches the already-documented runtime rule (`find_shared_pose` in `zones.py:86-109`), and the removed named-pose tables were superseded by the data-driven zone format already documented in `zones.py`'s module docstring.
+
+### Architecture
+
+No architectural impact. The editor advisory is now a strict mirror of the runtime gate's inter-zone hand-off rule (same predicate, same margin), and the `POSES`/`LIN_POSES` removal completes the existing refactor that moved named poses out of code into the (now absent) data file. No runtime behavior changed.
+
+### Validation
+
+- `node --check` on the extracted editor `<script>` block: **SYNTAX OK**.
+- `python3 -c "import main; from rtr.io.httpserver import HttpServer; from rtr.state import StateMachine, Zones"`: **imports OK** (previously `ImportError`).
+- `pytest tests/test_safety_conflict.py tests/test_transition.py tests/test_state_machine.py`: **30 passed, 9 skipped, 1 failed** (previously: collection `ImportError` on all three).
+- `pytest tests/test_safety_conflict.py tests/test_state_machine.py`: **23 passed, 9 skipped** — all gate-symmetry and state-machine tests green.
+- Gate symmetry on real `zones.json`: forward `roaring/roar → roaring_grabbing_bridge/bridge` `conflict: False`; reverse `conflict: False`; shared pose `[-5,-125,116,-2,80,0]`.
+- The 1 failure (`test_transition.py::test_all_reachable_transitions_complete`, `TypeError` at `rtr/robot/sim.py:42`) is **pre-existing** and unrelated: the harness passes `growling/growl`'s entry pose `['x', -10, -9, -2, 5, 0]` (an unresolved `"x"` frozen axis) straight into `SimRobot`, so the sim's per-axis arithmetic hits `'str' - 'str'`. Only unmodified files/data are on that path (`sim.py`, `machine.py`, `zones.json`, the test itself).
+
+### Decisions and Caveats
+
+- The editor check now mirrors the runtime gate exactly (any shared pose, margin `0.5`), so the advisory and the gate can no longer disagree on inter-zone hand-offs. It remains a save-time flag, not a block.
+- `validate_state_data` still accepts legacy `poses`/`lin_poses` keys in the data file, so old backups keep validating; they are simply no longer consumed by the core (the midi named-pose note protocol is gone).
+- The `test_transition.py` `"x"`-axis sim failure is a test-harness limitation (the harness doesn't resolve frozen axes before feeding the sim) — flagged as a follow-up, not fixed here.
+
+### Next Task
+
+Optionally fix `tests/test_transition.py::_run_transition` to resolve `"x"` axes before constructing `SimRobot` (e.g., replace `"x"` with the source action's live value on that axis, or skip transitions whose entry pose contains `"x"` with a note), so the harness exercises all reachable edges.
+
+### Instructions for the Next Task
+
+In `tests/test_transition.py:47-70`, `_run_transition` builds `SimRobot(home=list(zones.get(start_zone).action_entry_pose(start_action)))`. When that entry pose contains `"x"` (frozen axis, e.g. `growling/growl`), `SimRobot.get_curjpos` raises `TypeError` at `rtr/robot/sim.py:42` (`self._target[i] - self._cur[i]` with strings). Resolve the `"x"` before `SimRobot` construction — the runtime resolves `"x"` to the robot's live value on that axis, so the harness can substitute the current pose's value (the home value itself on that axis is unknown, so pick the safezone midpoint or the successor's concrete value on that axis) — or skip such pairs with a `pytest.skip` note. Then re-run `pytest tests/test_transition.py -q`.
+
 ## 2026-10-24 — Fix spurious intra-zone "entry pose differs" save warning
 
 ### Status

@@ -48,9 +48,7 @@ Legacy hardcoded protocol (default port only)
 - CC1 (value 1-6)      → trigger_action (zone + first enabled action)
 - CC3 (value i)        → play the i-th action (1-based) in the current zone; 0 clears
 - CC20 / 21 / 22       → adjust_limit (index 0/1/2)
-- Note ch1 / ch2: 61-64 → set_joint_pose (named ch1 poses)
 - Note ch3             → random_wrist
-- Note ch6             → set_linear_pose (random cartesian pose)
 
 The per-trigger random walks on ch4/ch5 and the ch7 "step" trigger are subsumed by the
 brain's continuous tick in the new architecture, so they are intentionally not mapped.
@@ -63,7 +61,6 @@ from typing import Any, Optional
 from ..core.bus import StateBus
 from ..core.commands import Cmd, Command, Event
 from ..flow import activation_commands, build_items
-from ..state.zones import LIN_POSES, POSES
 
 # Legacy hardcoded protocol tables (channel-0 fallback, default port only).
 ZONE_BY_CC1 = {1: "init", 2: "rest", 3: "wakeup", 4: "stretch", 5: "wander", 6: "wildwander"}
@@ -289,17 +286,13 @@ class MidiInput:
     """
 
     def __init__(self, bus: StateBus, in_port: Optional[int] = None, enabled: bool = True,
-                 poses=None, lin_poses=None, zones_provider=None, midi_loader=None,
+                 zones_provider=None, midi_loader=None,
                  brain=None):
         self.bus = bus
         self._brain = brain
         # The default port (legacy fallback + the port for zones with a null in_port).
         self.in_port = in_port
         self.enabled = enabled
-        # Named pose tables come from the loaded zone data (wired in main.py);
-        # the built-in dicts are the fallback when the data file omits them.
-        self.poses = poses if poses is not None else POSES
-        self.lin_poses = lin_poses if lin_poses is not None else LIN_POSES
         # The live zone table (hot-reloads); used to resolve CC3 action indices.
         self.zones_provider = zones_provider
         # The loaded midi table (enabled / zones); the built-in fallback is the
@@ -891,19 +884,11 @@ class MidiInput:
         self._submit(Cmd.PLAY_ACTION, {"action": actions[index - 1]})
 
     def _handle_note(self, channel: int, note: int, velocity: int) -> None:
-        """Legacy note protocol (channel 0/1/2/5)."""
+        """Legacy note protocol (channel 2)."""
         if velocity == 0:  # note off
             return
-        if channel in (0, 1) and 61 <= note <= 64:
-            table = self.poses.get("ch1")
-            if table and 0 <= note - 61 < len(table):
-                self._submit(Cmd.SET_JOINT_POSE, {"pose": table[note - 61]})
-        elif channel == 2:
+        if channel == 2:
             self._submit(Cmd.RANDOM_WRIST, {})
-        elif channel == 5:
-            table = self.lin_poses.get("pos1")
-            if table:
-                self._submit(Cmd.SET_LINEAR_POSE, {"pose": table[velocity % len(table)]})
 
     def _submit(self, cmd: Cmd, payload: dict) -> None:
         self._record("out", cmd=cmd.value, payload=payload)

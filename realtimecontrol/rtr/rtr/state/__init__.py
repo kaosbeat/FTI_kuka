@@ -4,8 +4,6 @@ from .machine import StateMachine
 from .zones import (
     HARDWARE_LIMITS,
     LIMITS,
-    POSES,
-    LIN_POSES,
     SOFTWARE_LIMITS,
     ZONES,
     Zone,
@@ -18,8 +16,6 @@ __all__ = [
     "Zones",
     "Zone",
     "ZONES",
-    "POSES",
-    "LIN_POSES",
     "LIMITS",
     "SOFTWARE_LIMITS",
     "HARDWARE_LIMITS",

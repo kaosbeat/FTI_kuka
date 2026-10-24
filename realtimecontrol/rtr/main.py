@@ -30,7 +30,7 @@ from rtr.robot import (
 from rtr.camera.geometry import load_camera_geometry
 from rtr.camera.snapshot_grab import SnapshotGrabber
 from rtr.state import StateMachine, Zones
-from rtr.state.zones import LIN_POSES, POSES, ZONES, load_state_data
+from rtr.state.zones import ZONES, load_state_data
 from rtr.brain import Brain, builtin_brain_config, load_brain_config
 from rtr.safety import SafetyGate, CollisionChecker
 from rtr.display import make_display
@@ -127,7 +127,7 @@ def load_zones_data(path: str) -> dict:
         return load_state_data(path)
     except (OSError, ValueError) as exc:
         print(f"[rtr] zones file {path!r} unavailable ({exc}); using built-in zones")
-        return {"zones": ZONES, "poses": POSES, "lin_poses": LIN_POSES}
+        return {"zones": ZONES}
 
 
 def load_sound_data_fallback(path: str) -> dict:
@@ -181,8 +181,6 @@ async def run(cfg: Config) -> None:
     # --- zone data --------------------------------------------------------
     data = load_zones_data(cfg.zones_path)
     zones = Zones(data["zones"])
-    poses = data.get("poses", POSES)
-    lin_poses = data.get("lin_poses", LIN_POSES)
 
     # --- core -----------------------------------------------------------
     # The robot calibration config is physical-robot-only (A6 home offset). It is
@@ -225,7 +223,6 @@ async def run(cfg: Config) -> None:
     # so the engine can hold its reload hook (POST /api/midi hot-reloads the table).
     midi = MidiInput(bus, in_port=cfg.midi_in_port,
                       enabled=cfg.midi_in_port is not None,
-                      poses=poses, lin_poses=lin_poses,
                       zones_provider=lambda: machine.zones,
                       midi_loader=lambda: load_midi_data_fallback(cfg.midi_path),
                       brain=brain)
