@@ -3142,12 +3142,16 @@
             "pose_1792749791349_d17eb4ad.png"
           ],
           "pose_videos": [
-            null,
+            "MiniMax_H3_00052_..mp4",
             null,
             null,
             null,
             null
-          ]
+          ],
+          "next": {
+            "zone": "grabbing_hunting_bridge",
+            "action": "bridge"
+          }
         }
       }
     },
@@ -3678,7 +3682,15 @@
           "next": {
             "zone": "clawing",
             "action": "claw"
-          }
+          },
+          "pose_imgs": [
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null
+          ]
         }
       }
     },
@@ -3872,6 +3884,67 @@
           }
         }
       }
+    },
+    "grabbing_hunting_bridge": {
+      "enabled": true,
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -134,
+          5
+        ],
+        [
+          -39,
+          8
+        ],
+        [
+          -90,
+          90
+        ],
+        [
+          -55,
+          80
+        ],
+        [
+          -35,
+          35
+        ]
+      ],
+      "speed": 100,
+      "actions": {
+        "bridge": {
+          "enabled": true,
+          "loop": false,
+          "behavior": "bridge",
+          "poses": [
+            [
+              45,
+              -10,
+              8,
+              90,
+              -54,
+              0
+            ],
+            [
+              "x",
+              -10,
+              -9,
+              -2,
+              5,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "speed": 100,
+          "next": {
+            "zone": "hunting",
+            "action": "track"
+          }
+        }
+      }
     }
   },
   "layout": {
@@ -3949,8 +4022,8 @@
         "y": 40
       },
       "roaring": {
-        "x": 2616.916015625,
-        "y": 76.73356628417969
+        "x": 2531.70703125,
+        "y": 12.116878509521484
       },
       "growling": {
         "x": 2797.4599609375,
@@ -3961,8 +4034,8 @@
         "y": 51.61984825134277
       },
       "clawing": {
-        "x": 3118.897705078125,
-        "y": -53.996726512908936
+        "x": 2683.63232421875,
+        "y": 306.4573197364807
       },
       "grabbing": {
         "x": 2980,
@@ -3997,8 +4070,8 @@
         "y": 302.4030303955078
       },
       "growling_clawing_bridge": {
-        "x": 2944.5341796875,
-        "y": -111.7735185623169
+        "x": 2395.87890625,
+        "y": 325.9514570236206
       },
       "scanning_leaping_bridge": {
         "x": 2021.4212646484375,
@@ -4011,14 +4084,18 @@
       "roaring_scanning_bridge": {
         "x": 2204.9969482421875,
         "y": -264.2243375778198
+      },
+      "grabbing_hunting_bridge": {
+        "x": 2107.039306640625,
+        "y": 221.8426971435547
       }
     },
     "view": {
-      "x": 970.3967362210474,
-      "y": -57.224059646033254,
-      "w": 1897.590534669688,
-      "h": 327.26086270445745
+      "x": 2027.8738631454275,
+      "y": 93.79930139927302,
+      "w": 1039.5476408308127,
+      "h": 187.11246040684975
     },
-    "key": "clawing,cuddling,cuddling_purring_bridge,cuddling_stretching_bridge,examining,examining_cuddling_bridge,examining_performing_bridge,grabbing,growling,growling_clawing_bridge,hunting,hunting_examining_bridge,hunting_scanning_bridge,leaping,performing,performing_roaring_bridge,purring,purring_hunting_bridge,resting,resting_sleeping_bridge,resting_testing_bridge,roaring,roaring_grabbing_bridge,roaring_growling_bridge,roaring_scanning_bridge,scanning,scanning_leaping_bridge,scanning_roaring_bridge,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge,testing,testing_cuddling_bridge"
+    "key": "clawing,cuddling,cuddling_purring_bridge,cuddling_stretching_bridge,examining,examining_cuddling_bridge,examining_performing_bridge,grabbing,grabbing_hunting_bridge,growling,growling_clawing_bridge,hunting,hunting_examining_bridge,hunting_scanning_bridge,leaping,performing,performing_roaring_bridge,purring,purring_hunting_bridge,resting,resting_sleeping_bridge,resting_testing_bridge,roaring,roaring_grabbing_bridge,roaring_growling_bridge,roaring_scanning_bridge,scanning,scanning_leaping_bridge,scanning_roaring_bridge,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge,testing,testing_cuddling_bridge"
   }
 }
