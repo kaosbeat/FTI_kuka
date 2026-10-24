@@ -419,7 +419,8 @@
       "sweep_amp": 0.5,
       "stay": 1,
       "triggers": [
-        "dwell"
+        "dwell",
+        "new_lock"
       ]
     },
     "gentle": {

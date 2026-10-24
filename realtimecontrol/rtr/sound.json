@@ -217,6 +217,27 @@
         "note": 60,
         "velocity": 60
       }
+    },
+    "growling_clawing_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "clawing_leaping_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "scanning_leaping_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
     }
   },
   "actions": {
@@ -777,6 +798,10 @@
           {
             "note": 60,
             "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
           }
         ]
       }
@@ -1103,7 +1128,16 @@
           "note": 60,
           "velocity": 60
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "examining_cuddling_bridge": {
@@ -1143,6 +1177,33 @@
       }
     },
     "testing_cuddling_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "growling_clawing_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "clawing_leaping_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "scanning_leaping_bridge": {
       "bridge": {
         "start": {
           "note": 60,
