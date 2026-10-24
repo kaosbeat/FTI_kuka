@@ -245,6 +245,20 @@
         "note": 60,
         "velocity": 60
       }
+    },
+    "grabbing_hunting_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "stretching_hunting_bridge2": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
     }
   },
   "actions": {
@@ -1244,6 +1258,24 @@
       }
     },
     "roaring_scanning_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "grabbing_hunting_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "stretching_hunting_bridge2": {
       "bridge": {
         "start": {
           "note": 60,
