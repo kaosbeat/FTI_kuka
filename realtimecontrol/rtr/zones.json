@@ -1589,7 +1589,7 @@
         ],
         [
           -135,
-          -20
+          -10
         ],
         [
           13,
@@ -1680,10 +1680,6 @@
           "behavior": "aggressive",
           "speed": 40,
           "loop": true,
-          "next": {
-            "zone": "clawing_leaping_bridge",
-            "action": "bridge"
-          },
           "pose_imgs": [
             null
           ],
@@ -2825,7 +2821,7 @@
               -2,
               7,
               -90,
-              -55,
+              -54,
               0
             ],
             [
@@ -2833,7 +2829,7 @@
               -10,
               8,
               90,
-              55,
+              54,
               0
             ],
             [
@@ -2841,7 +2837,7 @@
               -2,
               8,
               -90,
-              -55,
+              -54,
               0
             ],
             [
@@ -2849,7 +2845,7 @@
               -10,
               8,
               -90,
-              55,
+              54,
               0
             ],
             [
@@ -2857,11 +2853,13 @@
               -10,
               8,
               90,
-              -55,
+              -54,
               0
             ]
           ],
-          "variable_axes": [],
+          "variable_axes": [
+            0
+          ],
           "behavior": "aggressive",
           "speed": 20,
           "loop": true,
@@ -2938,7 +2936,7 @@
               -2,
               7,
               -90,
-              -55,
+              -54,
               0
             ]
           ],
@@ -3428,67 +3426,6 @@
         }
       }
     },
-    "clawing_leaping_bridge": {
-      "enabled": true,
-      "safezone": [
-        [
-          -185,
-          185
-        ],
-        [
-          -135,
-          -20
-        ],
-        [
-          -19,
-          157
-        ],
-        [
-          -2,
-          2
-        ],
-        [
-          -118,
-          118
-        ],
-        [
-          -357,
-          357
-        ]
-      ],
-      "speed": 80,
-      "actions": {
-        "bridge": {
-          "enabled": true,
-          "loop": false,
-          "behavior": "bridge",
-          "poses": [
-            [
-              "x",
-              -97,
-              17,
-              -2,
-              0,
-              0
-            ],
-            [
-              -85,
-              -120,
-              137,
-              0,
-              0,
-              0
-            ]
-          ],
-          "variable_axes": [],
-          "speed": 80,
-          "next": {
-            "zone": "leaping",
-            "action": "leap"
-          }
-        }
-      }
-    },
     "scanning_leaping_bridge": {
       "enabled": true,
       "safezone": [
@@ -3683,10 +3620,10 @@
       }
     },
     "view": {
-      "x": -323.5557793369712,
-      "y": -438.162283496506,
-      "w": 4623.719107971184,
-      "h": 705.4291299629198
+      "x": 1714.0373524306974,
+      "y": -334.3463687562888,
+      "w": 2298.8055710374347,
+      "h": 350.72295181927757
     },
     "key": "clawing,cuddling,cuddling_purring_bridge,cuddling_stretching_bridge,examining,examining_cuddling_bridge,examining_performing_bridge,grabbing,growling,growling_clawing_bridge,hunting,hunting_examining_bridge,hunting_scanning_bridge,leaping,performing,performing_roaring_bridge,purring,purring_hunting_bridge,resting,resting_sleeping_bridge,resting_testing_bridge,roaring,roaring_grabbing_bridge,roaring_growling_bridge,scanning,scanning_leaping_bridge,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge,testing,testing_cuddling_bridge"
   }

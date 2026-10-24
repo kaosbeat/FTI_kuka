@@ -33,7 +33,6 @@
     "roaring_growling_bridge": "osc(4, 0.1, 1.2).out()",
     "testing_cuddling_bridge": "osc(4, 0.1, 1.2).out()",
     "growling_clawing_bridge": "osc(4, 0.1, 1.2).out()",
-    "clawing_leaping_bridge": "osc(4, 0.1, 1.2).out()",
     "scanning_leaping_bridge": "osc(4, 0.1, 1.2).out()"
   },
   "modes": {
@@ -171,9 +170,6 @@
       "bridge": "osc(4, 0.1, 1.2).out()"
     },
     "growling_clawing_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "clawing_leaping_bridge": {
       "bridge": "osc(4, 0.1, 1.2).out()"
     },
     "scanning_leaping_bridge": {

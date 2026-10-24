@@ -225,13 +225,6 @@
         "velocity": 60
       }
     },
-    "clawing_leaping_bridge": {
-      "out_port": null,
-      "command": {
-        "note": 60,
-        "velocity": 60
-      }
-    },
     "scanning_leaping_bridge": {
       "out_port": null,
       "command": {
@@ -1186,15 +1179,6 @@
       }
     },
     "growling_clawing_bridge": {
-      "bridge": {
-        "start": {
-          "note": 60,
-          "velocity": 60
-        },
-        "poses": []
-      }
-    },
-    "clawing_leaping_bridge": {
       "bridge": {
         "start": {
           "note": 60,
