@@ -1,5 +1,53 @@
 # Task Handoff Log
 
+## 2026-10-24 — Fix spurious intra-zone "entry pose differs" save warning
+
+### Status
+
+Completed. The editor's save-time advisory `entry pose differs from next …` (and the matching action-editor hint) no longer fires for **intra-zone** successors, matching the runtime safety gate. Confirmed the warning is non-blocking and that action-to-action transitions are **not** gated by it.
+
+### Summary
+
+The user reported many `saved — warning: resting/hold: entry pose differs from next resting/wake` messages and asked (a) whether the warning should exist — arguing that within a safezone the robot moves freely, so entry/exit pose differences are fine — and (b) whether it blocks action-to-action transitions.
+
+**Root cause:** The editor's pose-continuity check compared an action's entry anchor (`poses[0]`) against each successor's entry anchor with a `0.001` threshold, for **all** successors (intra- and inter-zone). But the runtime safety gate explicitly exempts **intra-zone** moves from any pose-continuity requirement — `gate.py:72-90` and the editor's own `edgeConflict` (`editor.html:1049-1057`) both state the robot moves freely within a zone, so any pose inside the safezone is a valid hand-off. The save-time check never honored that exemption, so every intra-zone successor whose entry pose differed by ≥ 0.001 produced a false-positive warning.
+
+**Is it blocked? No.** Two independent confirmations:
+1. The save itself is non-blocking — `saveZones()` (`editor.html:6123-6126`) reports `saved — warning:` but the POST succeeds on HTTP `ok` regardless of `warns`.
+2. The runtime transition is governed by the **safety gate**, not this warning. For intra-zone moves the gate only conflicts when a connection pose lies *outside* the safezone (`gate.py:75-90`); it never requires pose continuity. So action-to-action within a zone is free.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html:6107-6119` (`saveZones`): the pose-continuity loop now `continue`s when `t.zone === name` (same zone as the current action), so intra-zone successors no longer produce the `entry pose differs from next` warning. Inter-zone successors are still checked as before.
+- `realtimecontrol/rtr/editor.html:4950-4960` (action-editor hint in `buildActionEditor`): the same exemption — the `diffs` filter returns `false` when `t.zone === zn` — so the inline "entry pose differs from next" hint no longer appears for intra-zone successors.
+
+### Documentation
+
+None required — behavior now matches the already-documented runtime rule (the intra-zone free-movement exemption is already documented in `gate.py:63-66` and `editor.html:1040-1043`).
+
+### Architecture
+
+No architectural impact. This aligns the editor's advisory with the existing runtime safety-gate contract; no runtime behavior changed.
+
+### Validation
+
+- `node --check` on the extracted editor `<script>` block: **SYNTAX OK** (6692 lines).
+- `pytest tests/test_safety_conflict.py tests/test_transition.py tests/test_state_machine.py`: 30 passed, 9 skipped, 1 failed.
+- The 1 failure (`test_transition.py::test_all_reachable_transitions_complete`, `TypeError` at `rtr/robot/sim.py:42`) is **pre-existing**: reproduced identically with this change stashed (`git stash`), so it is unrelated to the editor edit (a sim string-operand bug on an unresolved `"x"` axis).
+
+### Decisions and Caveats
+
+- Scope kept to the intra-zone exemption (the user's specific complaint, `resting/hold → resting/wake`). The inter-zone check still compares entry-to-entry at `0.001`, whereas the runtime's inter-zone rule is "any shared pose within `0.5`" (`find_shared_pose`). These differ, so the inter-zone warning can still be a false positive in some cases — left as-is to avoid broadening the change; flagged as a follow-up.
+- The editor check remains a *stricter* advisory than the runtime gate by design (it's a save-time flag, not a block).
+
+### Next Task
+
+Optionally tighten the inter-zone pose-continuity check to mirror the runtime's `find_shared_pose` (any anchor within `0.5`) instead of entry-to-entry at `0.001`, so inter-zone saves stop producing false positives too.
+
+### Instructions for the Next Task
+
+In `editor.html`, the inter-zone branch of the pose-continuity check (currently `saveZones` ~line 6113 and the action-editor hint ~line 4956) compares `poses[0]` vs the successor's `poses[0]` at `0.001`. To mirror the runtime, replace that with a "do the two actions share any pose within `0.5` on all concrete axes" test (the JS equivalent of `find_shared_pose` in `rtr/state/zones.py:92`), and only warn when no shared pose exists. Keep the intra-zone `continue`/`return false` exemptions already added this task. Verify with `node --check` and re-run `pytest tests/test_safety_conflict.py`.
+
 ## 2026-10-24 — Assertive control mode: full implementation (config + machine + brain driver + UI + test)
 
 ### Status
