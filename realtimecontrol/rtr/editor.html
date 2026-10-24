@@ -4948,8 +4948,11 @@ function buildActionEditor() {
   addRow.onclick = () => { targets.push({}); commitNext(targets); };
   nsec.appendChild(addRow);
   // Pose-continuity hint: the action's entry anchor should match each successor's.
+  // Intra-zone successors are exempt: the robot moves freely within a zone, so
+  // any pose inside the safezone is a valid hand-off (mirrors the safety gate).
   if (a.poses.length) {
     const diffs = targets.filter((t) => {
+      if (t.zone === zn) return false;  // intra-zone: free movement, no continuity required
       const tgt = (t.zone && t.action && TABLE.zones[t.zone] && TABLE.zones[t.zone].actions[t.action])
         ? actionPoses(TABLE.zones[t.zone].actions[t.action]) : [];
       // "x" axes have no static value (resolved at runtime); compare only concrete axes.
@@ -6102,7 +6105,10 @@ function saveZones() {
         }
       });
       // Pose continuity: the action's entry anchor should match each successor's.
+      // Intra-zone successors are exempt: the robot moves freely within a zone, so
+      // any pose inside the safezone is a valid hand-off (mirrors the safety gate).
       for (const t of nextList(a)) {
+        if (t.zone === name) continue;  // intra-zone: free movement, no continuity required
         if (t.zone && t.action && TABLE.zones[t.zone] && TABLE.zones[t.zone].actions[t.action]) {
           const tgt = actionPoses(TABLE.zones[t.zone].actions[t.action]);
           // "x" axes have no static value (resolved at runtime); compare only concrete axes.

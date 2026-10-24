@@ -26,8 +26,8 @@
           10
         ],
         [
-          -25,
-          25
+          -3,
+          4
         ]
       ],
       "speed": 20,
@@ -85,7 +85,7 @@
             4
           ],
           "behavior": "restless",
-          "speed": 20,
+          "speed": 21,
           "loop": true,
           "next": [
             {

@@ -109,6 +109,11 @@ class StateMachine:
         # Control mode: "auto" (the brain drives autonomous decisions) or
         # "manual" (only explicit client commands move the robot).
         self.control_mode = "auto"
+        # Assertive per-move speed: the brain rolls one speed per destination and
+        # stores it here. Honored by :meth:`_current_speed` while control_mode is
+        # "assertive" (stays constant for the duration of a move, not re-rolled
+        # each tick). None when not in assertive mode or before the first roll.
+        self.assertive_speed: Optional[float] = None
         # Forced behavior (live test override): when set, the robot runs this
         # behavior's motion policy regardless of the current action's declared
         # behavior. Set by the enable_behavior command; cleared by clear_behavior.
@@ -244,7 +249,13 @@ class StateMachine:
         self.clear_action()  # hold the target
 
     def set_control_mode(self, mode: str, curjpos: Optional[List[float]] = None) -> None:
-        """Set the control mode: ``"auto"`` (brain drives) or ``"manual"`` (operator only).
+        """Set the control mode.
+
+        - ``"auto"``: the brain drives autonomous decisions.
+        - ``"manual"``: only explicit client commands move the robot.
+        - ``"assertive"``: the brain drives the robot to random safe destinations
+          (see the ``assertive`` config section). Behaves like ``auto`` for driving
+          (no manual freeze); the brain's assertive driver picks the destinations.
 
         In manual mode the brain skips autonomous decisions (hunt, facefocus,
         autonomy advance) and the machine does not auto-advance after a
@@ -258,8 +269,11 @@ class StateMachine:
         in-progress transition and holding the current pose makes the robot stop
         where it is until an explicit command moves it. ``curjpos`` (the robot's
         current joint position) is used for the hold pose when provided.
+
+        Leaving assertive mode clears the per-move speed (the brain rolls a new one
+        when it next picks a destination in assertive mode).
         """
-        if mode not in ("manual", "auto"):
+        if mode not in ("manual", "auto", "assertive"):
             print(f"[state] invalid control mode: {mode}")
             return
         if mode == "manual" and self.control_mode != "manual":
@@ -276,6 +290,10 @@ class StateMachine:
             if curjpos is not None:
                 self.target = list(curjpos)
                 self.target_kind = "joint"
+        if self.control_mode == "assertive" and mode != "assertive":
+            # Leaving assertive mode: drop the per-move speed (assertive_speed is
+            # only meaningful while control_mode == "assertive").
+            self.assertive_speed = None
         self.control_mode = mode
         print(f"[state] control mode: {mode}")
 
@@ -700,10 +718,13 @@ class StateMachine:
     def _current_speed(self) -> float:
         """The move speed for the current state.
 
+        - assertive mode with a rolled speed -> the assertive per-move speed;
         - transition in progress -> the target zone's speed;
         - action with a declared ``speed`` -> the action's speed;
         - otherwise (no action, or no declared action speed) -> the zone's speed.
         """
+        if self.control_mode == "assertive" and self.assertive_speed is not None:
+            return self.assertive_speed
         if self._transition is not None:
             return self.zones.get(self._transition["zone"]).speed
         if self.current_action:

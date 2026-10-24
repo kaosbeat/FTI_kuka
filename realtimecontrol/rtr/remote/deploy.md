@@ -131,3 +131,24 @@ New TUI features shipped in this round:
 | `realtimecontrol/rtr/rtr/remote/ledtest.py` | SDL LED app; imports from `.led`. |
 | `realtimecontrol/rtr/rtr/remote/sdlapp.py` | SDL renderer + selftest (the failing `--selftest` path). |
 | `realtimecontrol/rtr/rtr/remote/config.json` | Device config; `"repo": "/storage/rtr-remote"`. |
+
+
+
+to make it available on the network, forward traffice to wifi:
+run this on th orangebot:
+
+socat TCP4-LISTEN:8777,bind=10.110.128.138,reuseaddr,fork TCP4:192.168.10.111:8765
+
+
+after putting this in config.json (not config.py) on the tremui
+/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/config.json
+
+{
+  "core_host": "NEW_CORE_IP",
+  "core_port": 8765,
+  ...
+}
+
+If the core's HTTP port differs from the WS port, http_host/http_port in the same file control the zone-table link (http_host defaults to core_host).
+
+

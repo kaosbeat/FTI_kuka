@@ -93,6 +93,17 @@ class Brain:
         self.active_group: Optional[str] = None
         self.group_nav: List[tuple] = []
         self.group_nav_index: int = 0
+        # Assertive mode navigation: the brain drives the robot to random safe
+        # destinations. ``assertive_nav`` holds the (zone, action) waypoints to walk
+        # (the start is stripped); ``assertive_nav_index`` the next waypoint to
+        # trigger. ``assertive_prev`` is the last seen (zone, action) (resets the
+        # dwell timer on a state change); ``assertive_arrived_ts`` stamps when the
+        # robot reached the current node (the dwell timer for the next reselect).
+        # See the ``assertive`` config section.
+        self.assertive_nav: List[tuple] = []
+        self.assertive_nav_index: int = 0
+        self.assertive_prev: Optional[tuple] = None
+        self.assertive_arrived_ts: float = 0.0
         if self._config is not None:
             self._recompute_enabled()
 
@@ -151,6 +162,10 @@ class Brain:
     def _autonomy_cfg(self) -> dict:
         """The autonomy master config (``{enabled, dwell_s, events}``)."""
         return self._config.get("autonomy", {})
+
+    def _assertive_cfg(self) -> dict:
+        """The assertive-mode config (``{enabled, dwell_s, speed_min, speed_max, wander, track, pool}``)."""
+        return self._config.get("assertive", {})
 
     def _hunt_group(self) -> dict:
         """The hunt config (``{zones, enabled, params}``) — a top-level section, not a zone group."""
@@ -351,6 +366,33 @@ class Brain:
         h = cs.get("h", 0.0)
         return (w + h) / 2.0 > engage_dist
 
+    def _hunt_move_safe(self, zone: str, action: str) -> bool:
+        """Whether a hunt move to ``(zone, action)`` is conflict-free from the current
+        position.
+
+        The hunt state (scan/track/...) always runs on the camera, but the *physical*
+        move to the hunt zone only happens when the safety gate would allow it. This
+        decouples the hunt state from the physical zone: when the current zone's
+        safezone does not overlap the hunt zone's safezone (or the actions share no
+        pose), the robot stays where it is and runs the hunt state in place, instead of
+        requesting a move the safety gate would discard (the repeated "red-link
+        conflict" warning). The check is driven by the live safezone data, so it
+        applies to whatever zone the robot currently occupies and whatever zone the
+        hunt params name — not just a fixed pair.
+
+        Returns ``True`` when the move is safe, or when no safety gate is wired (the
+        move is not conflict-checked, so it is allowed). Returns ``False`` when
+        ``zone``/``action`` is empty, or when the safety gate reports a conflict.
+        """
+        if not zone or not action:
+            return False
+        safety = self.machine.safety
+        if safety is None:
+            return True
+        conflict, _issues = safety.check_conflict(
+            self.machine.current_zone, self.machine.current_action, zone, action)
+        return not conflict
+
     def _record_lost(self) -> None:
         """Record a person-lost event and update the feral flag.
 
@@ -436,6 +478,16 @@ class Brain:
             # clear the active group before the machine freezes the pose.
             if p.get("mode") == "manual" and self.active_group is not None:
                 self.clear_group()
+            # Assertive mode is independent of groups: entering it clears the active
+            # group; leaving it clears the assertive navigation state (the machine
+            # drops the per-move speed when it exits assertive mode).
+            if p.get("mode") == "assertive" and self.active_group is not None:
+                self.clear_group()
+            if self.machine.control_mode == "assertive" and p.get("mode") != "assertive":
+                self.assertive_nav = []
+                self.assertive_nav_index = 0
+                self.assertive_prev = None
+                self.assertive_arrived_ts = 0.0
             # Pass the current joint position so entering manual mode holds the
             # robot where it is (a freeze), not just stops new autonomous triggers.
             self.machine.set_control_mode(p.get("mode"), curjpos)
@@ -578,12 +630,13 @@ class Brain:
             hp = hunt.get("params", {})
             guard = tuple(hp.get("attention_guard", []))
             detect = hp.get("detect", {})
-            if (self.machine.control_mode != "manual"
+            if (self._hunt_active()
                     and self.current_class not in ("track", "farfocus", "approach", "facefocus")
                     and self.machine.behavior not in guard
                     and not self.machine.transitioning
                     and not self.machine.pending
-                    and hunt.get("enabled", False)):
+                    and hunt.get("enabled", False)
+                    and self._hunt_move_safe(detect.get("zone"), detect.get("action"))):
                 self.machine.trigger_action(detect.get("zone"), detect.get("action"))
 
     def _handle_cam_force_lock(self, p: dict) -> None:
@@ -715,6 +768,17 @@ class Brain:
             self._clear_feral_if_stale()
             self._update_hunt_state()
             return
+        # Assertive mode: the brain drives the robot to random safe destinations
+        # (see :meth:`_assertive_tick`). Person tracking (the hunt ladder) runs
+        # only when ``assertive.track`` is enabled.
+        if self.machine.control_mode == "assertive":
+            self._assertive_tick(curjpos)
+            if self._hunt_active():
+                self._hunt_tick(curjpos, navigate=False)
+            self._clear_feral_if_stale()
+            self._update_hunt_state()
+            return
+        # Auto mode: group navigation, then the hunt ladder, then autonomy.
         # Group navigation: while an active group is still navigating, drive the
         # path and suppress the regular hunt/autonomy (the robot is en route).
         if self.active_group is not None:
@@ -724,12 +788,25 @@ class Brain:
                 return
             # Arrived: continue with the regular logic (autonomy now restricted
             # to the group's zones via _allowed_zones).
+        self._hunt_tick(curjpos, navigate=True)
+
+    # ------------------------------------------------------------------
+    # Hunt ladder (person-lost detection + class escalation), shared by auto
+    # and assertive modes.
+    # ------------------------------------------------------------------
+    def _hunt_tick(self, curjpos: List[float], navigate: bool = True) -> None:
+        """Per-tick hunt ladder: person-lost detection + class escalation.
+
+        Extracted from :meth:`tick` so assertive mode can reuse the person-tracking
+        loop when ``assertive.track`` is enabled. ``navigate`` controls whether the
+        autonomy next-link follower runs at the end (auto mode); assertive mode
+        passes False (it has its own destination driver).
+        """
         hunt = self._hunt_group()
         hunt_enabled = bool(hunt.get("enabled", False))
         if not hunt_enabled:
-            self._clear_feral_if_stale()
-            self._update_hunt_state()
-            self._autonomy_tick(curjpos)
+            if navigate:
+                self._autonomy_tick(curjpos)
             return
         hp = hunt.get("params", {})
         lost_s = hp.get("lost_s", 2.0)
@@ -738,10 +815,15 @@ class Brain:
             self._hunt_lock_id = None
             self.machine.face_state = {}
             scan = hp.get("scan", {})
-            self.machine.trigger_action(scan.get("zone"), scan.get("action"))
+            # Move to the hunt scan zone only when the safety gate allows it; when
+            # the current zone's safezone does not overlap the hunt zone's, scan in
+            # place (the hunt state runs in the current zone, no move requested).
+            if self._hunt_move_safe(scan.get("zone"), scan.get("action")):
+                self.machine.trigger_action(scan.get("zone"), scan.get("action"))
             self._set_class("scan")
             self._record_lost()
-            self._autonomy_tick(curjpos)
+            if navigate:
+                self._autonomy_tick(curjpos)
             return
         self._clear_feral_if_stale()
         # Escalation / de-escalation based on the current class.
@@ -773,8 +855,9 @@ class Brain:
                 self._set_class("scan")
         self._update_hunt_state()
         # Autonomy navigation: follow the current action's next link when dwell
-        # expires or an event fires.
-        self._autonomy_tick(curjpos)
+        # expires or an event fires (auto mode only).
+        if navigate:
+            self._autonomy_tick(curjpos)
 
     # ------------------------------------------------------------------
     # Autonomy navigation (follow next links across the enabled zone union).
@@ -993,6 +1076,185 @@ class Brain:
         if (self.machine.current_zone, self.machine.current_action) == cur:
             self._autonomy_action_start_ts = time.time()
         self._update_lock_tracking()
+
+    # ------------------------------------------------------------------
+    # Assertive mode (random safe destinations).
+    # ------------------------------------------------------------------
+    def _hunt_active(self) -> bool:
+        """Whether the person-tracking (hunt) loop runs this tick.
+
+        - manual: False (the operator drives the robot).
+        - assertive: True only when ``assertive.track`` is enabled.
+        - auto: True (the hunt ladder is part of auto mode).
+        """
+        if self.machine.control_mode == "manual":
+            return False
+        if self.machine.control_mode == "assertive":
+            return bool(self._assertive_cfg().get("track", False))
+        return True
+
+    def _assertive_pool(self) -> List[tuple]:
+        """The assertive destination pool: ``(zone, action)`` nodes the robot may go to.
+
+        - An explicit ``pool`` (a list of ``"zone/action"`` strings): those entries,
+          validated against the zone table (unknown/disabled entries are dropped).
+        - Otherwise: every enabled ``(zone, action)`` node across all enabled zones.
+        """
+        a = self._assertive_cfg()
+        pool = a.get("pool")
+        cands: List[tuple] = []
+        if isinstance(pool, list) and pool:
+            for entry in pool:
+                if not isinstance(entry, str) or "/" not in entry:
+                    continue
+                z, an = entry.split("/", 1)
+                if not self.machine.zones.has(z):
+                    continue  # unknown zone entry; drop it
+                zone = self.machine.zones.get(z)
+                if not zone.enabled:
+                    continue
+                if an not in zone.actions() or not zone.action_enabled(an):
+                    continue
+                cands.append((z, an))
+        else:
+            for zname in self.machine.zones.names():
+                zone = self.machine.zones.get(zname)
+                if zone is None or not zone.enabled:
+                    continue
+                for an in zone.actions():
+                    if zone.action_enabled(an):
+                        cands.append((zname, an))
+        return cands
+
+    def _assertive_pick_destination(self, cur_zone: str, cur_action: str) -> Optional[tuple]:
+        """Pick the next assertive destination: a random ``(zone, action)`` from the pool.
+
+        Skips the current node (a no-op) and candidates blocked by the safety gate.
+        When ``wander`` is False, restricts the pool to the current zone's actions
+        (no cross-zone travel). Returns None when there is nothing valid to go to.
+        """
+        a = self._assertive_cfg()
+        wander = a.get("wander", True)
+        pool = self._assertive_pool()
+        if not wander:
+            pool = [c for c in pool if c[0] == cur_zone]
+        cur = (cur_zone, cur_action)
+        options = [c for c in pool if c != cur and c not in self._blocked_candidates]
+        if not options:
+            return None
+        return random.choice(options)
+
+    def _assertive_roll_speed(self) -> None:
+        """Roll a per-move speed in ``[speed_min, speed_max]`` and store it on the machine.
+
+        The speed stays constant for the duration of a move (not re-rolled each tick);
+        the machine's :meth:`_current_speed` honors it while control_mode is assertive.
+        """
+        a = self._assertive_cfg()
+        lo = a.get("speed_min", 30.0)
+        hi = a.get("speed_max", 100.0)
+        self.machine.assertive_speed = random.uniform(lo, hi)
+
+    def _assertive_find_path(self, dest: tuple) -> Optional[list]:
+        """A safe path from the current position to ``dest`` (a ``(zone, action)``).
+
+        Returns the path (a list of ``(zone, action)`` starting at the current node)
+        or None when no safe path exists.
+        """
+        m = self.machine
+        cur_zone = m.current_zone
+        cur_action = m.current_action or ""
+        zones_dict = m.zones.table()
+        safety_check = None
+        if m.safety is not None:
+            safety_check = m.safety.check_conflict
+        return find_safe_path(
+            zones_dict, cur_zone, cur_action, dest[0], dest[1],
+            safety_check=safety_check,
+        )
+
+    def _assertive_tick(self, curjpos: List[float]) -> bool:
+        """Per-tick assertive driver: drive the robot to a random safe destination.
+
+        - When there is no active navigation, the robot dwells at its current node;
+          once the dwell expires, pick a destination, roll a per-move speed, and find
+          a safe path to it (the start is stripped).
+        - While navigating, drive the next waypoint when the robot is idle (no
+          transition, no pending).
+        - When all waypoints are triggered and the last move has settled, the dwell
+          timer is reset (via the (zone, action) change) and the next reselect begins.
+
+        Returns True while still navigating/dwelling (always, in assertive mode).
+        """
+        m = self.machine
+        if m.pending:
+            return True  # safety-gated move unresolved; wait
+        cur = (m.current_zone, m.current_action)
+        if cur != self.assertive_prev:
+            # New (zone, action): reset the dwell timer (the robot is at a new node)
+            # and drop the old blocked candidates (stale at a new node).
+            self.assertive_prev = cur
+            self.assertive_arrived_ts = time.time()
+            self._blocked_candidates.clear()
+        if self.assertive_nav:
+            # Active navigation: drive the next waypoint when the robot is idle.
+            if m.transitioning:
+                return True  # still moving to the current waypoint
+            if self.assertive_nav_index < len(self.assertive_nav):
+                wz, wa = self.assertive_nav[self.assertive_nav_index]
+                if wz == m.current_zone:
+                    m.play_action(wa)
+                else:
+                    m.trigger_action(wz, wa)
+                self.assertive_nav_index += 1
+                print(f"[brain] assertive nav: to {wz}/{wa} "
+                      f"({self.assertive_nav_index}/{len(self.assertive_nav)})")
+                return True
+            # All waypoints triggered; wait for the last move to settle.
+            if m.transitioning:
+                return True
+            # Arrived: clear the navigation (the dwell timer was reset above).
+            self.assertive_nav = []
+            self.assertive_nav_index = 0
+            return False
+        # No active navigation: dwelling at the current node.
+        if m.transitioning:
+            return True  # still finishing the previous move
+        now = time.time()
+        dwell = self._assertive_cfg().get("dwell_s", 8.0)
+        if (now - self.assertive_arrived_ts) < dwell:
+            return True  # still dwelling at the current destination; hold
+        # Dwell expired: pick the next destination and find a safe path to it.
+        dest = self._assertive_pick_destination(m.current_zone, m.current_action or "")
+        if dest is None:
+            self.assertive_arrived_ts = now  # nowhere to go; re-evaluate later
+            return True
+        self._assertive_roll_speed()
+        # No current action (e.g., entering assertive from manual/frozen): there is
+        # no valid start node for a safe path, so trigger the destination directly
+        # (the safety gate validates the move; a discard is handled by the reselect).
+        if m.current_action is None:
+            if m.current_zone == dest[0]:
+                m.play_action(dest[1])
+            else:
+                m.trigger_action(dest[0], dest[1])
+            print(f"[brain] assertive: (no current action) direct to {dest[0]}/{dest[1]}")
+            return True
+        # Same-zone destination: play the action directly (the robot is already in
+        # the zone; no cross-zone path is needed). The safety gate still applies
+        # (play_action stores the move as pending when wired).
+        if dest[0] == m.current_zone:
+            m.play_action(dest[1])
+            print(f"[brain] assertive: same-zone to {dest[0]}/{dest[1]}")
+            return True
+        # Cross-zone destination: find a safe path and walk it.
+        path = self._assertive_find_path(dest)
+        if path is None:
+            self.assertive_arrived_ts = now  # no safe path; re-evaluate later
+            return True
+        self.assertive_nav = path[1:] if len(path) > 1 else []
+        self.assertive_nav_index = 0
+        return True  # navigating (or already at the destination)
 
     # ------------------------------------------------------------------
     # External event handlers (autonomy triggers).

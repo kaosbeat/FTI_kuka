@@ -36,9 +36,10 @@
   button:hover { border-color: var(--accent); }
   button.active { background: var(--accent); color: #0b0d10; border-color: var(--accent); }
   button.dim { opacity: .45; }
-  /* Control mode: a left/right segmented toggle. The active side is highlighted
-     (manual = red, auto = green) so it visually points to the current state; the
-     inactive side stays dim. Click a side to switch to that mode. */
+  /* Control mode: a segmented toggle (manual / auto / assertive). The active side
+     is highlighted (manual = red, auto = green, assertive = amber) so it visually
+     points to the current state; the inactive sides stay dim. Click a side to
+     switch to that mode. */
   .seg-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
   .seg { background: #22262f; color: var(--dim); border: none; padding: 8px 18px; font-size: 13px;
          font-weight: bold; text-transform: uppercase; letter-spacing: .06em; cursor: pointer; }
@@ -47,6 +48,7 @@
   .seg.active { color: #0b0d10; }
   .seg.manual.active { background: #e05d5d; color: #fff; }
   .seg.auto.active { background: var(--accent); }
+  .seg.assertive.active { background: #d8a13a; color: #0b0d10; }
   main { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
   section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
   h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
@@ -132,6 +134,7 @@
   <div id="controlMode" class="seg-toggle" title="control mode — click a side to switch">
     <button id="cmManual" class="seg manual">manual</button>
     <button id="cmAuto" class="seg auto">auto</button>
+    <button id="cmAssertive" class="seg assertive">assertive</button>
   </div>
 </header>
 
@@ -681,9 +684,10 @@ function renderState(s) {
 
   // Sync the control mode toggle with the core state: highlight the active side.
   if (s.control_mode) {
-    const manual = s.control_mode === "manual";
-    $("cmManual").className = "seg manual" + (manual ? " active" : "");
-    $("cmAuto").className = "seg auto" + (!manual ? " active" : "");
+    const mode = s.control_mode;
+    $("cmManual").className = "seg manual" + (mode === "manual" ? " active" : "");
+    $("cmAuto").className = "seg auto" + (mode === "auto" ? " active" : "");
+    $("cmAssertive").className = "seg assertive" + (mode === "assertive" ? " active" : "");
   }
 
   // Active group: highlight the active group button, dim the rest.
@@ -906,9 +910,11 @@ function buildUI() {
   $("connect").onclick = () => { const u = $("host").value.trim(); $("host").value = u; connect(); };
 
   // Control mode: clicking a side switches to that mode (manual = operator drives,
-  // auto = brain drives). The snapshot render highlights the active side.
+  // auto = brain drives, assertive = brain drives to random safe destinations).
+  // The snapshot render highlights the active side.
   $("cmManual").onclick = () => send({ cmd: "set_control_mode", mode: "manual" });
   $("cmAuto").onclick = () => send({ cmd: "set_control_mode", mode: "auto" });
+  $("cmAssertive").onclick = () => send({ cmd: "set_control_mode", mode: "assertive" });
 
   // Clear the active zone group (returns to normal multi-group autonomy).
   $("clearGroupBtn").onclick = () => send({ cmd: "clear_group" });
