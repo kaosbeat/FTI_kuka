@@ -30,7 +30,8 @@
     "hunting_scanning_bridge": "osc(4, 0.1, 1.2).out()",
     "examining_cuddling_bridge": "osc(4, 0.1, 1.2).out()",
     "purring_hunting_bridge": "osc(4, 0.1, 1.2).out()",
-    "roaring_growling_bridge": "osc(4, 0.1, 1.2).out()"
+    "roaring_growling_bridge": "osc(4, 0.1, 1.2).out()",
+    "testing_cuddling_bridge": "osc(4, 0.1, 1.2).out()"
   },
   "modes": {
     "calm": "osc(1, 0.08, 1.2)\n.posterize(4)\n.diff(src(o0).rotate(1.5))\n.out(o3)",
@@ -161,6 +162,9 @@
       "bridge": "osc(4, 0.1, 1.2).out()"
     },
     "roaring_growling_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
+    },
+    "testing_cuddling_bridge": {
       "bridge": "osc(4, 0.1, 1.2).out()"
     }
   }
