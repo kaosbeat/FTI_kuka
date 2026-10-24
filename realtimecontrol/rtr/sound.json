@@ -231,6 +231,20 @@
         "note": 60,
         "velocity": 60
       }
+    },
+    "scanning_roaring_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "roaring_scanning_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
     }
   },
   "actions": {
@@ -1190,7 +1204,16 @@
           "note": 60,
           "velocity": 60
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "scanning_leaping_bridge": {
@@ -1209,6 +1232,24 @@
             "velocity": 60
           }
         ]
+      }
+    },
+    "scanning_roaring_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "roaring_scanning_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
       }
     }
   },
