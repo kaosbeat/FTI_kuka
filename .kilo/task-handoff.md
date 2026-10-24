@@ -1,5 +1,140 @@
 # Task Handoff Log
 
+## 2026-10-24 — Implement + test: `check_zone_limits.py` (limit checker with interactive apply)
+
+### Status
+
+Completed.
+
+### Summary
+
+Built `realtimecontrol/rtr/check_zone_limits.py`, a reusable checker that walks every zone and action in `zones.json` and validates all joint-space values against the real KR60 axis limits. It lists every out-of-limit value with a proposed clamp to the nearest limit, then interactively offers to apply ALL / ONE BY ONE / NONE (or non-interactive `--dry-run` / `--apply-all` / `--apply-one` / `--file`). It checks three data kinds: `safezone` bands, action `poses` (skipping `"x"` frozen axes and counting them), and action `axis_bands`. Disabled zones/actions are checked too and flagged `[disabled]`. The `layout` section (2D canvas coords, not joints) is excluded.
+
+**Result on the real `zones.json`: 12 violations, all in `safezone` bands (0 pose, 0 axis_bands violations).** All 12 are in bridge zones:
+- A6 `[-357,357]` → `[-150,150]`: `sleeping_stretching_bridge` (lo+hi), `cuddling_stretching_bridge` (lo+hi), `performing_roaring_bridge` (lo+hi)
+- A2 lo `-136` → `-135`: `stretching_hunting_bridge`, `hunting_examining_bridge`, `purring_hunting_bridge`
+- A5 `[-118,118]`/`hi 118` → `[-55,100]`: `scanning_leaping_bridge` (lo+hi), `performing_roaring_bridge` (hi)
+
+**Note:** during analysis I had estimated 13 violations, but the script found 12. The discrepancy was my manual reading: `hunting`'s A2 safezone is actually `[-134,5]` (in limits), not `-136`. The script is the source of truth. Also the file has 35 zones, not the 33 counted during the initial read.
+
+### Changes Made
+
+- `realtimecontrol/rtr/check_zone_limits.py`: created. `AXIS_LIMITS = [(-185,185),(-135,35),(-95,158),(-180,180),(-55,100),(-150,150)]` at top (editable). `collect()` walks zones → safezone/poses/axis_bands, building `Violation` records with a `clamp()` fix. `interactive_apply()` prompts `[A]/[O]/[n]`; non-TTY stdin is treated as NONE. `write_file()` backs up to `zones.json.bak-pre-limit-check` then writes with `json.dumps(indent=2, ensure_ascii=False) + "\n"` (matches existing format). Exit 0 = clean/all-applied, 1 = violations remain, 2 = file/structure error.
+- `realtimecontrol/rtr/zones.json`: **NOT modified** (real file left untouched; apply was tested only on a `/tmp` copy).
+
+### Documentation
+
+- Script docstring documents usage, limits, and rationale. No separate docs needed.
+
+### Architecture
+
+- No architectural impact — standalone utility script next to `zones.json`, no new dependencies (stdlib only).
+
+### Validation
+
+- `python3 check_zone_limits.py --dry-run` on the real `zones.json`: reports 12 violations, exit 1, no write. 35 zones, 57 actions, 126 poses checked, 23 `"x"` axes skipped.
+- `python3 check_zone_limits.py --file /tmp/kilo/test_zones.json --apply-all` on a copy: applied 12/12, re-check 0 remaining, exit 0, backup created.
+- `diff` (original vs applied copy, both normalized via `json.dumps(indent=2)`): exactly **12 changed value lines**, no structural/formatting changes → JSON round-trip preserves formatting.
+- `git status --short zones.json`: clean → real file untouched.
+
+### Decisions and Caveats
+
+- Applied clamps change robot behavior; the real `zones.json` was deliberately left unmodified. The user can run the script interactively (`python3 check_zone_limits.py`) to apply, or ask me to run `--apply-all`.
+- `AXIS_LIMITS` is a single editable constant; if the robot's real limits ever change, only that line needs updating.
+- `"x"` frozen pose axes are skipped (value comes from the live robot at runtime — a static checker cannot verify them); count is reported.
+
+### Next Task
+
+Decide whether to apply the 12 clamps to the real `zones.json` (via the script) or leave it for the user.
+
+### Instructions for the Next Task
+
+If applying: run `python3 check_zone_limits.py --apply-all` from `realtimecontrol/rtr/` (or `--apply-one` to pick per change). It creates `zones.json.bak-pre-limit-check` first. After applying, re-run `--dry-run` to confirm 0 violations. No code changes needed; the script is complete and tested.
+
+## 2026-10-24 — Research: reconcile stated axis limits with codebase (A3 discrepancy)
+
+### Status
+
+Completed.
+
+### Summary
+
+The user asked to verify that ALL zones and actions in `realtimecontrol/rtr/zones.json` are within the actual robot axis limits, and to build a repeatable script that lists all out-of-limit values with proposed clamps and offers to apply ALL / ONE BY ONE / NONE. The user's stated limits matched the codebase on 5 of 6 axes; A3 differed: the message said `[95, 158]` while the codebase consistently defines A3 as `[-95, 158]`. Asked the user; they confirmed `[-95, 158]` (the `95` was a typo). Final real limits = the codebase `HARDWARE_LIMITS`: A1 `[-185,185]`, A2 `[-135,35]`, A3 `[-95,158]`, A4 `[-180,180]`, A5 `[-55,100]`, A6 `[-150,150]`.
+
+### Changes Made
+
+- None (research only).
+
+### Documentation
+
+- None required — findings recorded in this handoff entry.
+
+### Architecture
+
+- No architectural impact.
+
+### Validation
+
+- Cross-checked limit definitions across three independent files:
+  - `realtimecontrol/rtr/rtr/state/zones.py:34-54` — `SOFTWARE_LIMITS` and `HARDWARE_LIMITS` both give A3 `(-95, 158)`; HARDWARE_LIMITS sourced from the `kr60ha_macro.xacro` joint `<limit>` tags.
+  - `realtimecontrol/rtr/validate_zones.js:138-139` — `SOFTWARE_LIMITS`/`HARDWARE_LIMITS` mirror the same values.
+  - `realtimecontrol/rtr/rtr/remote/view.py:60-67` — `HW_LIMITS` for the ARM page bars, same values.
+- `robotconfig.json` contains no axis-limit definitions (grep: no matches).
+
+### Decisions and Caveats
+
+- A3 lower limit is `-95` (user-confirmed). The checker script must use the codebase limits as its default.
+- Pre-scan of `zones.json` under these limits (to be confirmed by the script): **all 6-axis poses are in limits**; violations are confined to `safezone` bands: A2 lo `-136` in `hunting`, `stretching_hunting_bridge`, `hunting_examining_bridge`, `purring_hunting_bridge`; A5 `[-30,118]` in `performing_roaring_bridge`; A5 `[-118,118]` in `scanning_leaping_bridge`; A6 `[-357,357]` in `sleeping_stretching_bridge`, `cuddling_stretching_bridge`, `performing_roaring_bridge` (13 band-end violations total, 0 pose violations).
+
+### Next Task
+
+Implement the checker script (`realtimecontrol/rtr/check_zone_limits.py`).
+
+### Instructions for the Next Task
+
+Build a Python script next to `zones.json` that: (1) checks every zone `safezone` band end, every action `poses` value (`"x"` frozen axes skipped), and every action `axis_bands` end against `AXIS_LIMITS = [(-185,185),(-135,35),(-95,158),(-180,180),(-55,100),(-150,150)]`; (2) lists each violation with a proposed clamp to the nearest limit; (3) interactively offers apply ALL / ONE BY ONE / NONE; (4) writes `zones.json` back with `indent=2` after a `.bak` backup; (5) supports `--dry-run` / `--apply-all` / `--apply-one` / `--file` for non-interactive use. Check disabled zones/actions too (the user asked for ALL), marking them `[disabled]`.
+
+## 2026-10-24 — Analyse: zones.json structure and check targets
+
+### Status
+
+Completed.
+
+### Summary
+
+Read `realtimecontrol/rtr/zones.json` in full (3975 lines). It contains 33 zones under `zones` (12 behavioral zones + 17 bridge zones + `testing`, `grabbing`, `scanning`), plus a `layout` section (2D canvas coordinates — not joint values, out of scope). Three data kinds hold joint-space values that must be checked against the real axis limits:
+
+1. `zones.<zone>.safezone` — 6 `[lo, hi]` bands, one per axis A1..A6.
+2. `zones.<zone>.actions.<action>.poses` — list of 6-element arrays; an axis may be the string `"x"` meaning "freeze / copy the current robot axis value" (no static value to check — skipped and counted).
+3. `zones.<zone>.actions.<action>.axis_bands` — dict keyed `"0".."5"` with `[lo, hi]` bands (used by ACTIVE_CLASSES tracking actions; `clawing.lock_target` has an empty `{}`).
+
+The `layout` section holds 2D editor positions and is untouched by the checker. Zones/actions can have `enabled: false` (e.g. `grabbing.grab`); the user asked to check ALL, so disabled entries are checked too and marked.
+
+### Changes Made
+
+- None (analysis only).
+
+### Documentation
+
+- None required — structure recorded in this handoff entry.
+
+### Architecture
+
+- No architectural impact.
+
+### Validation
+
+- Full file read (lines 1-3975). All 33 zones enumerated; every `safezone`, `poses`, and `axis_bands` entry inspected against the limits during analysis.
+
+### Decisions and Caveats
+
+- `"x"` pose axes are skipped (frozen axes take their value from the live robot at runtime — a static checker cannot verify them; the count is reported).
+- `layout` coordinates are 2D canvas positions, not joint angles — excluded.
+
+### Next Task
+
+Research existing limit definitions and reconcile with the user's stated limits (done — see the entry above).
+
 ## 2026-10-24 — Intra-zone full-mesh `next` (auto-connect siblings, hidden in flow view)
 
 ### Status
