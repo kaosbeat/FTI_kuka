@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import os
+import re
 import socket
 import xml.etree.ElementTree as ET
 from typing import Literal
+
+# Per-frame logging is off by default: block mode sends 3 <Rob> frames per
+# tick at 20 Hz, which drowns the log. Set KUKAPY_DEBUG=1 to print every
+# SEND and every parsed frame (useful when chasing a desync).
+_DEBUG = os.environ.get("KUKAPY_DEBUG", "") == "1"
 
 
 class KukaError(Exception):
@@ -49,7 +56,7 @@ class Robot:
         self.host = ip if ip is not None else host
         self.port = port
         self.socket_timeout = socket_timeout  # used only while waiting for KRC to connect
-        self.recv_timeout = recv_timeout       # None = wait forever; default 300s so a desync fails loudly
+        self.recv_timeout = recv_timeout       # seconds to wait for a command response; a desync (KRL stranded at WAIT FOR $FLAG[1]) then raises instead of hanging forever
         self.comm_sock: socket.socket | None = None
         # Leftover bytes carried between _recv_xml calls. A recv() frequently
         # returns a whole <Res> plus the start of the next frame; that tail must
@@ -89,63 +96,99 @@ class Robot:
 
     # ------------------------------------------------------------------
     # EKI XML framing helpers
-    # KUKAPY.xml: PROTOCOL=TCP, SENDFLAG=1 — both directions are
-    # \x00-delimited. <Rob> commands are \x00-terminated; <Res> responses
-    # are split on \x00 (plain-XML fallback kept for non-flagged streams).
+    # KUKAPY.xml: PROTOCOL=TCP + SENDFLAG=1.
+    #  - client -> KRC: <Rob> frames must be \x00-delimited (the KRC EKI
+    #    parser byte-accounts between flags; without them it drifts after
+    #    enough ticks and never sets $FLAG[1], stranding the KRL at
+    #    WAIT FOR $FLAG[1], line 57).
+    #  - KRC -> client: plain XML documents, no \x00 flags on the wire.
+    #    <Res> responses are interleaved with periodic <AliveCounter>
+    #    keepalives, and TCP does not preserve document boundaries — a
+    #    single recv() frequently holds a whole <Res> plus a whole (or
+    #    part of a) keepalive.
     # ------------------------------------------------------------------
+
+    # Matches the start of a document: leading whitespace, then a root tag.
+    _DOC_RE = re.compile(rb"^\s*<([A-Za-z_][A-Za-z0-9_.-]*)")
+
+    def _first_document(self, buf: bytes):
+        """Split off the first complete XML document from ``buf``.
+
+        Returns ``(doc, rest)``; returns ``(None, None)`` when no complete
+        document is present yet (partial document: keep accumulating)."""
+        m = self._DOC_RE.match(buf)
+        if not m:
+            return None, None
+        close = b"</" + m.group(1) + b">"
+        end = buf.find(close)
+        if end < 0:
+            return None, None
+        end += len(close)
+        return buf[:end], buf[end:]
 
     def _send_xml(self, element: ET.Element) -> None:
         xml_str = ET.tostring(element, encoding="unicode")
         data = xml_str.encode("utf-8") + b"\x00"
-        print(f"[kukapy] SEND {repr(data)}")
+        if _DEBUG:
+            print(f"[kukapy] SEND {repr(data)}")
         self.comm_sock.sendall(data)
 
     def _recv_xml(self) -> ET.Element:
-        """Read one <Res> frame.
-        Handles both SENDFLAG=1 (\\x00-delimited) and plain XML modes.
-        AliveCounter / other non-Res frames are silently skipped.
+        """Read one <Res> frame from the KRC EKI stream.
 
-        Leftover bytes (a partial next frame) are kept in ``self._recv_buf`` so the
-        next call continues where this one stopped. Discarding them split the
-        following frame and poisoned the stream, stranding the KRL at
-        ``WAIT FOR $FLAG[1]`` (the "waiting for flag" error)."""
+        The buffer is scanned document by document: \x00-delimited frames are
+        split on the flag (defensive; KRC currently sends none), and plain
+        XML documents are sliced out by root tag so that a buffer holding
+        several concatenated documents (a <Res> plus an <AliveCounter>
+        keepalive, which routinely coalesce into one TCP segment) no longer
+        deadlocks the reader. Non-<Res> documents are skipped.
+
+        Leftover bytes are kept in ``self._recv_buf`` so the next call
+        continues where this one stopped — discarding them splits the next
+        document and strands the KRL at WAIT FOR $FLAG[1]."""
         buf = self._recv_buf
         while True:
+            while True:
+                # \x00-delimited frames (SENDFLAG on the KRC side, if ever enabled)
+                if b"\x00" in buf:
+                    frame, buf = buf.split(b"\x00", 1)
+                    frame = frame.strip()
+                    if frame:
+                        try:
+                            elem = ET.fromstring(frame.decode("utf-8"))
+                        except ET.ParseError:
+                            print(f"[kukapy] FRAME-PARSE-FAIL len={len(frame)}B {repr(frame)}")
+                            continue
+                        if elem.tag == "Res":
+                            self._recv_buf = buf
+                            if _DEBUG:
+                                print(f"[kukapy] FRAME tag='Res' len={len(frame)}B leftover={len(buf)}B")
+                            return elem
+                        # non-Res keepalive: drop and keep scanning
+                    continue
+                # plain XML: slice out the first complete document
+                doc, rest = self._first_document(buf)
+                if doc is None:
+                    break  # incomplete document: need more bytes
+                try:
+                    elem = ET.fromstring(doc.decode("utf-8"))
+                except ET.ParseError:
+                    print(f"[kukapy] DOC-PARSE-FAIL len={len(doc)}B {repr(doc[:120])}")
+                    buf = rest
+                    continue
+                if elem.tag == "Res":
+                    self._recv_buf = rest
+                    if _DEBUG:
+                        print(f"[kukapy] FRAME tag='Res' len={len(doc)}B leftover={len(rest)}B")
+                    return elem
+                buf = rest  # non-Res document (AliveCounter): drop, keep scanning
+
             chunk = self.comm_sock.recv(4096)
             if not chunk:
                 raise KukaError("Connection closed by KRC")
             buf += chunk
-
-            # Mode 1: \x00-delimited frames (SENDFLAG=1 on KRC side)
-            while b"\x00" in buf:
-                frame, buf = buf.split(b"\x00", 1)
-                frame = frame.strip()
-                if not frame:
-                    continue
-                try:
-                    elem = ET.fromstring(frame.decode("utf-8"))
-                    print(f"[kukapy] FRAME tag={elem.tag!r} len={len(frame)}B leftover={len(buf)}B")
-                    if elem.tag == "Res":
-                        self._recv_buf = buf
-                        return elem
-                except ET.ParseError:
-                    print(f"[kukapy] FRAME-PARSE-FAIL len={len(frame)}B {repr(frame)}")
-
-            # Mode 2: plain XML stream (no SENDFLAG) — try to parse what we have
-            stripped = buf.strip()
-            if stripped:
-                try:
-                    elem = ET.fromstring(stripped.decode("utf-8"))
-                    print(f"[kukapy] FRAME2 tag={elem.tag!r} len={len(stripped)}B")
-                    if elem.tag == "Res":
-                        self._recv_buf = b""
-                        return elem
-                    self._recv_buf = b""  # non-Res complete frame, discard and keep reading
-                except ET.ParseError:
-                    pass  # incomplete XML, accumulate more
-
-            # Defensive: if framing is broken the buffer would grow without bound;
-            # fail loudly instead of hanging forever.
+            # Defensive: if framing is broken the buffer would grow without
+            # bound; fail loudly instead of hanging forever.
             if len(buf) > 1_000_000:
                 raise KukaError("EKI receive buffer overflow; framing desync")
             self._recv_buf = buf
