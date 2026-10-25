@@ -42,14 +42,14 @@ class Robot:
         host: str = "192.168.1.1",
         port: int = 18735,
         socket_timeout: int = 60,
-        recv_timeout: int | None = None,
+        recv_timeout: int | None = 300,
         # legacy alias kept for compatibility
         ip: str | None = None,
     ):
         self.host = ip if ip is not None else host
         self.port = port
         self.socket_timeout = socket_timeout  # used only while waiting for KRC to connect
-        self.recv_timeout = recv_timeout       # None = wait forever for command responses
+        self.recv_timeout = recv_timeout       # None = wait forever; default 300s so a desync fails loudly
         self.comm_sock: socket.socket | None = None
         # Leftover bytes carried between _recv_xml calls. A recv() frequently
         # returns a whole <Res> plus the start of the next frame; that tail must
@@ -89,13 +89,14 @@ class Robot:
 
     # ------------------------------------------------------------------
     # EKI XML framing helpers
-    # KUKAPY.xml uses PROTOCOL=TCP (raw stream, no null-byte framing).
-    # We detect message boundaries by attempting incremental XML parsing.
+    # KUKAPY.xml: PROTOCOL=TCP, SENDFLAG=1 — both directions are
+    # \x00-delimited. <Rob> commands are \x00-terminated; <Res> responses
+    # are split on \x00 (plain-XML fallback kept for non-flagged streams).
     # ------------------------------------------------------------------
 
     def _send_xml(self, element: ET.Element) -> None:
         xml_str = ET.tostring(element, encoding="unicode")
-        data = xml_str.encode("utf-8")
+        data = xml_str.encode("utf-8") + b"\x00"
         print(f"[kukapy] SEND {repr(data)}")
         self.comm_sock.sendall(data)
 
@@ -109,14 +110,11 @@ class Robot:
         following frame and poisoned the stream, stranding the KRL at
         ``WAIT FOR $FLAG[1]`` (the "waiting for flag" error)."""
         buf = self._recv_buf
-        n = 0
         while True:
-            n += 1
             chunk = self.comm_sock.recv(4096)
             if not chunk:
                 raise KukaError("Connection closed by KRC")
             buf += chunk
-            print(f"[kukapy] RECV#{n} chunk={len(chunk)}B buf={len(buf)}B {repr(buf)}")
 
             # Mode 1: \x00-delimited frames (SENDFLAG=1 on KRC side)
             while b"\x00" in buf:

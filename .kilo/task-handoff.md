@@ -1,5 +1,60 @@
 # Task Handoff Log
 
+## 2026-10-25 — Ported the `\x00` SENDFLAG fix to the real runtime module `realtimecontrol/rtr/KukaPy/kukapy/robot.py` + removed the excessive per-chunk RECV logging
+
+### Status
+
+Completed (fix implemented + validated locally). On-robot redeploy/restart is the operator's action (the core runs on 192.168.10.201, not this machine).
+
+### Summary
+
+The operator clarified that the real runtime module is **`realtimecontrol/rtr/KukaPy/kukapy/robot.py`** (the `kukapy` package under `rtr/KukaPy`, resolved by `from kukapy.robot import Robot` in `rtr/robot/kuka.py:47`), **not** the `KukaPyNEW` copy fixed in the previous entry. The same two fixes were applied there, plus the debug instrumentation was trimmed:
+
+1. **`\x00` SENDFLAG framing:** `_send_xml` now sends `xml_str.encode("utf-8") + b"\x00"` — every `<Rob>` is `\x00`-terminated, matching `KUKAPY.xml` `SENDFLAG=1` (both directions null-delimited). This is the fix for the line-57 strand (KRC parser byte-accounting drift → `$FLAG[1]` never set).
+2. **`recv_timeout` default `None` → `300`** so a future desync raises `socket.timeout` after 300 s instead of hanging forever. `None` is still accepted explicitly for wait-forever.
+3. **Logging trimmed:** removed the per-chunk `[kukapy] RECV#` dump (it reprinted the entire growing buffer on every `recv` — quadratic output). Kept: `[kukapy] SEND` (one line per command; confirms the trailing `\x00` after deploy), `[kukapy] FRAME` / `FRAME2` / `FRAME-PARSE-FAIL` (one line per parsed frame; desync detection), and the 1 MB buffer-overflow guard.
+
+The framing comment block at the `_send_xml` section was corrected (it previously claimed "raw stream, no null-byte framing", contradicting the deployed `SENDFLAG=1`).
+
+### Changes Made
+
+- `realtimecontrol/rtr/KukaPy/kukapy/robot.py`:
+  - `_send_xml`: `data = xml_str.encode("utf-8")` → `data = xml_str.encode("utf-8") + b"\x00"`.
+  - `__init__`: `recv_timeout: int | None = None` → `recv_timeout: int | None = 300`; comment updated.
+  - `_recv_xml`: removed the `n` counter and the `print(f"[kukapy] RECV#{n} ...")` per-chunk dump.
+  - Framing comment block rewritten to document `SENDFLAG=1` both-directions `\x00` framing.
+- The `KukaPyNEW/kukapy/robot.py` copy from the previous entry is now a **duplicate** of the fix (it still contains the verbose `RECV#` logging). If it is no longer used, consider deleting it to avoid two divergent copies.
+
+### Documentation
+
+- None required — the in-code comment block documents the framing; the KUKAPY.xml `SENDFLAG=1` semantics are already documented in the previous handoff entry.
+
+### Architecture
+
+- No architectural impact. Same module, same API; only wire-format framing (now matching the deployed config) and log verbosity changed.
+
+### Validation
+
+- `PYTHONPATH=realtimecontrol/rtr/KukaPy python3 -m pytest realtimecontrol/rtr/tests/test_kuka_eki_recv.py realtimecontrol/rtr/tests/test_kuka_eki_serialization.py -q` → **12 passed** (6 recv-framing + 6 serialization).
+- Import check: `kukapy.robot.__file__` resolves to `realtimecontrol/rtr/KukaPy/kukapy/robot.py` (the edited file); `Robot(port=1).recv_timeout == 300`; `_send_xml` source contains the `+ b"\x00"` framing.
+
+### Decisions and Caveats
+
+- The `kukapy` package is **not** pip-installed globally (`import kukapy` fails from a bare shell); the runtime and tests resolve it via `PYTHONPATH`/working-directory pointing at `realtimecontrol/rtr/KukaPy`. The on-robot core (192.168.10.201) must therefore use the same resolution — verify the deployed tree's `robot.py` is the one from `rtr/KukaPy/kukapy/`.
+- `KukaPyNEW/kukapy/robot.py` and `rtr/KukaPy/kukapy/robot.py` now both carry the fix; keep them in sync or delete one.
+- If the strand recurs despite the `\x00` fix, the remaining suspect is a config mismatch: the robot's deployed `KUKAPY.xml` may differ from the repo's (`SENDFLAG=1`).
+
+### Next Task
+
+Operator: redeploy `realtimecontrol/rtr/KukaPy/kukapy/robot.py` to the robot PC (192.168.10.201), restart the core, confirm `[kukapy] SEND` lines show a trailing `\x00`, then re-trigger `hunting` → `track2` and verify the core runs past tick #130 without stranding.
+
+### Instructions for the Next Task
+
+1. Sync `realtimecontrol/rtr/KukaPy/kukapy/robot.py` to the robot PC, restart the core.
+2. Confirm in the log that `[kukapy] SEND` lines end with `...b'\x00'` and that the old `[kukapy] RECV#` dump is gone.
+3. Re-trigger `hunting` → `track2`; verify no strand past tick #130 (KRL not parked at line 57).
+4. If it still strands: verify `SENDFLAG=1` on the pendant's `KUKAPY.xml` and capture the trace tail + KRL line at the stall.
+
 ## 2026-10-25 — Root-caused the strand: KRL confirmed at line 57 (request-side EKI desync); fixed `_send_xml` to send `\x00`-delimited `<Rob>` frames + added a defensive `recv_timeout`
 
 ### Status
