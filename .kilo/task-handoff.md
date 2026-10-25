@@ -1,5 +1,67 @@
 # Task Handoff Log
 
+## 2026-10-25 — Root-caused the strand: KRL confirmed at line 57 (request-side EKI desync); fixed `_send_xml` to send `\x00`-delimited `<Rob>` frames + added a defensive `recv_timeout`
+
+### Status
+
+Completed (fix implemented + validated locally). On-robot redeploy/restart is the operator's action (the core runs on 192.168.10.201, not this machine).
+
+### Summary
+
+The operator confirmed two decisive facts: **KRL is at line 57 (`WAIT FOR $FLAG[1]`)** and **there is no log after tick #130**. This resolves the two competing hypotheses from the previous handoff:
+
+- **RULED OUT — "PTP never completes" (KRL in `PTP` at line 131).** KRL is at line 57, not 131, so the move is not the problem.
+- **CONFIRMED — "request-side EKI desync" (KRC never set `$FLAG[1]`).** KRL idles at `WAIT FOR $FLAG[1]` because the KRC EKI layer never finished parsing tick #130's `<Rob>`, so it never set `$FLAG[1]` (the `Set_Flag="1"` on the last RECEIVE element `Rob/DO_Val`, `KUKAPY.xml:34`). Python sent the Type2 (`get_curjpos`) `<Rob>` (last log line: `tick#130 SEND Type2`) and is now blocked in `_recv_xml` waiting for a `<Res>` that never comes.
+
+**Root cause:** `KUKAPY.xml` uses `PROTOCOL=TCP` + **`SENDFLAG=1`**, which makes the KRC EKI layer delimit frames with `\x00` in **both** directions. The Python client's `_send_xml` (`kukapy/robot.py`) sent **raw, unframed** `<Rob>` bytes (`sendall(data)` with no `\x00`). The code comment at `robot.py:92` even claimed "raw stream, no null-byte framing" — contradicting the deployed config. With no delimiter, the KRC parser's byte accounting drifts after enough ticks and it stops recognizing the `<Rob>` boundary, so `$FLAG[1]` is never set → KRL strands at line 57. This is a *stateful* desync (it worked for ~130 ticks, then broke), which is why a steady-state framing mismatch was not the obvious culprit.
+
+**Fix (2 changes in `KukaPyNEW/kukapy/robot.py`, the active runtime module):**
+1. `_send_xml` now appends `b"\x00"` to every `<Rob>` frame so the KRC parser gets an explicit frame boundary and reliably sets `$FLAG[1]`.
+2. `recv_timeout` default changed `None` → `300` so a future desync raises a `socket.timeout` after 300 s instead of hanging forever (300 s is safe for slow block moves and matches the README's recommended value).
+
+**Note on the receive side:** `_recv_xml` already handles `\x00`-delimited frames (Mode 1) and was already correct; it is unchanged. The existing regression tests (`tests/test_kuka_eki_recv.py`) confirm the receive framing is sound.
+
+### Changes Made
+
+- `realtimecontrol/kukapyEKI/KukaPyNEW/kukapy/robot.py`:
+  - `_send_xml` (was `robot.py:99-100`): `data = xml_str.encode("utf-8")` → `data = xml_str.encode("utf-8") + b"\x00"`. Added a comment explaining the `SENDFLAG=1` both-directions framing and the line-57 strand.
+  - `__init__` default: `recv_timeout: int | None = None` → `recv_timeout: int | None = 300`. Updated the `self.recv_timeout` comment.
+
+### Documentation
+
+- Updated the `_send_xml` docstring/comment block to state the `SENDFLAG=1` both-directions `\x00` framing (replacing the incorrect "raw stream, no null-byte framing" note).
+
+### Architecture
+
+No architectural impact. The fix is a framing correction inside the existing EKI client; the server/client roles, the single-flight lock (`kuka.py`), and the engine tick sequence are unchanged.
+
+### Validation
+
+- `python -c "import ast; ast.parse(...)"` on `kukapy/robot.py` → syntax OK.
+- `python tests/test_kuka_eki_recv.py` (from `realtimecontrol/rtr`) → **all 6 EKI `_recv_xml` framing tests passed** (split frames, interleaved keepalives, multi-frame chunks, tiny-chunk reassembly, connect reset).
+- `python tests/test_kuka_eki_serialization.py` (from `realtimecontrol/rtr`) → **all 6 serialization tests passed** (single-flight lock, stream vs block positioning).
+
+### Decisions and Caveats
+
+- **The `\x00` is the primary fix; `recv_timeout=300` is defensive.** If the desync recurs despite the delimiter (e.g. the robot's deployed `KUKAPY.xml` differs from the repo's), the timeout will now surface it as a `socket.timeout` instead of a silent hang, and the `[kukapy] SEND`/`RECV` instrumentation will show exactly where it stalled.
+- **The robot's deployed `KUKAPY.xml` must match the repo's** (`SENDFLAG=1`). If the operator's KRC has a different config (e.g. `SENDFLAG` absent), the `\x00` framing assumption changes — verify on the pendant. The repo's `KUKAPY.xml:7` has `SENDFLAG=1`.
+- **The fix is in the local tree only.** The running core is on 192.168.10.201 (a different machine); it must be restarted from the updated tree to pick up the change. Do NOT `pkill` locally (the core is not here).
+- The vendored copy `realtimecontrol/rtr/KukaPy/kukapy/robot.py` is **not** on the runtime path (the active module is `KukaPyNEW/kukapy/robot.py`); it was left unchanged this turn. If it is ever used, it needs the same `_send_xml` fix.
+
+### Next Task
+
+Redeploy the fixed `robot.py` to the robot PC (192.168.10.201) and restart the core from the current tree, then re-trigger the strand to confirm the fix.
+
+### Instructions for the Next Task
+
+1. **On the robot PC (192.168.10.201)**, sync the updated `realtimecontrol/kukapyEKI/KukaPyNEW/kukapy/robot.py` into the running core's path (the same path the instrumented core uses — confirm with `python -c "import kukapy.robot, os; print(os.path.abspath(kukapy.robot.__file__))"` on that machine).
+2. **Restart the core** from the current tree, capturing output:
+   `cd <core-path>/realtimecontrol/rtr && python main.py --robot --ip 192.168.10.201 2>&1 | tee /tmp/kukapy_trace.log`
+   Confirm `[engine] tick#1 start ...` lines appear (instrumentation loaded) and that the `[kukapy] SEND` lines now show a trailing `\x00` (e.g. `b'...<Rob>...</Rob>\x00'`).
+3. Start KUKAPY_SERVER on the pendant; park neutral (`{"cmd":"goto_zone","zone":"rest"}`), then re-trigger: `{"cmd":"goto_zone","zone":"hunting"}` then `{"cmd":"play_action","action":"track2"}`.
+4. **Verify the fix:** the core should now run past tick #130 without stranding (KRL no longer idles at line 57). If it still strands, the `recv_timeout=300` will raise a `socket.timeout` within 5 min — capture the tail of `/tmp/kukapy_trace.log` and the KRL line at the moment of the stall.
+5. If it still strands with the `\x00` in place, the next discriminator is the robot's deployed `KUKAPY.xml` (confirm `SENDFLAG=1` on the pendant) — a config mismatch is the only remaining suspect.
+
 ## 2026-10-25 — Analyzed operator trace: the "traceback" is a debug print, and the running core is STALE (pre-instrumentation, old path)
 
 ### Status
