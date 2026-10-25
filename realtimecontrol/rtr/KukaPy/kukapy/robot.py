@@ -51,6 +51,11 @@ class Robot:
         self.socket_timeout = socket_timeout  # used only while waiting for KRC to connect
         self.recv_timeout = recv_timeout       # None = wait forever for command responses
         self.comm_sock: socket.socket | None = None
+        # Leftover bytes carried between _recv_xml calls. A recv() frequently
+        # returns a whole <Res> plus the start of the next frame; that tail must
+        # be preserved (not discarded) or the next frame is split and the stream
+        # desyncs, stranding the KRL at WAIT FOR $FLAG[1].
+        self._recv_buf = b""
 
     # ------------------------------------------------------------------
     # Connection management
@@ -69,6 +74,7 @@ class Robot:
         finally:
             srv.close()
         self.comm_sock.settimeout(self.recv_timeout)
+        self._recv_buf = b""  # fresh stream: drop any stale leftover bytes
         print(f"[kukapy] KRC connected from {addr[0]}:{addr[1]}")
 
     def disconnect(self) -> None:
@@ -79,6 +85,7 @@ class Robot:
         if self.comm_sock:
             self.comm_sock.close()
             self.comm_sock = None
+        self._recv_buf = b""
 
     # ------------------------------------------------------------------
     # EKI XML framing helpers
@@ -95,8 +102,13 @@ class Robot:
     def _recv_xml(self) -> ET.Element:
         """Read one <Res> frame.
         Handles both SENDFLAG=1 (\\x00-delimited) and plain XML modes.
-        AliveCounter / other non-Res frames are silently skipped."""
-        buf = b""
+        AliveCounter / other non-Res frames are silently skipped.
+
+        Leftover bytes (a partial next frame) are kept in ``self._recv_buf`` so the
+        next call continues where this one stopped. Discarding them split the
+        following frame and poisoned the stream, stranding the KRL at
+        ``WAIT FOR $FLAG[1]`` (the "waiting for flag" error)."""
+        buf = self._recv_buf
         while True:
             chunk = self.comm_sock.recv(4096)
             if not chunk:
@@ -113,6 +125,7 @@ class Robot:
                 try:
                     elem = ET.fromstring(frame.decode("utf-8"))
                     if elem.tag == "Res":
+                        self._recv_buf = buf
                         return elem
                 except ET.ParseError:
                     pass
@@ -123,11 +136,17 @@ class Robot:
                 try:
                     elem = ET.fromstring(stripped.decode("utf-8"))
                     if elem.tag == "Res":
-                        buf = b""
+                        self._recv_buf = b""
                         return elem
-                    buf = b""  # non-Res complete frame, discard and keep reading
+                    self._recv_buf = b""  # non-Res complete frame, discard and keep reading
                 except ET.ParseError:
                     pass  # incomplete XML, accumulate more
+
+            # Defensive: if framing is broken the buffer would grow without bound;
+            # fail loudly instead of hanging forever.
+            if len(buf) > 1_000_000:
+                raise KukaError("EKI receive buffer overflow; framing desync")
+            self._recv_buf = buf
 
     def _build_cmd(self, cmd_type: str, **kw) -> ET.Element:
         """Build a <Rob> XML element with all fields populated."""

@@ -44,6 +44,12 @@ class StateMachine:
         self.current_action: Optional[str] = None
         self.action_index = 0
         self._transition: Optional[dict] = None
+        # The zone the robot most recently transitioned FROM (the runtime "previous
+        # zone"). Updated in :meth:`_commit` on every cross-zone arrival, cleared on
+        # :meth:`reset`. Used by :meth:`_advance_after_action` to auto-return a
+        # single-action zone that has no valid ``next``/``exits`` back to where the
+        # robot came from, so it does not dead-end.
+        self._prev_zone: Optional[str] = None
 
         # Camera telemetry (the brain stashes the latest CAM_TRACK payload here; the
         # behaviour policies read it). Empty dict until the first frame arrives.
@@ -527,8 +533,14 @@ class StateMachine:
         """Hand off after a single-run action completes (its last anchor is reached).
 
         Priority: the action's ordered ``next`` list (first valid candidate) >
-        zone-level ``exits`` (first valid, deterministic). No valid target ->
-        stop the action (the robot holds the last pose).
+        zone-level ``exits`` (first valid, deterministic) > the runtime previous
+        zone (single-action zones only). No valid target -> stop the action
+        (the robot holds the last pose).
+
+        The previous-zone fallback auto-returns a single-action zone that has no
+        valid ``next``/``exits`` back to the zone the robot came from (its first
+        enabled action), so the flow never dead-ends. Multi-action zones keep the
+        legacy hold: they are the operator's choice points.
 
         In manual mode the action is simply cleared (no auto-advance): the
         operator explicitly triggers the next action.
@@ -548,6 +560,24 @@ class StateMachine:
         for tz, ta in zone.exits():
             if self._try_go(tz, ta):
                 return
+        # Last resort: a single-action zone with no valid next/exits would dead-end
+        # the robot. Return it to the runtime previous zone (where the robot came
+        # from), starting that zone's first enabled action.
+        if len(zone.actions()) == 1 and self._prev_zone is not None \
+                and self._prev_zone != self.current_zone:
+            self._try_go(self._prev_zone, self._first_enabled_action(self._prev_zone))
+
+    def _first_enabled_action(self, zone_name: str) -> Optional[str]:
+        """The first enabled action name in ``zone_name`` (table order), or None.
+
+        Used to resolve the entry action when auto-returning to the runtime
+        previous zone (see :meth:`_advance_after_action`).
+        """
+        z = self.zones.get(zone_name)
+        for name in z.actions():
+            if z.action_enabled(name):
+                return name
+        return None
 
     def _try_go(self, tz: str, ta: str) -> bool:
         """Attempt to hand off to ``(tz, ta)``. Returns True if the handoff was taken.
@@ -690,6 +720,10 @@ class StateMachine:
         zone = t["zone"]
         action = t["action"]
         z = self.zones.get(zone)
+        # Capture the runtime previous zone before the arrival swaps it in.
+        # Same-zone commits (shared-pose handoffs) keep the previous zone as-is.
+        if zone != self.current_zone:
+            self._prev_zone = self.current_zone
         self.current_zone = zone
         self.speed = z.speed
         self.current_action = action
@@ -769,6 +803,7 @@ class StateMachine:
         self.current_zone = "resting"
         self.current_action = None
         self.action_index = 0
+        self._prev_zone = None
         self.speed = self.zones.get(self.current_zone).speed
         self.target = list(curjpos)
         self.target_kind = "joint"

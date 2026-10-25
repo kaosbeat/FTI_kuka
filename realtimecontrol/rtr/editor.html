@@ -5061,6 +5061,32 @@ function cleanNextLists() {
     }
   }
 }
+// Give a single-action zone that has no return `next` (and no zone-level `exits`) a
+// concrete return link back to its (single) incoming zone, so the runtime never
+// dead-ends. Called at create (new action / copy, via meshNewAction) and on save.
+// Additive and conservative — it only fires for a zone with EXACTLY one enabled
+// action whose `next` has no zone target, when exactly one zone points in (an
+// unambiguous return edge). Otherwise it leaves the data alone and the runtime's
+// dynamic previous-zone fallback (machine._prev_zone) carries the return. It never
+// removes existing targets.
+function ensureAutoReturn() {
+  for (const zn of Object.keys(TABLE.zones)) {
+    const z = TABLE.zones[zn];
+    if (!z || !z.actions) continue;
+    const names = Object.keys(z.actions);
+    if (names.length !== 1) continue;  // only single-action zones auto-return
+    const an = names[0];
+    const a = z.actions[an];
+    if (a.enabled === false) continue;  // a disabled single action never runs / dead-ends
+    if (nextList(a).some((t) => t.zone)) continue;  // already has a return target
+    if (Array.isArray(z.exits) && z.exits.length) continue;  // zone-level exits carry the flow
+    const incoming = zoneReverse(zn);
+    if (incoming.length !== 1) continue;  // ambiguous: the runtime fallback carries it
+    const backAction = firstEnabledAction(incoming[0]);
+    if (!backAction) continue;
+    setNext(a, nextList(a).concat([{ zone: incoming[0], action: backAction }]));
+  }
+}
 
 // Wire a newly-created (or copied) action `an` into its zone's intra-zone mesh: the
 // action points to every OTHER action in the zone, and every other action points back
@@ -5089,6 +5115,8 @@ function meshNewAction(zn, an) {
     if (n === an) continue;
     addMissing(z.actions[n], [{ zone: zn, action: an }]);
   }
+  // A freshly-created single-action zone may now be a dead-end; give it a return link.
+  ensureAutoReturn();
 }
 
 // Rename zn/an to nn: re-key the action, repoint `next` refs, and move the sound +
@@ -6136,6 +6164,7 @@ function saveZones() {
       });
     }
   }
+  ensureAutoReturn();  // give single-action dead-end zones a return link before POST
   cleanNextLists();  // drop blank draft rows before POST
   persistFlowLayout();  // carry the current flow layout with the full table save
   fetch("/api/zones", {
@@ -6168,6 +6197,7 @@ function saveActionEditor() {
     $("aeSaveStatus").className = "aeStatus err";
     return;
   }
+  ensureAutoReturn();  // give single-action dead-end zones a return link before POST
   cleanNextLists();  // drop blank draft rows before POST
   persistFlowLayout();  // carry the current flow layout with the zones POST
   Promise.all([

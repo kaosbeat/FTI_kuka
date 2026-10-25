@@ -1076,6 +1076,9 @@
           ],
           "variable_axes": [],
           "behavior": "calm",
+          "engine": {
+            "move_mode": "block"
+          },
           "loop": true,
           "pose_imgs": [
             null,
