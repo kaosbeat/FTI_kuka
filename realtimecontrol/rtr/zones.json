@@ -4312,10 +4312,10 @@
       }
     },
     "view": {
-      "x": -1504.519667311431,
-      "y": -370.20180741303056,
-      "w": 3656.999999999995,
-      "h": 658.2384883880603
+      "x": 528.362589162185,
+      "y": -160.44558356686684,
+      "w": 2765.2173913043466,
+      "h": 497.7228645656415
     },
     "key": "clawing,cuddling,cuddling_hunting_bridge2,cuddling_purring_bridge,cuddling_scanning_bridge,cuddling_stretching_bridge,examining,examining_cuddling_bridge,examining_performing_bridge,grabbing,grabbing_hunting_bridge,growling,growling_clawing_bridge,hunting,hunting_examining_bridge,hunting_scanning_bridge,leaping,performing,performing_roaring_bridge,purring,purring_hunting_bridge,resting,resting_sleeping_bridge,resting_testing_bridge,roaring,roaring_grabbing_bridge,roaring_growling_bridge,roaring_scanning_bridge,scanning,scanning_leaping_bridge,scanning_roaring_bridge,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge,stretching_hunting_bridge2,testing,testing_cuddling_bridge"
   }
