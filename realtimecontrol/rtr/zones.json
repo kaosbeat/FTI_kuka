@@ -10,24 +10,24 @@
           185
         ],
         [
-          -135,
-          5
+          -60,
+          -40
         ],
         [
-          -39,
+          -10,
           -9
         ],
         [
-          -3,
-          33
+          0,
+          1
         ],
         [
-          -5,
-          10
+          60,
+          62
         ],
         [
-          -5,
-          5
+          -15,
+          15
         ]
       ],
       "speed": 20,
@@ -55,10 +55,10 @@
           "poses": [
             [
               10,
+              -59,
               -10,
-              -9,
-              -2,
-              5,
+              0,
+              60,
               0
             ],
             [
@@ -299,7 +299,7 @@
             ]
           ],
           "variable_axes": [],
-          "behavior": "calm",
+          "behavior": "spontaneous",
           "loop": true,
           "next": [
             {
@@ -354,7 +354,7 @@
             3,
             4
           ],
-          "behavior": "vigilant",
+          "behavior": "spontaneous",
           "speed": 10,
           "loop": true,
           "next": [
@@ -438,7 +438,15 @@
           "enabled": true,
           "poses": [
             [
-              "x",
+              -90,
+              -134,
+              157,
+              3,
+              0,
+              0
+            ],
+            [
+              0,
               -134,
               157,
               3,
@@ -486,9 +494,11 @@
             null,
             null,
             null,
+            null,
             null
           ],
           "pose_videos": [
+            null,
             null,
             "MiniMax_H3_00051_..mp4",
             "MiniMax_H3_00049_..mp4",
@@ -507,7 +517,7 @@
               0
             ],
             [
-              "x",
+              0,
               -133,
               156,
               -2,
@@ -519,7 +529,7 @@
             0,
             2
           ],
-          "behavior": "soothing",
+          "behavior": "impatient",
           "speed": 10,
           "loop": true,
           "next": [
@@ -1253,7 +1263,7 @@
             3,
             4
           ],
-          "behavior": "intent",
+          "behavior": "vigilant",
           "speed": 20,
           "loop": true,
           "next": {
@@ -1285,7 +1295,7 @@
             4,
             5
           ],
-          "behavior": "gentle",
+          "behavior": "vigilant",
           "speed": 20,
           "loop": true,
           "next": [
@@ -3256,7 +3266,7 @@
         ],
         [
           -60,
-          -59
+          -40
         ],
         [
           -10,
@@ -3295,7 +3305,7 @@
             4,
             5
           ],
-          "behavior": "impatient",
+          "behavior": "spontaneous",
           "speed": 20,
           "loop": true,
           "pose_imgs": [
@@ -4166,8 +4176,8 @@
         "y": 212.442138671875
       },
       "cuddling": {
-        "x": 743.0621948242188,
-        "y": -176.98906326293945
+        "x": 827.2969360351562,
+        "y": -269.8633003234863
       },
       "sleeping_stretching_bridge": {
         "x": 654.6218872070312,
@@ -4242,8 +4252,8 @@
         "y": 202.54949188232422
       },
       "scanning": {
-        "x": 1736.032958984375,
-        "y": -99.67658042907715
+        "x": 1741.4326171875,
+        "y": -281.10533714294434
       },
       "hunting_scanning_bridge": {
         "x": 1537.1741943359375,
@@ -4294,15 +4304,15 @@
         "y": -69.73645782470703
       },
       "cuddling_scanning_bridge": {
-        "x": 1140.6460876464844,
-        "y": -200.4289674758911
+        "x": 1144.9657897949219,
+        "y": -173.430645942688
       }
     },
     "view": {
-      "x": -238.3298407736529,
-      "y": -573.3199929212894,
-      "w": 2404.53686200378,
-      "h": 432.8024909266448
+      "x": -1504.519667311431,
+      "y": -370.20180741303056,
+      "w": 3656.999999999995,
+      "h": 658.2384883880603
     },
     "key": "clawing,cuddling,cuddling_hunting_bridge2,cuddling_purring_bridge,cuddling_scanning_bridge,cuddling_stretching_bridge,examining,examining_cuddling_bridge,examining_performing_bridge,grabbing,grabbing_hunting_bridge,growling,growling_clawing_bridge,hunting,hunting_examining_bridge,hunting_scanning_bridge,leaping,performing,performing_roaring_bridge,purring,purring_hunting_bridge,resting,resting_sleeping_bridge,resting_testing_bridge,roaring,roaring_grabbing_bridge,roaring_growling_bridge,roaring_scanning_bridge,scanning,scanning_leaping_bridge,scanning_roaring_bridge,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge,stretching_hunting_bridge2,testing,testing_cuddling_bridge"
   }

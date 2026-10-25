@@ -259,6 +259,20 @@
         "note": 60,
         "velocity": 60
       }
+    },
+    "cuddling_hunting_bridge2": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "cuddling_scanning_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
     }
   },
   "actions": {
@@ -369,6 +383,10 @@
           "velocity": 45
         },
         "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
           {
             "note": 60,
             "velocity": 60
@@ -1276,6 +1294,24 @@
       }
     },
     "stretching_hunting_bridge2": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "cuddling_hunting_bridge2": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "cuddling_scanning_bridge": {
       "bridge": {
         "start": {
           "note": 60,

@@ -84,6 +84,7 @@
         "hunting",
         "scanning"
       ],
+      "behaviors": [],
       "enabled": true,
       "params": {}
     }
