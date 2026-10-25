@@ -1,5 +1,126 @@
 # Task Handoff Log
 
+## 2026-10-25 — Analyzed operator trace: the "traceback" is a debug print, and the running core is STALE (pre-instrumentation, old path)
+
+### Status
+
+Completed (analysis). On-robot restart is the operator's action.
+
+### Summary
+
+The operator pasted a trace ending at `[debug-cmd] play_action payload={'action': 'track2'} curjpos=[-24.4, -10.5, -10.0, -3.0, 3.4,` (cut off). Two decisive findings:
+
+1. **The "traceback" in the log is NOT an error.** It is the intentional debug call-stack dump from `clear_action` (`rtr/state/machine.py:458-464`), which prints `traceback.format_stack()[-4:-1]` on every action clear. The frames `step(656) → _advance_anchor(396) → _advance_after_action(551) → clear_action(458)` are the **normal** completion path of the `track` action (last pose reached → anchor advanced → action cleared). No exception occurred there. Similarly, `[debug-cmd] ...` (`rtr/brain/brain.py:448-451`) is a normal command log. So the state machine was healthy; the `track` action completed cleanly before `play_action track2`.
+
+2. **The running core is STALE — it does not have the instrumentation.** Evidence:
+   - The trace has **no** `[engine] tick#` lines (which print unconditionally at the top of every 20 Hz tick, `rtr/core/engine.py:84`) and **no** `[kukapy] SEND` lines (which print on every EKI command, `kukapy/robot.py:99`). Dozens of ticks of camera activity appear with none of these markers.
+   - The traceback path is `/home/kaos/FTI_kuka/realtimecontrol/rtr/rtr/state/machine.py` — a path that **no longer exists** on this machine (`ls: cannot access '/home/kaos/FTI_kuka'`). The repo now lives at `/home/kaos/Documents/kaotec/FTI_kuka`. The core was launched from the old path (before the repo move and before the Test #2 instrumentation edits) and has been running the old in-memory code ever since.
+
+**Confirmed the instrumentation IS present in the current tree** (grep): `kukapy/robot.py:99` `[kukapy] SEND`, `engine.py:84/159/161` `[engine] tick#`/`BLOCK-move`. So the code is ready — the running process just predates it.
+
+**Engine kill mechanism (why the strand looks like an EKI desync):** `main.py:296` does `asyncio.create_task(engine.run())` and `engine.run()` (`rtr/core/engine.py:80-170`) has **no try/except**. Any uncaught exception in a tick (in `get_curjpos`/`get_curpos`, `machine.step`, a move, or `_resolve_pending`) kills the engine task; asyncio prints the traceback to the log; the engine stops forever → Python stops sending EKI commands → the KRL idles at `WAIT FOR $FLAG[1]` (line 57). That is "situation 2." The instrumentation will reveal whether the kill is an uncaught exception (a traceback will appear in the log) or a true EKI framing stall (last `[kukapy] SEND`/`RECV`/`FRAME` lines).
+
+### Changes Made
+
+None (analysis only; no code changed this turn).
+
+### Documentation
+
+None required — diagnostic analysis.
+
+### Architecture
+
+No architectural impact.
+
+### Validation
+
+- `grep` confirmed instrumentation present in the current tree: `kukapy/robot.py:99`, `engine.py:84,159,161`.
+- `ls /home/kaos/FTI_kuka` → does not exist (confirms the running core's path is stale).
+- Read `machine.py:380-409,458-502,535-569,640-669`, `engine.py:60-189`, `brain.py:430-469`, `main.py` (engine spawn) to confirm the "traceback" is a debug print and the engine has no exception guard.
+
+### Decisions and Caveats
+
+- Do NOT treat the `clear_action` stack dump as a bug or the root cause — it is expected debug output on every action clear.
+- The strand mechanism is still unconfirmed between (a) an uncaught engine-tick exception and (b) an EKI framing stall; the instrumented re-run distinguishes them.
+
+### Next Task
+
+Kill the stale core and restart from the current tree so the instrumentation loads, then re-trigger the strand and capture the trace.
+
+### Instructions for the Next Task
+
+1. **Kill the stale core** (it runs from the old, now-gone path): `pkill -f "main.py --robot"` (or find the PID with `pgrep -f "main.py --robot"`). Confirm it is gone.
+2. **Restart from the current tree**, capturing all output:
+   `cd /home/kaos/Documents/kaotec/FTI_kuka/realtimecontrol/rtr && python main.py --robot --ip 192.168.10.201 2>&1 | tee /tmp/kukapy_trace.log`
+   (default IP 192.168.10.201, listens :18735). Wait for `[rtr] robot connected` + `[rtr] core up`, and confirm `[engine] tick#1 start ...` lines appear (proof the instrumentation loaded).
+3. Start KUKAPY_SERVER on the pendant.
+4. Park neutral (`{"cmd":"goto_zone","zone":"rest"}`), then trigger the strand: `{"cmd":"goto_zone","zone":"hunting"}` then `{"cmd":"play_action","action":"track2"}`.
+5. When the KRL idles at line 57, grab the **tail** of `/tmp/kukapy_trace.log` — the last `[engine] tick#`, `[kukapy] SEND`, `[kukapy] RECV`, `[kukapy] FRAME*` lines, and any traceback. Branch:
+   - A **traceback** appears in the log at the stall → uncaught engine-tick exception (fix that exception).
+   - `BLOCK-move start` + `SEND` but no `RECV`/`FRAME`/`done` → KRL `<Res>` not delivered.
+   - `RECV` lines with no `FRAME`/`FRAME2` → `_recv_xml` framing desync.
+   - No new `tick#` after a stream action → engine loop stopped/blocked.
+
+## 2026-10-25 — Result: block mode ALSO strands (stream-pileup refuted); instrument EKI + engine to capture the desync
+
+### Status
+
+Completed (Test #1 result recorded + Test #2 instrumentation applied + operator instructions delivered). The on-robot re-run is performed by the operator.
+
+### Summary
+
+**Test #1 result (from the operator):** the forced block-mode `hunting/track2` **still** strands at `WAIT FOR $FLAG[1]` (line 57). The operator ran `trigger_action hunting/track` (the explicit stream action) then `play_action track2` (now block); the KRL idled at line 57 again. This **refutes** the stream-pileup hypothesis: the strand is not caused by stream mode spawning a daemon thread per tick. Block mode (one awaited move at a time, no thread pileup) strands identically, so the root cause is a **common EKI-framing desync** that affects both modes — the engine loop stops, so Python stops sending, so the KRL idles at `WAIT FOR $FLAG[1]`.
+
+**Test #2 applied (instrumentation):** enabled byte-level logging in the EKI layer and stall markers in the engine tick so the next on-robot run captures (a) the exact bytes sent/received, (b) the frame boundaries, and (c) exactly where the engine loop stops.
+
+Mechanism map (why line-57 idle = engine stop, and where the stop can happen):
+- KRL loop (KUKAPY_SERVER.SRC): `WAIT FOR $FLAG[1]` (57) → read `Rob/*` → `SWITCH cmd_code` → `EKI_SEND Res` (183) → loop. `FLAG[1]` is set by an incoming Python EKI frame; the KRL clears it (58) after waking. **KRL idling at 57 ⇒ FLAG[1] stays FALSE ⇒ Python sent nothing ⇒ the engine loop stopped** (a mid-move hang would strand the KRL *in* the PTP/C_PTP, not at 57).
+- Engine tick (engine.py `run`): `get_curjpos` / `get_curpos` (each takes `KukaRobot._lock`) → drain commands → `brain.tick` → `_resolve_pending` → `machine.step` → **move** (`stream` = `move(..., blocking=False)` spawns a daemon thread; `block` = `await asyncio.to_thread(move, ...)`) → publish. In block mode the tick **awaits the move**, which holds `_lock` and blocks inside `_send_cmd → _recv_xml` until a `<Res>` returns. So a block-mode stall = the move's `_recv_xml` never returns a `<Res>`.
+- EKI reader (kukapy/robot.py `_recv_xml`): accumulates `recv(4096)` chunks into `buf`; Mode 1 splits on `\x00` (SENDFLAG=1) and returns the first `<Res>`; Mode 2 falls back to whole-buffer XML parse. Leftover bytes persist in `self._recv_buf`. A desync here = the `<Res>` is never recognized, so `_recv_xml` keeps reading forever (the engine stays blocked in the move).
+
+### Changes Made
+
+- `realtimecontrol/kukapyEKI/KukaPyNEW/kukapy/robot.py` (the **active** runtime module — confirmed via `import kukapy.robot` resolving here):
+  - `_send_xml`: enabled `print(f"[kukapy] SEND {repr(data)}")` (was commented).
+  - `_recv_xml`: enabled per-chunk `print(f"[kukapy] RECV#{n} chunk=..B buf=..B {repr(buf)}")` (was commented); added `FRAME` log on each Mode-1 frame parse, `FRAME-PARSE-FAIL` log when a `\x00` frame fails to parse, and `FRAME2` log on a Mode-2 parse.
+- `realtimecontrol/rtr/KukaPy/kukapy/robot.py` (vendored copy, not on the runtime path): identical instrumentation applied for consistency.
+- `realtimecontrol/rtr/rtr/core/engine.py` (`run` tick loop): added `tick#N start (move_mode=.. action=..)` at the top of each tick, and `tick#N BLOCK-move start/done` around the block-mode `await asyncio.to_thread(move, ...)` so the trace shows whether the stall is before the move, inside the move, or after.
+
+### Documentation
+
+None required — diagnostic instrumentation, no behavior change to document.
+
+### Architecture
+
+No architectural impact. Logging only; no control-flow, protocol, or module-boundary change.
+
+### Validation
+
+- `python3 -c "import ast; ast.parse(...)"` on both edited files: OK.
+- `python3 -c "json.load(open('zones.json'))"`: parses clean (track2 `engine={'move_mode':'block'}`, track `engine={'cadence':'arrival','move_mode':'stream'}` unchanged).
+
+### Decisions and Caveats
+
+- **Stream-pileup hypothesis is dead.** Block mode strands identically, so the fix is NOT "stop stream spawning a thread per tick." The real cause is a common EKI-framing desync (or a stall that blocks `_lock` in both modes). Do not pursue the per-tick-thread fix.
+- The instrumentation is **verbose** (20 Hz tick log + a `RECV` line per socket chunk, each printing the full buffer repr). It is meant to run for one strand capture only, then be reverted. Capture stdout to a file rather than scrolling.
+- The `[kukapy] RECV` line prints the **accumulated** `buf` (not just the new chunk), so the last `RECV` line before the stall is the most informative (it shows everything the reader has seen but not yet parsed).
+- **Confirmed the active module:** `import kukapy.robot` from `realtimecontrol/rtr/` resolves to `realtimecontrol/kukapyEKI/KukaPyNEW/kukapy/robot.py` (the editable install), NOT the vendored `rtr/KukaPy` copy. The active KukaPyNEW module is now instrumented; the vendored copy was instrumented too for consistency.
+
+### Next Task
+
+Operator re-runs the strand scenario with the instrumented code and captures the byte trace. Branch on where the trace stops:
+- **`BLOCK-move start` + `SEND` present, but no subsequent `RECV`/`FRAME`/`BLOCK-move done`:** the KRL's `<Res>` never arrived at Python → the desync is on the KRL→Python delivery (the response was sent but not received, or the connection dropped). Inspect the last `RECV` bytes for a partial/mangled frame.
+- **`RECV` lines present (bytes arriving) but no `FRAME`/`FRAME2` (no successful parse):** `_recv_xml` is failing to recognize the `<Res>` → a parser/framing desync (e.g. an `AliveCounter` or leftover byte poisoning the buffer). Inspect the `FRAME-PARSE-FAIL` lines and the `RECV` buffer.
+- **No `BLOCK-move start` (stalled before the move):** the engine is stuck in `get_curjpos`/`get_curpos` (a `_lock` held by a lingering stream daemon thread from the earlier `track` action) → lock-contention stall, a different mechanism.
+- **`BLOCK-move done` present but the next tick never starts:** the stall is after the move (in `brain.tick` / `_resolve_pending` / `machine.step` / publish) → narrow further.
+
+### Instructions for the Next Task
+
+1. **Restart the core** to load the instrumented code: `python main.py --robot --ip <IP>` (default 192.168.10.201), listening :18735. Capture all output: `python main.py --robot --ip <IP> 2>&1 | tee /tmp/kukapy_trace.log`.
+2. Start KUKAPY_SERVER on the pendant; wait for `[rtr] robot connected` + `[rtr] core up`.
+3. Park neutral (`{"cmd":"goto_zone","zone":"rest"}`), then trigger the strand: `{"cmd":"goto_zone","zone":"hunting"}` then `{"cmd":"play_action","action":"track2"}`.
+4. When the KRL idles at line 57, grab the **tail** of `/tmp/kukapy_trace.log` (the last `[engine] tick#`, `[kukapy] SEND`, `[kukapy] RECV`, `[kukapy] FRAME*` lines) and hand it back. Branch per the Next Task list.
+
 ## 2026-10-25 — Test: force `hunting/track2` to block mode to isolate the stream-mode strand
 
 ### Status

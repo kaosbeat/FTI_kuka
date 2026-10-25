@@ -76,9 +76,12 @@ class Engine:
                             self.machine.current_action)
 
         interval = 1.0 / self.tick_hz
+        tick_no = 0
         while self._running:
+            tick_no += 1
             loop_start = asyncio.get_event_loop().time()
 
+            print(f"[engine] tick#{tick_no} start (move_mode={self.machine.move_mode} action={self.machine.current_action})")
             curjpos = await asyncio.to_thread(self.robot.get_curjpos)
             curpos = await asyncio.to_thread(self.robot.get_curpos)
 
@@ -153,7 +156,9 @@ class Engine:
                 else:
                     # Block: wait for this move to arrive before the next tick
                     # (the legacy kukapy behaviour).
+                    print(f"[engine] tick#{tick_no} BLOCK-move start target={target}")
                     await asyncio.to_thread(move, target, self.machine.speed)
+                    print(f"[engine] tick#{tick_no} BLOCK-move done")
 
             self._publish(curjpos, curpos, target)
             self._publish_changes()

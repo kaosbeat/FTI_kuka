@@ -96,7 +96,7 @@ class Robot:
     def _send_xml(self, element: ET.Element) -> None:
         xml_str = ET.tostring(element, encoding="unicode")
         data = xml_str.encode("utf-8")
-        #print(f"[kukapy] SEND {repr(data)}")
+        print(f"[kukapy] SEND {repr(data)}")
         self.comm_sock.sendall(data)
 
     def _recv_xml(self) -> ET.Element:
@@ -109,12 +109,14 @@ class Robot:
         following frame and poisoned the stream, stranding the KRL at
         ``WAIT FOR $FLAG[1]`` (the "waiting for flag" error)."""
         buf = self._recv_buf
+        n = 0
         while True:
+            n += 1
             chunk = self.comm_sock.recv(4096)
             if not chunk:
                 raise KukaError("Connection closed by KRC")
             buf += chunk
-            #print(f"[kukapy] RECV {repr(buf)}")
+            print(f"[kukapy] RECV#{n} chunk={len(chunk)}B buf={len(buf)}B {repr(buf)}")
 
             # Mode 1: \x00-delimited frames (SENDFLAG=1 on KRC side)
             while b"\x00" in buf:
@@ -124,17 +126,19 @@ class Robot:
                     continue
                 try:
                     elem = ET.fromstring(frame.decode("utf-8"))
+                    print(f"[kukapy] FRAME tag={elem.tag!r} len={len(frame)}B leftover={len(buf)}B")
                     if elem.tag == "Res":
                         self._recv_buf = buf
                         return elem
                 except ET.ParseError:
-                    pass
+                    print(f"[kukapy] FRAME-PARSE-FAIL len={len(frame)}B {repr(frame)}")
 
             # Mode 2: plain XML stream (no SENDFLAG) — try to parse what we have
             stripped = buf.strip()
             if stripped:
                 try:
                     elem = ET.fromstring(stripped.decode("utf-8"))
+                    print(f"[kukapy] FRAME2 tag={elem.tag!r} len={len(stripped)}B")
                     if elem.tag == "Res":
                         self._recv_buf = b""
                         return elem
