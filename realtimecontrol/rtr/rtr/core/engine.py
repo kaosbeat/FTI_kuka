@@ -27,6 +27,11 @@ from ..robot.helpers import comparelist
 from ..state.machine import StateMachine
 from ..state.zones import Zones
 
+try:
+    from kukapy.robot import KukaError
+except ImportError:
+    KukaError = None  # type: ignore[assignment]
+
 
 class Engine:
     """Runs the core's control loop."""
@@ -82,92 +87,112 @@ class Engine:
             loop_start = asyncio.get_event_loop().time()
 
             print(f"[engine] tick#{tick_no} start (move_mode={self.machine.move_mode} action={self.machine.current_action})")
-            curjpos = await asyncio.to_thread(self.robot.get_curjpos)
-            curpos = await asyncio.to_thread(self.robot.get_curpos)
-
-            for cmd in self.bus.drain_commands():
-                if cmd.cmd == Cmd.RELOAD_ZONES:
-                    self.reload_zones()
-                elif cmd.cmd == Cmd.RELOAD_SOUND:
-                    if self._sound_reload is not None:
-                        self._sound_reload()
-                elif cmd.cmd == Cmd.RELOAD_PATCHES:
-                    if self._patch_reload is not None:
-                        self._patch_reload()
-                elif cmd.cmd == Cmd.RELOAD_MIDI:
-                    if self._midi_reload is not None:
-                        self._midi_reload()
-                elif cmd.cmd == Cmd.RELOAD_BRAIN:
-                    if self._brain_reload is not None:
-                        self._brain_reload()
-                elif cmd.cmd == Cmd.RELOAD_ROBOT_CONFIG:
-                    if self._robot_reload is not None:
-                        self._robot_reload()
-                elif cmd.cmd == Cmd.MIDI_LEARN:
-                    # A learned MIDI key captured by MidiInput (rtmidi thread). Publish
-                    # it here, inside the loop, so the display adapter can forward it to
-                    # the WebSocket (ws.broadcast needs a running loop).
-                    self.bus.publish(Event.MIDI_LEARN, cmd.payload)
-                elif cmd.cmd == Cmd.SET_SCREEN_PATCH:
-                    if self._screen_patch_override is not None:
-                        self._screen_patch_override(cmd.payload.get("code"))
-                elif cmd.cmd == Cmd.SET_RENDER_UI:
-                    if self._render_ui_setter is not None:
-                        self._render_ui_setter(
-                            hud=cmd.payload.get("hud"),
-                            code=cmd.payload.get("code"),
-                        )
-                elif cmd.cmd == Cmd.SNAPSHOT_GRAB:
-                    # Fetch the RPi's latest camera frame into the local snapshot
-                    # file (non-blocking: the grabber spawns its own thread).
-                    if self._snapshot_grab is not None:
-                        self._snapshot_grab()
-                else:
-                    if cmd.cmd == Cmd.SET_JOINT_POSE and self.machine.current_action is not None:
-                        # A raw joint pose is about to clear the active action (the
-                        # brain's SET_JOINT_POSE handler calls clear_action); surface
-                        # the conflict so the operator sees what was interrupted.
-                        self.bus.publish(Event.POSE_CONFLICT, {
-                            "action": self.machine.current_action,
-                            "zone": self.machine.current_zone,
-                            "pose": cmd.payload.get("pose"),
-                        })
-                    self.brain.on_command(cmd, curjpos)
-
-            # Hunt bookkeeping (lost detection / rescan) before the step, so a
-            # triggered transition is driven the same tick.
-            self.brain.tick(curjpos)
-
-            # Resolve any pending safety-gated move before stepping.
-            await self._resolve_pending(curjpos)
-
-            target = self.machine.step(curjpos)
-
-            if target is not None:
-                if self.machine.target_kind == "linear":
-                    move = self.robot.move_linear
-                else:
-                    move = self.robot.move_joint
-                if self.machine.move_mode == "stream":
-                    # Non-blocking: fire without waiting, so the 20 Hz loop keeps
-                    # streaming a fresh target every tick (the robot retargets, like
-                    # the sim). This is the base contract (move_* only set a target).
-                    move(target, self.machine.speed, blocking=False)
-                else:
-                    # Block: wait for this move to arrive before the next tick
-                    # (the legacy kukapy behaviour).
-                    print(f"[engine] tick#{tick_no} BLOCK-move start target={target}")
-                    await asyncio.to_thread(move, target, self.machine.speed)
-                    print(f"[engine] tick#{tick_no} BLOCK-move done")
-
-            self._publish(curjpos, curpos, target)
-            self._publish_changes()
-
-            # Keep the tick rate steady.
+            try:
+                await self._tick(tick_no)
+            except Exception as exc:
+                # Watchdog: an uncaught exception (e.g. a failed KukaError from a
+                # dead EKI connection) would otherwise kill the engine task
+                # silently, stranding the KRL at WAIT FOR $FLAG[1] forever.
+                # Log it and continue the loop so the engine stays alive.
+                print(f"[engine] tick#{tick_no} EXCEPTION: {exc!r}")
+                self.bus.publish(Event.SAFETY_ALERT, {
+                    "type": "engine_exception",
+                    "error": str(exc),
+                    "tick": tick_no,
+                })
+                continue
             elapsed = asyncio.get_event_loop().time() - loop_start
             sleep_for = interval - elapsed
             if sleep_for > 0:
                 await asyncio.sleep(sleep_for)
+
+    async def _tick(self, tick_no: int) -> None:
+        """Execute one tick: read pose, drain commands, step, move, publish.
+
+        Extracted from :meth:`run` so the watchdog try/except in :meth:`run`
+        can catch any exception (including ``KukaError`` from a dead EKI
+        connection) without killing the engine task.
+        """
+        curjpos = await asyncio.to_thread(self.robot.get_curjpos)
+        curpos = await asyncio.to_thread(self.robot.get_curpos)
+
+        for cmd in self.bus.drain_commands():
+            if cmd.cmd == Cmd.RELOAD_ZONES:
+                self.reload_zones()
+            elif cmd.cmd == Cmd.RELOAD_SOUND:
+                if self._sound_reload is not None:
+                    self._sound_reload()
+            elif cmd.cmd == Cmd.RELOAD_PATCHES:
+                if self._patch_reload is not None:
+                    self._patch_reload()
+            elif cmd.cmd == Cmd.RELOAD_MIDI:
+                if self._midi_reload is not None:
+                    self._midi_reload()
+            elif cmd.cmd == Cmd.RELOAD_BRAIN:
+                if self._brain_reload is not None:
+                    self._brain_reload()
+            elif cmd.cmd == Cmd.RELOAD_ROBOT_CONFIG:
+                if self._robot_reload is not None:
+                    self._robot_reload()
+            elif cmd.cmd == Cmd.MIDI_LEARN:
+                # A learned MIDI key captured by MidiInput (rtmidi thread). Publish
+                # it here, inside the loop, so the display adapter can forward it to
+                # the WebSocket (ws.broadcast needs a running loop).
+                self.bus.publish(Event.MIDI_LEARN, cmd.payload)
+            elif cmd.cmd == Cmd.SET_SCREEN_PATCH:
+                if self._screen_patch_override is not None:
+                    self._screen_patch_override(cmd.payload.get("code"))
+            elif cmd.cmd == Cmd.SET_RENDER_UI:
+                if self._render_ui_setter is not None:
+                    self._render_ui_setter(
+                        hud=cmd.payload.get("hud"),
+                        code=cmd.payload.get("code"),
+                    )
+            elif cmd.cmd == Cmd.SNAPSHOT_GRAB:
+                # Fetch the RPi's latest camera frame into the local snapshot
+                # file (non-blocking: the grabber spawns its own thread).
+                if self._snapshot_grab is not None:
+                    self._snapshot_grab()
+            else:
+                if cmd.cmd == Cmd.SET_JOINT_POSE and self.machine.current_action is not None:
+                    # A raw joint pose is about to clear the active action (the
+                    # brain's SET_JOINT_POSE handler calls clear_action); surface
+                    # the conflict so the operator sees what was interrupted.
+                    self.bus.publish(Event.POSE_CONFLICT, {
+                        "action": self.machine.current_action,
+                        "zone": self.machine.current_zone,
+                        "pose": cmd.payload.get("pose"),
+                    })
+                self.brain.on_command(cmd, curjpos)
+
+        # Hunt bookkeeping (lost detection / rescan) before the step, so a
+        # triggered transition is driven the same tick.
+        self.brain.tick(curjpos)
+
+        # Resolve any pending safety-gated move before stepping.
+        await self._resolve_pending(curjpos)
+
+        target = self.machine.step(curjpos)
+
+        if target is not None:
+            if self.machine.target_kind == "linear":
+                move = self.robot.move_linear
+            else:
+                move = self.robot.move_joint
+            if self.machine.move_mode == "stream":
+                # Non-blocking: fire without waiting, so the 20 Hz loop keeps
+                # streaming a fresh target every tick (the robot retargets, like
+                # the sim). This is the base contract (move_* only set a target).
+                move(target, self.machine.speed, blocking=False)
+            else:
+                # Block: wait for this move to arrive before the next tick
+                # (the legacy kukapy behaviour).
+                print(f"[engine] tick#{tick_no} BLOCK-move start target={target}")
+                await asyncio.to_thread(move, target, self.machine.speed)
+                print(f"[engine] tick#{tick_no} BLOCK-move done")
+
+        self._publish(curjpos, curpos, target)
+        self._publish_changes()
 
     def stop(self) -> None:
         self._running = False

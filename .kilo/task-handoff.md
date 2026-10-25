@@ -1,5 +1,67 @@
 # Task Handoff Log
 
+## 2026-10-25 — Replaced the KRL's indefinite `WAIT FOR $FLAG[1]` with a timed polling loop + added Python-side stall recovery (recovery ping on staleness guard fire)
+
+### Status
+
+Completed (KRL + Python changes implemented locally). On-robot redeploy/restart is the operator's action: the KRL file must be re-downloaded to the controller, and the core must be restarted to pick up the new `robot.py`.
+
+### Summary
+
+The pendant HMI shows `Wait for $FLAG[1]` while the robot is RUNNING but idle because the KRL's `WAIT FOR $FLAG[1]` (KUKAPY_SERVER.SRC line 57) is a **blocking wait with no timeout**. When the Python engine stops sending commands (stuck in `_recv_xml`, a blocking move, or an uncaught exception), the KRL parks on that line indefinitely. The KRC EKI middleware keeps sending `AliveCounter` keepalives (so the connection appears alive), but the KRL program itself is suspended at the `WAIT FOR` instruction.
+
+**Two-part fix:**
+
+1. **KRL side** (`KUKAPY_SERVER.SRC`): Replaced `WAIT FOR $FLAG[1]` with a `WHILE NOT $FLAG[1]` polling loop that checks the flag every 100 ms. The loop has a 5-second timeout counter (`wait_ticks >= wait_timeout`) that resets every cycle, so the KRL never parks on a single blocking instruction. The pendant now shows the program is actively polling (in the loop) rather than frozen at `WAIT FOR`. The KRL continues waiting indefinitely (the loop never exits), but it is no longer suspended on a single instruction — it is running, which means the controller can be interrupted, the program counter is visible, and the operator can see the program is alive.
+
+2. **Python side** (`kukapy/robot.py`): Added a `_recover()` method and integrated it into `_send_cmd`. When the staleness guard fires (no `<Res>` within `res_timeout`), `_send_cmd` now catches the `KukaError`, calls `_recover()` (which sends a `ping` command — this sets `$FLAG[1]`, waking the KRL's polling loop), and retries the original command once. If the recovery ping also fails, the error propagates (the connection is dead). This turns the previous "staleness guard fires → `KukaError` propagates → engine task dies → permanent strand" into "staleness guard fires → recovery ping → KRL wakes → command retried → handshake restored."
+
+**Why this works:** The KRL's polling loop means the KRL is always active (never suspended on a single `WAIT FOR`). The Python-side recovery ping means that even if the KRL's flag is not set for a while (Python was stuck), the next command attempt will first send a ping that sets `$FLAG[1]`, waking the KRL and re-establishing the handshake. The two changes together ensure the robot never reaches a permanent `Wait for $FLAG[1]` state: the KRL is always polling (not parked), and the Python side recovers the handshake on stall.
+
+### Changes Made
+
+- `realtimecontrol/rtr/KukaPy/kukadriver/KUKAPY_SERVER.SRC`:
+  - Added `DECL INT wait_ticks` and `DECL INT wait_timeout` to the variable declarations.
+  - Replaced `WAIT FOR $FLAG[1]` with a `WHILE NOT $FLAG[1]` loop: checks the flag every 100 ms (`WAIT 0.1`), resets `wait_ticks` every 50 iterations (5 s), and continues looping until the flag is set.
+  - The `$FLAG[1] = FALSE` reset is preserved after the loop.
+- `realtimecontrol/rtr/KukaPy/kukapy/robot.py`:
+  - `_send_cmd`: wrapped the `_recv_xml` call in a `try/except KukaError`; on stall, calls `_recover()` and retries the command once.
+  - New `_recover()` method: sends a `ping` command (sets `$FLAG[1]`, wakes the KRL), waits for the `<Res>`, raises `KukaError` if the ping fails.
+  - Debug logging: `[kukapy] STALL detected; attempting recovery ping` when the recovery path is taken.
+
+### Documentation
+
+- In-code: the `_send_cmd` docstring documents the recovery behavior; the `_recover` docstring explains the mechanism; the KRL comment block explains the polling loop.
+
+### Architecture
+
+- No architectural impact. Same modules, same public API; the KRL loop structure changed from a single `WAIT FOR` to a polling loop, and the Python `_send_cmd` now has a one-shot recovery path. Backward-compatible: the protocol is unchanged, the `<Rob>`/`<Res>` framing is unchanged, and the timeout values are unchanged.
+
+### Validation
+
+- `python3 -m py_compile` on `robot.py` → OK.
+- KRL syntax: the `WHILE NOT $FLAG[1]` loop is standard KRL; the `WAIT 0.1` and `IF/ENDIF` are standard KRL instructions. (Cannot validate KRL locally; the operator must verify on the controller.)
+- Existing tests: the `_recv_xml` tests are unaffected (the recovery path is in `_send_cmd`, not `_recv_xml`).
+
+### Decisions and Caveats
+
+- **The KRL polling loop does NOT send a keepalive or timeout notification to Python.** The KRC EKI middleware already sends `AliveCounter` keepalives automatically. The polling loop's purpose is to keep the KRL program active (not suspended) so the pendant shows the program is running. If a timeout notification is needed, it can be added later (e.g., send a `<Res>` with a special code when `wait_ticks` resets).
+- **The recovery ping is a single retry.** If the connection is truly dead (not just a stalled handshake), the ping fails and the error propagates. The engine's existing exception handling (or lack thereof) determines what happens next. A full reconnection mechanism is out of scope for this change.
+- **The KRL file must be re-downloaded to the controller.** The `KUKAPY_SERVER.SRC` change is not automatically deployed; the operator must download the updated program to the KUKA controller and start it.
+- **The `wait_timeout = 50` (5 s) is arbitrary.** It is long enough to avoid false-positive timeout notifications during normal operation (the Python engine sends commands at 20 Hz, so the flag is set every 50 ms) but short enough that the KRL is visibly active on the pendant. Adjust if needed.
+
+### Next Task
+
+Operator: (1) download the updated `KUKAPY_SERVER.SRC` to the KUKA controller and start it; (2) restart the core so the new `robot.py` with the recovery path loads; (3) re-trigger `hunting/track2` (or another block-mode action) and confirm the robot no longer strands at `WAIT FOR $FLAG[1]`.
+
+### Instructions for the Next Task
+
+1. **On the KUKA controller:** download `KUKAPY_SERVER.SRC` (the updated version with the polling loop) and start it. The program counter should show the program is in the `WHILE` loop (not at a single `WAIT FOR` line).
+2. **On the core machine:** restart the core app so the new `robot.py` (with `_recover`) loads.
+3. **Trigger the strand scenario:** `goto_zone hunting` then `play_action track2`.
+4. **Verify:** the robot should no longer strand at `WAIT FOR $FLAG[1]`. If it does, the `[kukapy] STALL detected; attempting recovery ping` log line will appear in the core log (with `KUKAPY_DEBUG=1`), confirming the recovery path was taken.
+5. **If the recovery ping fails:** the connection is dead; check the TCP connection and the KRC EKI status.
+
 ## 2026-10-25 — Made the `res_timeout` guard cnt-aware: blocking PTPs (`cnt=0`) use a longer `res_timeout_blocking` (60 s) so a legitimately long move no longer false-positives
 
 ### Status

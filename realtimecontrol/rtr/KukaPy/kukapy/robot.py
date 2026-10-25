@@ -259,14 +259,48 @@ class Robot:
         """Send command and return the raw <Res> response element.
 
         ``res_timeout`` overrides the staleness guard for this call; blocking
-        moves pass the longer ``res_timeout_blocking`` (see :meth:`move`)."""
+        moves pass the longer ``self.res_timeout_blocking`` (see :meth:`move`).
+
+        If the staleness guard fires (KRL stranded at WAIT FOR $FLAG[1]), a
+        single recovery ping is attempted before re-raising: the ping sets
+        $FLAG[1] and wakes the KRL's timed wait loop, re-establishing the
+        handshake. If the ping also fails the connection is dead and the
+        error propagates."""
         self._send_xml(self._build_cmd(cmd_type, **kw))
-        resp = self._recv_xml(res_timeout=res_timeout)
+        try:
+            resp = self._recv_xml(res_timeout=res_timeout)
+        except KukaError:
+            # Staleness guard fired: the KRL is parked at WAIT FOR $FLAG[1].
+            # Try one recovery ping to re-establish the handshake. The ping
+            # sets $FLAG[1], waking the KRL's timed wait loop.
+            if _DEBUG:
+                print("[kukapy] STALL detected; attempting recovery ping")
+            try:
+                self._recover()
+            except KukaError:
+                raise
+            # Recovery succeeded: retry the original command once.
+            self._send_xml(self._build_cmd(cmd_type, **kw))
+            resp = self._recv_xml(res_timeout=res_timeout)
         code = int(resp.findtext("Code", default="1"))
         msg  = resp.findtext("Msg",  default="")
         if code != self.SUCCESS_CODE:
             raise KukaError(msg)
         return resp
+
+    def _recover(self) -> None:
+        """Recover from a stalled handshake.
+
+        The KRL is parked at its timed wait loop (WAIT FOR $FLAG[1] replaced
+        by a polling loop). A ping sets $FLAG[1], waking the KRL and
+        re-establishing the command/response handshake.
+
+        Raises KukaError if the connection is dead (ping fails)."""
+        self._send_xml(self._build_cmd("ping"))
+        resp = self._recv_xml(res_timeout=self.res_timeout)
+        code = int(resp.findtext("Code", default="1"))
+        if code != self.SUCCESS_CODE:
+            raise KukaError(f"recovery ping failed: {resp.findtext('Msg', default='')}")
 
     # ------------------------------------------------------------------
     # Robot API

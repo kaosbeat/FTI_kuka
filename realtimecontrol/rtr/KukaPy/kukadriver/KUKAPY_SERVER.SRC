@@ -24,6 +24,8 @@ DEF KUKAPY_SERVER( )
   DECL INT cmd_do_val
   DECL AXIS target_jpos
   DECL POS target_pos
+  DECL INT wait_ticks
+  DECL INT wait_timeout
 
   BAS(#INITMOV, 0)
 
@@ -51,10 +53,19 @@ DEF KUKAPY_SERVER( )
   cmd_do_val = 0
 
   $FLAG[1] = FALSE
+  wait_ticks = 0
+  wait_timeout = 50
 
   LOOP
 
-    WAIT FOR $FLAG[1]
+    wait_ticks = 0
+    WHILE NOT $FLAG[1]
+      wait_ticks = wait_ticks + 1
+      IF wait_ticks >= wait_timeout THEN
+        wait_ticks = 0
+      ENDIF
+      WAIT 0.1
+    ENDWHILE
     $FLAG[1] = FALSE
 
     
