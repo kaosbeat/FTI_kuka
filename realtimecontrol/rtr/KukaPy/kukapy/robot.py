@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import socket
+import time
 import xml.etree.ElementTree as ET
 from typing import Literal
 
@@ -50,6 +51,7 @@ class Robot:
         port: int = 18735,
         socket_timeout: int = 60,
         recv_timeout: int | None = 300,
+        res_timeout: float | None = 10.0,
         # legacy alias kept for compatibility
         ip: str | None = None,
     ):
@@ -57,6 +59,11 @@ class Robot:
         self.port = port
         self.socket_timeout = socket_timeout  # used only while waiting for KRC to connect
         self.recv_timeout = recv_timeout       # seconds to wait for a command response; a desync (KRL stranded at WAIT FOR $FLAG[1]) then raises instead of hanging forever
+        # Staleness guard: raise KukaError if no <Res> arrives within this many
+        # seconds while keepalives (AliveCounter) keep arriving — the persistent
+        # stall. The socket-level recv_timeout never fires in that case because
+        # recv() keeps succeeding on the keepalive bytes. None disables the guard.
+        self.res_timeout = res_timeout
         self.comm_sock: socket.socket | None = None
         # Leftover bytes carried between _recv_xml calls. A recv() frequently
         # returns a whole <Res> plus the start of the next frame; that tail must
@@ -145,8 +152,16 @@ class Robot:
 
         Leftover bytes are kept in ``self._recv_buf`` so the next call
         continues where this one stopped — discarding them splits the next
-        document and strands the KRL at WAIT FOR $FLAG[1]."""
+        document and strands the KRL at WAIT FOR $FLAG[1].
+
+        A staleness guard raises ``KukaError`` if no ``<Res>`` arrives within
+        ``self.res_timeout`` seconds: the persistent stall signature is
+        keepalives (``AliveCounter``) arriving forever with no response, which
+        the socket-level ``recv_timeout`` never catches because ``recv()`` keeps
+        succeeding on the keepalive bytes. A stranded KRL parks at
+        ``WAIT FOR $FLAG[1]``."""
         buf = self._recv_buf
+        t0 = time.monotonic()
         while True:
             while True:
                 # \x00-delimited frames (SENDFLAG on the KRC side, if ever enabled)
@@ -192,6 +207,17 @@ class Robot:
             if len(buf) > 1_000_000:
                 raise KukaError("EKI receive buffer overflow; framing desync")
             self._recv_buf = buf
+            # Staleness guard: keepalives (AliveCounter) arriving forever with
+            # no <Res> means the KRL never got (or never finished) the command
+            # and is stranded at WAIT FOR $FLAG[1]. The socket-level
+            # recv_timeout never fires here because recv() keeps succeeding on
+            # the keepalive bytes, so this wall-clock check turns the silent
+            # forever-hang into a recoverable error.
+            if self.res_timeout is not None and time.monotonic() - t0 > self.res_timeout:
+                raise KukaError(
+                    f"no <Res> within {self.res_timeout:.0f}s (keepalives still "
+                    "arriving); KRL stranded at WAIT FOR $FLAG[1]"
+                )
 
     def _build_cmd(self, cmd_type: str, **kw) -> ET.Element:
         """Build a <Rob> XML element with all fields populated."""

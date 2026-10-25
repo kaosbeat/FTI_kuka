@@ -1,5 +1,120 @@
 # Task Handoff Log
 
+## 2026-10-25 — Added the Res-staleness guard to `_recv_xml`: keepalives-without-`<Res>` now raise `KukaError` after `res_timeout` instead of hanging forever
+
+### Status
+
+Completed (implemented + validated locally against both `robot.py` copies). On-robot redeploy/restart is the operator's action.
+
+### Summary
+
+The multi-document `_recv_xml` deadlock (previous entry) is fixed, but a second, rarer stall remained: KRC stays alive (periodic `<AliveCounter>` keepalives keep arriving) yet never sends the `<Res>` the Python side is waiting for, and the KRL is stranded at `WAIT FOR $FLAG[1]` (line 57). The socket-level `recv_timeout` (300 s) never fires in this case because `recv()` keeps *succeeding* on the keepalive bytes — so `_recv_xml` discards keepalives forever: a silent, unrecoverable hang.
+
+**Fix:** a wall-clock staleness guard in `_recv_xml`. `t0 = time.monotonic()` is recorded at call start; after every `recv()`, if `self.res_timeout` is set and `time.monotonic() - t0 > self.res_timeout` (default 10.0 s), `_recv_xml` raises `KukaError("no <Res> within Ns (keepalives still arriving); KRL stranded at WAIT FOR $FLAG[1]")`. This turns the silent forever-hang into a recoverable, self-describing error.
+
+**Note:** this detects the stall but does not fix the root cause of *why* the KRC stops sending the `<Res>` (or why the KRL is stranded). Discriminating between (a) Python stuck in `_recv_xml` and (b) a client→KRC framing desync (KRC never set `$FLAG[1]`) still requires a `KUKAPY_DEBUG=1` capture.
+
+### Changes Made
+
+- `realtimecontrol/kukapyEKI/KukaPyNEW/kukapy/robot.py` (the **actual runtime module**, via editable install):
+  - New import `time`.
+  - `Robot.__init__`: new `res_timeout: float | None = 10.0` parameter; stored as `self.res_timeout` (`None` disables the guard).
+  - `_recv_xml`: `t0 = time.monotonic()` at call start; after each `recv()`, raise `KukaError` if `self.res_timeout is not None and time.monotonic() - t0 > self.res_timeout`.
+- `realtimecontrol/rtr/KukaPy/kukapy/robot.py` (shadow copy): same changes; now byte-identical to KukaPyNEW.
+- `realtimecontrol/rtr/tests/test_kuka_eki_recv.py`: new regression test `test_keepalives_without_res_raise_timeout` (FakeSock looping keepalives forever, `res_timeout=0.5`, asserts `KukaError`).
+
+### Documentation
+
+- In-code: `res_timeout` documented in `__init__` and in the `_recv_xml` docstring (stall signature + why the socket timeout can't catch it). No other docs needed.
+
+### Architecture
+
+- No architectural impact. Same module, same API; only a new optional `res_timeout` constructor parameter and a wall-clock guard in the receive loop.
+
+### Validation
+
+- `python3 test_kuka_eki_recv.py` → **11 passed** (10 recv-framing + 1 new staleness test).
+- `python3 test_kuka_eki_serialization.py` → **6 passed**.
+- `mypy robot.py` → only the **2 pre-existing** errors (lines 141 & 201: `comm_sock` is `socket | None`); **no new errors** from the guard.
+- `diff` of the two `robot.py` copies → identical; both parse (`ast.parse`) clean.
+
+### Decisions and Caveats
+
+- The guard is a wall-clock timeout on the whole `_recv_xml` call (default 10.0 s), not a "time since last byte" check: during the stall keepalives keep arriving, so a last-byte timer would never accumulate. A wall-clock timer is the only simple timer that fires.
+- Caveat: a legitimately long *blocking* PTP move (KRL blocked on `PTP` line 131, keepalives still arriving) could false-positive if it exceeds `res_timeout`. In block mode (the primary use case) moves are small 20 Hz increments, so 10 s is very safe. For long one-shot moves (e.g. the `gotopos` transition in `midikuka.py`), raise `res_timeout` (e.g. `Robot(port=18735, res_timeout=30.0)`) or disable it (`res_timeout=None`).
+- The guard does not fix the root cause; it makes the stall detectable and recoverable.
+
+### Next Task
+
+Operator: run with `KUKAPY_DEBUG=1`, re-trigger `hunting` → `track2`, and capture the stall. The new `KukaError` will confirm the stall (last log line a `SEND` with no following `FRAME`/`<Res>`). Then discriminate the root cause: if the KRL is parked at line 57 with the flag never set, it is a client→KRC framing desync (verify `SENDFLAG=1` on the pendant's `KUKAPY.xml`); if the KRL is mid-move, it is a slow KRL.
+
+### Instructions for the Next Task
+
+1. Restart the core app (the pip editable install loads `KukaPyNEW/kukapy/robot.py` directly — no file copy needed if it runs from this tree).
+2. Launch with `KUKAPY_DEBUG=1` in the environment to get per-frame `SEND`/`FRAME` logs back.
+3. Re-trigger `hunting` → `track2`; when the stall occurs, capture the last ~20 log lines + the KRL line. The new `KukaError("no <Res> within 10s ...")` confirms the stall and that the KRL is stranded at `WAIT FOR $FLAG[1]`.
+4. To tune the timeout for long moves: `Robot(port=18735, res_timeout=30.0)`, or `res_timeout=None` to disable the guard entirely.
+
+## 2026-10-25 — Fixed the real recurring stall: multi-document `_recv_xml` deadlock (KRC sends plain XML, no `\x00`); silenced per-frame logging behind `KUKAPY_DEBUG=1`
+
+### Status
+
+Completed (fix implemented + validated locally). On-robot redeploy/restart is the operator's action.
+
+### Summary
+
+**Version question (answered by the trace):** the app *was* running the fixed code. Proof: (1) every `[kukapy] SEND` line in the operator's trace ends with `\x00` — only the fixed `_send_xml` produces that; (2) the `FRAME2` marker only exists in the current `robot.py`. Module resolution: the app runs under the `kukart` pyenv, where `kukapy` is a **pip editable install** pointing at `realtimecontrol/kukapyEKI/KukaPyNEW` — so the loaded file is `KukaPyNEW/kukapy/robot.py`, **not** `rtr/KukaPy` (that is a shadow copy; both now carry identical code).
+
+**The `\x00`-both-directions hypothesis was wrong.** Every response in the trace was parsed via `FRAME2` (the plain-XML fallback) — mode 1 (`\x00`-split) never fired, so **KRC sends plain XML documents with no `\x00` flags on the wire**. `SENDFLAG=1` applies to the client→KRC direction only (our `\x00`-terminated `<Rob>` sends are correct and stay). The stall moved from tick #130 to #480 — the KRC side is now healthy — but a second, independent bug remained on the Python side.
+
+**Root cause of the recurring stall:** KRC interleaves `<Res>` responses with periodic `<AliveCounter>` keepalives (`KUKAPY.xml` `<ALIVE ElementName="AliveCounter"/>`). Both are small (~260 B + ~40 B), so they routinely coalesce into **one TCP segment = one `recv()` chunk holding two complete documents**. The old mode-2 code did `ET.fromstring(whole_buffer)`, which raises `ParseError: junk after document element` (verified) whenever two documents are present — so `_recv_xml` kept accumulating keepalives forever (silent; the 1 MB guard is hours away), never returned, never sent the next `<Rob>`, and the KRL parked at `WAIT FOR $FLAG[1]` (line 57). This exactly matches the stall signature: last log line `SEND Type2`, then nothing, KRL at line 57. The stall point is random (TCP coalescing luck), which is why it moved 130 → 480.
+
+**Fix (both `kukapy/robot.py` copies, now byte-identical):**
+1. `_recv_xml` rewritten to scan the buffer **document by document**: split on `\x00` if present (dormant fallback), otherwise slice the first complete document out by root tag (new `_first_document` helper: regex for the root tag, `find("</root>")`), parse it, keep the rest. Non-`<Res>` documents (keepalives) are skipped. Leftover bytes still persist in `_recv_buf`.
+2. Logging silenced: per-frame `SEND`/`FRAME` prints are now gated behind `KUKAPY_DEBUG=1` (env var). Error logs (`FRAME-PARSE-FAIL`, `DOC-PARSE-FAIL`, buffer overflow) stay always-on. This kills the ~15 KB/s log spam (3 full 250 B frame reprs per tick at 20 Hz).
+
+### Changes Made
+
+- `realtimecontrol/kukapyEKI/KukaPyNEW/kukapy/robot.py` (the **actual runtime module**, via editable install):
+  - New imports `os`, `re`; module-level `_DEBUG = os.environ.get("KUKAPY_DEBUG", "") == "1"`.
+  - `_send_xml`: `\x00` framing kept (correct for KRC side); print gated behind `_DEBUG`.
+  - `_recv_xml` + new `_first_document`: per-document scanning (see Summary).
+  - Per-chunk `RECV#` dump removed (already done in the shadow copy last turn).
+- `realtimecontrol/rtr/KukaPy/kukapy/robot.py` (shadow copy): same rewrite applied; now byte-identical to KukaPyNEW.
+- `realtimecontrol/rtr/tests/test_kuka_eki_recv.py`: 4 new regression tests for the plain-XML production stream: `test_plain_xml_res_plus_keepalive_one_chunk` (the exact stall), `test_plain_xml_keepalive_then_res_one_chunk`, `test_plain_xml_two_res_one_chunk_preserves_tail`, `test_plain_xml_partial_then_keepalive`.
+
+### Documentation
+
+- In-code framing comment block rewritten: client→KRC is `\x00`-delimited (SENDFLAG), KRC→client is plain XML with keepalives. No other docs needed.
+
+### Architecture
+
+- No architectural impact. Same module, same API; only the receive-side document handling and log verbosity changed.
+
+### Validation
+
+- `PYTHONPATH=realtimecontrol/rtr/KukaPy python3 -m pytest tests/test_kuka_eki_recv.py tests/test_kuka_eki_serialization.py -q` → **16 passed** (10 recv-framing incl. 4 new + 6 serialization).
+- Same suite against the runtime copy: `PYTHONPATH=.../kukapyEKI/KukaPyNEW python3 -m pytest ...` → **16 passed**.
+- Live simulation against the KukaPyNEW module (thread + timeout, so a hang = deterministic failure): stall-case `Res+Alive` one chunk → `Res`; `Alive+Res` → `Res`; split `Res` + `Alive` + next `Res` → `Res` then `Res`; byte-by-byte → `Res`. All pass.
+- `diff` of the two `robot.py` copies → identical.
+
+### Decisions and Caveats
+
+- The old tests only covered `\x00`-delimited traffic (mode 1) — the mode that never fires in production. The new tests cover the plain-XML mode that actually runs.
+- If the stall recurs after this fix, it is no longer a Python-side framing issue (the reader now provably handles every coalescing pattern). Next discriminator: run with `KUKAPY_DEBUG=1` and capture the trace tail — if `SEND` lines stop with no `FRAME`/`DOC-PARSE-FAIL`, the KRC side stopped responding (check the pendant's `KUKAPY.xml` for `SENDFLAG=1` and the KRL line).
+- `KUKAPY_OLD` (`kukapyEKI/KukaPyOLD`) is an untouched legacy copy; ignore it.
+
+### Next Task
+
+Operator: restart the core (the editable install picks up the new `robot.py` automatically — no file copy needed if the app runs from this tree; otherwise sync `KukaPyNEW/kukapy/robot.py` to 192.168.10.201), re-trigger `hunting` → `track2`, and confirm the core runs past the previous stall point (~tick #480) without stranding.
+
+### Instructions for the Next Task
+
+1. Restart the core app (no code copy needed if it runs from this tree — the pip editable install loads `KukaPyNEW/kukapy/robot.py` directly).
+2. The log should now be much quieter: no per-tick `[kukapy] SEND`/`FRAME` lines. To bring them back: `KUKAPY_DEBUG=1` in the launch environment.
+3. Re-trigger `hunting` → `track2`; verify no strand (KRL not parked at line 57) past the old stall point.
+4. If it strands: launch with `KUKAPY_DEBUG=1`, capture the last ~20 lines + the KRL line, and check `SENDFLAG=1` on the pendant's `KUKAPY.xml`.
+
 ## 2026-10-25 — Ported the `\x00` SENDFLAG fix to the real runtime module `realtimecontrol/rtr/KukaPy/kukapy/robot.py` + removed the excessive per-chunk RECV logging
 
 ### Status
