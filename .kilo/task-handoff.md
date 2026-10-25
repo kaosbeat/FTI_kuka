@@ -1,5 +1,67 @@
 # Task Handoff Log
 
+## 2026-10-25 — Made the `res_timeout` guard cnt-aware: blocking PTPs (`cnt=0`) use a longer `res_timeout_blocking` (60 s) so a legitimately long move no longer false-positives
+
+### Status
+
+Completed (implemented + validated locally against both `robot.py` copies and the wrapper). On-robot redeploy/restart is the operator's action.
+
+### Summary
+
+The previous entry added a wall-clock staleness guard to `_recv_xml` (default `res_timeout=10.0 s`) to turn the keepalives-without-`<Res>` hang into a recoverable `KukaError`. Its own "Decisions and Caveats" noted the risk: a **blocking** PTP (`cnt_val == 0`) holds the KRL's `<Res>` until the robot *arrives* (`KUKAPY_SERVER.SRC` CASE 4 — a plain `PTP` blocks until arrival), so any blocking move longer than 10 s would false-positive the guard. The user's "still fails" log pointed at exactly this ("might have been an unusual longh action"), and `zones.json` `hunting/track2` is `move_mode: block`.
+
+**Fix:** make the timeout cnt-aware. `Robot.move()` now picks the effective timeout from `cnt_val`:
+- `cnt_val == 0` (blocking PTP) → `self.res_timeout_blocking` (new, default **60.0 s**): the KRL legitimately holds the `<Res>` until arrival, so the guard must not fire mid-move.
+- `cnt_val > 0` (stream) and every other command (ping/curjpos/curpos/setdo/getdo) → the short `self.res_timeout` (10.0 s): the KRL answers immediately, so a delayed `<Res>` there is still a real stall.
+
+The override is threaded per-call: `move()` → `_send_cmd(res_timeout=rt)` → `_recv_xml(res_timeout=rt)` (falls back to `self.res_timeout` when the override is `None`). Stream moves and queries are untouched. The `KukaRobot` wrapper exposes both timeouts as optional constructor params (default `None` → use the `Robot` defaults) so a deployment can tune them without editing the vendored `robot.py`.
+
+### Changes Made
+
+- `realtimecontrol/rtr/KukaPy/kukapy/robot.py` (shadow copy):
+  - `Robot.__init__`: new `res_timeout_blocking: float | None = 60.0` param; stored as `self.res_timeout_blocking` (independent of `res_timeout`; `None` disables that specific guard).
+  - `_recv_xml(self, res_timeout=None)`: new per-call override; `rt = self.res_timeout if res_timeout is None else res_timeout`; the staleness guard now compares against `rt` and reports `{rt:.0f}s`.
+  - `_send_cmd(self, cmd_type, res_timeout=None, **kw)`: passes `res_timeout` through to `_recv_xml`.
+  - `move()`: `rt = self.res_timeout_blocking if cnt_val == 0 else self.res_timeout`; passes `res_timeout=rt` to `_send_cmd`.
+- `realtimecontrol/kukapyEKI/KukaPyNEW/kukapy/robot.py` (the **actual runtime module**, via editable install): copied to stay **byte-identical** to the shadow copy.
+- `realtimecontrol/rtr/rtr/robot/kuka.py` (wrapper):
+  - `from typing import List, Optional`.
+  - `KukaRobot.__init__`: new optional `res_timeout` / `res_timeout_blocking` params (default `None` → Robot defaults).
+  - `connect()`: forwards them to `Robot(...)` only when not `None`.
+- `realtimecontrol/rtr/tests/test_kuka_eki_recv.py`: new `import time`; new `DelayedSock` (keepalives until `delay` s, then `<Res>`, with a no-op `sendall`); two new tests — `test_blocking_move_uses_longer_timeout` and `test_stream_move_uses_short_timeout`.
+
+### Documentation
+
+- In-code: `res_timeout_blocking` documented in `Robot.__init__`; the per-call override documented in the `_recv_xml` and `_send_cmd` docstrings; the cnt-awareness rationale documented in `move()`; the wrapper params documented in `KukaRobot.__init__`. No other docs needed.
+
+### Architecture
+
+- No architectural impact. Same modules, same public API; only a new optional constructor param on `Robot` + `KukaRobot`, a per-call override threaded through `_send_cmd`/`_recv_xml`, and a timeout selection in `move()`. Backward-compatible: legacy scripts that construct `Robot(port=...)` are unaffected (the new param has a default).
+
+### Validation
+
+- `python tests/test_kuka_eki_recv.py` → **13 passed** (11 recv-framing/staleness + 2 new cnt-aware tests).
+- `python tests/test_kuka_eki_serialization.py` → **4 passed**.
+- `python -m py_compile` on `robot.py`, `rtr/robot/kuka.py`, and the test file → OK.
+- `diff` of the two `robot.py` copies → identical.
+
+### Decisions and Caveats
+
+- `res_timeout_blocking` defaults to **60 s**, chosen with ~6× margin over the worst realistic blocking move: the slowest zone speed is 10 % and the largest single-axis span is ~180°, so the longest realistic blocking PTP is ~10 s; 60 s is a hard bound (not forever) that still catches a truly stranded KRL during a blocking move. If a deployment has genuinely longer one-shot blocking moves, raise it (or set `res_timeout_blocking=None` to disable that guard) via the `KukaRobot` constructor.
+- The two timeouts are **independent**: `res_timeout=None` disables the stream/query guard, `res_timeout_blocking=None` disables the blocking guard. (Deliberately not auto-linked, so disabling one does not silently disable the other.)
+- The `make_robot` factory in `rtr/rtr/robot/__init__.py` does not forward the timeouts, so it uses the `Robot` defaults — correct for the fix; extend it only if an operator needs to tune at config level.
+
+### Next Task
+
+Operator: redeploy/restart the core (the pip editable install loads `KukaPyNEW/kukapy/robot.py` directly — no file copy needed if it runs from this tree), then re-trigger the long hunting action that previously failed and confirm the blocking move no longer raises `KukaError: no <Res> within 10s`.
+
+### Instructions for the Next Task
+
+1. Restart the core app so the editable `KukaPyNEW/kukapy/robot.py` picks up the cnt-aware `move()`.
+2. Re-trigger the action that failed (e.g. `hunting` → `track2`, a `block`-mode action) — the blocking PTP now waits up to `res_timeout_blocking` (60 s) before the guard can fire, so a legitimately long move completes instead of erroring.
+3. If a specific one-shot move is still too long for 60 s, construct the robot with a longer/disabled blocking timeout, e.g. `KukaRobot(port=18735, res_timeout_blocking=120.0)` (or `res_timeout_blocking=None` to disable that guard entirely).
+4. Note: the core runtime at `/home/kaos/FTI_kuka` is a *separate, diverged* checkout from this workspace (`/home/kaos/Documents/kaotec/FTI_kuka`) — confirm the deployment/sync path before assuming this fix is live on the core.
+
 ## 2026-10-25 — Added the Res-staleness guard to `_recv_xml`: keepalives-without-`<Res>` now raise `KukaError` after `res_timeout` instead of hanging forever
 
 ### Status

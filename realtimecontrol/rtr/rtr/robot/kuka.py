@@ -10,7 +10,7 @@ controller interpolates.
 """
 
 import threading
-from typing import List
+from typing import List, Optional
 
 from .base import RobotBase
 
@@ -31,10 +31,19 @@ class KukaRobot(RobotBase):
     its comparelist arrival check) stays consistent. The sim is never offset.
     """
 
-    def __init__(self, port: int = 18735, joint_offsets: List[float] = None):
+    def __init__(self, port: int = 18735, joint_offsets: List[float] = None,
+                 res_timeout: Optional[float] = None,
+                 res_timeout_blocking: Optional[float] = None):
         self._port = port
         self._robot = None
         self._joint_offsets = list(joint_offsets) if joint_offsets else [0.0] * 6
+        # EKI staleness timeouts (seconds). Left as None to use the kukapy
+        # Robot defaults (res_timeout=10.0 for stream moves/queries,
+        # res_timeout_blocking=60.0 for blocking PTPs, which hold the <Res>
+        # until the robot arrives). Pass a value or None to override per
+        # deployment; None for res_timeout_blocking disables that guard.
+        self._res_timeout = res_timeout
+        self._res_timeout_blocking = res_timeout_blocking
         # Serializes every EKI (kukapy) call. The KUKAPY server is a strict
         # single-flight request/response loop (KUKAPY_SERVER.SRC: ``WAIT FOR
         # $FLAG[1]`` -> one command -> one <Res>). Concurrent send/recv on the
@@ -50,7 +59,12 @@ class KukaRobot(RobotBase):
                 "kukapy is not installed. Run `pip install git+https://github.com/"
                 "JasonLvernex/KukaPy.git` or use --sim."
             ) from exc
-        self._robot = Robot(port=self._port)
+        kwargs = {}
+        if self._res_timeout is not None:
+            kwargs["res_timeout"] = self._res_timeout
+        if self._res_timeout_blocking is not None:
+            kwargs["res_timeout_blocking"] = self._res_timeout_blocking
+        self._robot = Robot(port=self._port, **kwargs)
         self._robot.connect()
 
     def disconnect(self) -> None:

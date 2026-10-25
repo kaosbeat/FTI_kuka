@@ -52,6 +52,7 @@ class Robot:
         socket_timeout: int = 60,
         recv_timeout: int | None = 300,
         res_timeout: float | None = 10.0,
+        res_timeout_blocking: float | None = 60.0,
         # legacy alias kept for compatibility
         ip: str | None = None,
     ):
@@ -64,6 +65,12 @@ class Robot:
         # stall. The socket-level recv_timeout never fires in that case because
         # recv() keeps succeeding on the keepalive bytes. None disables the guard.
         self.res_timeout = res_timeout
+        # Staleness timeout for BLOCKING (cnt_val == 0) PTP moves specifically.
+        # The KRL holds the <Res> until the robot arrives (KUKAPY_SERVER.SRC CASE 4:
+        # a plain ``PTP`` blocks until arrival), so a blocking move that outlasts
+        # res_timeout would otherwise false-positive the guard. Stream moves
+        # (cnt_val > 0) answer immediately and keep the short res_timeout.
+        self.res_timeout_blocking = res_timeout_blocking
         self.comm_sock: socket.socket | None = None
         # Leftover bytes carried between _recv_xml calls. A recv() frequently
         # returns a whole <Res> plus the start of the next frame; that tail must
@@ -140,7 +147,7 @@ class Robot:
             print(f"[kukapy] SEND {repr(data)}")
         self.comm_sock.sendall(data)
 
-    def _recv_xml(self) -> ET.Element:
+    def _recv_xml(self, res_timeout: float | None = None) -> ET.Element:
         """Read one <Res> frame from the KRC EKI stream.
 
         The buffer is scanned document by document: \x00-delimited frames are
@@ -155,12 +162,17 @@ class Robot:
         document and strands the KRL at WAIT FOR $FLAG[1].
 
         A staleness guard raises ``KukaError`` if no ``<Res>`` arrives within
-        ``self.res_timeout`` seconds: the persistent stall signature is
-        keepalives (``AliveCounter``) arriving forever with no response, which
-        the socket-level ``recv_timeout`` never catches because ``recv()`` keeps
+        the timeout: the persistent stall signature is keepalives
+        (``AliveCounter``) arriving forever with no response, which the
+        socket-level ``recv_timeout`` never catches because ``recv()`` keeps
         succeeding on the keepalive bytes. A stranded KRL parks at
-        ``WAIT FOR $FLAG[1]``."""
+        ``WAIT FOR $FLAG[1]``.
+
+        ``res_timeout`` overrides ``self.res_timeout`` for this call; blocking
+        moves pass the longer ``self.res_timeout_blocking`` (see :meth:`move`).
+        """
         buf = self._recv_buf
+        rt = self.res_timeout if res_timeout is None else res_timeout
         t0 = time.monotonic()
         while True:
             while True:
@@ -213,9 +225,9 @@ class Robot:
             # recv_timeout never fires here because recv() keeps succeeding on
             # the keepalive bytes, so this wall-clock check turns the silent
             # forever-hang into a recoverable error.
-            if self.res_timeout is not None and time.monotonic() - t0 > self.res_timeout:
+            if rt is not None and time.monotonic() - t0 > rt:
                 raise KukaError(
-                    f"no <Res> within {self.res_timeout:.0f}s (keepalives still "
+                    f"no <Res> within {rt:.0f}s (keepalives still "
                     "arriving); KRL stranded at WAIT FOR $FLAG[1]"
                 )
 
@@ -243,10 +255,13 @@ class Robot:
         ET.SubElement(rob, "DO_Val").text = str(int(kw.get("DO_Val", 0)))
         return rob
 
-    def _send_cmd(self, cmd_type: str, **kw) -> ET.Element:
-        """Send command and return the raw <Res> response element."""
+    def _send_cmd(self, cmd_type: str, res_timeout: float | None = None, **kw) -> ET.Element:
+        """Send command and return the raw <Res> response element.
+
+        ``res_timeout`` overrides the staleness guard for this call; blocking
+        moves pass the longer ``res_timeout_blocking`` (see :meth:`move`)."""
         self._send_xml(self._build_cmd(cmd_type, **kw))
-        resp = self._recv_xml()
+        resp = self._recv_xml(res_timeout=res_timeout)
         code = int(resp.findtext("Code", default="1"))
         msg  = resp.findtext("Msg",  default="")
         if code != self.SUCCESS_CODE:
@@ -311,8 +326,14 @@ class Robot:
         else:
             raise ValueError(f"Unknown move_type: {move_type!r}")
 
+        # The KRL answers a stream move (cnt_val > 0) immediately, but a
+        # blocking PTP (cnt_val == 0) holds the <Res> until the robot arrives.
+        # Use the longer blocking timeout for cnt_val == 0 so a legitimately
+        # long move does not false-positive the staleness guard; stream moves
+        # and every other command keep the short res_timeout.
+        rt = self.res_timeout_blocking if cnt_val == 0 else self.res_timeout
         try:
-            self._send_cmd(cmd, **kw)
+            self._send_cmd(cmd, res_timeout=rt, **kw)
         except KukaError:
             if not continue_on_error:
                 raise
