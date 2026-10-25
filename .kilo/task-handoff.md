@@ -1,5 +1,146 @@
 # Task Handoff Log
 
+## 2026-10-25 — Test: force `hunting/track2` to block mode to isolate the stream-mode strand
+
+### Status
+
+Completed (test config applied + operator instructions delivered). The on-robot run itself is performed by the operator; the branch points for the result are documented below.
+
+### Summary
+
+Applied the isolation test for the "strands at `WAIT FOR $FLAG[1]`" bug. The code-established discriminator: the four failing actions (`hunting/track2`, `hunting/scan`, `examining/focus`, `cuddling/breathe`) have **no** `engine` field, so they **inherit** `move_mode=stream` / `cadence=arrival` from the preceding `hunting/track` (the only action with an explicit `engine: {cadence:arrival, move_mode:stream}`, zones.json:1003-1006). The one working action (`scanning/scnr`) reaches a block-mode state. Hypothesis under test: stream mode spawns a daemon thread **per tick** (kuka.py:115-116), piling up EKI calls that contend for `_lock`; block mode sends one awaited move at a time (engine.py:156).
+
+The test forces `hunting/track2` into block mode via `"engine": {"move_mode": "block"}`. Only `move_mode` is set — `cadence` is deliberately omitted from the engine dict so it stays inherited (`arrival`), isolating the single variable the hypothesis targets. Because engine-less actions inherit from the previous action, this cascades: `hunting/scan` and `hunting/focus` (no engine field) will now inherit `block` from `track2`, so the whole post-`track` hunting sub-sequence runs in block mode.
+
+### Changes Made
+
+- `realtimecontrol/rtr/zones.json`: added `"engine": {"move_mode": "block"}` to `hunting.actions.track2` (between `behavior` and `loop`). `cadence` intentionally omitted → stays inherited (`arrival`).
+
+### Documentation
+
+None required — this is a diagnostic config change, not a behavior change to document.
+
+### Architecture
+
+No architectural impact. Exercises the existing `engine` field mechanism (`brain._apply_action_engine`, brain.py:205-239) with a new config value; no code path changed.
+
+### Validation
+
+- `python3 -c "json.load(open('zones.json'))"`: parses clean, 38 zones.
+- Confirmed `hunting.track2.engine == {'move_mode': 'block'}` and `hunting.track.engine == {'cadence':'arrival','move_mode':'stream'}`.
+- Read `engine.py:148-156` (stream/block dispatch), `machine.py:661-678` (`_cadence_due`), `brain.py:205-239` (`_apply_action_engine`) to confirm `cadence` and `move_mode` are orthogonal and that omitting `cadence` leaves it inherited.
+
+### Decisions and Caveats
+
+- `cadence` was deliberately **not** changed. The originally-described test used `{cadence:fixed, move_mode:block}`; it was refined to isolate `move_mode` only, so a clear result unambiguously implicates stream mode rather than the cadence change.
+- The `engine` field is applied by the brain **only on an action change** (`_apply_action_engine`). The override therefore takes effect on the **next** transition into `track2` — the robot must not be sitting in `track2` when the config loads; it must re-enter `hunting/track2` afterward.
+- Block mode slows the action (each move is awaited to arrival before the next tick — the "legacy kukapy behaviour"). Slower pose-stepping in `track2` is **expected**, not a failure; the test measures whether it **strands** (freezes), not its speed.
+
+### Next Task
+
+Run the on-robot test (operator) and branch on the result:
+- **Strand clears (block works):** the fix is to stop stream mode spawning a daemon thread per tick — send the `cnt>0` move synchronously under `_lock` (the KRL answers C_PTP immediately, so no thread is needed), collapsing per-tick EKI traffic to a single serialized flight.
+- **Still strands at line 57 (WAIT):** the desync is a common EKI-framing issue affecting both modes → run Test #2 (instrument `_recv_xml` to capture the exact desync bytes).
+- **Strands mid-move (PTP/C_PTP loop, not line 57):** a single blocking EKI call hung → different mechanism; capture the hung frame.
+
+### Instructions for the Next Task
+
+Operator steps (delivered with this task): (1) load the config into the core — restart `python main.py --robot` **or** hot-reload via `POST /api/zones`; (2) park the robot in a neutral zone (not `track2`); (3) `goto_zone hunting` then `play_action track2`; (4) observe the KRL program counter (KUKAPY_SERVER.SRC), the physical robot, and the core's state snapshots; (5) branch per the Next Task list above.
+
+## 2026-10-24 — Fix EKI `_recv_xml` silent hang (the "Wait for $FLAG[1]" KUKA HMI error)
+
+### Status
+
+Completed.
+
+### Summary
+
+Fixed the root cause of the "Wait for $FLAG[1]" KUKA HMI error: a silent infinite hang in the EKI `_recv_xml` reader. The KUKA EKI link (`KUKAPY.xml`: `PROTOCOL=TCP`, `SENDFLAG=1`, `ALIVE ElementName="AliveCounter"`) is a `\x00`-delimited byte stream that interleaves `<Res>` responses with periodic `AliveCounter` keepalives. TCP does not preserve message boundaries, so a single `recv(4096)` frequently returns a whole `<Res>` **plus** the start of the next frame. The old `_recv_xml` kept its buffer in a *local* variable and returned as soon as it found a `<Res>`, throwing the leftover bytes away. The next call then started on a **fragment**, which can never be parsed, so it kept reading keepalives forever — a silent hang that stranded the KRL at `WAIT FOR $FLAG[1]` (idle, no new commands) and left the robot without its next move.
+
+The fix makes the leftover buffer persistent across calls: `self._recv_buf` is written on every return path (the tail after the returned `<Res>` in `\x00`-mode, or the accumulated bytes in plain-XML mode) and read at the start of the next call. It is reset to `b""` on `connect()` and `disconnect()` so stale bytes never leak across sessions. A defensive 1 MB size guard raises `KukaError` instead of hanging if framing ever desyncs.
+
+### Changes Made
+
+- `realtimecontrol/kukapyEKI/KukaPyNEW/kukapy/robot.py` (the **active** editable-install module): added `self._recv_buf = b""` to `Robot.__init__`; rewrote `_recv_xml` to read from / write to `self._recv_buf` (persistent leftover) instead of a local `buf`; reset `self._recv_buf` in `connect()` and `disconnect()`; added a 1 MB overflow guard.
+- `realtimecontrol/rtr/KukaPy/kukapy/robot.py` (vendored copy, not used at runtime): applied the identical fix so the bug cannot resurface if that copy is ever used.
+- `realtimecontrol/rtr/tests/test_kuka_eki_recv.py` (new): 6 regression tests driving `_recv_xml` against a fake socket — split frame across two recvs, keepalive between Res frames, keepalive-only chunk, multi-frame chunk tail preservation, byte-at-a-time reassembly, and connect reset. The fake socket loops on an `AliveCounter` (like the real KRC) so a buggy reader hangs and the join timeout turns the hang into a deterministic failure.
+
+### Documentation
+
+None required — the fix is self-documenting via the `_recv_xml` docstring and the new test file's module docstring, which explain the protocol and the bug.
+
+### Architecture
+
+No architectural impact. This is a bug fix within the existing EKI framing layer; the protocol, module boundaries, and data flow are unchanged.
+
+### Validation
+
+- `python3 -m py_compile` on both `robot.py` copies: OK.
+- `diff` of the two `_recv_xml` methods: identical.
+- `/tmp/kilo/repro_recv.py` (reproduction): before the fix, call1 OK / call2 HANG; after the fix, **both RES_A and RES_B retrieved (PASS)**.
+- `tests/test_kuka_eki_recv.py` (new): all 6 tests pass.
+- `tests/test_kuka_eki_serialization.py` (existing EKI test): all 6 tests pass.
+- Full `tests/` suite (excluding `test_remote_tui.py`, which has a **pre-existing** `ImportError: cannot import name 'action_kind' from 'rtr.flow'`): 274 passed, 14 skipped, 7 failed — all 7 failures are **pre-existing** and none import `kukapy` (`test_bridge_behavior.py::test_real_zones_bridge_action_is_tagged`, 5× `test_remote_sdl.py`, `test_transition.py::test_all_reachable_transitions_complete`).
+
+### Decisions and Caveats
+
+- The 1 MB overflow guard is a safety net, not a protocol feature; it converts a possible infinite hang into a loud `KukaError`. Under normal operation the buffer stays tiny (one partial frame).
+- The vendored copy (`rtr/KukaPy/`) is not on the runtime path (`kukapy` resolves to the KukaPyNEW editable install), but it was fixed too for consistency.
+- The 7 pre-existing test failures and the `test_remote_tui.py` collection error are unrelated to this change and were present before it.
+
+### Next Task
+
+Two pending workstreams, both blocked on user input:
+1. **Single-action auto-return** (`editor.html` on-save normalization): for a zone with exactly one action and an empty `next`, add a return target to the incoming/reverse zone. Blocked on the definition of the "previous" target and the creation trigger (the earlier clarification was dismissed).
+2. **A6 continuous-axis accumulation**: the A6 counter accumulated to `216237.30°` and manifests as a growling. The code side is confirmed (no Python wrapping; RSI `AXISACT Type="Measured"`; the arrival check `count=5` excludes A6). The remaining question — what KUKA controller operation resets the continuous counter and why it grows — is controller-side knowledge not present in the codebase.
+
+### Instructions for the Next Task
+
+- Auto-return: confirm the "previous" target (is it the action's `next` list, the `reverse_targets` of the incoming zone, or something else?) and the creation trigger (on-save only, or also on zone create?), then implement in `editor.html` using `reverse_targets`, `firstEnabledAction`, and `setNext`; add a save-normalization test.
+- A6: obtain the KUKA controller behavior for the A6 continuous axis (which pendant/controller operation resets the measured counter, and whether the growling correlates with the counter magnitude). Then decide whether to add a Python-side wrap or a controller-side reset to `behavior.py` / the KRL.
+
+## 2026-10-24 — Investigate: `auto discarded move to cuddling_purring_bridge / bridge — red-link conflict`
+
+### Status
+
+Completed.
+
+### Summary
+
+Explained the runtime warning `auto discarded move to cuddling_purring_bridge / bridge — red-link conflict`. The move `cuddling/purr → cuddling_purring_bridge/bridge` (the first candidate in `cuddling/purr`'s `next` list) is discarded by the core's safety gate on the **inter-zone shared-position rule**: the two actions must share at least one anchor pose within 0.5° on every axis. All three `bridge/bridge` anchor poses carry an `'x'` (frozen-axis) marker on A1 (`['x', -133, 156, -2, 0, 0]`, `['x', -120, 135, -2, 0, 0]`, `['x', -110, 135, -2, -5, 0]`), and `find_shared_pose` (`rtr/state/zones.py:92`) skips any pose containing `'x'` — so no shared pose is ever found. The safezone-overlap rule passes (both zones overlap on all 6 axes, gap list empty).
+
+**Divergence found:** the editor's flow view judges this edge as CLEAN because its `edgeConflict` (`editor.html:1077-1090`) skips only the `'x'` axes and compares the concrete ones (purr end pose `['x', -133, 156, -2, 0, 0]` vs bridge entry pose `['x', -133, 156, -2, 0, 0]` — all concrete axes match). The core's matcher is stricter: it discards the whole pose when any axis is `'x'`. Hence the editor shows a green link while the runtime discards the move.
+
+### Changes Made
+
+- No code changes (read-only investigation).
+
+### Documentation
+
+None required — explanation only.
+
+### Architecture
+
+No architectural impact.
+
+### Validation
+
+- Real `SafetyGate.check_conflict("cuddling", "purr", "cuddling_purring_bridge", "bridge")` on the live `zones.json`: `conflict=True`, issues=`['no shared position: cuddling/purr shares no pose with cuddling_purring_bridge/bridge']`.
+- Safezone overlap gaps for `cuddling` vs `cuddling_purring_bridge`: `[]` (all 6 axes overlap).
+
+### Decisions and Caveats
+
+- The root cause is the `'x'`-handling mismatch between `find_shared_pose` (core, skips whole pose) and `edgeConflict` (editor, skips only `'x'` axes). Until aligned, every auto move into a bridge action whose anchors are all `'x'`-marked will be discarded.
+
+### Next Task
+
+Decide the fix: (a) give `cuddling_purring_bridge/bridge` (and similar bridge actions) at least one fully numeric anchor pose matching the source's end pose, or (b) change `find_shared_pose` to compare only concrete axes like the editor does.
+
+### Instructions for the Next Task
+
+- Option (a): in `zones.json`, replace the `'x'` on A1 of the bridge's first anchor with a concrete value (e.g. `[-60, -133, 156, -2, 0, 0]` — any value inside the zone safezone that matches the robot's pose at hand-off), keeping the other anchors as-is.
+- Option (b): in `rtr/state/zones.py` `find_shared_pose`, compare axis-by-axis only where both sides are numeric (mirror `editor.html` `edgeConflict` lines 1080-1090); update `tests/test_safety_conflict.py` accordingly and re-run it.
+
 ## 2026-10-24 — Implement + test: `check_zone_limits.py` (limit checker with interactive apply)
 
 ### Status

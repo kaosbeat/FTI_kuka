@@ -190,6 +190,7 @@ class Engine:
             m.current_zone = "init"
             m.current_action = None
             m.action_index = 0
+            m._prev_zone = None  # the previous zone is stale (the robot was reset)
         elif m.current_action and m.current_action not in zones.get(m.current_zone).actions():
             # The action was removed/renamed: stop it (hold the current pose).
             m.current_action = None
