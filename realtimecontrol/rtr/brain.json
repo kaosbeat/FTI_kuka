@@ -8,91 +8,9 @@
       "websocket": true
     }
   },
-  "zone_groups": {
-    "museum-closed": {
-      "zones": [
-        "resting",
-        "sleeping",
-        "cuddling",
-        "purring"
-      ],
-      "behaviors": [],
-      "enabled": true,
-      "params": {
-        "speed": 10,
-        "dwell_s": 60
-      }
-    },
-    "event-sit-back": {
-      "zones": [
-        "cuddling",
-        "purring",
-        "stretching",
-        "hunting",
-        "examining",
-        "performing"
-      ],
-      "behaviors": [],
-      "enabled": true,
-      "params": {
-        "speed": 40,
-        "dwell_s": 30
-      }
-    },
-    "stage-takeover": {
-      "zones": [
-        "stretching",
-        "hunting",
-        "examining",
-        "performing",
-        "roaring",
-        "growling",
-        "clawing",
-        "leaping",
-        "resting_sleeping_bridge",
-        "sleeping_stretching_bridge",
-        "cuddling_purring_bridge",
-        "examining_performing_bridge",
-        "cuddling_stretching_bridge",
-        "stretching_hunting_bridge",
-        "hunting_examining_bridge",
-        "performing_roaring_bridge",
-        "grabbing",
-        "roaring_grabbing_bridge",
-        "scanning",
-        "hunting_scanning_bridge",
-        "examining_cuddling_bridge",
-        "purring_hunting_bridge",
-        "roaring_growling_bridge",
-        "testing_cuddling_bridge",
-        "growling_clawing_bridge",
-        "scanning_leaping_bridge",
-        "scanning_roaring_bridge",
-        "roaring_scanning_bridge",
-        "grabbing_hunting_bridge"
-      ],
-      "behaviors": [],
-      "enabled": true,
-      "params": {
-        "speed": 80,
-        "dwell_s": 15
-      }
-    },
-    "high-movement-group": {
-      "zones": [
-        "cuddling",
-        "hunting",
-        "scanning"
-      ],
-      "behaviors": [],
-      "enabled": true,
-      "params": {}
-    }
-  },
+  "zone_groups": {},
   "hunt": {
-    "zones": [
-      "hunting"
-    ],
+    "zones": [],
     "behaviors": [],
     "enabled": true,
     "params": {
@@ -106,11 +24,9 @@
         "gentle"
       ],
       "detect": {
-        "zone": "hunting",
         "action": "track"
       },
       "scan": {
-        "zone": "hunting",
         "action": "scan"
       }
     }

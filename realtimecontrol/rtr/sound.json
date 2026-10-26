@@ -273,6 +273,13 @@
         "note": 60,
         "velocity": 60
       }
+    },
+    "leaping_growling_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
     }
   },
   "actions": {
@@ -457,6 +464,10 @@
           "velocity": 60
         },
         "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
           {
             "note": 60,
             "velocity": 60
@@ -991,6 +1002,18 @@
           {
             "note": 60,
             "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
           }
         ]
       }
@@ -1312,6 +1335,15 @@
       }
     },
     "cuddling_scanning_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "leaping_growling_bridge": {
       "bridge": {
         "start": {
           "note": 60,

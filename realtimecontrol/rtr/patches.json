@@ -1,5 +1,5 @@
 {
-  "default": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out(o1)",
+  "default": "",
   "zones": {
     "resting": "osc(222, 0.1, 1.2)\n.posterize(3)\n.out(o0)",
     "sleeping": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out(o0)",
@@ -39,7 +39,8 @@
     "grabbing_hunting_bridge": "osc(4, 0.1, 1.2).out()",
     "stretching_hunting_bridge2": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out(o1)",
     "cuddling_hunting_bridge2": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out(o1)",
-    "cuddling_scanning_bridge": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out(o1)"
+    "cuddling_scanning_bridge": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out(o1)",
+    "leaping_growling_bridge": "osc(4, 0.1, 1.2).out()"
   },
   "modes": {
     "calm": "osc(1, 0.08, 1.2)\n.posterize(4)\n.diff(src(o0).rotate(1.5))\n.out(o3)",
@@ -198,6 +199,9 @@
     },
     "cuddling_scanning_bridge": {
       "bridge": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out(o1)"
+    },
+    "leaping_growling_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
     }
   }
 }

@@ -10,20 +10,20 @@
           185
         ],
         [
-          -60,
-          -40
-        ],
-        [
-          -10,
-          -9
+          -30,
+          -10
         ],
         [
           0,
-          1
+          42
         ],
         [
-          60,
-          62
+          -15,
+          15
+        ],
+        [
+          -20,
+          10
         ],
         [
           -15,
@@ -54,11 +54,11 @@
           "enabled": true,
           "poses": [
             [
-              10,
-              -59,
-              -10,
+              45,
+              -30,
+              42,
               0,
-              60,
+              -5,
               0
             ],
             [
@@ -87,7 +87,7 @@
             5
           ],
           "behavior": "restless",
-          "speed": 20,
+          "speed": 100,
           "loop": true,
           "next": [
             {
@@ -114,11 +114,11 @@
           "enabled": true,
           "poses": [
             [
-              85,
-              -97,
-              -9,
-              -2,
+              45,
+              -10,
+              12,
               0,
+              -5,
               0
             ],
             [
@@ -486,10 +486,16 @@
           ],
           "behavior": "calm",
           "loop": true,
-          "next": {
-            "zone": "cuddling_hunting_bridge2",
-            "action": "bridge"
-          },
+          "next": [
+            {
+              "zone": "cuddling_hunting_bridge2",
+              "action": "bridge"
+            },
+            {
+              "zone": "cuddling",
+              "action": "purr"
+            }
+          ],
           "pose_imgs": [
             null,
             null,
@@ -529,7 +535,7 @@
             0,
             2
           ],
-          "behavior": "impatient",
+          "behavior": "spontaneous",
           "speed": 10,
           "loop": true,
           "next": [
@@ -611,6 +617,14 @@
           "enabled": true,
           "poses": [
             [
+              -90,
+              -134,
+              157,
+              3,
+              -5,
+              0
+            ],
+            [
               "x",
               -110,
               135,
@@ -650,9 +664,11 @@
           "pose_imgs": [
             null,
             null,
+            null,
             null
           ],
           "pose_videos": [
+            null,
             "MiniMax_H3_00122_..mp4",
             "MiniMax_H3_00117_..mp4",
             "MiniMax_H3_00112_..mp4"
@@ -2036,10 +2052,16 @@
           ],
           "behavior": "calm",
           "loop": true,
-          "next": {
-            "zone": "leaping",
-            "action": "leap"
-          },
+          "next": [
+            {
+              "zone": "leaping",
+              "action": "leap"
+            },
+            {
+              "zone": "leaping_growling_bridge",
+              "action": "bridge"
+            }
+          ],
           "pose_imgs": [
             null,
             null,
@@ -2075,7 +2097,7 @@
         ],
         [
           -15,
-          45
+          63
         ],
         [
           -35,
@@ -2243,11 +2265,11 @@
         ],
         [
           -30,
-          -10
+          -20
         ],
         [
           0,
-          42
+          32
         ],
         [
           -15,
@@ -2280,7 +2302,7 @@
             [
               45,
               -30,
-              42,
+              32,
               0,
               -5,
               0
@@ -2294,7 +2316,7 @@
           ],
           "behavior": "locked",
           "sweep": true,
-          "speed": 100,
+          "speed": 40,
           "loop": true,
           "next": [
             {
@@ -2327,7 +2349,33 @@
           ],
           "pose_videos": [
             "MiniMax_H3_00064_..mp4"
-          ]
+          ],
+          "axis_bands": {
+            "0": [
+              -185,
+              185
+            ],
+            "1": [
+              -30,
+              -20
+            ],
+            "2": [
+              0,
+              32
+            ],
+            "3": [
+              -15,
+              15
+            ],
+            "4": [
+              -20,
+              10
+            ],
+            "5": [
+              -15,
+              15
+            ]
+          }
         },
         "intent": {
           "enabled": true,
@@ -2572,7 +2620,7 @@
         ],
         [
           -20,
-          45
+          62
         ],
         [
           -15,
@@ -2666,6 +2714,22 @@
           "behavior": "bridge",
           "poses": [
             [
+              0,
+              -133,
+              156,
+              -2,
+              0,
+              0
+            ],
+            [
+              -90,
+              -134,
+              157,
+              3,
+              -5,
+              0
+            ],
+            [
               "x",
               -133,
               156,
@@ -2688,6 +2752,14 @@
               -2,
               -5,
               0
+            ],
+            [
+              -90,
+              -134,
+              157,
+              3,
+              -5,
+              0
             ]
           ],
           "variable_axes": [],
@@ -2697,6 +2769,17 @@
             "action": "hold"
           },
           "pose_imgs": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null,
+            null,
             null,
             null,
             null
@@ -4154,169 +4237,102 @@
           }
         }
       }
+    },
+    "leaping_growling_bridge": {
+      "enabled": true,
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -124,
+          -80
+        ],
+        [
+          -19,
+          127
+        ],
+        [
+          -23,
+          23
+        ],
+        [
+          -55,
+          50
+        ],
+        [
+          -150,
+          150
+        ]
+      ],
+      "speed": 80,
+      "actions": {
+        "bridge": {
+          "enabled": true,
+          "loop": false,
+          "behavior": "bridge",
+          "poses": [
+            [
+              -90,
+              -124,
+              127,
+              0,
+              5,
+              0
+            ],
+            [
+              "x",
+              -100,
+              100,
+              -2,
+              -10,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "speed": 80,
+          "next": {
+            "zone": "growling",
+            "action": "growl"
+          }
+        }
+      }
     }
   },
   "layout": {
     "pos": {
-      "resting": {
-        "x": 479.02371978759766,
-        "y": 11.794570922851562
-      },
-      "resting_sleeping_bridge": {
-        "x": 264.0373229980469,
-        "y": -47.91793632507324
-      },
-      "resting_testing_bridge": {
-        "x": 206.46551513671875,
-        "y": 188.044921875
-      },
       "sleeping": {
-        "x": 66.35023498535156,
-        "y": 11.794567108154297
-      },
-      "testing": {
-        "x": 409.4798278808594,
-        "y": 212.442138671875
+        "x": -340.44840240478516,
+        "y": 246.52914428710938
       },
       "cuddling": {
-        "x": 827.2969360351562,
-        "y": -269.8633003234863
-      },
-      "sleeping_stretching_bridge": {
-        "x": 654.6218872070312,
-        "y": 182.4652099609375
-      },
-      "stretching": {
-        "x": 903.3121948242188,
-        "y": 0.27022552490234375
-      },
-      "cuddling_purring_bridge": {
-        "x": 849.0106201171875,
-        "y": 127.0106201171875
-      },
-      "cuddling_stretching_bridge": {
-        "x": 880,
-        "y": 276
+        "x": -33.70581245422363,
+        "y": 254.13809967041016
       },
       "purring": {
-        "x": 1079.0589599609375,
-        "y": 104.48351812362671
+        "x": -247.63404846191406,
+        "y": 91.08879089355469
       },
-      "stretching_hunting_bridge": {
-        "x": 1205.6561889648438,
-        "y": 342.97390365600586
+      "stretching": {
+        "x": 460,
+        "y": 206
       },
-      "hunting": {
-        "x": 1326.080322265625,
-        "y": 27.580764770507812
-      },
-      "hunting_examining_bridge": {
-        "x": 1509.040283203125,
-        "y": 70.0200424194336
-      },
-      "examining": {
-        "x": 1720,
-        "y": 40
-      },
-      "examining_performing_bridge": {
-        "x": 1930,
-        "y": 40
-      },
-      "performing": {
-        "x": 2140,
-        "y": 40
-      },
-      "performing_roaring_bridge": {
-        "x": 2350,
-        "y": 40
-      },
-      "roaring": {
-        "x": 2531.70703125,
-        "y": 12.116878509521484
-      },
-      "growling": {
-        "x": 2797.4599609375,
-        "y": -42.38015174865723
-      },
-      "roaring_grabbing_bridge": {
-        "x": 2770,
-        "y": 51.61984825134277
-      },
-      "clawing": {
-        "x": 2683.63232421875,
-        "y": 306.4573197364807
-      },
-      "grabbing": {
-        "x": 2980,
-        "y": 158
-      },
-      "leaping": {
-        "x": 2288.951171875,
-        "y": 202.54949188232422
+      "testing": {
+        "x": 460,
+        "y": 404
       },
       "scanning": {
-        "x": 1741.4326171875,
-        "y": -281.10533714294434
-      },
-      "hunting_scanning_bridge": {
-        "x": 1537.1741943359375,
-        "y": -73.41739177703857
-      },
-      "examining_cuddling_bridge": {
-        "x": 1076.1527099609375,
-        "y": 434.3812942504883
-      },
-      "purring_hunting_bridge": {
-        "x": 1346.464111328125,
-        "y": -108.67167091369629
-      },
-      "roaring_growling_bridge": {
-        "x": 2618.894287109375,
-        "y": -84.59538078308105
-      },
-      "testing_cuddling_bridge": {
-        "x": 652.7313842773438,
-        "y": 302.4030303955078
-      },
-      "growling_clawing_bridge": {
-        "x": 2395.87890625,
-        "y": 325.9514570236206
-      },
-      "scanning_leaping_bridge": {
-        "x": 2021.4212646484375,
-        "y": -91.26306819915771
-      },
-      "scanning_roaring_bridge": {
-        "x": 2257.5201416015625,
-        "y": -132.29694080352783
-      },
-      "roaring_scanning_bridge": {
-        "x": 2204.9969482421875,
-        "y": -264.2243375778198
-      },
-      "grabbing_hunting_bridge": {
-        "x": 2107.039306640625,
-        "y": 221.8426971435547
-      },
-      "stretching_hunting_bridge2": {
-        "x": 1098.7913818359375,
-        "y": 159.7326202392578
-      },
-      "cuddling_hunting_bridge2": {
-        "x": 1072.2812194824219,
-        "y": -69.73645782470703
-      },
-      "cuddling_scanning_bridge": {
-        "x": 1144.9657897949219,
-        "y": -173.430645942688
+        "x": 460,
+        "y": 394
       }
     },
     "view": {
-      "x": 528.362589162185,
-      "y": -160.44558356686684,
-      "w": 2765.2173913043466,
-      "h": 497.7228645656415
+      "x": 0,
+      "y": 0,
+      "w": 660,
+      "h": 606
     },
-    "key": "clawing,cuddling,cuddling_hunting_bridge2,cuddling_purring_bridge,cuddling_scanning_bridge,cuddling_stretching_bridge,examining,examining_cuddling_bridge,examining_performing_bridge,grabbing,grabbing_hunting_bridge,growling,growling_clawing_bridge,hunting,hunting_examining_bridge,hunting_scanning_bridge,leaping,performing,performing_roaring_bridge,purring,purring_hunting_bridge,resting,resting_sleeping_bridge,resting_testing_bridge,roaring,roaring_grabbing_bridge,roaring_growling_bridge,roaring_scanning_bridge,scanning,scanning_leaping_bridge,scanning_roaring_bridge,sleeping,sleeping_stretching_bridge,stretching,stretching_hunting_bridge,stretching_hunting_bridge2,testing,testing_cuddling_bridge"
+    "key": "cuddling,purring,scanning,sleeping,stretching,testing"
   }
 }
