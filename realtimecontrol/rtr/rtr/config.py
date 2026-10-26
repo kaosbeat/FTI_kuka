@@ -24,6 +24,10 @@ class Config:
     # modest rate is enough and keeps the loop responsive to commands.
     tick_hz: float = 20.0
 
+    # Verbose per-tick engine debug logging (tick start, block-move). Off by
+    # default: at 20 Hz a per-tick line floods the log. Enable via --verbose.
+    verbose: bool = False
+
     # --- MIDI ------------------------------------------------------------
     # Index of the MIDI input port used for control. Sound uses its own out port.
     midi_in_port: Optional[int] = 0

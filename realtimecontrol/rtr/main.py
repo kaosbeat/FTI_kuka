@@ -71,6 +71,8 @@ def parse_args(argv):
     parser.add_argument("--ip", default="192.168.10.201", help="robot IP")
     parser.add_argument("--port", type=int, default=18735, help="robot EKI port")
     parser.add_argument("--tick", type=float, default=20.0, help="engine tick rate (Hz)")
+    parser.add_argument("--verbose", action="store_true",
+                        help="print per-tick engine debug (tick start, block-move)")
     parser.add_argument("--ws-port", type=int, default=8765, help="WebSocket port")
     parser.add_argument("--http-port", type=int, default=8766, help="HTTP server port")
     parser.add_argument("--no-http", action="store_true", help="disable the HTTP server")
@@ -100,6 +102,7 @@ def build_config(args) -> Config:
     cfg.robot_ip = args.ip
     cfg.robot_port = args.port
     cfg.tick_hz = args.tick
+    cfg.verbose = args.verbose
     cfg.ws_port = args.ws_port
     cfg.http_port = args.http_port
     cfg.enable_http = not args.no_http
@@ -240,6 +243,7 @@ async def run(cfg: Config) -> None:
     snapshot_grabber = SnapshotGrabber(url=cfg.snapshot_url,
                                         path=_resolve(cfg.snapshot_path))
     engine = Engine(bus, robot, brain, machine, tick_hz=cfg.tick_hz,
+                    verbose=cfg.verbose,
                     zone_loader=lambda: load_state_data(cfg.zones_path),
                     sound_reload=sound.reload,
                     patch_reload=patches.reload,

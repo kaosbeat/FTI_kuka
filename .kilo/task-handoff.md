@@ -1,5 +1,279 @@
 # Task Handoff Log
 
+## 2026-10-26 — Fixed `delZone`/`renameZone` to clean zone-level `exits` (and added an `exits` check to the client validator)
+
+### Status
+
+Completed. The editor's `delZone` now strips the removed zone name from every other zone's `exits` list (mirroring its existing `next` cleanup), `renameZone` re-points `exits` entries naming the renamed zone, and the client-side `validate()` now rejects a dangling `exits` target before it is POSTed. Syntax-checked and logic-tested.
+
+### Summary
+
+Deleting or renaming a zone in the editor left stale zone-level `exits` references behind. `delZone` already cleaned action-level `next` targets pointing at the removed zone, but it never touched the zone-level `exits` field (a list of `[zone, action]` pairs). The server validator (`rtr/state/zones.py` `_validate_zone`, lines 561–566) requires every `exits[i][0]` to be a live zone name, so a stale exit made the save fail with a 400 (`zone '…': exits must be a list of [zone, action] pairs`), leaving `zones.json` untouched and the client showing stale zones. `renameZone` had the same gap (it re-pointed `next` but not `exits`), and the client's `validate()` never checked `exits` at all, so the dangling reference sailed past the client and only surfaced as a server 400.
+
+This task closes all three gaps:
+1. **`delZone`** strips any `exits` pair naming the removed zone from every surviving zone.
+2. **`renameZone`** re-points any `exits` pair naming the renamed zone to the new name (only the zone half of the `[zone, action]` pair changes).
+3. **`validate()`** now checks `exits` (must be a list of `[zone, action]` pairs whose zone exists), mirroring the server validator, so a dangling exit is surfaced client-side before the POST.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - `delZone()` (was line 7095): the post-delete cleanup loop now also strips `exits` pairs naming the removed zone. Changed the early `if (!oz.actions) return;` to an `if (oz.actions) { … }` block so the `exits` cleanup runs even for a zone without actions; added `if (Array.isArray(oz.exits) && oz.exits.length) oz.exits = oz.exits.filter((e) => !(Array.isArray(e) && e[0] === nm));`.
+  - `renameZone()` (was line 7161): step 2 (the `next` re-point loop) now also re-points `exits` pairs naming the renamed zone. Same `if (oz.actions) { … }` restructure; added `if (Array.isArray(oz.exits) && oz.exits.length) oz.exits = oz.exits.map((e) => (Array.isArray(e) && e[0] === nm) ? [clean, e[1]] : e);`.
+  - `validate()` (was line 6092): added an `exits` reference check after the `speed` check — if `z.exits` is present it must be an array of 2-element `[zone, action]` pairs where `e[0]` is a string naming an existing zone and `e[1]` is a string; otherwise it pushes an error.
+
+### Documentation
+
+- None required beyond this handoff. The change mirrors the already-documented server-side `exits` contract (`zones.py` `_validate_zone`); no user-facing config or behaviour contract changed.
+
+### Architecture
+
+- No architectural impact. The zone graph (actions' `next` + zone-level `exits`) is unchanged; this only keeps the editor's in-memory `TABLE.zones` consistent with that contract on delete/rename, and makes the client validator enforce the same `exits` rule the server already enforces. `exits` remains an optional zone field; zones without one are unaffected.
+
+### Validation
+
+- Inline-JS syntax check: extracted the inline `<script>` (editor.html lines 740–7536) and parsed with Node `vm.Script` → **SYNTAX OK** (6795 lines, no errors).
+- Logic test (standalone Node harness replicating the exact cleanup expressions): a `sleeping` zone with `exits [["testing","hold"],["purring","purr"]]` → after `delZone("purring")` the `purring` exit is stripped and `testing` survives; after `renameZone("testing"→"testzone2")` the exit re-points to `["testzone2","hold"]` (action name preserved). **ALL ASSERTIONS PASSED.**
+- Confirmed `delZone`/`renameZone` are the only zone delete/rename entry points (grep: `delete TABLE.zones` appears only in those two functions).
+
+### Decisions and Caveats
+
+- **`validate()` `exits` check is defense-in-depth** (the two requested fixes are the `delZone`/`renameZone` cleanups). It mirrors the server validator so a dangling exit from *any* source is caught client-side instead of as a 400. It is conservative: a valid `exits` list passes; only a malformed or dangling one is flagged. If the reviewer prefers the validator untouched, that block is self-contained and trivially removable.
+- The `if (oz.actions)` restructure (vs the old `if (!oz.actions) return;`) is behaviour-preserving for the `next` cleanup and merely lets the `exits` cleanup run unconditionally per zone.
+- No on-disk `zones.json` was modified — this is a client-side editor fix. The current on-disk file is already valid; the fix prevents the in-memory `TABLE` from going dangling after an in-session delete/rename.
+
+### Next Task
+
+The separate pending item from the prior session: write a fresh `zones.json` containing only the `sleeping` and `testing` zones with all `exits`/`next` cross-references removed, then verify it passes `validate_state_data`. (Not part of this editor fix; flagged so it is not lost.)
+
+### Instructions for the Next Task
+
+1. The editor fix is live in `realtimecontrol/rtr/editor.html` (no build step; reload the editor page to pick it up).
+2. To verify: open the editor, delete a zone that other zones reference in `exits`, and save — the save should now succeed (no 400) and the flow/detail views re-render cleanly. Renaming a zone re-points `exits` the same way.
+3. If the `zones.json` rewrite is still wanted: build a file with only `sleeping` + `testing`, drop every `exits` and `next` field, and validate against `rtr/state/zones.py` `validate_state_data` before writing.
+
+## 2026-10-26 — Gated the per-tick engine debug prints behind a `--verbose` flag
+
+### Status
+
+Completed. The per-tick debug lines are silent by default and reappear under `--verbose`. Verified with a sim smoke test (0 tick lines default, 147 with `--verbose`).
+
+### Summary
+
+The operator reported the `TypeError` is gone, but the core now spits a lot of debugging **every tick**. The only unconditional per-tick prints were in `engine.py`: the `tick#N start` line (fired every tick) and the `BLOCK-move start/done` pair (fired every tick during a blocking move). These are now gated behind a `verbose` flag, threaded through the central `Config` object and a new `--verbose` CLI flag. All other engine prints (reload, exception watchdog, collision, safety-discard, zone-reload) are event-based and remain ungated.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/core/engine.py`:
+  - `Engine.__init__`: added `verbose: bool = False` parameter; stored as `self.verbose`.
+  - `run()`: the `tick#N start` print is now wrapped in `if self.verbose:`.
+  - `_tick()`: the two `BLOCK-move start/done` prints are now wrapped in `if self.verbose:`.
+- `realtimecontrol/rtr/rtr/config.py`: added `verbose: bool = False` field to `Config` (documented in the engine section).
+- `realtimecontrol/rtr/main.py`:
+  - `parse_args`: added `--verbose` (`action="store_true"`).
+  - `build_config`: sets `cfg.verbose = args.verbose`.
+  - `run`: passes `verbose=cfg.verbose` into the `Engine(...)` constructor.
+
+### Documentation
+
+- `main.py --help` now lists `--verbose  print per-tick engine debug (tick start, block-move)`. No dedicated doc update needed beyond that; the flag is self-documenting.
+
+### Architecture
+
+- No architectural change. Reuses the existing central-config pattern: `Config` is the single place the core reads runtime settings, and adapters receive it. The `verbose` flag flows `CLI → Config → Engine`, matching how `tick_hz` and every other engine setting is wired. The per-tick data flow is untouched.
+
+### Validation
+
+- `python3 -m py_compile rtr/core/engine.py rtr/config.py main.py` → OK.
+- `python3 main.py --help` → `--verbose` present in usage and options.
+- `inspect.signature(Engine.__init__)` → `verbose` present with default `False` (so `sim_demo.py`'s `Engine(bus, robot, brain, machine, tick_hz=30.0)` still works).
+- Sim smoke test (`python3 -u main.py --sim --no-http --no-midi --no-sound`, `timeout 3`): **0** `tick#` lines without `--verbose`, **147** with `--verbose` (tick start + BLOCK-move start/done per tick). Confirms the gate.
+
+### Decisions and Caveats
+
+- Chose a **CLI flag through `Config`** over an env var, because `main.py` is the real entry point (launched as `python main.py --robot/--sim`) and the codebase already funnels all runtime settings through `Config`. Toggling verbose requires a relaunch with `--verbose` — acceptable for a debug flag. (An env-var fallback, e.g. `RTR_VERBOSE=1`, is easy to add later if a service launcher needs it.)
+- The `BLOCK-move` prints are gated too (not just `tick#N start`), since they fire every tick while a blocking move is active and are the bulk of the per-tick noise.
+- The **exception watchdog** prints (`EXCEPTION (first, full trace)` / `EXCEPTION`) are intentionally left ungated: they are real error diagnostics, not debug chatter, and are already self-limiting (full trace once per distinct signature, one-liner on repeats).
+- The unused `from_args` helper in `rtr/config.py` was intentionally left unchanged (dead code; `main.py` uses `build_config`).
+
+### Next Task
+
+No immediate next task identified. If the operator wants verbose on by default, or an env-var trigger (`RTR_VERBOSE`) for service launches, that is the natural follow-up.
+
+### Instructions for the Next Task
+
+- To see the per-tick debug again: relaunch the core with `--verbose` (e.g. `python main.py --robot --verbose`).
+- The gate lives in `engine.py` (`self.verbose`); add further per-tick debug prints there under the same `if self.verbose:` if needed.
+
+## 2026-10-26 — Diagnosed the per-tick `TypeError("'<' not supported between 'str' and 'int'")`; hardened the watchdog + camera-conf path
+
+### Status
+
+In progress (diagnosis narrowed; root line pending a live capture). Instrumentation and a defensive fix are in place and compile clean; the exact raising line will be confirmed by the next live run, which now logs the full traceback on first occurrence.
+
+### Summary
+
+The engine watchdog (added in prior work) now surfaces a **pre-existing** exception that was silently killing the engine task and stranding the robot: `TypeError("'<' not supported between instances of 'str' and 'int'")`, raised **every tick** (hundreds in the log). The operand order (`str` first, `int` second) is the key fingerprint.
+
+This task did two things:
+
+1. **Made the watchdog diagnostic.** Previously it logged only the one-liner `exc!r`, so the exact line could not be pinned. It now logs the **full traceback on the first occurrence** of each distinct exception signature (and the one-liner on repeats), so the next live run identifies the exact file/line.
+2. **Ran a full static trace** of the per-tick path to narrow the source, and **hardened one real latent bug** found along the way (camera candidate `conf` compared while still a string).
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/core/engine.py` (watchdog in `run()`):
+  - Added `import traceback`.
+  - Added `self._seen_exceptions = {}` (exception signature → count).
+  - The watchdog now computes `sig = f"{type(exc).__name__}: {exc}"`; on first sight of a signature it prints `traceback.format_exc()` (full stack), otherwise the one-liner. Still publishes `Event.SAFETY_ALERT` and `continue`s the loop (engine stays alive).
+- `realtimecontrol/rtr/rtr/brain/brain.py` (`_handle_cam_candidates`):
+  - `conf = c.get("conf", 0)` is now coerced to `float` inside a `try/except (TypeError, ValueError)` with a `0.0` fallback, before `if conf < min_conf:`. A non-numeric `conf` falls back to `0.0` (below threshold → candidate skipped). This is **defensive hardening**, not a confirmed root-cause fix (see Decisions).
+
+### Documentation
+
+- None required beyond this handoff. The change is a diagnostic + defensive hardening; no user-facing behaviour or config contract changed.
+
+### Architecture
+
+- No architectural change. The watchdog remains a per-tick `try/except` in `Engine.run()`; it only changes *what* it logs (full traceback once per distinct exception). The per-tick data flow (`engine._tick` → `brain.tick` + `machine.step`) is untouched.
+
+### What the static trace established
+
+- **Per-tick path** (`engine._tick`): the only unconditional per-tick calls are `brain.tick(curjpos)` (line ~184) and `machine.step(curjpos)` (line ~189); `curjpos`/`curpos` are floats (`kuka.py get_curjpos/get_curpos` → `float(...)`).
+- **`machine.step` clamp path is SAFE:** `build_target` resolves `"x"` frozen axes via `resolve_x` (behavior.py) before `clamp` → `fitlimits`; `action_axis_bands` coerces band values to `float` (zones.py); a scan of `zones.json` confirmed the **only** string values are `"x"` pose axes (safezones are all-numeric, axis_bands coerced, variable_axes all-int).
+- **The `conf` path is SAFE from the real pipeline:** `camera/pipeline.py` coerces `conf` to `float(confs[i])`, so the real camera never sends a string conf. (The defensive coercion in `brain.py` still stands as hardening.)
+- **Operand-order elimination:** `checklimits` (`lo <= angle <= hi`) would raise `int < str` (reversed) — does NOT match. The only str-first `<` sites are `fitlimits` (helpers.py `angle < lo`), `hardware_clamp` (behavior.py), and `gate._pose_outside_safezone` (`pose[i] < lo`) — all reached only via **resolved** poses or **transient** transition/safety-gated paths, not the steady per-tick clamp.
+- **`conf < min_conf` (brain.py) is NOT the live source:** the log line `round(c.get('conf',0), 2)` runs *before* the `conf < min_conf` comparison; if `conf` were a string that `round()` would raise first (a different error). Since the observed error is specifically `<`, `conf` is already numeric at runtime.
+
+### Validation
+
+- `python3 -m py_compile rtr/brain/brain.py rtr/core/engine.py` → OK (both edited files compile).
+- No runtime repro: no live core / EKI connection available in this environment. The full-traceback instrumentation is the confirmation mechanism for the exact line.
+
+### Decisions and Caveats
+
+- **The conf fix is defensive, not a confirmed root cause.** It hardens a real latent bug (a string `conf` would break both the `round()` log line and the `<` comparison) but the live error is not from `conf`. It is safe to keep (no-op when `conf` is already numeric) and does not change valid-data behaviour.
+- **The exact raising line is NOT yet confirmed.** The strongest remaining hypothesis, by elimination, is a pose axis that is a string (`"x"`) reaching `fitlimits`/`hardware_clamp`/`gate` **without** being resolved by `resolve_x` — most plausibly via a **stuck transition** (`machine.step` transition branch → `hardware_clamp(t)` where the transition target carries an `"x"` axis, so the transition never completes and the error repeats every tick) or a **stuck safety-gated move** (`_resolve_pending` → `check_conflict` → `_pose_outside_safezone`). This is a hypothesis, not a confirmed line.
+- **Do not harden `fitlimits`/`checklimits` preemptively** on the strength of this trace — the resolved clamp path is clean, and the safezone/pose data is clean; the string is not entering from those fields.
+
+### Next Task
+
+Capture the full traceback from the next live run to pin the exact line, then fix at the root (resolve the offending pose before it reaches the `<` comparison, or coerce at the specific comparison site the traceback names).
+
+### Instructions for the Next Task
+
+1. Operator: restart the core to load the current `engine.py` (instrumented watchdog) + `brain.py`, and let the exception fire once. The log will show `[engine] tick#N EXCEPTION (first, full trace):` followed by the full stack — **that stack names the exact file:line**.
+2. Feed that `file:line` back; apply the root fix there (resolve the `"x"` axis before the comparison, or coerce the specific value). Then re-run to confirm the per-tick exception is gone.
+3. If the traceback points to the **transition** path (`machine.step` → `hardware_clamp`), the fix is to resolve `"x"` in the transition target before `hardware_clamp` (mirror `resolve_x` in `build_target`). If it points to the **safety gate** (`_pose_outside_safezone`), resolve the entry pose before the safezone check.
+4. Keep the conf coercion (brain.py) and the full-traceback watchdog (engine.py) — both are safe improvements independent of the root cause.
+
+## 2026-10-25 — Added a master MIDI on/off toggle (editor) that gates BOTH MIDI-in and MIDI-out/sound in the core
+
+### Status
+
+Completed. Implemented and tested (headless). The new master button lives in `editor.html`'s MIDI tab; the core now honours a runtime `enabled` soft switch on the sound (MIDI-out) side, mirroring the existing MIDI-in one.
+
+### Summary
+
+The user wanted a single **master "MIDI on/off"** button in the editor that, when off, makes the core completely ignore all incoming MIDI messages AND send no outgoing MIDI (sound) messages.
+
+The MIDI-**in** side already had a runtime soft switch: `midi.json` `enabled`, honoured by `MidiInput._effective_enabled()` (hard constructor switch AND data `enabled`), with the editor's per-zone `enabled` checkbox bound to it. The MIDI-**out/sound** side had **no** runtime soft switch — `Sound.enabled` was constructor-only (`cfg.enable_sound`) and `sound.json` had no `enabled` field.
+
+So the work was: (1) give the sound adapter the same soft-switch pattern as MIDI-in, and (2) add one editor button that drives **both** sides and saves both tables so the core hot-reloads each.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/sound/sound.py`:
+  - `builtin_sound_data()` now ships `"enabled": True`.
+  - `validate_sound_data()` validates a top-level `enabled` (must be a bool; defaults to `True` when absent).
+  - New `Sound._effective_enabled()` = constructor `self.enabled` AND the data `enabled` (mirrors `midi.py`).
+  - `on_event()` now early-returns on `not self._effective_enabled()` (was `not self.enabled`), so no zone/action/pose MIDI is sent while off.
+  - `reload()` closes **all** open out ports when `_effective_enabled()` is false (was always `_reconcile_outs()`), so no MIDI can leak out of a stale port; the reload log now reports `enabled=`.
+- `realtimecontrol/rtr/sound.json`: added `"enabled": true` at the top level.
+- `realtimecontrol/rtr/editor.html`:
+  - `#midiToggleRow` now holds a master checkbox `#midiMasterCb` (label "midi master on/off") beside the out/in sub-tabs.
+  - `SOUND_FALLBACK` gained `enabled: true`; `loadSound()` seeds `SOUND.enabled` (default `true`); `validateSound()` rejects a non-bool `SOUND.enabled`.
+  - New `refreshMidiMaster()` (sets the checkbox to `MIDI.enabled && SOUND.enabled`) and `onMidiMasterToggle()` (sets **both** `MIDI.enabled` and `SOUND.enabled`, then `saveMidiAll()` which POSTs `/api/sound` + `/api/midi` so the core hot-reloads both).
+  - Wired: `$("midiMasterCb").onchange = onMidiMasterToggle`; `refreshMidiMaster()` called in the bootstrap load chain (after `loadMidi`), in `switchView` when the MIDI tab shows, on the per-zone `enabled` checkbox change (keeps the master in sync when `MIDI.enabled` is toggled there), and after a config restore.
+
+### Documentation
+
+- None required beyond this handoff — the change follows the existing, already-documented MIDI-in soft-switch pattern; no new architecture doc is warranted.
+
+### Architecture
+
+- No new modules or data-flow changes. The sound adapter now exposes the same two-switch gate (`hard` = `cfg.enable_sound`, `soft` = `sound.json` `enabled`) as the MIDI-in adapter. The editor's master button is a convenience that writes both `enabled` fields; the two tables remain independently editable (the per-zone MIDI-in `enabled` checkbox still works and stays in sync via `refreshMidiMaster`).
+
+### Validation
+
+- `python tests/test_sound_enabled.py` → ALL TESTS PASSED (9 tests: validate accepts/defaults/rejects `enabled`; `builtin_sound_data` includes it; `_effective_enabled` truth table (hard×soft); soft-off sends nothing; soft-off reload closes all out ports; re-enabling resumes sending).
+- `python tests/test_sound_out_ports.py` → ALL TESTS PASSED (no regression to the out-port routing).
+- `python tests/test_midi_in.py` → ALL TESTS PASSED (1 skipped) (no regression to MIDI-in).
+- Full `pytest tests/ --ignore=tests/test_remote_tui.py` → 294 passed, 7 failed. The 7 failures (`test_transition`, `test_bridge_behavior`, `test_remote_sdl`×5) are **pre-existing** — confirmed by stashing my changes and re-running (same 7 fail without them). `test_remote_tui.py` fails at collection on a pre-existing `action_kind` import error, also unrelated.
+
+### Decisions and Caveats
+
+- **Master semantics:** the button reads "on" only when **both** `MIDI.enabled` and `SOUND.enabled` are true; if either is off it shows off. Toggling it sets both to the new value and saves both. This means the master can re-enable a side that was individually turned off (expected master-switch behaviour).
+- **Save path:** the master toggle reuses `saveMidiAll()`, which validates the **whole** SOUND and MIDI tables before POSTing. If an unrelated field elsewhere is invalid, the toggle won't persist (consistent with the editor's normal save button behaviour).
+- **No hardware test:** verified headless with a fake rtmidi (per project convention); no real MIDI device was exercised.
+
+### Next Task
+
+No immediate next task identified. (Optional follow-ups: add a matching master-state indicator light to `client.html`, or let the per-zone MIDI-in `enabled` checkbox and the master button share a single source of truth more explicitly.)
+
+### Instructions for the Next Task
+
+1. To verify on hardware: start the core, open the editor → MIDI tab, toggle the master checkbox off, confirm the core logs `[sound] mapping reloaded: enabled=False` and `[midi] ... enabled=False`, and that no MIDI is sent / no controller keys are honoured. Toggle on to restore.
+2. The core picks up the change via the existing hot-reload path (`POST /api/sound` → `Cmd.RELOAD_SOUND` → `engine._sound_reload()`; `POST /api/midi` → `Cmd.RELOAD_MIDI` → `engine._midi_reload()`); no restart is required.
+
+## 2026-10-25 — Reverted `KUKAPY_SERVER.SRC` to the original `WAIT FOR $FLAG[1]` (polling-loop "flaghack" rejected by the KUKA compiler)
+
+### Status
+
+Completed. Working tree restored byte-identical to the pre-flaghack original (git commit `961b915 kukapy`). The flaghack version is preserved as `KUKAPY_SERVER_flaghack.SRC` (user-renamed, untracked).
+
+### Summary
+
+The KUKA compiler rejected the polling-loop version with: `line 67 col 15 expected SEC, FOR or CLOCK`. That line is `WAIT 0.1` — bare `WAIT <value>` is invalid KRL; the grammar is `WAIT <value> SEC` | `WAIT FOR <condition>` | `WAIT CLOCK`. The user renamed the edited file to `KUKAPY_SERVER_flaghack.SRC` to keep it as a draft and asked for `KUKAPY_SERVER.SRC` to be reverted to the original. The original (with `WAIT FOR $FLAG[1]` at line 57) was restored from git commit `961b915` via `git restore --source=961b915`. The `KukaPyNEW` sync copy was re-synced to the original as well.
+
+**The Python-side stall recovery remains in place and is compatible with the original KRL:** `robot.py`'s `_recover()` sends a ping that sets `$FLAG[1]`, which wakes the KRL parked at `WAIT FOR $FLAG[1]`; the engine watchdog (`engine.py`) still catches tick exceptions and publishes `Event.SAFETY_ALERT`. So the anti-strand protection does not depend on the KRL polling loop.
+
+### Changes Made
+
+- `realtimecontrol/rtr/KukaPy/kukadriver/KUKAPY_SERVER.SRC`: restored to original content — `WAIT FOR $FLAG[1]` (line 57), no `wait_ticks`/`wait_timeout` declarations, no polling loop.
+- `realtimecontrol/kukapyEKI/KukaPyNEW/kukadriver/KUKAPY_SERVER.SRC`: re-synced to the identical original content.
+- `realtimecontrol/rtr/KukaPy/kukadriver/KUKAPY_SERVER_flaghack.SRC`: untouched (user's preserved copy of the rejected polling-loop version; still contains the invalid `WAIT 0.1` line).
+
+### Documentation
+
+- None required — this reverts a previously documented change; the prior handoff entry below still documents the flaghack design and the Python-side recovery, which remain accurate.
+
+### Architecture
+
+- No architectural impact. The KRL protocol, `<Rob>`/`<Res>` framing, and flag handshake are unchanged from the original design.
+
+### Validation
+
+- `git diff 961b915 -- realtimecontrol/rtr/KukaPy/kukadriver/KUKAPY_SERVER.SRC` → empty (working tree byte-identical to the original commit).
+- `grep -n "WAIT\|WHILE\|wait_ticks"` on the restored file → only `57: WAIT FOR $FLAG[1]` (no polling loop remnants).
+- `diff` between `rtr/KukaPy` and `KukaPyNEW` copies → identical.
+
+### Decisions and Caveats
+
+- **The flaghack file still has the KRL syntax error.** If it is ever wanted back, line 67 must be changed from `WAIT 0.1` to `WAIT 0.1 SEC` before it will compile. It was intentionally left unmodified (user's draft).
+- **Controller state:** the operator should confirm the controller is running the original program (re-download `KUKAPY_SERVER.SRC` if the flaghack version was ever downloaded). The core machine does not need a restart — the Python-side recovery (`robot.py` `_recover`, `engine.py` watchdog) is unchanged and works with the original KRL.
+- **The polling-loop idea is not the current line of defense.** The Python-side recovery ping + engine watchdog remain the stall protection while the KRL stays at the original blocking `WAIT FOR $FLAG[1]`.
+
+### Next Task
+
+Confirm on the controller that the original `KUKAPY_SERVER.SRC` is running, then continue root-cause diagnosis of the original stall (capture a `KUKAPY_DEBUG=1` log during a `hunting/track2` run) to determine whether the Python engine blocks in `_recv_xml`, a blocking move, or raises an uncaught exception.
+
+### Instructions for the Next Task
+
+1. **On the KUKA controller:** verify the running program is the original (program counter parks at `WAIT FOR $FLAG[1]` between commands — normal). If the flaghack version was downloaded, re-download the original `KUKAPY_SERVER.SRC`.
+2. **On the core machine:** restart the core (to pick up `robot.py`/`engine.py` changes, which remain in place), enable `KUKAPY_DEBUG=1`, and re-run `hunting/track2`.
+3. **Capture the log** during/after a stall: look for `[kukapy] STALL detected; attempting recovery ping` (recovery path taken) or `[engine] tick#N EXCEPTION:` (watchdog caught an exception). That identifies the exact blocking point.
+
 ## 2026-10-25 — Replaced the KRL's indefinite `WAIT FOR $FLAG[1]` with a timed polling loop + added Python-side stall recovery (recovery ping on staleness guard fire)
 
 ### Status

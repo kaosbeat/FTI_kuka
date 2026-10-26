@@ -17,6 +17,7 @@ state machine advances one step per tick.
 """
 
 import asyncio
+import traceback
 from typing import Callable, Optional
 
 from ..brain.brain import Brain
@@ -38,6 +39,7 @@ class Engine:
 
     def __init__(self, bus: StateBus, robot: RobotBase, brain: Brain,
                  machine: StateMachine, tick_hz: float = 20.0,
+                 verbose: bool = False,
                  zone_loader: Callable[[], dict] = None,
                  sound_reload: Callable[[], None] = None,
                  patch_reload: Callable[[], None] = None,
@@ -52,6 +54,9 @@ class Engine:
         self.brain = brain
         self.machine = machine
         self.tick_hz = tick_hz
+        # Verbose per-tick engine debug logging (tick start, block-move). Off by
+        # default: at 20 Hz a per-tick line floods the log. Enable via --verbose.
+        self.verbose = verbose
         self._zone_loader = zone_loader
         self._sound_reload = sound_reload
         self._patch_reload = patch_reload
@@ -70,6 +75,10 @@ class Engine:
         self._running = False
         # The previous tick's (zone, mode, action), used to emit change events.
         self._prev_state = None
+        # Exception-signature -> count, so a repeating tick exception logs its full
+        # traceback once (the first time) and the one-liner afterwards (hundreds of
+        # identical tracebacks would otherwise flood the log).
+        self._seen_exceptions = {}
 
     async def run(self) -> None:
         """Run until :meth:`stop` is called."""
@@ -86,7 +95,8 @@ class Engine:
             tick_no += 1
             loop_start = asyncio.get_event_loop().time()
 
-            print(f"[engine] tick#{tick_no} start (move_mode={self.machine.move_mode} action={self.machine.current_action})")
+            if self.verbose:
+                print(f"[engine] tick#{tick_no} start (move_mode={self.machine.move_mode} action={self.machine.current_action})")
             try:
                 await self._tick(tick_no)
             except Exception as exc:
@@ -94,7 +104,16 @@ class Engine:
                 # dead EKI connection) would otherwise kill the engine task
                 # silently, stranding the KRL at WAIT FOR $FLAG[1] forever.
                 # Log it and continue the loop so the engine stays alive.
-                print(f"[engine] tick#{tick_no} EXCEPTION: {exc!r}")
+                sig = f"{type(exc).__name__}: {exc}"
+                if sig not in self._seen_exceptions:
+                    # First time this exact exception: log the full traceback so the
+                    # exact line is diagnosable. Repeats log only the one-liner.
+                    self._seen_exceptions[sig] = 1
+                    print(f"[engine] tick#{tick_no} EXCEPTION (first, full trace):\n"
+                          f"{traceback.format_exc()}")
+                else:
+                    self._seen_exceptions[sig] += 1
+                    print(f"[engine] tick#{tick_no} EXCEPTION: {exc!r}")
                 self.bus.publish(Event.SAFETY_ALERT, {
                     "type": "engine_exception",
                     "error": str(exc),
@@ -187,9 +206,11 @@ class Engine:
             else:
                 # Block: wait for this move to arrive before the next tick
                 # (the legacy kukapy behaviour).
-                print(f"[engine] tick#{tick_no} BLOCK-move start target={target}")
+                if self.verbose:
+                    print(f"[engine] tick#{tick_no} BLOCK-move start target={target}")
                 await asyncio.to_thread(move, target, self.machine.speed)
-                print(f"[engine] tick#{tick_no} BLOCK-move done")
+                if self.verbose:
+                    print(f"[engine] tick#{tick_no} BLOCK-move done")
 
         self._publish(curjpos, curpos, target)
         self._publish_changes()
