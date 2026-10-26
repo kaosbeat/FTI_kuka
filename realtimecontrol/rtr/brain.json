@@ -17,6 +17,7 @@
         "task1_task2_bridge",
         "task2_task3_bridge"
       ],
+      "behaviors": [],
       "enabled": true,
       "params": {
         "dwell_s": 35
@@ -38,9 +39,11 @@
         "gentle"
       ],
       "detect": {
+        "zone": "hunting",
         "action": "track"
       },
       "scan": {
+        "zone": "hunting",
         "action": "scan"
       }
     }

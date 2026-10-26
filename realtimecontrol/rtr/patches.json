@@ -7,7 +7,15 @@
     "stretching": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3).scale(40)\n.out(o0)\n",
     "testing": "osc(4, 0.1, 1.2).out(o0)",
     "testing_sleeping_bridge": "osc(4, 0.1, 1.2).out(o0)",
-    "scanning": "osc(4, 0.1, 1.2).out()"
+    "scanning": "osc(4, 0.1, 1.2).out()",
+    "resting": "osc(4, 0.1, 1.2).out()",
+    "sleeping_testing_bridge": "osc(4, 0.1, 1.2).out()",
+    "sleeping_scanning_bridge": "osc(4, 0.1, 1.2).out()",
+    "task1": "osc(4, 0.1, 1.2).out()",
+    "task2": "osc(4, 0.1, 1.2).out()",
+    "task3": "osc(4, 0.1, 1.2).out()",
+    "task1_task2_bridge": "osc(4, 0.1, 1.2).out()",
+    "task2_task3_bridge": "osc(4, 0.1, 1.2).out()"
   },
   "modes": {
     "calm": "osc(1, 0.08, 1.2)\n.posterize(4)\n.diff(src(o0).rotate(1.5))\n.out(o3)",
@@ -59,6 +67,32 @@
     },
     "scanning": {
       "scnr": "osc(4, 0.1, 1.2).out()"
+    },
+    "resting": {
+      "hold": "osc(4, 0.1, 1.2).out()"
+    },
+    "sleeping_testing_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
+    },
+    "sleeping_scanning_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
+    },
+    "task1": {
+      "scan": "osc(4, 0.1, 1.2).out()"
+    },
+    "task2": {
+      "locked": "osc(4, 0.1, 1.2).out()"
+    },
+    "task3": {
+      "approach": "osc(4, 0.1, 1.2).out()",
+      "facefocus": "osc(4, 0.1, 1.2).out()",
+      "retreat": "osc(4, 0.1, 1.2).out()"
+    },
+    "task1_task2_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
+    },
+    "task2_task3_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
     }
   }
 }

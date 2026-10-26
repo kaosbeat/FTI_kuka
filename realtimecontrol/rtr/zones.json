@@ -71,12 +71,10 @@
           "behavior": "restless",
           "speed": 20,
           "loop": true,
-          "next": [
-            {
-              "zone": "sleeping",
-              "action": "breathe"
-            }
-          ],
+          "next": {
+            "zone": "sleeping",
+            "action": "breathe"
+          },
           "pose_imgs": [
             "pose_1792397354907_2e4d7151.png",
             "pose_1792351922635_a6b53eac.png",
@@ -316,7 +314,7 @@
         ],
         [
           0,
-          42
+          32
         ],
         [
           -15,
@@ -339,7 +337,7 @@
             [
               45,
               -30,
-              42,
+              32,
               0,
               -5,
               0
@@ -349,11 +347,12 @@
             0,
             1,
             3,
-            4
+            4,
+            5
           ],
           "behavior": "locked",
           "sweep": true,
-          "speed": 100,
+          "speed": 45,
           "loop": true,
           "next": [
             {
@@ -382,7 +381,29 @@
           ],
           "pose_videos": [
             "MiniMax_H3_00064_..mp4"
-          ]
+          ],
+          "axis_bands": {
+            "0": [
+              -185,
+              185
+            ],
+            "1": [
+              -30,
+              -10
+            ],
+            "3": [
+              -15,
+              15
+            ],
+            "4": [
+              -20,
+              10
+            ],
+            "5": [
+              -15,
+              15
+            ]
+          }
         },
         "intent": {
           "enabled": true,
@@ -662,7 +683,11 @@
           ],
           "pose_videos": [
             "MiniMax_H3_00063_..mp4"
-          ]
+          ],
+          "next": {
+            "zone": "sleeping_scanning_bridge",
+            "action": "bridge"
+          }
         }
       }
     },
@@ -835,12 +860,10 @@
           "speed": 20,
           "loop": true,
           "dwell_s": 35,
-          "next": [
-            {
-              "zone": "task1_task2_bridge",
-              "action": "bridge"
-            }
-          ],
+          "next": {
+            "zone": "task1_task2_bridge",
+            "action": "bridge"
+          },
           "pose_imgs": [
             null
           ],
@@ -923,12 +946,10 @@
           "behavior": "locked",
           "speed": 40,
           "loop": true,
-          "next": [
-            {
-              "zone": "task2_task3_bridge",
-              "action": "bridge"
-            }
-          ],
+          "next": {
+            "zone": "task2_task3_bridge",
+            "action": "bridge"
+          },
           "pose_imgs": [
             null
           ],
@@ -1011,12 +1032,10 @@
           "behavior": "aggressive",
           "speed": 100,
           "loop": true,
-          "next": [
-            {
-              "zone": "task3",
-              "action": "facefocus"
-            }
-          ],
+          "next": {
+            "zone": "task3",
+            "action": "facefocus"
+          },
           "pose_imgs": [
             null
           ],
@@ -1065,12 +1084,10 @@
           "behavior": "gentle",
           "speed": 20,
           "loop": true,
-          "next": [
-            {
-              "zone": "task3",
-              "action": "retreat"
-            }
-          ],
+          "next": {
+            "zone": "task3",
+            "action": "retreat"
+          },
           "pose_imgs": [
             null
           ],
@@ -1259,31 +1276,31 @@
         "y": -134.6554
       },
       "task1": {
-        "x": 1200.0,
-        "y": 300.0
+        "x": 1200,
+        "y": 300
       },
       "task2": {
-        "x": 1400.0,
-        "y": 400.0
+        "x": 1492.3685302734375,
+        "y": 289.1085510253906
       },
       "task3": {
-        "x": 1600.0,
-        "y": 500.0
+        "x": 1600,
+        "y": 500
       },
       "task1_task2_bridge": {
-        "x": 1300.0,
-        "y": 350.0
+        "x": 1223.090576171875,
+        "y": 464.4411926269531
       },
       "task2_task3_bridge": {
-        "x": 1500.0,
-        "y": 450.0
+        "x": 1859.4737548828125,
+        "y": 353.48736572265625
       }
     },
     "view": {
-      "x": 528.362589162185,
-      "y": -160.44558356686684,
-      "w": 2765.2173913043466,
-      "h": 497.7228645656415
+      "x": 592.5662072761061,
+      "y": 350.29814866196085,
+      "w": 1818.175320985844,
+      "h": 327.260862704457
     },
     "key": "resting,scanning,sleeping,sleeping_scanning_bridge,sleeping_testing_bridge,task1,task1_task2_bridge,task2,task2_task3_bridge,task3,testing"
   }
