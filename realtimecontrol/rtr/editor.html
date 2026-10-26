@@ -6105,6 +6105,19 @@ function validate() {
       });
     }
     if (!isNum(z.speed)) errs.push(`${name}: speed must be a number`);
+    // Zone-level exits: optional list of [zone, action] pairs; each zone must exist.
+    // Mirrors the core's zones._validate_zone, which rejects a dangling exit target
+    // with a 400 — surfacing it here keeps the save from failing server-side.
+    if (z.exits !== undefined) {
+      if (!Array.isArray(z.exits)) {
+        errs.push(`${name}: exits must be a list of [zone, action] pairs`);
+      } else {
+        z.exits.forEach((e, i) => {
+          if (!Array.isArray(e) || e.length !== 2 || typeof e[0] !== "string" || typeof e[1] !== "string" || !TABLE.zones[e[0]])
+            errs.push(`${name}: exits[${i}] must be [zone, action] naming an existing zone`);
+        });
+      }
+    }
     if (!z.actions || typeof z.actions !== "object" || Array.isArray(z.actions)) errs.push(`${name}: actions must be an object`);
     for (const an of Object.keys(z.actions || {})) {
       const a = z.actions[an];
@@ -7099,14 +7112,20 @@ function delZone() {
   if (!confirm(`remove zone "${nm}"?`)) return;
   delete TABLE.zones[nm];
   // Clean dangling references: drop any `next` entry pointing at the removed zone
-  // (the zone graph is derived from actions' `next` fields). Other targets survive.
+  // (the zone graph is derived from actions' `next` fields) and any zone-level
+  // `exits` pair naming it. Other targets survive. The server validator requires
+  // every exits[i][0] to be a live zone, so a stale exit would 400 the save.
   Object.keys(TABLE.zones).forEach((other) => {
     const oz = TABLE.zones[other];
-    if (!oz.actions) return;
-    Object.keys(oz.actions).forEach((an) => {
-      const a = oz.actions[an];
-      setNext(a, nextList(a).filter((t) => t.zone !== nm));
-    });
+    if (oz.actions) {
+      Object.keys(oz.actions).forEach((an) => {
+        const a = oz.actions[an];
+        setNext(a, nextList(a).filter((t) => t.zone !== nm));
+      });
+    }
+    if (Array.isArray(oz.exits) && oz.exits.length) {
+      oz.exits = oz.exits.filter((e) => !(Array.isArray(e) && e[0] === nm));
+    }
   });
   // Clean orphaned per-zone references (sound, patches, midi, brain) so the deleted
   // zone never leaves stale entries behind (mirrors renameZone's re-pointing).
@@ -7173,15 +7192,20 @@ function renameZone() {
   const z = TABLE.zones[nm];
   delete TABLE.zones[nm];
   TABLE.zones[clean] = z;
-  // 2. Re-point every action's `next` target that names this zone.
+  // 2. Re-point every action's `next` target and zone-level `exits` entry that
+  // names this zone (an exit is a [zone, action] pair; only the zone half changes).
   Object.values(TABLE.zones).forEach((oz) => {
-    if (!oz.actions) return;
-    Object.values(oz.actions).forEach((a) => {
-      const list = nextList(a);
-      if (list.some((t) => t.zone === nm)) {
-        setNext(a, list.map((t) => t.zone === nm ? Object.assign({}, t, { zone: clean }) : t));
-      }
-    });
+    if (oz.actions) {
+      Object.values(oz.actions).forEach((a) => {
+        const list = nextList(a);
+        if (list.some((t) => t.zone === nm)) {
+          setNext(a, list.map((t) => t.zone === nm ? Object.assign({}, t, { zone: clean }) : t));
+        }
+      });
+    }
+    if (Array.isArray(oz.exits) && oz.exits.length) {
+      oz.exits = oz.exits.map((e) => (Array.isArray(e) && e[0] === nm) ? [clean, e[1]] : e);
+    }
   });
   // 3. Sound mapping (zone-entry + per-zone actions).
   if (SOUND) {

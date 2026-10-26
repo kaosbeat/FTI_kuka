@@ -589,6 +589,14 @@ class Brain:
         best_score = -1
         for c in cands:
             conf = c.get("conf", 0)
+            # A camera candidate may carry ``conf`` as a string (pipeline
+            # serialization); comparing it to the numeric ``min_conf`` would raise
+            # TypeError every tick and kill the engine. Coerce to a number; a
+            # non-numeric value falls back to 0.0 (below threshold, so skipped).
+            try:
+                conf = float(conf)
+            except (TypeError, ValueError):
+                conf = 0.0
             if conf < min_conf:
                 continue  # below the sensitivity threshold: not a valid lock target
             # Centrality: smaller distance from (0.5, 0.5) is better. Normalize the
