@@ -240,7 +240,7 @@ def test_single_run_exit_triggers_transition_and_entry():
 # Control mode (manual / auto).
 # ---------------------------------------------------------------------------
 def test_set_control_mode_validates():
-    m = StateMachine(_zones(), initial_zone="resting", tick_hz=20.0)
+    m = StateMachine(_zones(), initial_zone="sleeping", tick_hz=20.0)
     assert m.control_mode == "auto"  # default
     m.set_control_mode("manual")
     assert m.control_mode == "manual"

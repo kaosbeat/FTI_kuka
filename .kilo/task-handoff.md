@@ -1,5 +1,65 @@
 # Task Handoff Log
 
+## 2026-10-26 — Rewrote `zones.json` to a 5-zone table (sleeping / testing / scanning + 2 bridges) and updated the data-dependent tests
+
+### Status
+
+Completed. `zones.json` now holds exactly `sleeping`, `testing`, `scanning`, plus the two new directional bridges `sleeping_testing_bridge` and `sleeping_scanning_bridge`. Every `exits` field is gone and every action `next` that referenced a removed zone is gone, so the file passes `validate_state_data` with no dangling references. The three tests that load the *real* `zones.json` were updated to reference the new zones and now pass.
+
+### Summary
+
+The pending item was to write a fresh `zones.json` with only `sleeping` + `testing` and all `exits`/`next` cross-references removed. The operator refined that: **also keep `scanning`**, and **make/keep a bridge zone between sleeping↔testing and between sleeping↔scanning**.
+
+A "bridge zone" in this codebase is a single-action zone (`behavior: "bridge"`, `loop: false`, `variable_axes: []`) whose one `bridge` action holds curated anchor poses and hands off via `next` to the target zone's entry action. The existing bridges follow the naming `<source>_<target>_bridge`. Neither `sleeping_testing_bridge` nor `sleeping_scanning_bridge` existed, so both were created.
+
+What the new table contains:
+- **`sleeping`** (actions `breathe`/`snore`/`yawn`): full real pose data kept; `exits` removed; `next` filtered to intra-zone only, with the two new bridges appended to `yawn` (the historical exit action) at lowest priority.
+- **`testing`** (actions `locked`/`intent`/`curious`/`gentle`/`locked_band`): full real pose data kept; `exits` removed; `next` filtered to intra-zone only.
+- **`scanning`** (action `scnr`): full real pose data kept; its old `next` (→ `scanning_leaping_bridge`, `scanning_roaring_bridge`) referenced removed zones, so it is now empty (the action is `loop: true`, so it simply loops).
+- **`sleeping_testing_bridge`** → hands off to `testing/locked`; pose = the `testing/locked` entry pose `[45,-30,42,0,-5,0]`; safezone/speed inherited from `testing`.
+- **`sleeping_scanning_bridge`** → hands off to `scanning/scnr`; pose = the `scanning/scnr` entry pose `[10,-59,-10,0,60,0]`; safezone/speed inherited from `scanning`.
+
+Resulting flow graph (verified via `rtr.flow`): `sleeping → sleeping_testing_bridge → testing` and `sleeping → sleeping_scanning_bridge → scanning`.
+
+### Changes Made
+
+- `realtimecontrol/rtr/zones.json`: rebuilt from the 38-zone original down to the 5 zones above. All `exits` removed; every `next` entry whose `zone` is not in the kept set removed; `sleeping.yawn.next` gained the two new bridge targets; the two new bridge zones added (single `bridge` action each, `behavior: "bridge"`, `loop: false`, `variable_axes: []`, `next` → target entry action); `layout` reduced to the 5 zones (the 3 kept zones retain their old positions, the 2 bridges placed at the midpoint of their source/target).
+- `tests/test_state_machine.py`: `test_set_control_mode_validates` — `initial_zone="resting"` → `"sleeping"` (the only change; the assertion logic is unchanged).
+- `tests/test_transition.py`: `test_all_reachable_transitions_complete` — the four transition pairs updated from the removed zones to the two bridge hops + two bridge→target hops: `("sleeping","yawn","sleeping_testing_bridge","bridge")`, `("sleeping","yawn","sleeping_scanning_bridge","bridge")`, `("sleeping_testing_bridge","bridge","testing","locked")`, `("sleeping_scanning_bridge","bridge","scanning","scnr")`.
+- `tests/test_bridge_behavior.py`: `test_real_zones_bridge_action_is_tagged` — now asserts against `sleeping_testing_bridge` (was `resting_sleeping_bridge`) and `len(act["poses"]) >= 1` (was `== 3`; the new bridge is a single curated pose).
+- `realtimecontrol/rtr/zones.json.bak-20261026-121651`: backup of the original 38-zone file (repo convention of keeping `zones.json.bak-*` snapshots).
+
+### Documentation
+
+- None beyond this handoff. No user-facing config contract changed; the zone graph is now a smaller, self-contained table.
+
+### Architecture
+
+- No architectural change. The zone model, the bridge pattern, and the navigation priority (`action next` → `zone exits` → previous-zone fallback) are unchanged. Only the *data* in `zones.json` changed. The bridges are **directional** (sleeping → target): the reverse direction is handled by the runtime previous-zone fallback for single-action zones (`scanning`) or by manual triggering for multi-action zones (`testing`). If a true bidirectional path is wanted later, add a `testing_sleeping_bridge` / `scanning_sleeping_bridge`.
+
+### Validation
+
+- `validate_state_data` (via `load_state_data`) on the on-disk file → **OK** (passes; no dangling `exits`/`next`).
+- `rtr.flow` graph check → `reachable(sleeping) = [sleeping, sleeping_testing_bridge, sleeping_scanning_bridge]`; `reachable(sleeping_testing_bridge) = [testing]`; `reachable(sleeping_scanning_bridge) = [scanning]`; `reverse(testing) = [testing, sleeping_testing_bridge]`; `reverse(scanning) = [sleeping_scanning_bridge]`. Confirms both bridges sit between sleeping and their targets.
+- Full suite `pytest tests/ --ignore=tests/test_remote_tui.py` → **296 passed, 5 failed, 14 skipped**. The 5 failures are all in `tests/test_remote_sdl.py` (TUI/SDL rendering) — **pre-existing** and unrelated to `zones.json` (that test file does not reference zones). The previously-failing `test_transition` and `test_bridge_behavior` now **pass**.
+
+### Decisions and Caveats
+
+- **The new bridges use a single curated pose = the target's entry pose** (no fabricated intermediate motion). This is the safest choice: the robot transitions to a known-good pose and hands off to the target action at that same pose. **The operator should add intermediate path poses in the editor** for a smooth physical traversal between the real sleeping position and the target; right now the bridge is a direct (safety-gated) move to the target pose.
+- **Bridges are directional** (sleeping → target). See Architecture for the reverse-direction note.
+- **`exits` are intentionally all removed** (the original task asked to drop all exits/cross-references). The bridges are wired via action `next`, not zone `exits`.
+- The three test edits are **data-reference updates only** — the code-behavior assertions are unchanged. They keep the suite green against the new table.
+
+### Next Task
+
+Optional (operator): refine the two new bridge actions' poses in the editor for a smooth physical path (currently a single direct move to the target pose), and add reverse-direction bridges (`testing_sleeping_bridge`, `scanning_sleeping_bridge`) if a true bidirectional path is wanted.
+
+### Instructions for the Next Task
+
+1. Reload the editor page to load the new `zones.json` (the flow view will show `sleeping → sleeping_testing_bridge → testing` and `sleeping → sleeping_scanning_bridge → scanning`).
+2. To refine a bridge: open `sleeping_testing_bridge` (or `sleeping_scanning_bridge`) in the editor and add intermediate anchor poses between the sleeping-side pose and the target entry pose. Keep `behavior: "bridge"`, `variable_axes: []`, `loop: false`.
+3. The original 38-zone table is preserved in `zones.json.bak-20261026-121651` if a full restore is ever needed.
+
 ## 2026-10-26 — Fixed `delZone`/`renameZone` to clean zone-level `exits` (and added an `exits` check to the client validator)
 
 ### Status

@@ -74,10 +74,10 @@ def test_all_reachable_transitions_complete():
     """Every transition driven through a real exits-graph edge must commit in bounded time."""
     zones = _zones()
     pairs = [
-        ("resting", "hold", "sleeping", "breathe"),
-        ("resting", "hold", "stretching", "look"),
-        ("stretching", "look", "hunting", "track"),
-        ("hunting", "track", "growling", "growl"),
+        ("sleeping", "yawn", "sleeping_testing_bridge", "bridge"),
+        ("sleeping", "yawn", "sleeping_scanning_bridge", "bridge"),
+        ("sleeping_testing_bridge", "bridge", "testing", "locked"),
+        ("sleeping_scanning_bridge", "bridge", "scanning", "scnr"),
     ]
     for start_zone, start_action, target_zone, target_action in pairs:
         committed, final_zone, transitioning = _run_transition(

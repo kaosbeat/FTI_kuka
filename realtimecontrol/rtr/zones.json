@@ -1,5 +1,95 @@
 {
   "zones": {
+    "resting": {
+      "enabled": true,
+      "class": "scan",
+      "mode_group": "museum-closed",
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -60,
+          -40
+        ],
+        [
+          -10,
+          -9
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          60,
+          62
+        ],
+        [
+          -15,
+          15
+        ]
+      ],
+      "speed": 20,
+      "actions": {
+        "hold": {
+          "enabled": true,
+          "poses": [
+            [
+              10,
+              -59,
+              -10,
+              0,
+              60,
+              0
+            ],
+            [
+              0,
+              -130,
+              -9,
+              0,
+              0,
+              0
+            ],
+            [
+              -60,
+              -90,
+              -9,
+              15,
+              10,
+              0
+            ]
+          ],
+          "variable_axes": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "behavior": "restless",
+          "speed": 20,
+          "loop": true,
+          "next": [
+            {
+              "zone": "sleeping",
+              "action": "breathe"
+            }
+          ],
+          "pose_imgs": [
+            "pose_1792397354907_2e4d7151.png",
+            "pose_1792351922635_a6b53eac.png",
+            "pose_1792351903804_8bb45799.png"
+          ],
+          "pose_videos": [
+            "MiniMax_H3_00083_..mp4",
+            "MiniMax_H3_00082_..mp4",
+            "MiniMax_H3_00077_..mp4"
+          ]
+        }
+      }
+    },
     "sleeping": {
       "enabled": true,
       "class": "scan",
@@ -697,6 +787,10 @@
   },
   "layout": {
     "pos": {
+      "resting": {
+        "x": 479.02371978759766,
+        "y": 11.794570922851562
+      },
       "sleeping": {
         "x": 66.35023498535156,
         "y": 11.794567108154297
@@ -724,6 +818,6 @@
       "w": 2765.2173913043466,
       "h": 497.7228645656415
     },
-    "key": "scanning,sleeping,sleeping_scanning_bridge,sleeping_testing_bridge,testing"
+    "key": "resting,scanning,sleeping,sleeping_scanning_bridge,sleeping_testing_bridge,testing"
   }
 }
