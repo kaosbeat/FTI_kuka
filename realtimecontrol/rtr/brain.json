@@ -15,7 +15,9 @@
         "task2",
         "task3",
         "task1_task2_bridge",
-        "task2_task3_bridge"
+        "task2_task3_bridge",
+        "task3_task1_bridge",
+        "task3_task2_bridge"
       ],
       "enabled": true,
       "params": {

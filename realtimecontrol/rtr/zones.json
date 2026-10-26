@@ -1096,12 +1096,12 @@
           "loop": false,
           "next": [
             {
-              "zone": "task1",
-              "action": "scan"
+              "zone": "task3_task1_bridge",
+              "action": "bridge"
             },
             {
-              "zone": "task2",
-              "action": "locked"
+              "zone": "task3_task2_bridge",
+              "action": "bridge"
             }
           ],
           "pose_imgs": [
@@ -1121,7 +1121,7 @@
           185
         ],
         [
-          -50,
+          -95,
           -40
         ],
         [
@@ -1134,7 +1134,7 @@
         ],
         [
           35,
-          45
+          85
         ],
         [
           -5,
@@ -1146,6 +1146,14 @@
         "bridge": {
           "enabled": true,
           "poses": [
+            [
+              45,
+              -90,
+              20,
+              0,
+              80,
+              0
+            ],
             [
               0,
               -45,
@@ -1164,9 +1172,11 @@
             "action": "locked"
           },
           "pose_imgs": [
+            null,
             null
           ],
           "pose_videos": [
+            null,
             null
           ]
         }
@@ -1180,7 +1190,7 @@
           185
         ],
         [
-          -20,
+          -50,
           -10
         ],
         [
@@ -1188,16 +1198,16 @@
           25
         ],
         [
-          -10,
-          10
+          0,
+          1
         ],
         [
           -25,
-          -15
+          45
         ],
         [
-          -15,
-          15
+          -5,
+          5
         ]
       ],
       "speed": 40,
@@ -1205,6 +1215,14 @@
         "bridge": {
           "enabled": true,
           "poses": [
+            [
+              0,
+              -45,
+              20,
+              0,
+              40,
+              0
+            ],
             [
               0,
               -15,
@@ -1223,9 +1241,149 @@
             "action": "approach"
           },
           "pose_imgs": [
+            null,
             null
           ],
           "pose_videos": [
+            null,
+            null
+          ]
+        }
+      }
+    },
+    "task3_task1_bridge": {
+      "enabled": true,
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -95,
+          -10
+        ],
+        [
+          15,
+          25
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          -25,
+          85
+        ],
+        [
+          -5,
+          5
+        ]
+      ],
+      "speed": 40,
+      "actions": {
+        "bridge": {
+          "enabled": true,
+          "poses": [
+            [
+              0,
+              -15,
+              20,
+              0,
+              -20,
+              0
+            ],
+            [
+              45,
+              -90,
+              20,
+              0,
+              80,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "behavior": "bridge",
+          "speed": 40,
+          "loop": false,
+          "next": {
+            "zone": "task1",
+            "action": "scan"
+          },
+          "pose_imgs": [
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null
+          ]
+        }
+      }
+    },
+    "task3_task2_bridge": {
+      "enabled": true,
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -50,
+          -10
+        ],
+        [
+          15,
+          25
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          -25,
+          45
+        ],
+        [
+          -5,
+          5
+        ]
+      ],
+      "speed": 40,
+      "actions": {
+        "bridge": {
+          "enabled": true,
+          "poses": [
+            [
+              0,
+              -15,
+              20,
+              0,
+              -20,
+              0
+            ],
+            [
+              0,
+              -45,
+              20,
+              0,
+              40,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "behavior": "bridge",
+          "speed": 40,
+          "loop": false,
+          "next": {
+            "zone": "task2",
+            "action": "locked"
+          },
+          "pose_imgs": [
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
             null
           ]
         }
@@ -1277,6 +1435,14 @@
       "task2_task3_bridge": {
         "x": 1500.0,
         "y": 450.0
+      },
+      "task3_task1_bridge": {
+        "x": 1350.0,
+        "y": 420.0
+      },
+      "task3_task2_bridge": {
+        "x": 1500.0,
+        "y": 480.0
       }
     },
     "view": {
@@ -1285,6 +1451,6 @@
       "w": 2765.2173913043466,
       "h": 497.7228645656415
     },
-    "key": "resting,scanning,sleeping,sleeping_scanning_bridge,sleeping_testing_bridge,task1,task1_task2_bridge,task2,task2_task3_bridge,task3,testing"
+    "key": "resting,scanning,sleeping,sleeping_scanning_bridge,sleeping_testing_bridge,task1,task1_task2_bridge,task2,task2_task3_bridge,task3,task3_task1_bridge,task3_task2_bridge,testing"
   }
 }
