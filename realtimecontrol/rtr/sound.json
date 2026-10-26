@@ -106,6 +106,20 @@
         "note": 60,
         "velocity": 60
       }
+    },
+    "task3_task1_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "task3_task2_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
     }
   },
   "actions": {
@@ -460,7 +474,12 @@
           "note": 60,
           "velocity": 60
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "task2": {
@@ -505,6 +524,24 @@
       }
     },
     "task2_task3_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "task3_task1_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "task3_task2_bridge": {
       "bridge": {
         "start": {
           "note": 60,

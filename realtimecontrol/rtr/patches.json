@@ -15,7 +15,9 @@
     "task2": "osc(4, 0.1, 1.2).out()",
     "task3": "osc(4, 0.1, 1.2).out()",
     "task1_task2_bridge": "osc(4, 0.1, 1.2).out()",
-    "task2_task3_bridge": "osc(4, 0.1, 1.2).out()"
+    "task2_task3_bridge": "osc(4, 0.1, 1.2).out()",
+    "task3_task1_bridge": "osc(4, 0.1, 1.2).out()",
+    "task3_task2_bridge": "osc(4, 0.1, 1.2).out()"
   },
   "modes": {
     "calm": "osc(1, 0.08, 1.2)\n.posterize(4)\n.diff(src(o0).rotate(1.5))\n.out(o3)",
@@ -92,6 +94,12 @@
       "bridge": "osc(4, 0.1, 1.2).out()"
     },
     "task2_task3_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
+    },
+    "task3_task1_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
+    },
+    "task3_task2_bridge": {
       "bridge": "osc(4, 0.1, 1.2).out()"
     }
   }
