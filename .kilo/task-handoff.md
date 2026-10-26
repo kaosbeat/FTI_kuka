@@ -1,5 +1,48 @@
 # Task Handoff Log
 
+## 2026-10-26 — Made A1 (base) constant during the task1→task2 bridge approach
+
+### Status
+
+Completed. The `task1_task2_bridge` approach now holds A1 constant (0) so the base no longer rotates while the robot approaches the task2 locked person. `task2_task3_bridge` already held A1 constant (0→0) and needed no change.
+
+### Summary
+
+The 2-pose bridge pattern from the previous task set `poses = [source_end, target_start]`. For `task1_task2_bridge` that meant `poses[0] = [45, -90, 20, 0, 80, 0]` (A1=45, task1's end pose) and `poses[1] = [0, -45, 20, 0, 40, 0]` (A1=0, task2's start pose). The robot therefore rotated its base A1 from 45→0 *during* the approach.
+
+The user requires A1 to stay constant while approaching the locked person (task2/task3 are both A1=0). Fix: set `task1_task2_bridge` `poses[0]` A1 to 0 so the bridge approach holds A1=0 throughout. The base rotation (45→0) now happens as a separate deliberate handoff move (`task1/scan` → bridge entry) before the approach, not during it.
+
+### Changes Made
+
+- `realtimecontrol/rtr/zones.json`: `task1_task2_bridge` `poses[0]` A1 `45` → `0` (pose now `[0, -90, 20, 0, 80, 0]`). `poses[1]` unchanged (`[0, -45, 20, 0, 40, 0]`). Safezone unchanged (A1 `[-185,185]` already contains 0).
+
+### Documentation
+
+None required — the bridge data model is already documented in `zones.py`; this is a data adjustment to satisfy a motion constraint, not a new behavior or config contract.
+
+### Architecture
+
+No architectural change. The bridge is still a no-op `behavior: "bridge"` zone stepping through curated anchors. The change moves the A1 reorientation from inside the bridge approach to the pre-approach handoff move (`_compute_handoff` falls back to the entry pose since the bridge no longer shares an A1-matching pose with `task1/scan`).
+
+### Validation
+
+- `/tmp/kilo/validate_links.py`: 45 checked links, **4** broken (was 3). The new red link is `task1/scan <-> task1_task2_bridge/bridge` — "no shared position on A1" — which is the *intended* consequence of making the bridge A1-constant (the base now rotates as a separate handoff move). The 3 pre-existing sleeping/resting red links are unchanged.
+- `python -m pytest tests/ -q --ignore=tests/test_remote_tui.py`: **296 passed, 5 failed, 14 skipped** — the 5 failures are the same pre-existing `test_remote_sdl` TUI failures; no new failures.
+
+### Decisions and Caveats
+
+- **Trade-off accepted:** an A1-constant approach is incompatible with a shared departure pose when source A1 ≠ target A1. Choosing A1-constant means the bridge no longer shares a pose with `task1/scan`, so the validator flags it and the base rotates during the handoff move (task1 → bridge entry) rather than during the approach. This matches the user's stated intent (A1 constant while approaching the locked person).
+- **`task2_task3_bridge` needed no change** — it already holds A1=0→0.
+- **`task3_task1_bridge` (retreat, task3→task1) still changes A1 0→45.** The user only specified the forward direction (task1→task2→task3). If the same A1-constant rule should apply to the retreat, `task3_task1_bridge` `poses[0]` A1 should be set to 45 (task1's value) — flagged as an open question, not changed.
+
+### Next Task
+
+Confirm with the user whether the A1-constant rule also applies to the retreat bridges. If yes, set `task3_task1_bridge` `poses[0]` A1 to 45. Otherwise no immediate next task.
+
+### Instructions for the Next Task
+
+If extending the rule to the retreat: edit `realtimecontrol/rtr/zones.json` `task3_task1_bridge` `poses[0]` (currently `[0, -15, 20, 0, -20, 0]`) to `[45, -15, 20, 0, -20, 0]` so the task3→task1 approach holds A1=45 (task1's value). Re-run `/tmp/kilo/validate_links.py` and the pytest suite (expect the same 3 pre-existing SDL failures + the expected A1 shared-pose red links).
+
 ## 2026-10-26 — Fixed all broken action-level links in the 3-task zone network (2-pose bridges + retreat bridges)
 
 ### Status
