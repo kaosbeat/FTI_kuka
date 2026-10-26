@@ -514,7 +514,12 @@
       <b>in</b> tab, click <b>learn</b> next to <b>next_zone</b>, then press a key on the keyboard.
       From now on that key moves the robot to the next zone.</div>
   </section>
-  <div class="row" id="midiToggleRow" style="margin-bottom:12px">
+  <div class="row" id="midiToggleRow" style="margin-bottom:12px;align-items:center">
+    <label id="midiMaster" style="margin-right:12px;display:inline-flex;align-items:center;gap:6px;font-size:12px">
+      <input type="checkbox" id="midiMasterCb"
+        title="Master MIDI on/off. Off = the core ignores ALL incoming MIDI keys AND sends no outgoing MIDI (sound) messages.">
+      <span id="midiMasterLbl">midi master on/off</span>
+    </label>
     <button id="midiTabOut" class="small" title="The robot PLAYS music: sounds the robot sends to a MIDI device.">out</button>
     <button id="midiTabIn" class="small" title="You CONTROL the robot: keys on a MIDI controller that make the robot act.">in</button>
   </div>
@@ -763,6 +768,7 @@ const FALLBACK = {
 // Last-resort sound mapping (mirrors rtr/sound/sound.py ZONE_NOTES/MODE_CCS). Used
 // when both /api/sound and /sound.json fail (e.g. opened from file://).
 const SOUND_FALLBACK = {
+  enabled: true,
   channel: 0,
   zones: {
     init: {note:48, velocity:60}, rest: {note:36, velocity:50}, wakeup: {note:52, velocity:70},
@@ -1381,6 +1387,7 @@ async function loadSound() {
   }
   if (!data) data = JSON.parse(JSON.stringify(SOUND_FALLBACK));
   SOUND = data;
+  if (SOUND.enabled === undefined) SOUND.enabled = true;
   if (SOUND.zones === undefined) SOUND.zones = {};
   if (SOUND.actions === undefined) SOUND.actions = {};
   if (SOUND.channel === undefined) SOUND.channel = 0;
@@ -1693,6 +1700,7 @@ function validMsg(msg) {
 
 function validateSound() {
   const errs = [];
+  if (typeof SOUND.enabled !== "boolean") errs.push("enabled must be a bool");
   const ch = SOUND.channel;
   if (!Number.isInteger(ch) || ch < 0 || ch > 15) errs.push("channel must be an int 0-15");
   const op = SOUND.out_port;
@@ -1914,7 +1922,7 @@ function buildMidiInForm() {
     en.title = "Turn MIDI input on/off. Off = the robot ignores all controller keys.";
     const cb = document.createElement("input");
     cb.type = "checkbox"; cb.checked = !!MIDI.enabled;
-    cb.onchange = () => { MIDI.enabled = cb.checked; };
+    cb.onchange = () => { MIDI.enabled = cb.checked; refreshMidiMaster(); };
     en.appendChild(cb); en.appendChild(document.createTextNode(" enabled"));
     head.appendChild(en);
     box.appendChild(head);
@@ -5275,6 +5283,7 @@ function switchView(v) {
     $("midiTabIn").className = midiSubView === "in" ? "small active" : "small";
     buildMidiOutForm();
     buildMidiInForm();
+    refreshMidiMaster();
   }
   if (patchView) buildPatchesForm();
   if (flowView) flowEnter();
@@ -5303,6 +5312,26 @@ function switchMidiSubView(v) {
   $("midiInView").style.display = v === "in" ? "" : "none";
   $("midiTabOut").className = v === "out" ? "small active" : "small";
   $("midiTabIn").className = v === "in" ? "small active" : "small";
+}
+
+// Master MIDI on/off: one switch that drives BOTH the MIDI-in table (MIDI.enabled,
+// the core ignores all incoming controller keys) and the MIDI-out/sound table
+// (SOUND.enabled, the core sends no outgoing MIDI/sound messages). "On" means both
+// are enabled; if either side is off the master shows off. Toggling it saves both
+// tables so the core hot-reloads each side (POST /api/midi + /api/sound).
+function refreshMidiMaster() {
+  if (!MIDI || !SOUND) return;
+  const cb = $("midiMasterCb");
+  if (cb) cb.checked = !!(MIDI.enabled && SOUND.enabled);
+}
+
+function onMidiMasterToggle() {
+  if (!MIDI || !SOUND) return;
+  const on = $("midiMasterCb").checked;
+  MIDI.enabled = on;
+  SOUND.enabled = on;
+  refreshMidiMaster();
+  saveMidiAll();
 }
 
 // ---------------------------------------------------------------------------
@@ -6302,6 +6331,7 @@ async function restoreConfig(bundle) {
   await loadMidi();
   await loadBrain();
   await loadRobotConfig();
+  refreshMidiMaster();
 }
 $("backup").onclick = () => { backupConfig().catch((e) => { $("saveMsg").textContent = "backup failed: " + e; $("saveMsg").className = "err"; }); };
 $("restore").onclick = () => $("restoreFile").click();
@@ -7354,7 +7384,7 @@ $("patchCode").oninput = () => {
 // zone table's action names), then the sound mapping, then the patches, then the brain
 // config (the header status bar derives the current zone group from it), then open
 // the WebSocket.
-  loadTable().then(loadSound).then(loadPatches).then(loadMidi).then(loadLimits).then(loadBrain).then(loadRobotConfig).then(connect).then(() => { if (TABLE) setupCamTest(); });
+  loadTable().then(loadSound).then(loadPatches).then(loadMidi).then(refreshMidiMaster).then(loadLimits).then(loadBrain).then(loadRobotConfig).then(connect).then(() => { if (TABLE) setupCamTest(); });
 $("connect").onclick = () => { $("host").value = $("host").value.trim(); connect(); };
 $("save").onclick = save;
 $("addZone").onclick = addZone;
@@ -7374,6 +7404,7 @@ $("delZone").onclick = delZone;
   $("valCopyCollision").onclick = copyValCollisionPose;
 $("midiTabOut").onclick = () => switchMidiSubView("out");
 $("midiTabIn").onclick = () => switchMidiSubView("in");
+$("midiMasterCb").onchange = onMidiMasterToggle;
 $("midiStopLearn").onclick = midiStopLearn;
 $("sndRefreshPorts").onclick = () => {
   fetch("/api/sound/ports", { cache: "no-store" }).then((r) => r.json()).then((b) => {

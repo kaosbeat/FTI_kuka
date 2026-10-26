@@ -73,6 +73,7 @@ def builtin_sound_data() -> dict:
     """
     channel = next(iter(ZONE_NOTES.values()))[0]
     return {
+        "enabled": True,
         "channel": channel,
         "zones": {name: {"out_port": None, "command": {"note": n, "velocity": v}}
                  for name, (_, n, v) in ZONE_NOTES.items()},
@@ -133,7 +134,8 @@ def _normalize_zone_entry(raw: Any, where: str) -> dict:
 def validate_sound_data(data: Any) -> dict:
     """Validate a full sound data table. Returns ``data`` or raises :class:`ValueError`.
 
-    Shape: ``{channel, out_port?, out_device?, zones, actions}`` where ``zones[z]`` is
+    Shape: ``{enabled?, channel, out_port?, out_device?, zones, actions}`` where
+    ``zones[z]`` is
     ``{out_port (int>=0|null), command (<msg>)}`` (a legacy bare-message zone entry is
     normalized to this shape in place) and ``actions`` maps a zone name to an object
     mapping an action name to ``{start?, poses?}`` (a message and/or a list of
@@ -147,6 +149,9 @@ def validate_sound_data(data: Any) -> dict:
     """
     if not isinstance(data, dict):
         raise ValueError("data must be an object")
+    enabled = data.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise ValueError("'enabled' must be a bool")
     channel = data.get("channel", 0)
     if not _is_int_in(channel, 0, 15):
         raise ValueError("'channel' must be an int 0-15")
@@ -252,7 +257,9 @@ class Sound:
 
         On a loader failure keep the current table (logged); on success swap the table
         and publish :data:`Event.SOUND_CHANGED`. Out ports are reconciled so a change to
-        a zone's ``out_port`` (or the global fallback) closes stale devices.
+        a zone's ``out_port`` (or the global fallback) closes stale devices. When the
+        soft switch (``sound.json`` ``enabled``) is off, all out ports are closed so no
+        MIDI is sent.
         """
         loaded = False
         try:
@@ -262,12 +269,23 @@ class Sound:
         else:
             self._data = data
             loaded = True
-        self._reconcile_outs()
+        if self._effective_enabled():
+            self._reconcile_outs()
+        else:
+            self.close()
         if loaded:
             self.bus.publish(Event.SOUND_CHANGED, "sound")
-            print(f"[sound] mapping reloaded: channel={data.get('channel', 0)} "
+            print(f"[sound] mapping reloaded: enabled={self._effective_enabled()} "
+                  f"channel={data.get('channel', 0)} "
                   f"zones={len(data.get('zones', {}))} "
                   f"actions={len(data.get('actions', {}))}")
+
+    # ------------------------------------------------------------------
+    # Effective settings.
+    # ------------------------------------------------------------------
+    def _effective_enabled(self) -> bool:
+        """The hard switch (constructor ``enabled``) AND the soft switch (``sound.json``)."""
+        return self.enabled and bool(self._data.get("enabled", True))
 
     # ------------------------------------------------------------------
     # MIDI-out connection (one port per distinct device, lazy + cached).
@@ -382,7 +400,7 @@ class Sound:
     # Event handling.
     # ------------------------------------------------------------------
     def on_event(self, event: Event, data) -> None:
-        if not self.enabled:
+        if not self._effective_enabled():
             return
         if event == Event.SNAPSHOT:
             self._on_snapshot(data)

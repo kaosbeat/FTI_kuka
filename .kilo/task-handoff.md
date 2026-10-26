@@ -1,5 +1,112 @@
 # Task Handoff Log
 
+## 2026-10-25 — Added a master MIDI on/off toggle (editor) that gates BOTH MIDI-in and MIDI-out/sound in the core
+
+### Status
+
+Completed. Implemented and tested (headless). The new master button lives in `editor.html`'s MIDI tab; the core now honours a runtime `enabled` soft switch on the sound (MIDI-out) side, mirroring the existing MIDI-in one.
+
+### Summary
+
+The user wanted a single **master "MIDI on/off"** button in the editor that, when off, makes the core completely ignore all incoming MIDI messages AND send no outgoing MIDI (sound) messages.
+
+The MIDI-**in** side already had a runtime soft switch: `midi.json` `enabled`, honoured by `MidiInput._effective_enabled()` (hard constructor switch AND data `enabled`), with the editor's per-zone `enabled` checkbox bound to it. The MIDI-**out/sound** side had **no** runtime soft switch — `Sound.enabled` was constructor-only (`cfg.enable_sound`) and `sound.json` had no `enabled` field.
+
+So the work was: (1) give the sound adapter the same soft-switch pattern as MIDI-in, and (2) add one editor button that drives **both** sides and saves both tables so the core hot-reloads each.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/sound/sound.py`:
+  - `builtin_sound_data()` now ships `"enabled": True`.
+  - `validate_sound_data()` validates a top-level `enabled` (must be a bool; defaults to `True` when absent).
+  - New `Sound._effective_enabled()` = constructor `self.enabled` AND the data `enabled` (mirrors `midi.py`).
+  - `on_event()` now early-returns on `not self._effective_enabled()` (was `not self.enabled`), so no zone/action/pose MIDI is sent while off.
+  - `reload()` closes **all** open out ports when `_effective_enabled()` is false (was always `_reconcile_outs()`), so no MIDI can leak out of a stale port; the reload log now reports `enabled=`.
+- `realtimecontrol/rtr/sound.json`: added `"enabled": true` at the top level.
+- `realtimecontrol/rtr/editor.html`:
+  - `#midiToggleRow` now holds a master checkbox `#midiMasterCb` (label "midi master on/off") beside the out/in sub-tabs.
+  - `SOUND_FALLBACK` gained `enabled: true`; `loadSound()` seeds `SOUND.enabled` (default `true`); `validateSound()` rejects a non-bool `SOUND.enabled`.
+  - New `refreshMidiMaster()` (sets the checkbox to `MIDI.enabled && SOUND.enabled`) and `onMidiMasterToggle()` (sets **both** `MIDI.enabled` and `SOUND.enabled`, then `saveMidiAll()` which POSTs `/api/sound` + `/api/midi` so the core hot-reloads both).
+  - Wired: `$("midiMasterCb").onchange = onMidiMasterToggle`; `refreshMidiMaster()` called in the bootstrap load chain (after `loadMidi`), in `switchView` when the MIDI tab shows, on the per-zone `enabled` checkbox change (keeps the master in sync when `MIDI.enabled` is toggled there), and after a config restore.
+
+### Documentation
+
+- None required beyond this handoff — the change follows the existing, already-documented MIDI-in soft-switch pattern; no new architecture doc is warranted.
+
+### Architecture
+
+- No new modules or data-flow changes. The sound adapter now exposes the same two-switch gate (`hard` = `cfg.enable_sound`, `soft` = `sound.json` `enabled`) as the MIDI-in adapter. The editor's master button is a convenience that writes both `enabled` fields; the two tables remain independently editable (the per-zone MIDI-in `enabled` checkbox still works and stays in sync via `refreshMidiMaster`).
+
+### Validation
+
+- `python tests/test_sound_enabled.py` → ALL TESTS PASSED (9 tests: validate accepts/defaults/rejects `enabled`; `builtin_sound_data` includes it; `_effective_enabled` truth table (hard×soft); soft-off sends nothing; soft-off reload closes all out ports; re-enabling resumes sending).
+- `python tests/test_sound_out_ports.py` → ALL TESTS PASSED (no regression to the out-port routing).
+- `python tests/test_midi_in.py` → ALL TESTS PASSED (1 skipped) (no regression to MIDI-in).
+- Full `pytest tests/ --ignore=tests/test_remote_tui.py` → 294 passed, 7 failed. The 7 failures (`test_transition`, `test_bridge_behavior`, `test_remote_sdl`×5) are **pre-existing** — confirmed by stashing my changes and re-running (same 7 fail without them). `test_remote_tui.py` fails at collection on a pre-existing `action_kind` import error, also unrelated.
+
+### Decisions and Caveats
+
+- **Master semantics:** the button reads "on" only when **both** `MIDI.enabled` and `SOUND.enabled` are true; if either is off it shows off. Toggling it sets both to the new value and saves both. This means the master can re-enable a side that was individually turned off (expected master-switch behaviour).
+- **Save path:** the master toggle reuses `saveMidiAll()`, which validates the **whole** SOUND and MIDI tables before POSTing. If an unrelated field elsewhere is invalid, the toggle won't persist (consistent with the editor's normal save button behaviour).
+- **No hardware test:** verified headless with a fake rtmidi (per project convention); no real MIDI device was exercised.
+
+### Next Task
+
+No immediate next task identified. (Optional follow-ups: add a matching master-state indicator light to `client.html`, or let the per-zone MIDI-in `enabled` checkbox and the master button share a single source of truth more explicitly.)
+
+### Instructions for the Next Task
+
+1. To verify on hardware: start the core, open the editor → MIDI tab, toggle the master checkbox off, confirm the core logs `[sound] mapping reloaded: enabled=False` and `[midi] ... enabled=False`, and that no MIDI is sent / no controller keys are honoured. Toggle on to restore.
+2. The core picks up the change via the existing hot-reload path (`POST /api/sound` → `Cmd.RELOAD_SOUND` → `engine._sound_reload()`; `POST /api/midi` → `Cmd.RELOAD_MIDI` → `engine._midi_reload()`); no restart is required.
+
+## 2026-10-25 — Reverted `KUKAPY_SERVER.SRC` to the original `WAIT FOR $FLAG[1]` (polling-loop "flaghack" rejected by the KUKA compiler)
+
+### Status
+
+Completed. Working tree restored byte-identical to the pre-flaghack original (git commit `961b915 kukapy`). The flaghack version is preserved as `KUKAPY_SERVER_flaghack.SRC` (user-renamed, untracked).
+
+### Summary
+
+The KUKA compiler rejected the polling-loop version with: `line 67 col 15 expected SEC, FOR or CLOCK`. That line is `WAIT 0.1` — bare `WAIT <value>` is invalid KRL; the grammar is `WAIT <value> SEC` | `WAIT FOR <condition>` | `WAIT CLOCK`. The user renamed the edited file to `KUKAPY_SERVER_flaghack.SRC` to keep it as a draft and asked for `KUKAPY_SERVER.SRC` to be reverted to the original. The original (with `WAIT FOR $FLAG[1]` at line 57) was restored from git commit `961b915` via `git restore --source=961b915`. The `KukaPyNEW` sync copy was re-synced to the original as well.
+
+**The Python-side stall recovery remains in place and is compatible with the original KRL:** `robot.py`'s `_recover()` sends a ping that sets `$FLAG[1]`, which wakes the KRL parked at `WAIT FOR $FLAG[1]`; the engine watchdog (`engine.py`) still catches tick exceptions and publishes `Event.SAFETY_ALERT`. So the anti-strand protection does not depend on the KRL polling loop.
+
+### Changes Made
+
+- `realtimecontrol/rtr/KukaPy/kukadriver/KUKAPY_SERVER.SRC`: restored to original content — `WAIT FOR $FLAG[1]` (line 57), no `wait_ticks`/`wait_timeout` declarations, no polling loop.
+- `realtimecontrol/kukapyEKI/KukaPyNEW/kukadriver/KUKAPY_SERVER.SRC`: re-synced to the identical original content.
+- `realtimecontrol/rtr/KukaPy/kukadriver/KUKAPY_SERVER_flaghack.SRC`: untouched (user's preserved copy of the rejected polling-loop version; still contains the invalid `WAIT 0.1` line).
+
+### Documentation
+
+- None required — this reverts a previously documented change; the prior handoff entry below still documents the flaghack design and the Python-side recovery, which remain accurate.
+
+### Architecture
+
+- No architectural impact. The KRL protocol, `<Rob>`/`<Res>` framing, and flag handshake are unchanged from the original design.
+
+### Validation
+
+- `git diff 961b915 -- realtimecontrol/rtr/KukaPy/kukadriver/KUKAPY_SERVER.SRC` → empty (working tree byte-identical to the original commit).
+- `grep -n "WAIT\|WHILE\|wait_ticks"` on the restored file → only `57: WAIT FOR $FLAG[1]` (no polling loop remnants).
+- `diff` between `rtr/KukaPy` and `KukaPyNEW` copies → identical.
+
+### Decisions and Caveats
+
+- **The flaghack file still has the KRL syntax error.** If it is ever wanted back, line 67 must be changed from `WAIT 0.1` to `WAIT 0.1 SEC` before it will compile. It was intentionally left unmodified (user's draft).
+- **Controller state:** the operator should confirm the controller is running the original program (re-download `KUKAPY_SERVER.SRC` if the flaghack version was ever downloaded). The core machine does not need a restart — the Python-side recovery (`robot.py` `_recover`, `engine.py` watchdog) is unchanged and works with the original KRL.
+- **The polling-loop idea is not the current line of defense.** The Python-side recovery ping + engine watchdog remain the stall protection while the KRL stays at the original blocking `WAIT FOR $FLAG[1]`.
+
+### Next Task
+
+Confirm on the controller that the original `KUKAPY_SERVER.SRC` is running, then continue root-cause diagnosis of the original stall (capture a `KUKAPY_DEBUG=1` log during a `hunting/track2` run) to determine whether the Python engine blocks in `_recv_xml`, a blocking move, or raises an uncaught exception.
+
+### Instructions for the Next Task
+
+1. **On the KUKA controller:** verify the running program is the original (program counter parks at `WAIT FOR $FLAG[1]` between commands — normal). If the flaghack version was downloaded, re-download the original `KUKAPY_SERVER.SRC`.
+2. **On the core machine:** restart the core (to pick up `robot.py`/`engine.py` changes, which remain in place), enable `KUKAPY_DEBUG=1`, and re-run `hunting/track2`.
+3. **Capture the log** during/after a stall: look for `[kukapy] STALL detected; attempting recovery ping` (recovery path taken) or `[engine] tick#N EXCEPTION:` (watchdog caught an exception). That identifies the exact blocking point.
+
 ## 2026-10-25 — Replaced the KRL's indefinite `WAIT FOR $FLAG[1]` with a timed polling loop + added Python-side stall recovery (recovery ping on staleness guard fire)
 
 ### Status
