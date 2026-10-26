@@ -480,6 +480,18 @@
             "velocity": 60
           }
         ]
+      },
+      "scnr": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "task2": {

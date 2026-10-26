@@ -863,10 +863,16 @@
           "speed": 20,
           "loop": true,
           "dwell_s": 35,
-          "next": {
-            "zone": "task1_task2_bridge",
-            "action": "bridge"
-          },
+          "next": [
+            {
+              "zone": "task1_task2_bridge",
+              "action": "bridge"
+            },
+            {
+              "zone": "task1",
+              "action": "scnr"
+            }
+          ],
           "pose_imgs": [
             null
           ],
@@ -899,6 +905,46 @@
               5
             ]
           }
+        },
+        "scnr": {
+          "enabled": true,
+          "poses": [
+            [
+              "x",
+              -85,
+              15,
+              0,
+              75,
+              0
+            ]
+          ],
+          "variable_axes": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "behavior": "impatient",
+          "speed": 20,
+          "loop": true,
+          "next": [
+            {
+              "zone": "task1",
+              "action": "scan"
+            },
+            {
+              "zone": "task2_task3_bridge",
+              "action": "bridge"
+            }
+          ],
+          "pose_imgs": [
+            null
+          ],
+          "pose_videos": [
+            null
+          ]
         }
       }
     },
@@ -949,10 +995,16 @@
           "behavior": "locked",
           "speed": 40,
           "loop": true,
-          "next": {
-            "zone": "task2_task3_bridge",
-            "action": "bridge"
-          },
+          "next": [
+            {
+              "zone": "task2_task3_bridge",
+              "action": "bridge"
+            },
+            {
+              "zone": "task1_task2_bridge",
+              "action": "bridge"
+            }
+          ],
           "pose_imgs": [
             null
           ],
@@ -1445,10 +1497,10 @@
       }
     },
     "view": {
-      "x": -143.7601227014543,
-      "y": 233.88125776925904,
-      "w": 2404.5368620037784,
-      "h": 432.8024909266443
+      "x": 780.192067243741,
+      "y": 423.7813549070863,
+      "w": 1581.0220182485602,
+      "h": 284.57466322126686
     },
     "key": "resting,scanning,sleeping,sleeping_scanning_bridge,sleeping_testing_bridge,task1,task1_task2_bridge,task2,task2_task3_bridge,task3,task3_task1_bridge,task3_task2_bridge,testing"
   }
