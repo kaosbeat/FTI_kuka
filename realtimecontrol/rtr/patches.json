@@ -1,46 +1,13 @@
 {
   "default": "",
   "zones": {
-    "resting": "osc(222, 0.1, 1.2)\n.posterize(3)\n.out(o0)",
     "sleeping": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out(o0)",
     "cuddling": "osc(2, 0.12, 1.2)\n.posterize(3)\n.out(o0)",
     "purring": "osc(3, 0.1, 1.2)\n.posterize(5)\n.out(o0)",
     "stretching": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3).scale(40)\n.out(o0)\n",
-    "hunting": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(4).out(o0)\n",
-    "examining": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out(o0)\n",
-    "performing": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3).out(o0)\n",
-    "roaring": "osc(60, 0.4, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out(o0)\n",
-    "growling": "osc(30, 0.35, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out(o0)\n",
-    "clawing": "osc(45, 0.4, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out(o0)\n",
-    "leaping": "osc(80, 0.5, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out(o0)\n",
-    "resting_sleeping_bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out(o0)\n",
-    "sleeping_stretching_bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out(o0)\n",
     "testing": "osc(4, 0.1, 1.2).out(o0)",
-    "resting_testing_bridge": "osc(4, 0.1, 1.2).out(o0)",
     "testing_sleeping_bridge": "osc(4, 0.1, 1.2).out(o0)",
-    "cuddling_purring_bridge": "osc(4, 0.1, 1.2).out()",
-    "examining_performing_bridge": "osc(4, 0.1, 1.2).out()",
-    "cuddling_stretching_bridge": "osc(4, 0.1, 1.2).out()",
-    "stretching_hunting_bridge": "osc(4, 0.1, 1.2).out()",
-    "hunting_examining_bridge": "osc(4, 0.1, 1.2).out()",
-    "performing_roaring_bridge": "osc(4, 0.1, 1.2).out()",
-    "grabbing": "osc(4, 0.1, 1.2).out()",
-    "roaring_grabbing_bridge": "osc(4, 0.1, 1.2).out()",
-    "scanning": "osc(4, 0.1, 1.2).out()",
-    "hunting_scanning_bridge": "osc(4, 0.1, 1.2).out()",
-    "examining_cuddling_bridge": "osc(4, 0.1, 1.2).out()",
-    "purring_hunting_bridge": "osc(4, 0.1, 1.2).out()",
-    "roaring_growling_bridge": "osc(4, 0.1, 1.2).out()",
-    "testing_cuddling_bridge": "osc(4, 0.1, 1.2).out()",
-    "growling_clawing_bridge": "osc(4, 0.1, 1.2).out()",
-    "scanning_leaping_bridge": "osc(4, 0.1, 1.2).out()",
-    "scanning_roaring_bridge": "osc(4, 0.1, 1.2).out()",
-    "roaring_scanning_bridge": "osc(4, 0.1, 1.2).out()",
-    "grabbing_hunting_bridge": "osc(4, 0.1, 1.2).out()",
-    "stretching_hunting_bridge2": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out(o1)",
-    "cuddling_hunting_bridge2": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out(o1)",
-    "cuddling_scanning_bridge": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out(o1)",
-    "leaping_growling_bridge": "osc(4, 0.1, 1.2).out()"
+    "scanning": "osc(4, 0.1, 1.2).out()"
   },
   "modes": {
     "calm": "osc(1, 0.08, 1.2)\n.posterize(4)\n.diff(src(o0).rotate(1.5))\n.out(o3)",
@@ -60,10 +27,6 @@
     "bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out(o3)\n"
   },
   "actions": {
-    "resting": {
-      "hold": "// Pose reference images \u2014 pose = current pose index, poseindex[i] = image, s0 only\nvar pose = 0\nvar poseindex = [\"/assets/imgs/pose_1792351891652_77103614.png\", \"/assets/imgs/pose_1792351922635_a6b53eac.png\", \"/assets/imgs/pose_1792351903804_8bb45799.png\"]\ns0.initImage(poseindex[pose])\n\nosc(2, 0.1, 1.2).modulate(src(s0),1)\n.posterize(3)\n.out(o1)",
-      "wake": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out(o1)\n"
-    },
     "sleeping": {
       "breathe": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out(o1)",
       "snore": "osc(1, 0.06, 1.2)\n.posterize(4)\n.out(o1)",
@@ -84,43 +47,6 @@
       "inspect": "setResolution(768,768)\ns0.initVideo(\"assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(30)\n.out(o1)\n",
       "call": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3)\n.out(o1)\n"
     },
-    "hunting": {
-      "track": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).out(o1)\n",
-      "focus": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out(o1)\n",
-      "scan": "osc(6, 0.2, 1.2)\n.kaleid(3)\n.out(o1)",
-      "track2": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out(o1)\n"
-    },
-    "examining": {
-      "focus": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(20)\n.out(o1)\n",
-      "face": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/hand08.mp4\") \nsrc(s0).kaleid(2).scale(30)\n.out(o1)\n"
-    },
-    "performing": {
-      "trick": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(3).out(o1)\n",
-      "bow": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).kaleid(4).out(o1)\n"
-    },
-    "roaring": {
-      "roar": "osc(60, 0.4, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out(o1)\n",
-      "snarl": "osc(55, 0.38, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out(o1)\n"
-    },
-    "growling": {
-      "growl": "osc(30, 0.35, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out(o1)\n",
-      "snarl": "osc(35, 0.38, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out(o1)\n"
-    },
-    "clawing": {
-      "claw": "osc(45, 0.4, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out(o1)\n",
-      "grab": "osc(50, 0.45, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out(o1)\n",
-      "lock_target": "osc(4, 0.1, 1.2).out(o1)"
-    },
-    "leaping": {
-      "leap": "osc(80, 0.5, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out(o1)\n",
-      "pacing": "osc(70, 0.45, 1.2)\n.rotate(()=>1+Math.sin(time))\n.out(o1)\n"
-    },
-    "resting_sleeping_bridge": {
-      "bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out(o1)\n"
-    },
-    "sleeping_stretching_bridge": {
-      "bridge": "setResolution(768,768)\ns0.initVideo(\"http://127.0.0.1:8766/assets/vid/test1.mp4\") \nsrc(s0).out(o1)\n"
-    },
     "testing": {
       "locked": "osc(4, 0.1, 1.2).out(o1)",
       "intent": "osc(4, 0.1, 1.2).out(o1)",
@@ -128,80 +54,11 @@
       "gentle": "osc(4, 0.1, 1.2).out(o1)",
       "locked_band": "osc(4, 0.1, 1.2).out()"
     },
-    "resting_testing_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out(o1)"
-    },
     "testing_sleeping_bridge": {
       "bridge": "osc(4, 0.1, 1.2).out(o1)"
     },
-    "cuddling_purring_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "examining_performing_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "cuddling_stretching_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "stretching_hunting_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "hunting_examining_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "performing_roaring_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "grabbing": {
-      "grab": "osc(4, 0.1, 1.2).out()"
-    },
-    "roaring_grabbing_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
     "scanning": {
       "scnr": "osc(4, 0.1, 1.2).out()"
-    },
-    "hunting_scanning_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "examining_cuddling_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "purring_hunting_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "roaring_growling_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "testing_cuddling_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "growling_clawing_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "scanning_leaping_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "scanning_roaring_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "roaring_scanning_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "grabbing_hunting_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
-    "stretching_hunting_bridge2": {
-      "bridge": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out(o1)"
-    },
-    "cuddling_hunting_bridge2": {
-      "bridge": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out(o1)"
-    },
-    "cuddling_scanning_bridge": {
-      "bridge": "osc(1, 0.08, 1.2)\n.posterize(4)\n.out(o1)"
-    },
-    "leaping_growling_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
     }
   }
 }
