@@ -14,11 +14,7 @@ Shape::
         "dwell_s": 30.0,
         "events": { "midi": true, "camera": true, "websocket": true }
       },
-      "zone_groups": {
-        "museum-closed":  { "zones": [...], "enabled": true, "params": { "speed": 10, "dwell_s": 60.0 } },
-        "event-sit-back": { "zones": [...], "enabled": true, "params": { "speed": 40, "dwell_s": 30.0 } },
-        "stage-takeover": { "zones": [...], "enabled": true, "params": { "speed": 80, "dwell_s": 15.0 } }
-      },
+      "zone_groups": { /* empty by default — groups are created in the editor */ },
       "hunt":      { "zones": [...], "enabled": true, "params": {...} },
       "facefocus": { "zones": [...], "enabled": true, "params": {...} },
       "assertive": { "enabled": true, "dwell_s": 8.0, "speed_min": 30, "speed_max": 100, "wander": true, "track": false, "pool": null },
@@ -103,23 +99,7 @@ DEFAULT_BRAIN_CONFIG: Dict[str, Any] = {
         "dwell_s": 30.0,
         "events": {"midi": True, "camera": True, "websocket": True},
     },
-    "zone_groups": {
-        "museum-closed": {
-            "zones": ["resting", "sleeping", "cuddling", "purring"],
-            "enabled": True,
-            "params": {"speed": 10, "dwell_s": 60.0},
-        },
-        "event-sit-back": {
-            "zones": ["stretching", "hunting", "examining", "performing"],
-            "enabled": True,
-            "params": {"speed": 40, "dwell_s": 30.0},
-        },
-        "stage-takeover": {
-            "zones": ["roaring", "growling", "clawing", "leaping"],
-            "enabled": True,
-            "params": {"speed": 80, "dwell_s": 15.0},
-        },
-    },
+    "zone_groups": {},
     "hunt": {
         "zones": ["hunting"],
         "enabled": True,
@@ -516,7 +496,7 @@ def validate_brain_config(data: Any) -> dict:
         },
     }
 
-    # --- zone_groups (the three mode groups) --------------------------------
+    # --- zone_groups (editor-defined; no built-in defaults) -----------------
     groups = data.get("zone_groups")
     if groups is not None and not isinstance(groups, dict):
         raise ValueError("'zone_groups' must be an object")
@@ -524,11 +504,6 @@ def validate_brain_config(data: Any) -> dict:
     zone_groups: Dict[str, dict] = {}
     for name, g in groups.items():
         zone_groups[name] = _validate_mode_group(name, g)
-    # Fill in any default mode groups not present in the file, so the brain always
-    # has the full set.
-    for name in DEFAULT_BRAIN_CONFIG["zone_groups"]:
-        if name not in zone_groups:
-            zone_groups[name] = _validate_mode_group(name, DEFAULT_BRAIN_CONFIG["zone_groups"][name])
 
     # --- hunt (top-level) ---------------------------------------------------
     hunt = data.get("hunt")

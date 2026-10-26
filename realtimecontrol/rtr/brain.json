@@ -8,7 +8,21 @@
       "websocket": true
     }
   },
-  "zone_groups": {},
+  "zone_groups": {
+    "active": {
+      "zones": [
+        "task1",
+        "task2",
+        "task3",
+        "task1_task2_bridge",
+        "task2_task3_bridge"
+      ],
+      "enabled": true,
+      "params": {
+        "dwell_s": 35
+      }
+    }
+  },
   "hunt": {
     "zones": [],
     "behaviors": [],

@@ -1,5 +1,173 @@
 # Task Handoff Log
 
+## 2026-10-26 — Removed the hardcoded zone groups (museum-closed / event-sit-back / stage-takeover) so editor-created groups are the only ones and deletions persist across reloads
+
+### Status
+
+Completed. The three default zone groups no longer exist anywhere in the realtime-control codebase; `zone_groups` is now purely editor-created. `hunt` and `facefocus` are untouched (they are special brain loops, not groups-tab groups, and remain in `BRAIN_DEFAULT_GROUPS` for their param defaults).
+
+### Summary
+
+The user's deleted groups (`museum-closed`, `event-sit-back`, `stage-takeover`) kept reappearing because both the editor and the Python core **re-seeded** them on every load from hardcoded defaults, even though `brain.json` on disk already had `"zone_groups": {}`. The fix removes every re-seed point and every hardcoded copy of the three groups:
+
+- **`rtr/brain/config.py`** — `DEFAULT_BRAIN_CONFIG["zone_groups"]` is now `{}`; the "fill in any default mode groups not present in the file" loop in `validate_brain_config()` is removed; the shape docstring no longer lists the three groups. The Python brain (`brain.py`) reads `zone_groups` generically (iterates whatever exists), so empty is safe. The `performance_mode` display heuristic in `brain.py:280-283` still references the old names but degrades safely (group absent → `performance_mode: False`).
+- **`editor.html`** — `BRAIN_FALLBACK.zone_groups` is now `{}`; `BRAIN_DEFAULT_GROUPS` no longer contains the three groups (only `hunt`/`facefocus` remain, needed by `_brainNormalizeGroup` for their `params` defaults); the re-seed loop in `normalizeBrain()` is removed. `buildGroupsForm()` renders from `BRAIN.zone_groups` as before; `removeGroup()` now sticks.
+- **`client.html`** — `BRAIN_FALLBACK.zone_groups` is now `{}` (display-client fallback only; its `loadBrain()` already built groups generically from the fetched data).
+- **`test_groups_tab.js`** — the test was already broken (LOAD ERROR from a stale mini-DOM `STATIC_IDS` list and stale API exports `_buildGroupBlock`/`selectedGroup`). Rewritten: added the 41 missing static element IDs, upgraded the mini-DOM `matchOne` to handle `[data-attr]`/`[attr=value]` selectors (needed by `.brainCard[data-name]` and `input[type=checkbox]`), fixed the export list, and rewrote the assertions for the no-default-groups behavior.
+
+The per-zone `mode_group` field (`zones.json` / `zones.py` `MODE_GROUPS`) is a **separate concept** (a per-zone label, not a groups-tab group) and was intentionally left untouched.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/brain/config.py`: `DEFAULT_BRAIN_CONFIG["zone_groups"]` → `{}`; removed the default-group re-fill loop in `validate_brain_config()`; updated the shape docstring (`zone_groups` example is now "empty by default — groups are created in the editor").
+- `realtimecontrol/rtr/editor.html`: `BRAIN_FALLBACK.zone_groups` → `{}`; `BRAIN_DEFAULT_GROUPS` → only `hunt` + `facefocus` (updated comment); removed the re-seed loop in `normalizeBrain()` (updated comment).
+- `realtimecontrol/rtr/client.html`: `BRAIN_FALLBACK.zone_groups` → `{}`.
+- `realtimecontrol/rtr/test_groups_tab.js`: added 41 missing IDs to `STATIC_IDS`; replaced `matchOne` with a tokenizer that handles tag/class/id/`[data-attr]`/`[attr=value]` selectors (with `dataset` fallback for `data-*`); fixed the `__T` export list (removed `_buildGroupBlock`, `selectedGroup`); rewrote the test body for no-default-groups (on-disk parity assertion, add/rename/remove, reload-no-reseed, `normalizeBrain` unit checks, full-payload save check).
+
+### Documentation
+
+- `config.py` module docstring updated (the `zone_groups` shape example and the "three mode groups" comment are gone). No other documentation needed — the groups tab's in-editor help text already describes groups generically.
+
+### Architecture
+
+- No architectural change. The runtime group-navigation mechanism (`zone_groups` + `_handle_enable_group` + `_allowed_zones`) is unchanged; it now operates on a purely editor-defined set. The config contract shifts from "the brain always has the three default groups" to "the brain has exactly the groups in brain.json" — an empty set is valid (autonomy then runs across all enabled zones, as `_allowed_zones` already handles when no group is active).
+
+### Validation
+
+- `node test_groups_tab.js`: **ALL_TESTS_PASSED** (20 assertions, including no-reseed-on-reload and the full save payload with hunt/facefocus/autonomy/behaviors/cam_control intact).
+- Python config checks: `validate_brain_config({'zone_groups': {}})` → `{}`; `builtin_brain_config()['zone_groups']` → `{}`; `load_brain_config('brain.json')` → `zone_groups = {}` (at the time; the file now holds the concurrent `active` group, which also validates); a custom editor-created group validates with its params preserved.
+- `python3 -m pytest tests/ -q --ignore=tests/test_remote_tui.py`: **296 passed, 5 failed, 14 skipped** — identical to the pre-change baseline (the 5 failures are the pre-existing `test_remote_sdl` TUI failures; `test_remote_tui.py` has a pre-existing collection ImportError for `action_kind`, also unrelated).
+- Brain/zone-group Python tests in isolation (`test_zone_groups.py`, `test_brain_autonomy_dwell.py`, `test_brain_assertive.py`, `test_midi_brain_trigger.py`, `test_brain_action_cam.py`): **50 passed**.
+- Grep sweep: no remaining references to `museum-closed`/`event-sit-back`/`stage-takeover` in any `.html` or `.js` file (only the out-of-scope per-zone `mode_group` labels in `zones.py` and the safe `performance_mode` heuristic in `brain.py`).
+
+### Decisions and Caveats
+
+- `hunt`/`facefocus` were deliberately kept in `BRAIN_DEFAULT_GROUPS` because `_brainNormalizeGroup("hunt"/"facefocus", ...)` reads their `params` defaults from there; removing them would throw on `dp.lost_s` etc. They are stripped from `BRAIN.zone_groups` by `normalizeBrain` as before.
+- The `brain.py` `performance_mode` heuristic (`stage-takeover` enabled while `event-sit-back` disabled) was left as-is: it is display-only, degrades to `False` when the groups are absent, and would work again if the user re-creates groups with those exact names.
+- **Concurrent work**: while this task ran, a separate "tasknet" task modified the live data files (`zones.json` now has 11 zones, `brain.json` `zone_groups` now holds a single `active` group). Those changes are independent of this fix and were not touched; the rewritten `test_groups_tab.js` is robust to whatever groups exist on disk (it asserts in-memory == on-disk, not a fixed count).
+- `test_remote_tui.py` (collection ImportError) and the `test_remote_sdl.py` failures are pre-existing and out of scope.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+The groups tab now shows exactly the groups in `brain.json` (currently: `active`, from the concurrent tasknet work). If the user wants to delete it, the editor's remove button now persists the deletion across reloads — no further code change needed. If groups are re-added via the editor, they are stored in `brain.json` and picked up by the Python core on hot-reload. Do not re-introduce default groups in `config.py`/`editor.html`; the re-seed loops are deliberately gone.
+
+## 2026-10-26 — Built the 3-task zone test network (task1 scan → task2 track → task3 approach/facefocus + retreat) and the selectable `active` group
+
+### Status
+
+Completed. `zones.json` now holds **11 zones** (was 6): the original `resting`, `sleeping`, `testing`, `scanning`, `sleeping_testing_bridge`, `sleeping_scanning_bridge` plus 5 new ones — `task1`, `task2`, `task3`, `task1_task2_bridge`, `task2_task3_bridge`. `brain.json` `zone_groups` now holds a single **`active`** group containing all 5 created zones. Both files pass their validators; the test suite is unchanged (296 passed, the same 5 pre-existing `test_remote_sdl` TUI failures, 14 skipped).
+
+### Summary
+
+Built a small 3-task engagement-ladder test network that exercises the available camera modes, behaviors, and the brain engagement ladder, with every created zone placed in a selectable `active` group. The flow is `task1 (scan) → task1_task2_bridge → task2 (track) → task2_task3_bridge → task3 (approach/facefocus/retreat)`, with task3's `retreat` looping back to task1/task2.
+
+**task1** — class `scan` (non-active → `variable_axes`), `mode_group` `event-sit-back`. Supplied safezone `[(-185,185),(-95,-85),(15,25),(0,1),(75,85),(-5,5)]` and pose `[45,-90,20,0,80,0]` (A1 free; A2=-90, A3=20, A4=0, A5=80, A6=0) used exactly. Single action `scan` (idle sweep, `variable_axes: [0]`, behavior `spontaneous`, `dwell_s: 35`) → `task1_task2_bridge/bridge`.
+
+**task2** — class `track` (active → `axis_bands`), `mode_group` `event-sit-back`. Supplied safezone `[(-185,185),(-50,-40),(15,25),(0,1),(35,45),(-5,5)]`, pose `[0,-45,20,0,40,0]`. Single action `locked` (`axis_bands` = safezone, behavior `locked`, speed 40) → `task2_task3_bridge/bridge`.
+
+**task3** — class `approach` (active → `axis_bands`), `mode_group` `event-sit-back`. Supplied safezone `[(-185,185),(-20,-10),(15,25),(-10,10),(-25,-15),(-15,15)]`, pose `[0,-15,20,0,-20,0]`. Three actions: `approach` (behavior `aggressive`, speed 100) → `facefocus`; `facefocus` (behavior `gentle`, close face) → `retreat`; `retreat` (behavior `calm`, `loop: false`) → `task1/scan` + `task2/locked`.
+
+**Bridges** — no class (like the existing bridges). `task1_task2_bridge` (safezone = task2's, pose = task2's start `[0,-45,20,0,40,0]`) → `task2/locked`. `task2_task3_bridge` (safezone = task3's, pose = task3's start `[0,-15,20,0,-20,0]`) → `task3/approach`. Both satisfy `find_shared_pose` (margin 0.5): the bridge pose is the target's start pose, so the handoff commits at the shared pose (index 0 in both lists).
+
+**`active` group** (brain.json `zone_groups`): `{zones: [task1, task2, task3, task1_task2_bridge, task2_task3_bridge], enabled: true, params: {dwell_s: 35}}`. All 5 created zones are included so that when the group is active, `_allowed_zones` (brain.py:1563) still permits the next-links to the bridges (a group-active brain restricts autonomy to the group's zones; excluding the bridges would make the task1→task2 and task2→task3 links invalid).
+
+**Key validation decisions:**
+- safezone `A4=(0,0)` in the supplied task1/task2 values is **invalid** (`_validate_zone` requires strict `lo < hi`); normalized to `(0,1)` — the same precedent as the existing `resting`/`scanning` zones. All other supplied safezone values used exactly.
+- Inverted safezone ranges from the prior turn were already normalized before this write.
+- The group's `params.dwell_s` (35) is documentation: `_autonomy_dwell_s` (brain.py:883) looks the group up by the zone's `mode_group` (`event-sit-back`), not by the group name (`active`), so it does not apply at runtime. The 35s idle dwell is instead set per-action on `task1/scan` (`dwell_s: 35`), which is the value the dwell lookup actually reads.
+
+### Changes Made
+
+- `realtimecontrol/rtr/zones.json`: added `task1`, `task2`, `task3`, `task1_task2_bridge`, `task2_task3_bridge` to `zones`; added their `layout.pos` entries (a fresh bottom-right cluster at x≈1200-1600, y≈300-500); updated `layout.key` to include all 11 zone names.
+- `realtimecontrol/rtr/brain.json`: added the `active` group to `zone_groups` (previously `{}`).
+- Backups: `zones.json.pre-tasknet` and `brain.json.pre-tasknet` (the pre-write state of each file).
+- Build script: `/tmp/kilo/build_task_network.py` (idempotent-guarded; asserts the new zone names don't already exist before writing; validates both files before the atomic replace).
+
+### Documentation
+
+- None required — no config contract or behavior changed; this adds test data to the existing zone/brain schema.
+
+### Architecture
+
+- No architectural change. The network reuses the existing engagement-ladder classes (`scan`/`track`/`approach`), the bridge transition pattern (no-class zone, safezone = target's, pose = target's start, `behavior: bridge`, `loop: false`, next → target), and the runtime group-navigation mechanism (`zone_groups` + `_handle_enable_group` + `_allowed_zones`). The `active` group is a new selectable group, not a new mode_group.
+
+### Validation
+
+- `validate_state_data` (full zones.json): **passes** (11 zones).
+- `validate_brain_config` (full brain.json): **passes** (`zone_groups: ['active']`).
+- `find_shared_pose` bridge continuity: `task1_task2_bridge/bridge → task2/locked` shared `([0,-45,20,0,40,0], 0, 0)`; `task2_task3_bridge/bridge → task3/approach` shared `([0,-15,20,0,-20,0], 0, 0)`.
+- Pose-in-safezone + HARDWARE_LIMITS check (script assertions): all 3 task poses within their safezone and the hardware floor.
+- `python3 -m pytest tests/ -q --ignore=tests/test_remote_tui.py`: **296 passed, 5 failed, 14 skipped** — the 5 failures are the pre-existing `test_remote_sdl` TUI failures (unrelated to zones, identical to before this change).
+
+### Decisions and Caveats
+
+- Zone names `task1`/`task2`/`task3` and the task2/task3 poses are my design choices (the user supplied only the task1 pose and the three safezones).
+- The `active` group includes the bridges (not just task1/task2/task3) — required for group-active navigation to work (see Summary). If the user wants a UI group that lists only the three "real" tasks, the bridges would need to stay reachable some other way; as it stands, the group is the navigation-safe choice.
+- The `active` group's `params.dwell_s` is not read at runtime (group lookup is by `mode_group`, not group name). The 35s dwell is effective only via the per-action `dwell_s` on `task1/scan`.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+If extending the network: add new zones to `zones.json` `zones` (validate with `validate_state_data`), add their `layout.pos` entries and update `layout.key`, and add them to the `active` group in `brain.json` `zone_groups` if they should be reachable under group-active navigation. For active-class zones (`track`/`farfocus`/`approach`/`facefocus`) use `axis_bands`; for non-active classes use `variable_axes`. Bridge zones follow the existing pattern (no class, safezone = target's, pose = target's start pose, `behavior: bridge`, `loop: false`, next → target).
+
+## 2026-10-26 — Added `resting` zone (exact backup pose) to `zones.json` to fix `KeyError: 'resting'` on startup
+
+### Status
+
+Completed. `python main.py --robot` no longer crashes at `StateMachine.__init__` with `KeyError: 'resting'`. `zones.json` now holds 6 zones: `resting`, `sleeping`, `testing`, `scanning`, `sleeping_testing_bridge`, `sleeping_scanning_bridge`.
+
+### Summary
+
+The 5-zone rewrite of `zones.json` removed the `resting` zone, but `StateMachine.__init__` (machine.py:35) defaults to `initial_zone="resting"` and `reset()` (machine.py:803) hardcodes `current_zone="resting"` — so `main.py` crashed at startup with `KeyError: 'resting'` before the engine ever ran.
+
+The `resting` zone was re-added from the backup (`zones.json.bak-20261026-121651`) with the exact backup pose data:
+- **`resting`** (single action `hold`): the backup's exact 3 `hold` poses `[[10,-59,-10,0,60,0],[0,-130,-9,0,0,0],[-60,-90,-9,15,10,0]]`, exact `safezone` (6 axis pairs), `speed: 20`, `variable_axes: [0..5]`, `behavior: "restless"`, `loop: true`, `speed: 20`, and the backup's `pose_imgs`/`pose_videos`.
+- `next`: `[{zone: "sleeping", action: "breathe"}]` — the backup's first zone-level exit (`["sleeping","breathe"]`), adapted to the current 5-zone world (the backup's other targets `wake`/`resting_testing_bridge` no longer exist). Harmless at runtime: `hold` is `loop: true`, so it wraps around and never fires `_advance_after_action`; the entry only feeds the `zones.graph()` display.
+- The backup's `wake` action and zone-level `exits` field were **not** carried over (the `exits` field is gone from the current schema; `wake`'s next referenced the removed `resting_sleeping_bridge`).
+- `layout.pos.resting` = the backup's exact position `{x: 479.02371978759766, y: 11.794570922851562}`; `layout.key` updated to include `resting`.
+
+Resulting flow graph: `resting → sleeping` (informational only for the looping action) plus the existing `sleeping → bridges → testing/scanning`.
+
+### Changes Made
+
+- `realtimecontrol/rtr/zones.json`: added the `resting` zone (first in the `zones` object) with the single `hold` action; added `layout.pos.resting`; added `resting` to `layout.key`.
+
+### Documentation
+
+- None required — no config contract or behavior changed; this restores the home zone the runtime already assumes.
+
+### Architecture
+
+- No architectural change. `resting` is the canonical home zone (`StateMachine` default `initial_zone` and `reset()` both target it). It is a single-action looping zone, consistent with the current minimal-zone pattern (`scanning` is also single-action). The previous-zone fallback would auto-return it if it ever dead-ended, but `loop: true` means it never ends.
+
+### Validation
+
+- `validate_state_data` (full file): passes.
+- `StateMachine(Zones(data["zones"]), tick_hz=20.0)`: initializes with `current_zone="resting"`, `speed=20` — the exact previously-failing call.
+- `python3 -m pytest tests/ -q --ignore=tests/test_remote_tui.py`: **296 passed, 5 failed, 14 skipped** — the 5 failures are the pre-existing `test_remote_sdl` TUI failures (unrelated to zones, same as before this change).
+- `tests/test_remote_tui.py` collection error: pre-existing `ImportError: cannot import name 'action_kind' from 'rtr.flow'` (stale test import; unrelated to this data change).
+- `brain.json` `zone_groups` is `{}` (empty), so the stale `DEFAULT_BRAIN_CONFIG` zone names are not used at runtime.
+
+### Decisions and Caveats
+
+- Only the `hold` action was ported (not `wake`): the user asked for "a resting pose" and the current architecture favors single-action zones. If the `wake` transition back into sleep is wanted later, port it from the backup and re-point its `next` (the backup's `resting_sleeping_bridge` no longer exists — it would need a new `resting_sleeping_bridge` or a direct `sleeping/breathe` hop).
+- The `resting → sleeping` link in `next` is informational (looping actions never auto-advance); actual transitions to `resting`/`sleeping` happen via manual triggering (brain/patches/midi/chatbot `trigger_action`/`play_action` commands).
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+If the operator wants the full backup `resting` zone back (both `hold` and `wake`), port `wake` from `zones.json.bak-20261026-121651` and re-point its `next` to existing zones. If a physical bridge path resting→sleeping is wanted, add a `resting_sleeping_bridge` following the existing bridge pattern (single `bridge` action, `loop: false`, `variable_axes: []`, pose = target entry pose).
+
 ## 2026-10-26 — Rewrote `zones.json` to a 5-zone table (sleeping / testing / scanning + 2 bridges) and updated the data-dependent tests
 
 ### Status

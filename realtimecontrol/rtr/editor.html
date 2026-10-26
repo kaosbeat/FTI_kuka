@@ -1121,26 +1121,7 @@ const BRAIN_FALLBACK = {
     dwell_s: 30.0,
     events: { midi: true, camera: true, websocket: true },
   },
-  zone_groups: {
-    "museum-closed": {
-      zones: ["resting", "sleeping", "cuddling", "purring"],
-      behaviors: [],
-      enabled: true,
-      params: { speed: 10, dwell_s: 60.0 },
-    },
-    "event-sit-back": {
-      zones: ["stretching", "hunting", "examining", "performing"],
-      behaviors: [],
-      enabled: true,
-      params: { speed: 40, dwell_s: 30.0 },
-    },
-    "stage-takeover": {
-      zones: ["roaring", "growling", "clawing", "leaping"],
-      behaviors: [],
-      enabled: true,
-      params: { speed: 80, dwell_s: 15.0 },
-    },
-  },
+  zone_groups: {},
   hunt: {
     zones: ["hunting"],
     behaviors: [],
@@ -2354,16 +2335,10 @@ async function loadPatches() {
 // payload would clobber the groups it omits.
 // ---------------------------------------------------------------------------
 
-// Default group values, mirroring rtr/brain/config.py DEFAULT_BRAIN_CONFIG. Used
-// to fill in any group (or field) missing from the fetched config so BRAIN is
-// always complete.
+// Default param values for the special brain loops (hunt/facefocus), mirroring
+// rtr/brain/config.py DEFAULT_BRAIN_CONFIG. Zone groups have no built-in
+// defaults — they exist only as created in the editor (BRAIN.zone_groups).
 const BRAIN_DEFAULT_GROUPS = {
-  "museum-closed":  { zones: ["resting", "sleeping", "cuddling", "purring"], behaviors: [], enabled: true,
-                      params: { speed: 10, dwell_s: 60.0 } },
-  "event-sit-back": { zones: ["stretching", "hunting", "examining", "performing"], behaviors: [], enabled: true,
-                      params: { speed: 40, dwell_s: 30.0 } },
-  "stage-takeover": { zones: ["roaring", "growling", "clawing", "leaping"], behaviors: [], enabled: true,
-                      params: { speed: 80, dwell_s: 15.0 } },
    hunt:      { zones: ["hunting"], behaviors: [], enabled: true,
                  params: { lost_s: 2.0, min_conf: 0.1, centrality_weight: 0.1,
                            attention_guard: ["locked", "intent", "curious", "gentle"],
@@ -2555,8 +2530,8 @@ function normalizeBehaviors(raw) {
 }
 
 // Normalise a raw brain config to the full { autonomy, zone_groups } shape. Keeps
-// every group present in the file (including custom ones) and fills the known
-// defaults so the brain always has the full set.
+// every group present in the file (including custom ones); there are no built-in
+// default groups to fill in.
 function normalizeBrain(data) {
   data = data || {};
   const fb = BRAIN_FALLBACK;
@@ -2575,11 +2550,6 @@ function normalizeBrain(data) {
   const src = data.zone_groups || {};
   for (const name of Object.keys(src)) {
     if (name !== "hunt" && name !== "facefocus") groups[name] = _brainNormalizeGroup(name, src[name]);
-  }
-  for (const name of Object.keys(BRAIN_DEFAULT_GROUPS)) {
-    if (name !== "hunt" && name !== "facefocus") {
-      if (!groups[name]) groups[name] = _brainNormalizeGroup(name, src[name]);
-    }
   }
   const hunt = _brainNormalizeGroup("hunt", data.hunt || fb.hunt);
   const facefocus = _brainNormalizeGroup("facefocus", data.facefocus || fb.facefocus);

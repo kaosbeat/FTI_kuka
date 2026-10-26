@@ -308,11 +308,7 @@ async function fetchZones() {
 // ------------------------------------------------------------------
 let BRAIN = null;
 const BRAIN_FALLBACK = {
-  zone_groups: {
-    "museum-closed": { zones: ["resting", "sleeping", "cuddling", "purring"] },
-    "event-sit-back": { zones: ["stretching", "hunting", "examining", "performing"] },
-    "stage-takeover": { zones: ["roaring", "growling", "clawing", "leaping"] },
-  },
+  zone_groups: {},
 };
 
 async function loadBrain() {
