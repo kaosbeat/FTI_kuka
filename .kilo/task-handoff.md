@@ -1,5 +1,61 @@
 # Task Handoff Log
 
+## 2026-10-26 — Fixed all broken action-level links in the 3-task zone network (2-pose bridges + retreat bridges)
+
+### Status
+
+Completed. All four broken action-level links in the 3-task zone network (task1→task2→task3 + retreat) now validate clean (green) against the editor's `edgeConflict` rules. The 4 task-network links are fixed; the 3 pre-existing sleeping/resting bridge links remain red (out of scope — they are not part of the 3-task network).
+
+### Summary
+
+The 3-task network's inter-zone links were structurally broken: a **single-pose** bridge cannot be clean on *both* legs when the source's end pose ≠ the target's start pose. The editor's `edgeConflict` checks (1) safezone overlap on all 6 axes and (2) source END pose (`poses[-1]`) vs target START pose (`poses[0]`) per-axis within 0.5. A single-pose bridge has `poses[0] == poses[-1]`, so it can match at most one of the two endpoints.
+
+**Fix:** rewrite each bridge as a **2-pose bridge** `poses = [source_end, target_start]`, with a safezone that (a) contains *both* poses (intra-zone check) and (b) overlaps *both* neighboring zones' safezones on every axis (inter-zone check). This makes leg 1 share `poses[0]` (source end) and leg 2 share `poses[-1]` (target start), so both validate clean. The runtime already handles this: `_compute_handoff` → `find_shared_pose` finds a shared pose on entry (resume from `poses[0]`) and on exit (resume from `poses[-1]`), consistent with the existing single-pose bridges.
+
+**Retreat links** (task3→task1, task3→task2) were *direct* inter-zone links with no safezone overlap on A2/A5. Added two new bridge zones (`task3_task1_bridge`, `task3_task2_bridge`) and redirected `task3/retreat`'s `next` to route through them.
+
+### Changes Made
+
+- `realtimecontrol/rtr/zones.json`:
+  - `task1_task2_bridge`: safezone A2 `[-50,-40]`→`[-95,-40]`, A5 `[35,45]`→`[35,85]` (span both task1/task2 safezones); poses `[[0,-45,20,0,40,0]]` → `[[45,-90,20,0,80,0],[0,-45,20,0,40,0]]` (2-pose); `pose_imgs`/`pose_videos` → 2 entries.
+  - `task2_task3_bridge`: safezone A2 `[-20,-10]`→`[-50,-10]`, A4 `[-10,10]`→`[0,1]`, A5 `[-25,-15]`→`[-25,45]`, A6 `[-15,15]`→`[-5,5]`; poses `[[0,-15,20,0,-20,0]]` → `[[0,-45,20,0,40,0],[0,-15,20,0,-20,0]]` (2-pose); `pose_imgs`/`pose_videos` → 2 entries.
+  - **new** `task3_task1_bridge`: safezone `[[-185,185],[-95,-10],[15,25],[0,1],[-25,85],[-5,5]]`, poses `[[0,-15,20,0,-20,0],[45,-90,20,0,80,0]]`, `next` → `task1/scan`.
+  - **new** `task3_task2_bridge`: safezone `[[-185,185],[-50,-10],[15,25],[0,1],[-25,45],[-5,5]]`, poses `[[0,-15,20,0,-20,0],[0,-45,20,0,40,0]]`, `next` → `task2/locked`.
+  - `task3/retreat`: `next` changed from direct `[task1/scan, task2/locked]` → `[task3_task1_bridge/bridge, task3_task2_bridge/bridge]`.
+  - `layout.pos`: added `task3_task1_bridge` (1350,420) and `task3_task2_bridge` (1500,480); `layout.key` updated to include both.
+- `realtimecontrol/rtr/brain.json`: `zone_groups.active.zones` now includes `task3_task1_bridge` and `task3_task2_bridge` (7 zones total).
+
+### Documentation
+
+None required — the zone/bridge data model (unified `poses` form, 2-pose bridge = a multi-anchor stepping action) is already documented in `zones.py`'s module docstring; no new behavior or config contract was introduced.
+
+### Architecture
+
+No architectural change. The bridge pattern (a no-op `behavior: "bridge"` zone that steps through curated anchor poses to transition between zones) is unchanged; the fix only corrects the *data* (poses + safezones + routing) so the existing `edgeConflict`/`find_shared_pose` logic validates clean. The 2-pose form is the canonical "multi-anchor action" the unified form already supports.
+
+### Validation
+
+- `/tmp/kilo/validate_links.py` (mirrors editor `edgeConflict` exactly): **before** 7 broken links (4 task-network + 3 sleeping/resting); **after** 3 broken links (0 task-network + 3 sleeping/resting). All 4 task-network links green.
+- `python -c "from rtr.state.zones import load_state_data; load_state_data('zones.json')"`: loads OK, 13 zones, all 4 bridges have 2 poses.
+- `python -m pytest tests/test_bridge_behavior.py tests/test_safety_conflict.py tests/test_state_machine.py tests/test_zone_groups.py tests/test_transition.py -q`: **60 passed, 9 skipped**.
+- `python -m pytest tests/ -q --ignore=tests/test_remote_tui.py`: **296 passed, 5 failed, 14 skipped** — the 5 failures are the pre-existing `test_remote_sdl` TUI failures (confirmed pre-existing by `git stash` + re-run); `test_remote_tui.py` has a pre-existing collection ImportError (`action_kind`), also unrelated.
+
+### Decisions and Caveats
+
+- **2-pose bridge is the minimal clean fix.** A single-pose bridge is mathematically impossible to be clean on both legs when source-end ≠ target-start. The 2-pose form `[source_end, target_start]` is the only shape that satisfies both `edgeConflict` legs.
+- **Safezones are per-axis *spans* (not intersections).** Each bridge safezone must contain both anchor poses AND overlap both neighbors on every axis; using the union-span (e.g. A5 `[35,85]` for task1_task2_bridge) satisfies both constraints. An intersection would be empty on A2/A5 and fail.
+- **Agent-chosen poses are adjustable.** task2/locked `[0,-45,20,0,40,0]` and task3 approach/facefocus/retreat `[0,-15,20,0,-20,0]` were agent-chosen (must stay in their zone safezones). If the user changes them, the bridge poses + safezones must be recomputed (bridge poses = `[source_end, target_start]`; safezone = per-axis span containing both poses that overlaps both neighbors).
+- **The 3 sleeping/resting red links are out of scope** but share the same structural flaw (single-pose bridges: `sleeping_testing_bridge`, `sleeping_scanning_bridge`, and the `resting/hold`↔`sleeping/breathe` direct link). They can be fixed with the same 2-pose pattern if requested.
+- **Dwell caveat (unchanged):** `_autonomy_dwell_s` (brain.py:883) looks up group by `mode_group` (`event-sit-back`), not by group name (`active`), so `params.dwell_s` in the `active` group is documentation-only; effective dwell is the per-action `dwell_s: 35` on `task1/scan`.
+
+### Next Task
+
+Fix the 3 remaining pre-existing red links (sleeping/resting network) using the same 2-pose bridge pattern, if the user wants the whole graph green. Otherwise no immediate next task.
+
+### Instructions for the Next Task
+
+The 2-pose bridge recipe: for a link `A → B` where A's end pose ≠ B's start pose, create/rewrite the bridge zone with `poses = [A_end, B_start]` and a safezone whose each axis is a span that (a) contains both `A_end[i]` and `B_start[i]` and (b) overlaps both A's and B's safezone on that axis. Add the bridge to `layout.pos` + `layout.key` (zones.json) and to the relevant `zone_groups` (brain.json). Validate with `/tmp/kilo/validate_links.py` (must show 0 broken links in the target network) and `pytest tests/test_bridge_behavior.py tests/test_safety_conflict.py`. Do NOT touch the 3 sleeping/resting links unless explicitly requested (out of scope for the tasknet work).
+
 ## 2026-10-26 — Removed the hardcoded zone groups (museum-closed / event-sit-back / stage-takeover) so editor-created groups are the only ones and deletions persist across reloads
 
 ### Status
