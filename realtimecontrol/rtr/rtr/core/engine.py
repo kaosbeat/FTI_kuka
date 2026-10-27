@@ -166,6 +166,7 @@ class Engine:
                     self._render_ui_setter(
                         hud=cmd.payload.get("hud"),
                         code=cmd.payload.get("code"),
+                        cam=cmd.payload.get("cam"),
                     )
             elif cmd.cmd == Cmd.SNAPSHOT_GRAB:
                 # Fetch the RPi's latest camera frame into the local snapshot

@@ -34,6 +34,10 @@
     white-space: pre-wrap; word-break: break-all;
     pointer-events: none; display: none;
   }
+  #camOverlay {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    z-index: 5; pointer-events: none; display: none;
+  }
 </style>
 </head>
 <body>
@@ -48,6 +52,7 @@
   <div class="row"><span class="k">midi</span><span id="midiStatus">—</span></div>
 </div>
 <div id="codeOverlay"></div>
+<canvas id="camOverlay"></canvas>
 
 <script src="https://cdn.jsdelivr.net/npm/hydra-synth/dist/hydra-synth.js"></script>
 <script>
@@ -61,7 +66,12 @@ let PATCHES = { default: DEFAULT_CODE, zones: {}, modes: {}, actions: {} };
 let hydra = null;
 let lastCode = null;        // the code currently running in the preview
 let ws = null;
-let renderUi = { hud: true, code: false };
+let renderUi = { hud: true, code: false, cam: false };
+// Live camera data for the camera-debug overlay (mirrors camera_debug.html's render):
+// candidate boxes + track/compensated vectors drawn over the hydra canvas (no background).
+let lastTelem = null;   // cam_telem payload (candidates/track/face/status)
+let lastIntent = null;  // camera intent payload (has lock_id)
+let lastServo = null;   // servo payload (dq_deg/dx/dy)
 
 const $ = (id) => document.getElementById(id);
 
@@ -96,9 +106,144 @@ function renderCode(code) {
 
 function applyRenderUi(ui) {
   if (!ui) return;
-  renderUi = { hud: ui.hud !== false, code: ui.code === true };
+  renderUi = { hud: ui.hud !== false, code: ui.code === true, cam: ui.cam === true };
   $("hud").style.display = renderUi.hud ? "" : "none";
   $("codeOverlay").style.display = renderUi.code ? "block" : "none";
+  $("camOverlay").style.display = renderUi.cam ? "block" : "none";
+}
+
+// ---------------------------------------------------------------------------
+// Camera-debug overlay: draws the live cam_telem (candidate boxes + track /
+// compensated vectors) over the hydra canvas, mirroring camera_debug.html. The
+// 640x480 frame is fit "contain" (aspect preserved, centered) into the
+// fullscreen overlay; only the content is drawn (no grid, status bar, or fill).
+// ---------------------------------------------------------------------------
+const FRAME_W = 640, FRAME_H = 480;
+function camIsNum(v) { return typeof v === "number" && !isNaN(v); }
+
+function camTransform() {
+  const c = $("camOverlay");
+  const cw = c.width, ch = c.height;
+  const scale = Math.min(cw / FRAME_W, ch / FRAME_H);
+  return { scale, ox: (cw - FRAME_W * scale) / 2, oy: (ch - FRAME_H * scale) / 2 };
+}
+
+function camToCanvas(t, fx, fy) {
+  return [t.ox + fx * t.scale, t.oy + fy * t.scale];
+}
+
+// Map data coords into 640x480 frame space: pixels with explicit dims, or
+// normalized 0..1 (mock), or default pixels (mirrors camera_debug detectScale).
+function camDataScale(coords, candW, candH) {
+  if (candW && candH) return [FRAME_W / candW, FRAME_H / candH];
+  const m = Math.max(...coords);
+  if (m <= 2) return [FRAME_W, FRAME_H];   // normalized 0..1
+  return [1, 1];                            // pixels, default frame size
+}
+
+function camArrowHead(ctx, x0, y0, x1, y1, color) {
+  const ang = Math.atan2(y1 - y0, x1 - x0);
+  const size = 8;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x1 - size * Math.cos(ang - 0.4), y1 - size * Math.sin(ang - 0.4));
+  ctx.lineTo(x1 - size * Math.cos(ang + 0.4), y1 - size * Math.sin(ang + 0.4));
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawCamOverlay() {
+  const c = $("camOverlay");
+  if (!c) return;
+  const ctx = c.getContext("2d");
+  const W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);   // transparent — no background fill
+  if (!renderUi.cam) return;
+
+  const t = camTransform();
+  const cx = t.ox + (FRAME_W / 2) * t.scale;
+  const cy = t.oy + (FRAME_H / 2) * t.scale;
+
+  // image-center cross
+  ctx.strokeStyle = "rgba(215,219,226,0.5)";
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(cx - 12, cy); ctx.lineTo(cx + 12, cy); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx, cy - 12); ctx.lineTo(cx, cy + 12); ctx.stroke();
+
+  const telem = lastTelem;
+  if (!telem) return;   // no telemetry: only the reference cross
+
+  const cands = (telem.candidates && telem.candidates.candidates) || [];
+  const candW = telem.candidates && telem.candidates.w;
+  const candH = telem.candidates && telem.candidates.h;
+  const lockedId = telem.track && telem.track.id != null ? telem.track.id
+                 : (lastIntent && lastIntent.lock_id != null ? lastIntent.lock_id : null);
+
+  // candidate boxes
+  for (const cd of cands) {
+    if (!camIsNum(cd.x1) || !camIsNum(cd.y1) || !camIsNum(cd.x2) || !camIsNum(cd.y2)) continue;
+    const [sx, sy] = camDataScale([cd.x1, cd.y1, cd.x2, cd.y2], candW, candH);
+    const [X1, Y1] = camToCanvas(t, cd.x1 * sx, cd.y1 * sy);
+    const [X2, Y2] = camToCanvas(t, cd.x2 * sx, cd.y2 * sy);
+    const locked = lockedId != null && cd.id === lockedId;
+    ctx.strokeStyle = locked ? "#e05d5d" : "#ff9f40";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(X1, Y1, X2 - X1, Y2 - Y1);
+    const conf = camIsNum(cd.conf) ? cd.conf.toFixed(2) : "";
+    const label = "#" + cd.id + " " + conf + (locked ? " LOCK" : "");
+    ctx.fillStyle = locked ? "#e05d5d" : "#ff9f40";
+    ctx.font = "12px monospace";
+    ctx.fillText(label, X1, Math.max(0, Y1 - 4));
+  }
+
+  // track: arrow from image center to the tracked point + cross marker
+  if (telem.track) {
+    const tr = telem.track;
+    if (camIsNum(tr.cx) && camIsNum(tr.cy)) {
+      const [sx, sy] = camDataScale([tr.cx, tr.cy]);
+      const [px, py] = camToCanvas(t, tr.cx * sx, tr.cy * sy);
+      ctx.strokeStyle = "#4fc08d";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(px, py); ctx.stroke();
+      camArrowHead(ctx, cx, cy, px, py, "#4fc08d");
+      ctx.beginPath(); ctx.moveTo(px - 8, py); ctx.lineTo(px + 8, py); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(px, py - 8); ctx.lineTo(px, py + 8); ctx.stroke();
+      ctx.fillStyle = "#4fc08d";
+      ctx.font = "12px monospace";
+      const txt = "dx=" + (camIsNum(tr.dx) ? tr.dx.toFixed(1) : "-") +
+                  " dy=" + (camIsNum(tr.dy) ? tr.dy.toFixed(1) : "-");
+      ctx.fillText(txt, px + 12, py + 4);
+    }
+  }
+
+  // compensated: the Jacobian-mapped joint command (dq_deg) the servo will drive.
+  const sv = lastServo;
+  if (sv && Array.isArray(sv.dq_deg) && sv.dq_deg.length) {
+    const nrm = Math.sqrt(sv.dq_deg.reduce((a, b) => a + (camIsNum(b) ? b * b : 0), 0));
+    if (nrm > 1e-3) {
+      const len = Math.min(160, nrm * 6);
+      const ox = camIsNum(sv.dx) ? sv.dx : 0, oy = camIsNum(sv.dy) ? sv.dy : 0;
+      const omag = Math.sqrt(ox * ox + oy * oy) || 1;
+      const ex = cx + (ox / omag) * len, ey = cy + (oy / omag) * len;
+      ctx.strokeStyle = "#40a0ff";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex, ey); ctx.stroke();
+      camArrowHead(ctx, cx, cy, ex, ey, "#40a0ff");
+      ctx.fillStyle = "#40a0ff";
+      ctx.font = "12px monospace";
+      const dqTxt = "dq=" + sv.dq_deg.map((v) => camIsNum(v) ? v.toFixed(1) : "?").join(",");
+      ctx.fillText(dqTxt, ex + 10, ey - 6);
+    }
+  }
+}
+
+// Keep the overlay canvas backing store matched to the window.
+function sizeCamOverlay() {
+  const c = $("camOverlay");
+  if (!c) return;
+  c.width = window.innerWidth;
+  c.height = window.innerHeight;
 }
 
 // ---------------------------------------------------------------------------
@@ -176,8 +321,13 @@ function connect() {
       // prefer it. Fall back to local matching when it is absent (file:// or an older
       // core that does not push the patch).
       renderCode((typeof m.patch === "string" && m.patch) ? m.patch : matchPatch(m.zone, m.mode, m.action));
-      // Apply the render-page UI state (HUD / code-overlay visibility).
+      // Capture the live camera data for the camera-debug overlay.
+      lastTelem = m.cam_telem || null;
+      lastIntent = m.camera || null;
+      lastServo = m.servo || null;
+      // Apply the render-page UI state (HUD / code-overlay / cam-overlay visibility).
       applyRenderUi(m.render_ui);
+      drawCamOverlay();
     } else if (m.type === "patches_changed") {
       loadPatches();
     }
@@ -186,9 +336,12 @@ function connect() {
 
 // Keep the canvas sized to the window (hydra renders at the canvas resolution).
 window.addEventListener("resize", () => {
-  if (!hydra) return;
-  const c = $("stage").querySelector("canvas");
-  if (c) { c.width = window.innerWidth; c.height = window.innerHeight; }
+  if (hydra) {
+    const c = $("stage").querySelector("canvas");
+    if (c) { c.width = window.innerWidth; c.height = window.innerHeight; }
+  }
+  sizeCamOverlay();
+  drawCamOverlay();
 });
 
 // ---------------------------------------------------------------------------
@@ -221,6 +374,7 @@ async function setupMidi() {
   }
 }
 
+sizeCamOverlay();   // size the camera-overlay canvas to the window before the first frame
 connect();
 // Load the hydra-midi extension (patches can then use note()/cc() from local MIDI).
 if (document.readyState === "loading") {

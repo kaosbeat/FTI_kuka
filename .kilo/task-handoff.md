@@ -1,5 +1,121 @@
 # Task Handoff Log
 
+## 2026-10-27 — Camera-debug overlay on the render page (`cam` flag in `render_ui`) + patches-tab toggle
+
+### Status
+
+Completed. The render page (`render.html`) now overlays the live camera-debug frame (candidate boxes + track/compensated vectors, no background) on top of the hydra canvas, fed by the same live `cam_telem`/`camera`/`servo` state data, and the patches tab of `editor.html` has an on/off toggle for it (`#uiCamToggle`). The `cam` flag rides the existing in-memory `render_ui` state (not persisted to `patches.json`), the same pattern as `hud`/`code`.
+
+### Summary
+
+Goal: an option on `render.html` to overlay the camera-debug frame content (candidate boxes + track/compensated vectors, no background) on top of the hydra render canvas, fed by the same live camera data, plus an on/off toggle in the patches tab of `editor.html`.
+
+The state frame (WS, 20 Hz) already carries everything the overlay needs: `cam_telem` (candidates/track/face/status), `camera` (intent, has `lock_id`), `servo` (`dq_deg`/`dx`/`dy`), and `render_ui` (confirmed in `display.py` `_frame`). So the transport was already in place — this task adds the `cam` flag to `render_ui` (core + editor toggle) and the overlay drawing in `render.html`.
+
+Design: a transparent canvas (`#camOverlay`) on top of the hydra canvas. The 640×480 frame is fit "contain" (aspect preserved, centered) into the fullscreen overlay. Only the content is drawn (no grid, status bar, or dark background fill): candidate boxes (rectangles + `#id`/conf/LOCK labels), the track arrow (green) + cross marker + dx/dy text, the compensated arrow (blue) + dq text, and the image-center cross. The drawing mirrors `camera_debug.html` (`detectScale`/`drawArrowHead`), re-targeted from the 640×480 canvas to the contain-fit overlay transform.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/patches/patches.py`:
+  - `self._render_ui` now `{"hud": True, "code": False, "cam": False}`.
+  - `set_render_ui(self, hud=None, code=None, cam=None)` handles `cam` (bool) and reports it in the log line.
+  - `render_ui()` returns the dict (now includes `cam`).
+- `realtimecontrol/rtr/rtr/core/engine.py`:
+  - `SET_RENDER_UI` branch forwards `cam=cmd.payload.get("cam")` to the `render_ui` setter.
+- `realtimecontrol/rtr/editor.html`:
+  - `#uiCamToggle` button in the patches tab (beside code/hud), title "Toggle the camera-debug overlay … (candidate boxes + track/compensated vectors, no background)".
+  - `renderUi = { hud: true, code: false, cam: false }`; `sendRenderUi(hud, code, cam)` (3-arg); `syncRenderUiToggles()` sets `#uiCamToggle`'s `.active` class.
+  - State-frame handler normalizes `renderUi` (`cam: m.render_ui.cam === true`) and the `_renderUiFp` fingerprint includes `cam`.
+  - `#uiCodeToggle`/`#uiHudToggle`/`#uiCamToggle` onclicks all pass the 3-arg `sendRenderUi(hud, code, cam)`.
+- `realtimecontrol/rtr/render.html`:
+  - `#camOverlay` `<canvas>` + CSS (`position:fixed; inset:0; pointer-events:none; display:none; z-index:5`) — transparent, above the hydra canvas, below the HUD.
+  - `renderUi` gains `cam`; `applyRenderUi()` shows/hides `#camOverlay` from `ui.cam === true`.
+  - State vars `lastTelem`/`lastIntent`/`lastServo`; the state handler captures `m.cam_telem`/`m.camera`/`m.servo` and calls `drawCamOverlay()` after `applyRenderUi()`.
+  - Drawing helpers: `camTransform()` (contain-fit 640×480 → overlay), `camToCanvas()`, `camDataScale()` (pixels-with-dims / normalized / default-pixels, mirrors `detectScale`), `camArrowHead()`, `drawCamOverlay()`, `sizeCamOverlay()`.
+  - Resize handler sizes `#camOverlay` to the window and redraws; `sizeCamOverlay()` runs on load.
+
+### Documentation
+
+None required — the overlay is a UI affordance for the already-documented `render_ui` core state (the earlier code/hud toggle entry documents the push path; this adds the `cam` flag to the same path). The `cam` flag is in-memory only (not persisted to `patches.json`), matching `hud`/`code`.
+
+### Architecture
+
+No architectural change. The `render_ui` command/push path (core `set_render_ui` → `_render_ui` → state frame → `render.html` `applyRenderUi`) and the `cam_telem`/`camera`/`servo` state fields were already in place; this task adds the `cam` flag to `render_ui` and the overlay drawing that consumes the already-pushed camera fields.
+
+### Validation
+
+- JS syntax: extracted the inline `<script>` from `render.html` and ran `node --check` → **OK**.
+- Core import check: imported `rtr.patches` + `rtr.core.engine`; `Patches.set_render_ui(cam=True)` → `render_ui()` returns `{'hud': True, 'code': False, 'cam': True}`; `Cmd.SET_RENDER_UI` present → **OK**.
+- Full test suite (run directly, `tests/test_*.py`): **20 passed, 4 non-zero exits** — all 4 are pre-existing / non-regressions:
+  - `test_zone_scoped_actions.py`: ends with an intentional `pytest.skip()` ("kind/target schema removed") that raises when run directly (all real checks PASS) — not a real failure.
+  - `test_remote_sdl.py`, `test_remote_tui.py`, `test_transition.py`: pre-existing — verified by `git stash` of my Python changes (`engine.py`, `patches.py`) and re-running: the same 3 fail on the clean tree.
+
+### Decisions and Caveats
+
+- **`cam` is in-memory only** (not persisted to `patches.json`), matching the `hud`/`code` flags. Toggling it is a live runtime state change, not a saved patch.
+- **Overlay is transparent** (no background fill / grid / status bar) — only the camera-debug *content* (candidate boxes + track/compensated vectors + image-center cross). This is the "only the content" requirement.
+- **Coordinate mapping** mirrors `camera_debug.html` `detectScale`: data coords are mapped to 640×480 frame space (pixels-with-explicit-dims / normalized-0..1 / default-pixels), then the contain-fit transform maps frame space to the fullscreen overlay (aspect preserved, centered).
+- **Live redraw**: the overlay redraws on every state frame (20 Hz) while `cam` is on, so it tracks the live telemetry. When off, `drawCamOverlay()` clears and returns early.
+
+### Next Task
+
+No immediate next task identified. The camera-debug overlay is complete end-to-end (core flag, editor toggle, render-page drawing).
+
+### Instructions for the Next Task
+
+If extending the overlay: the drawing lives in `render.html`'s `drawCamOverlay()` (helpers `camTransform`/`camToCanvas`/`camDataScale`/`camArrowHead`). Add new elements there, mapping through `camDataScale` (data → 640×480) then `camToCanvas` (frame → overlay). The `cam` flag is in-memory `render_ui` state (not persisted); the toggle is `#uiCamToggle` in the patches tab of `editor.html`.
+
+## 2026-10-27 — KeyError: 'hunting' in brain hunt tick: fail-safe unknown-zone handling in safety gate
+
+### Status
+
+Completed. The recurring engine tick crash `KeyError: 'hunting'` is stopped: `SafetyGate.check_conflict` now treats unknown/None zone names as a conflict instead of raising, so the brain's hunt path degrades to in-place scanning rather than crashing.
+
+### Summary
+
+Root cause: the brain's hunt config (`brain.json` scan/detect entries, `config.py` hunt params) references zone `hunting`, but the runtime zone table is built from `zones.json` (`engine.reload_zones` → `Zones(data.get("zones"))`), which contains 16 zones and has **no** `hunting`. The Python `ZONES` fallback in `zones.py` *does* contain `hunting`, but that fallback is not used at runtime. Crash path: `engine.py` tick → `brain._hunt_tick` → `_hunt_move_safe(scan.get("zone"), scan.get("action"))` → `safety.check_conflict(..., to_zone="hunting")` → `Zones.get("hunting")` → `KeyError`.
+
+Fix: `gate.py` `check_conflict` now resolves unknown/None zone names via a new `_zone_or_none` helper and returns `(True, ["unknown zone: ..."])` instead of raising. In the hunt path, `_hunt_move_safe` returns False on conflict, so the robot scans in place rather than crashing.
+
+This complements the earlier "x" pose placeholder fix (real-time resolves "x" to `curjpos[i]`; the flow editor treats "x" as a wildcard). `check_conflict` and `_pose_outside_safezone` accept an optional `curjpos`; the `engine.py` and `brain.py` real-time paths pass it; `flow.py` passes None.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/safety/gate.py`:
+  - Added `_zone_or_none(zones, name)` helper; returns None for unknown/None zone names instead of a `KeyError`.
+  - `check_conflict`: unknown/None `to_zone` (and `from_zone`) now return `(True, ["unknown zone: ..."])` (fail-safe conflict) instead of raising.
+  - (Earlier "x" work in the same file: optional `curjpos` param on `check_conflict`/`_pose_outside_safezone`.)
+- `realtimecontrol/rtr/tests/test_safety_conflict.py`:
+  - Added `test_unknown_zone_is_a_conflict_not_a_crash` and registered it in `main()`.
+
+### Documentation
+
+None required — the fail-safe is a behavior change on the safety-gate path; the unknown-zone contract is self-evident from the new test and the `check_conflict` docstring.
+
+### Architecture
+
+No architectural change. The safety gate's contract tightens from "unknown zone raises" to "unknown zone is a conflict" (fail-safe). This is a strict superset: every previously-valid conflict is preserved, and the previously-crashing path now degrades gracefully.
+
+### Validation
+
+- `python tests/test_safety_conflict.py`: **11 passed** (10 prior + 1 new unknown-zone regression test; includes the 3 "x" placeholder tests).
+- `python3 -m pytest tests/ --ignore=tests/test_remote_tui.py -q`: **299 passed, 6 failed, 14 skipped** — the 6 failures are pre-existing and unrelated to this change (verified by `git stash` of the tracked changes and re-running: the same 6 fail on the clean tree). Breakdown: 4× `test_remote_sdl` TUI failures, 1× `test_transition.py::test_all_reachable_transitions_complete` (TypeError — an "x" placeholder in a `zones.json` pose is not resolved in the state-machine step target; see Decisions), and `test_remote_tui.py` has a pre-existing collection error (`action_kind` not in `rtr.flow`).
+- Validated against real `zones.json`: `Zones(zones).has("hunting")` → False; `SafetyGate.check_conflict("resting", None, "hunting", "scan")` → `conflict=True`, `issues=["unknown zone: hunting"]`, no `KeyError`.
+
+### Decisions and Caveats
+
+- **Open config decision:** which existing `zones.json` zone/action should replace `hunting` in the hunt config (`brain.json` scan/detect, `config.py` hunt params). The fail-safe stops the crash, but the hunt will scan in place until the config is pointed at a real zone. The intended mapping is unknown and must be confirmed with the user.
+- **Pre-existing failure now surfaced:** `test_transition.py::test_all_reachable_transitions_complete` fails with `TypeError` because `zones.json` poses contain an `"x"` placeholder (e.g. `sleeping/yawn` pose `['x', -134, 157, 3, 0, 0]`) that the state-machine `step()` target does not resolve before handing to `SimRobot.move_joint`. This is a *separate* location from the safety-gate / flow-editor "x" handling and is not fixed by this change. It is pre-existing (fails on the clean tree too) and is a consequence of the "x" feature being added to `zones.json`.
+
+### Next Task
+
+Decide the real zone/action mapping for the hunt config's `hunting` reference, then update `brain.json` + `config.py`. Separately, resolve the "x" placeholder in the state-machine `step()` target so `test_transition.py::test_all_reachable_transitions_complete` passes.
+
+### Instructions for the Next Task
+
+1. Hunt mapping: confirm with the user which `zones.json` zone/action the hunt should target (candidate: the `scanning` zone with its scan action). Replace `hunting` in `brain.json` scan/detect entries and `config.py` hunt params. Re-run `python tests/test_safety_conflict.py`.
+2. State-machine "x" resolution: in `rtr/state/machine.py`, the target pose returned by `step()` must resolve any `"x"` axis to the robot's current joint position before being sent to `move_joint` (mirror the real-time `curjpos` resolution already done in `gate.py`/`engine.py`). Verify with `python tests/test_transition.py`.
+
 ## 2026-10-27 — A3=42 collision: revert testing safezone, move locked_band to new dedicated zone `testing_locked_band`
 
 ### Status

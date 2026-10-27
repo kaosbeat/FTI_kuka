@@ -451,6 +451,7 @@
     <button id="liveToggle" class="liveToggle">&#8617; broadcast</button>
     <button id="uiCodeToggle" class="liveToggle" title="Toggle the patch-code overlay on the render screens">code</button>
     <button id="uiHudToggle" class="liveToggle" title="Toggle the HUD on the render screens">hud</button>
+    <button id="uiCamToggle" class="liveToggle" title="Toggle the camera-debug overlay on the render screens (candidate boxes + track/compensated vectors, no background)">cam</button>
     <span class="patchTopHint">edit a patch slot; toggle broadcast to push the selected slot to the screens</span>
   </div>
   <div class="patchGrid">
@@ -1212,10 +1213,14 @@ function connect() {
       // The core is in manual mode (holding its pose) while the tab is open, so
       // skipping its drive here keeps the inspected pose stable.
       if (!validateView) Robot3D.update({ joints: m.joints, target: m.target, patch: m.patch });
-      // Render-page UI state (HUD / code-overlay toggles).
+      // Render-page UI state (HUD / code-overlay / camera-overlay toggles).
       if (m.render_ui) {
-        renderUi = m.render_ui;
-        const ruFp = (renderUi.hud ? 1 : 0) + "." + (renderUi.code ? 1 : 0);
+        renderUi = {
+          hud: m.render_ui.hud !== false,
+          code: m.render_ui.code === true,
+          cam: m.render_ui.cam === true,
+        };
+        const ruFp = (renderUi.hud ? 1 : 0) + "." + (renderUi.code ? 1 : 0) + "." + (renderUi.cam ? 1 : 0);
         if (ruFp !== _renderUiFp) { _renderUiFp = ruFp; syncRenderUiToggles(); }
       }
       // The 3D arm tracks every frame (20 Hz joints), but the discrete readouts below
@@ -2269,10 +2274,10 @@ function commitPatchEditor() {
 // follow the live state concatenation.
 // ---------------------------------------------------------------------------
 let broadcastOn = false;
-let renderUi = { hud: true, code: false };
+let renderUi = { hud: true, code: false, cam: false };
 
-function sendRenderUi(hud, code) {
-  if (ws) ws.send(JSON.stringify({ cmd: "set_render_ui", hud: hud, code: code }));
+function sendRenderUi(hud, code, cam) {
+  if (ws) ws.send(JSON.stringify({ cmd: "set_render_ui", hud: hud, code: code, cam: cam }));
 }
 
 function broadcastCurrentSlot() {
@@ -2292,6 +2297,7 @@ function syncBroadcastToggle() {
 function syncRenderUiToggles() {
   $("uiCodeToggle").className = renderUi.code ? "liveToggle active" : "liveToggle";
   $("uiHudToggle").className = renderUi.hud ? "liveToggle active" : "liveToggle";
+  $("uiCamToggle").className = renderUi.cam ? "liveToggle active" : "liveToggle";
 }
 
 async function loadPatches() {
@@ -7451,12 +7457,17 @@ $("liveToggle").onclick = () => {
 $("uiCodeToggle").onclick = () => {
   renderUi.code = !renderUi.code;
   syncRenderUiToggles();
-  sendRenderUi(renderUi.hud, renderUi.code);
+  sendRenderUi(renderUi.hud, renderUi.code, renderUi.cam);
 };
 $("uiHudToggle").onclick = () => {
   renderUi.hud = !renderUi.hud;
   syncRenderUiToggles();
-  sendRenderUi(renderUi.hud, renderUi.code);
+  sendRenderUi(renderUi.hud, renderUi.code, renderUi.cam);
+};
+$("uiCamToggle").onclick = () => {
+  renderUi.cam = !renderUi.cam;
+  syncRenderUiToggles();
+  sendRenderUi(renderUi.hud, renderUi.code, renderUi.cam);
 };
 // Action editor (Step 3) modal wiring.
 $("aeClose").onclick = closeActionEditor;
@@ -7506,10 +7517,4 @@ $("ghostCollide").onclick = () => {
     $("ghostInfo").textContent = "clear";
     $("ghostInfo").style.color = "var(--accent)";
   } else {
-    $("ghostInfo").textContent = "COLLIDES: " + res.collisions.map((c) => c.a + "~" + c.b).join(", ");
-    $("ghostInfo").style.color = "#e05d5d";
-  }
-};
-</script>
-</body>
-</html>
+    $("ghostInfo")

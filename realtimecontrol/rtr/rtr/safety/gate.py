@@ -75,8 +75,18 @@ class SafetyGate:
         (source end / target entry) that lies OUTSIDE the zone's safezone.
         """
         issues: List[str] = []
-        zA = self.zones.get(from_zone)
-        zB = self.zones.get(to_zone)
+        zA = self._zone_or_none(from_zone)
+        zB = self._zone_or_none(to_zone)
+        if zA is None or zB is None:
+            # Unknown zone (a config typo, a deleted zone, or None): fail-safe. A
+            # safety gate must never crash on a missing zone — report it as a
+            # conflict so the move is blocked and the robot holds, instead of
+            # raising a KeyError that kills the tick.
+            missing = [n for n in (from_zone, to_zone) if self._zone_or_none(n) is None]
+            issues.append(
+                f"unknown zone: {', '.join(str(n) for n in missing) if missing else 'none'}"
+            )
+            return (True, issues)
 
         if from_zone == to_zone:
             # Intra-zone: no shared-position requirement. Flag a connection pose
@@ -117,6 +127,17 @@ class SafetyGate:
                         )
 
         return (len(issues) > 0), issues
+
+    def _zone_or_none(self, name):
+        """The zone by name, or None when the name is unknown (or None).
+
+        A safety gate must never crash on a missing zone name (a config typo, a
+        deleted zone, or a None): callers receive a conflict and the move is
+        blocked, instead of a KeyError killing the tick.
+        """
+        if name is None:
+            return None
+        return self.zones.get(name) if self.zones.has(name) else None
 
     @staticmethod
     def _zone_overlap_gaps(zA, zB) -> List[str]:

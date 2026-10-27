@@ -123,6 +123,72 @@ def test_inter_zone_safezone_gap_is_a_conflict():
     assert any("safezones do not overlap" in i for i in issues), issues
 
 
+def test_intra_zone_x_pose_no_typeerror_flow_editor_wildcard():
+    """A pose with an ``"x"`` (frozen / copy) axis must not raise TypeError in the
+    flow-editor path (``curjpos`` is None). The ``"x"`` axis is treated as a
+    wildcard (any value within the safezone bounds) and skipped."""
+    g = _gate({"zones": {
+        "z": _zone([[-10, 10]] * 6, {
+            "a": {"poses": [["x", 5, 5, 5, 5, 5]]},
+            "b": {"poses": [[0, 0, 0, 0, 0, 0]]},
+        })
+    }})
+    # Flow-editor path: no curjpos -> "x" is a wildcard, skipped.
+    conflict, issues = g.check_conflict("z", "a", "z", "b")
+    # The concrete axes (A2..A6) are in range; the "x" axis (A1) is skipped.
+    assert not conflict, issues
+
+
+def test_intra_zone_x_pose_resolves_to_curjpos_realtime():
+    """Real-time path (``curjpos`` provided): the ``"x"`` axis resolves to the
+    robot's live position. If that position is OUTSIDE the safezone, the axis is
+    flagged (a conflict)."""
+    g = _gate({"zones": {
+        "z": _zone([[-10, 10]] * 6, {
+            "a": {"poses": [["x", 5, 5, 5, 5, 5]]},
+            "b": {"poses": [[0, 0, 0, 0, 0, 0]]},
+        })
+    }})
+    # curjpos A1 = 50 (outside the [-10, 10] safezone) -> conflict on A1.
+    conflict, issues = g.check_conflict("z", "a", "z", "b", curjpos=[50, 0, 0, 0, 0, 0])
+    assert conflict, "expected a conflict (curjpos A1 outside safezone)"
+    assert any("pose outside" in i and "A1" in i for i in issues), issues
+
+
+def test_intra_zone_x_pose_curjpos_in_range_is_not_a_conflict():
+    """Real-time path: the ``"x"`` axis resolves to the robot's live position. If
+    that position is INSIDE the safezone, no conflict."""
+    g = _gate({"zones": {
+        "z": _zone([[-10, 10]] * 6, {
+            "a": {"poses": [["x", 5, 5, 5, 5, 5]]},
+            "b": {"poses": [[0, 0, 0, 0, 0, 0]]},
+        })
+    }})
+    # curjpos A1 = 0 (inside the [-10, 10] safezone) -> no conflict.
+    conflict, issues = g.check_conflict("z", "a", "z", "b", curjpos=[0, 0, 0, 0, 0, 0])
+    assert not conflict, issues
+
+
+def test_unknown_zone_is_a_conflict_not_a_crash():
+    """A zone name that does not exist in the table (a config typo such as the
+    hunt scan zone "hunting") must be reported as a conflict — not raise a
+    KeyError. The safety gate is fail-safe: the move is blocked and the robot
+    holds, instead of crashing the tick."""
+    g = _gate({"zones": {
+        "z": _zone([[-10, 10]] * 6, {"a": {"poses": [[0, 0, 0, 0, 0, 0]]}}),
+    }})
+    # to_zone "hunting" is not in the table (the hunt-config case).
+    conflict, issues = g.check_conflict("z", "a", "hunting", "scan")
+    assert conflict, "expected a conflict for an unknown zone"
+    assert any("unknown zone" in i for i in issues), issues
+    # from_zone unknown too.
+    conflict2, issues2 = g.check_conflict("nope", None, "z", "a")
+    assert conflict2, "expected a conflict for an unknown from_zone"
+    # A None zone is also a conflict (fail-safe), not a crash.
+    conflict3, issues3 = g.check_conflict(None, None, "z", "a")
+    assert conflict3, "expected a conflict for a None zone"
+
+
 def main():
     tests = [
         test_intra_zone_no_shared_pose_is_not_a_conflict,
@@ -132,6 +198,10 @@ def main():
         test_inter_zone_shared_position_mismatch_is_a_conflict,
         test_inter_zone_matching_shared_pose_is_not_a_conflict,
         test_inter_zone_safezone_gap_is_a_conflict,
+        test_intra_zone_x_pose_no_typeerror_flow_editor_wildcard,
+        test_intra_zone_x_pose_resolves_to_curjpos_realtime,
+        test_intra_zone_x_pose_curjpos_in_range_is_not_a_conflict,
+        test_unknown_zone_is_a_conflict_not_a_crash,
     ]
     failures = 0
     for fn in tests:
