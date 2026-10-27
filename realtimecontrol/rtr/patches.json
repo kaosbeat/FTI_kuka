@@ -10,14 +10,16 @@
     "scanning": "osc(4, 0.1, 1.2).out()",
     "resting": "osc(4, 0.1, 1.2).out()",
     "sleeping_testing_bridge": "osc(4, 0.1, 1.2).out()",
-    "sleeping_scanning_bridge": "osc(4, 0.1, 1.2).out()",
     "task1": "osc(4, 0.1, 1.2).out()",
     "task2": "osc(4, 0.1, 1.2).out()",
     "task3": "osc(4, 0.1, 1.2).out()",
     "task1_task2_bridge": "osc(4, 0.1, 1.2).out()",
     "task2_task3_bridge": "osc(4, 0.1, 1.2).out()",
     "task3_task1_bridge": "osc(4, 0.1, 1.2).out()",
-    "task3_task2_bridge": "osc(4, 0.1, 1.2).out()"
+    "task3_task2_bridge": "osc(4, 0.1, 1.2).out()",
+    "testing_locked_band": "osc(4, 0.1, 1.2).out()",
+    "scanning_task1_bridge": "osc(4, 0.1, 1.2).out()",
+    "sleeping_resting_bridge": "osc(4, 0.1, 1.2).out()"
   },
   "modes": {
     "calm": "osc(1, 0.08, 1.2)\n.posterize(4)\n.diff(src(o0).rotate(1.5))\n.out(o3)",
@@ -76,11 +78,9 @@
     "sleeping_testing_bridge": {
       "bridge": "osc(4, 0.1, 1.2).out()"
     },
-    "sleeping_scanning_bridge": {
-      "bridge": "osc(4, 0.1, 1.2).out()"
-    },
     "task1": {
-      "scan": "osc(4, 0.1, 1.2).out()"
+      "scan": "osc(4, 0.1, 1.2).out()",
+      "scnr": "osc(4, 0.1, 1.2).out()"
     },
     "task2": {
       "locked": "osc(4, 0.1, 1.2).out()"
@@ -100,6 +100,15 @@
       "bridge": "osc(4, 0.1, 1.2).out()"
     },
     "task3_task2_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
+    },
+    "testing_locked_band": {
+      "locked_band": "osc(4, 0.1, 1.2).out()"
+    },
+    "scanning_task1_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
+    },
+    "sleeping_resting_bridge": {
       "bridge": "osc(4, 0.1, 1.2).out()"
     }
   }

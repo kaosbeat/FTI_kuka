@@ -39,9 +39,18 @@ class SafetyGate:
     # Red-link conflict (mirrors editor.html edgeConflict, line 649).
     # ------------------------------------------------------------------
     def check_conflict(self, from_zone: str, from_action: Optional[str],
-                       to_zone: str, to_action: str) -> Tuple[bool, List[str]]:
+                        to_zone: str, to_action: str,
+                        curjpos: Optional[List[float]] = None) -> Tuple[bool, List[str]]:
         """Check the red-link conflict for a move from ``(from_zone, from_action)``
         to ``(to_zone, to_action)``.
+
+        ``curjpos`` is the robot's live joint position. When provided (real-time
+        path: the engine's ``_resolve_pending`` and the brain's ``_hunt_move_safe``),
+        ``"x"`` (frozen / copy-from-previous) axes in the connection poses are
+        resolved to ``curjpos`` so the safezone check sees the concrete value the
+        robot will actually hold. When ``curjpos`` is None (flow-editor path:
+        ``find_safe_path`` / ``find_safe_path_to_any``), ``"x"`` is treated as a
+        wildcard — any value within the safezone bounds — and the axis is skipped.
 
         Returns ``(conflict, issues)`` where ``issues`` is a list of human-readable
         reason strings. ``conflict`` is True when at least one issue exists.
@@ -74,14 +83,14 @@ class SafetyGate:
             # that lies outside the zone's safezone (the robot cannot reach it).
             end = zA.action_end_pose(from_action) if from_action is not None else None
             start = zB.action_entry_pose(to_action)
-            end_gaps = self._pose_outside_safezone(end, zA)
+            end_gaps = self._pose_outside_safezone(end, zA, curjpos)
             if end_gaps:
                 issues.append(
                     f"pose outside {from_zone} safezone on {', '.join(end_gaps)}: "
                     f"{from_zone}/{from_action} ends "
                     f"[{', '.join(str(v) for v in end)}]"
                 )
-            start_gaps = self._pose_outside_safezone(start, zB)
+            start_gaps = self._pose_outside_safezone(start, zB, curjpos)
             if start_gaps:
                 issues.append(
                     f"pose outside {to_zone} safezone on {', '.join(start_gaps)}: "
@@ -131,12 +140,19 @@ class SafetyGate:
         return gaps
 
     @staticmethod
-    def _pose_outside_safezone(pose, z) -> List[str]:
+    def _pose_outside_safezone(pose, z, curjpos: Optional[List[float]] = None) -> List[str]:
         """The axes on which a pose lies OUTSIDE a zone's safezone.
 
         Mirrors the editor's ``.oob`` highlight (and ``editor.html``
         ``poseOutsideSafezone``). Returns a list of axis names (``["A1", ...]``);
         empty list = the pose is within range. A None pose or safezone yields [].
+
+        A ``"x"`` (frozen / copy-from-previous) axis has no static value: it
+        resolves to the robot's live position. When ``curjpos`` is provided
+        (real-time path), the axis is checked against ``curjpos[i]`` (the concrete
+        value the robot will hold). When ``curjpos`` is None (flow-editor path),
+        the axis is treated as a wildcard (any value within the safezone bounds)
+        and skipped.
         """
         if pose is None or z is None:
             return []
@@ -145,8 +161,14 @@ class SafetyGate:
             return []
         out: List[str] = []
         for i in range(6):
+            v = pose[i]
+            if v == "x":
+                if curjpos is not None:
+                    v = curjpos[i]
+                else:
+                    continue  # wildcard: any value within the safezone bounds
             lo, hi = sz[i]
-            if pose[i] < lo or pose[i] > hi:
+            if v < lo or v > hi:
                 out.append(AXES[i])
         return out
 

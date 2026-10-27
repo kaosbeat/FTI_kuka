@@ -90,20 +90,43 @@ def _pose_numeric(p) -> bool:
 
 
 def find_shared_pose(poses_a: List[List[float]], poses_b: List[List[float]],
-                     margin: float = 0.5) -> Optional[Tuple[List[float], int, int]]:
-    """Find a pose that appears in both pose lists.
+                      margin: float = 0.5) -> Optional[Tuple[List[float], int, int]]:
+    """Find a pose shared by both pose lists.
 
     Returns ``(pose, index_in_a, index_in_b)`` for the first pair of poses
-    (scanning A in order, B in order) that match within ``margin`` on every
-    axis, or ``None`` when no shared pose exists. Poses containing a non-numeric
-    axis (an ``"x"`` frozen/copy axis) are skipped — they have no fixed value to
-    compare against.
+    (scanning A in order, B in order) that match on every *concrete* axis, or
+    ``None`` when no shared pose exists.
+
+    An ``"x"`` axis (frozen / copy-from-previous) has no static value — it
+    resolves to the robot's live position at the hand-off, which is the same for
+    both poses — so it is a wildcard and is skipped in the comparison. A pair is a
+    shared pose when every axis that is concrete in both poses matches within
+    ``margin`` and at least one such axis exists (so an all-``"x"`` pose does not
+    trivially match everything).
     """
     for i, pa in enumerate(poses_a):
-        if not _pose_numeric(pa):
+        if not (isinstance(pa, list) and len(pa) == 6):
             continue
         for j, pb in enumerate(poses_b):
-            if _pose_numeric(pb) and all(abs(pa[k] - pb[k]) <= margin for k in range(len(pa))):
+            if not (isinstance(pb, list) and len(pb) == 6):
+                continue
+            concrete = 0
+            ok = True
+            for k in range(6):
+                va, vb = pa[k], pb[k]
+                if va == "x" or vb == "x":
+                    continue  # wildcard: resolves to the robot's live position
+                if not (isinstance(va, (int, float)) and not isinstance(va, bool)):
+                    ok = False
+                    break
+                if not (isinstance(vb, (int, float)) and not isinstance(vb, bool)):
+                    ok = False
+                    break
+                if abs(va - vb) > margin:
+                    ok = False
+                    break
+                concrete += 1
+            if ok and concrete > 0:
                 return (list(pa), i, j)
     return None
 

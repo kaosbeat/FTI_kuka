@@ -1,5 +1,280 @@
 # Task Handoff Log
 
+## 2026-10-27 — A3=42 collision: revert testing safezone, move locked_band to new dedicated zone `testing_locked_band`
+
+### Status
+
+Completed. The A3=42 collision directive is implemented: the widened testing safezone is reverted and `locked_band` now lives in a **new dedicated zone** at A3=32, routed bidirectionally with `testing` via the shared-pose handoff.
+
+### Summary
+
+User directive: A3=42 physically collides, so the `[0,42]` safezone widening from the previous task is reverted to `[0,32]`, and `locked_band` is moved into a **new dedicated zone** (user-confirmed structure — not an in-place cap, not a no-op bridge). The new zone `testing_locked_band` hosts the capped `locked_band` (pose A3=32, band `[0,32]`) and is routed bidirectionally with `testing`.
+
+Routing detail (why only `locked` links directly): `find_shared_pose` (`zones.py:92`) requires **every** concrete axis to match within margin 0.5 (not just one). `testing/locked` `[45,-30,32,0,-5,0]` and `locked_band` `[45,-30,32,0,-5,0]` match on all axes → valid shared-pose handoff. `intent`/`curious`/`gentle` `[45,-10,12,0,-5,0]` mismatch on A2 (−10 vs −30) and A3 (12 vs 32) → no shared pose → their direct `locked_band` links are dropped (they would be red inter-zone links). They route via `locked` (in-zone links intact), so the graph stays connected: `intent/curious/gentle` → `locked` → `testing_locked_band/locked_band`, and back.
+
+### Changes Made
+
+- `realtimecontrol/rtr/zones.json`:
+  - `testing` `safezone` A3: `[0, 42]` → `[0, 32]` (reverts the collision-causing widening).
+  - `testing` action `locked_band`: **removed** (moved to the new zone).
+  - `testing` action `locked` `next`: `testing/locked_band` → `testing_locked_band/locked_band` (the only valid inter-zone handoff, shared pose `[45,-30,32,0,-5,0]`).
+  - `testing` actions `intent`/`curious`/`gentle` `next`: dropped their direct `testing/locked_band` entries (no shared pose → would be red).
+  - **New zone `testing_locked_band`**: `class: track`, `mode_group: event-sit-back`, safezone identical to testing with A3 `[0, 32]`, speed 20, single action `locked_band` — pose `[45,-30,32,0,-5,0]` (A3 capped 42→32), `variable_axes [0,1,4]`, behavior `curious`, speed 100, loop true, `axis_bands "2": [0, 32]` (was `[0,42]`), `next: [testing/locked]` (bidirectional pair with `testing/locked`).
+  - `layout.pos`: added `testing_locked_band` at `{x: 560, y: 340}`; `layout.key`: appended `testing_locked_band`.
+
+### Documentation
+
+None required — safezone bounds and `next` routing are data; the shared-pose mechanism is already documented in `behavior.py:306` / `machine.py:86-93` / `zones.py:92`.
+
+### Architecture
+
+New zone added to the zone graph; no code change. `testing_locked_band` is a persistent single-action zone (loop true) reachable from `testing/locked` and returning to `testing/locked` — a valid bidirectional inter-zone handoff at the shared A3=32 pose. The runtime handles it with the existing `find_shared_pose`/`_compute_handoff` path (`machine.py:210`).
+
+Note: `sleeping_testing_bridge` (isolated, unreachable, safezone A3 `[0,42]`, pose A3=42) still carries a physically unsafe A3=42 pose. It is inert (no `next` links in or out) but should be capped to A3=32 or removed before any re-wiring.
+
+### Validation
+
+- `python3 -c "json.load(...)"`: zones.json parses; structure verified (testing safezone A3 `[0,32]`; `testing_locked_band` hosts capped `locked_band`; routing as above).
+- `/tmp/kilo/validate_links.py`: **39 checked, 0 broken** (was 45 checked / 0 broken; −6 from the dropped `intent`/`curious`/`gentle`→`locked_band` links and `locked_band`'s 4→1 `next` list).
+- `python3 -m pytest tests/ --ignore=tests/test_remote_tui.py -q`: **296 passed, 5 failed, 14 skipped** — same 5 pre-existing `test_remote_sdl` TUI failures; no regressions. (`test_remote_tui.py` has a pre-existing import error: `action_kind` not in `rtr.flow`.)
+
+### Decisions and Caveats
+
+- Only `testing/locked` ↔ `testing_locked_band/locked_band` is a valid shared-pose handoff (all-concrete-axes match). `intent`/`curious`/`gentle` route via `locked`.
+- `locked_band` A3 capped 42→32 (pose + `axis_bands "2"`), so it no longer reaches the colliding A3=42.
+- `sleeping_testing_bridge` A3=42 pose left as-is (isolated/inert) but flagged for capping or removal before re-wiring.
+
+### Next Task
+
+Cap or remove the `sleeping_testing_bridge` A3=42 pose (isolated but physically unsafe if re-wired).
+
+### Instructions for the Next Task
+
+`sleeping_testing_bridge` safezone A3 is `[0,42]` and its `bridge` pose is `[45,-30,42,0,-5,0]`. It is unreachable (no `next` links) so it is inert, but A3=42 collides. Decide with the user: cap its safezone A3 to `[0,32]` and pose A3 to 32, or delete the zone entirely (drop it from `layout.pos`/`layout.key`). Then re-run `/tmp/kilo/validate_links.py` + pytest.
+
+## 2026-10-26 — Museum/testing reds cleanup: widen testing safezone A3, drop museum routing links
+
+### Status
+
+Completed. All **12 pre-existing museum/testing reds** cleared. Two clusters, resolved differently:
+
+1. **8 `testing/*` ↔ `testing/locked_band` reds** (pose `[45,-30,42,0,-5,0]` outside testing safezone on A3): fixed by **widening the testing safezone A3** from `[0,32]` → `[0,42]`.
+2. **4 museum-bridge shared-pose reds** (`resting/hold`↔`sleeping/breathe`; `sleeping/yawn`↔both bridges; `sleeping_testing_bridge`↔`testing/locked`): fixed by **dropping the museum routing links** (user decision — disconnect the museum from the testing/scanning networks).
+
+### Summary
+
+The 12 reds were confirmed **pre-existing** by diffing the committed HEAD state (13 broken incl. the task-network red) against the working tree — my prior task-network work introduced none of them; it only removed the task-network red. Two distinct causes:
+
+- **testing safezone A3 had been narrowed to `[0,32]`** (pre-tasknet it was `[0,42]`), but `testing/locked_band` is designed to sweep A3 to 42 (`axis_bands "2": [0,42]`, pose A3=42). The `sleeping_testing_bridge` safezone is *exactly* `[0,42]` — strong signal `[0,42]` is the intended testing A3 bound. Restoring `[0,42]` makes the testing safezone identical to the bridge's and covers the `locked_band` sweep.
+- **The museum bridges are one-sided**: `sleeping_testing_bridge` carries only the testing-side pose `[45,-30,42,0,-5,0]` and `sleeping_scanning_bridge` only the scanning-side pose `[10,-59,-10,0,60,0]` — neither has the sleeping-side departure anchor the task-bridge pattern uses, and their safezones do not overlap the sleeping safezone. `resting/hold`→`sleeping/breathe` is a direct link between very different configs (A3 −10 vs +156). These cannot be made bidirectional without new real-robot anchor poses, so the user chose to disconnect the museum from testing/scanning by dropping the routing links.
+
+### Changes Made
+
+- `realtimecontrol/rtr/zones.json`:
+  - `testing` `safezone` A3: `[0, 32]` → `[0, 42]` (covers the `locked_band` A3 sweep; matches the `sleeping_testing_bridge` safezone).
+  - `resting` action `hold` `next`: `{"zone":"sleeping","action":"breathe"}` → removed (resting no longer transitions to sleeping).
+  - `sleeping` action `yawn` `next`: removed the two bridge entries — now `[{"zone":"sleeping","action":"breathe"}, {"zone":"sleeping","action":"snore"}]` (no more `sleeping_testing_bridge` / `sleeping_scanning_bridge` exits).
+  - `sleeping_testing_bridge` action `bridge` `next`: `{"zone":"testing","action":"locked"}` → removed (bridge no longer hands off to testing).
+
+  Note: the `sleeping_scanning_bridge` → `scanning/scnr` link and `scanning/scnr` → `sleeping_scanning_bridge` link are **left intact** (they form a valid shared-pose loop, not a red).
+
+### Documentation
+
+None required — safezone bounds and `next` routing are data; the `"x"`/shared-pose mechanism is already documented in `behavior.py:306` / `machine.py:86-93`.
+
+### Architecture
+
+No architectural change. The runtime already handles a single-action zone with no valid `next`/`exits` via the previous-zone auto-return fallback (`machine.py:563`), so the dropped links do not dead-end the robot.
+
+### Validation
+
+- `/tmp/kilo/validate_links.py`: **45 checked, 0 broken** (was 49 checked / 12 broken).
+- `python3 -m pytest tests/ --ignore=tests/test_remote_tui.py -q`: **296 passed, 5 failed, 14 skipped** — same 5 pre-existing `test_remote_sdl` TUI failures; no regressions.
+- `zones.json` loads via the runtime `Zones` (13 zones). Dropped links confirmed: `resting/hold.next=None`, `sleeping/yawn.next=[breathe,snore]`, `sleeping_testing_bridge/bridge.next=None`, `sleeping_scanning_bridge/bridge.next={scanning/scnr}` (loop kept), `testing.safezone[2]=[0,42]`.
+
+### Decisions and Caveats
+
+- **User decision (museum routing):** disconnect the museum (resting/sleeping) from the testing/scanning networks by dropping the 4 museum routing links, rather than adding new real-robot sleeping-side anchor poses to the bridges. Consequence: `sleeping_testing_bridge` is now an isolated (unreachable, no-next) zone — left `enabled: true` in data but functionally dead. `resting/hold` now has no `next` (auto-returns to the previous zone at runtime).
+- The `testing safezone` A3 widening to `[0,42]` is a **revert to the pre-tasknet value** and is consistent with the `locked_band`'s designed A3 sweep and the `sleeping_testing_bridge` safezone.
+- The 4 museum reds are *data/routing* reds, not mechanism bugs — `find_shared_pose` and the gate are correct; the museum bridges simply lack the sleeping-side anchors. If those transitions are wanted back, the bridges need a shared sleeping anchor pose + a spanning safezone (real robot poses required).
+
+### Next Task
+
+No museum/testing reds remain. No task-network work remains. The whole `zones.json` link graph validates clean (0 broken).
+
+### Instructions for the Next Task
+
+No immediate next task identified. If the museum→testing/scanning transitions are wanted back later: add a shared sleeping-side anchor pose to `sleeping_testing_bridge` / `sleeping_scanning_bridge` (derived from a real sleeping pose shared with `sleeping/yawn`), widen each bridge safezone to span both configs, and restore the `yawn`→bridge and bridge→target `next` links. Re-run `/tmp/kilo/validate_links.py` + the pytest suite after any such change.
+
+## 2026-10-26 — Task-network data cleanup: drop `scnr` bridge link, A1=`"x"` on task2↔task3 bridges
+
+### Status
+
+Completed. **Supersedes** the two open questions in the entry below. User decisions: (1) `task1/scnr` keeps no bridge exit — drop the `task2_task3_bridge` link; (2) `task2_task3_bridge` and `task3_task2_bridge` get A1=`"x"` like every other bridge.
+
+### Summary
+
+Two data adjustments to `zones.json` (user-confirmed):
+
+1. **`task1/scnr` → `task2_task3_bridge/bridge` dropped.** `scnr` sits in task1 (A2≈-85, A5≈75); `task2_task3_bridge` is physically in the task2/task3 region (A2 `[-50,-10]`, A5 `[-25,45]`) with no safezone overlap on A2/A5, so the robot could never hand off there. `scnr` now only loops back to `task1/scan` (stays purely intra-task1). `next` converted from a 2-element list to the single-dict form (matching other single-target actions).
+2. **task2↔task3 bridges A1 → `"x"`.** `task2_task3_bridge` and `task3_task2_bridge` held A1=0 constants on both poses while every other bridge and every task-zone action uses A1=`"x"` (copy-from-active, `behavior.py:306`). Now consistent: the base is never driven by these bridges; it stays at the frozen value from transition commit.
+
+### Changes Made
+
+- `realtimecontrol/rtr/zones.json`:
+  - `task1` action `scnr` `next`: `[{"zone":"task1","action":"scan"}, {"zone":"task2_task3_bridge","action":"bridge"}]` → `{"zone":"task1","action":"scan"}`.
+  - `task2_task3_bridge` action `bridge` `poses`: A1 `0` → `"x"` on both poses (`["x",-45,20,0,40,0]`, `["x",-15,20,0,-20,0]`).
+  - `task3_task2_bridge` action `bridge` `poses`: A1 `0` → `"x"` on both poses (`["x",-15,20,0,-20,0]`, `["x",-45,20,0,40,0]`).
+
+### Documentation
+
+None required — the `"x"` mechanism is documented in `behavior.py:306` / `machine.py:86-93`; this is a data consistency adjustment.
+
+### Architecture
+
+No architectural change.
+
+### Validation
+
+- `zones.json` loads + validates via the runtime `load_state_data` (13 zones).
+- Shared-pose checks (all four task2↔task3 links now resolve):
+  - `task2/locked` ↔ `task2_task3_bridge/bridge`: `(['x', -45, 20, 0, 40, 0], 0, 0)`
+  - `task3/approach` ↔ `task2_task3_bridge/bridge`: `(['x', -15, 20, 0, -20, 0], 0, 1)`
+  - `task2/locked` ↔ `task3_task2_bridge/bridge`: `(['x', -45, 20, 0, 40, 0], 0, 1)`
+  - `task3/approach` ↔ `task3_task2_bridge/bridge`: `(['x', -15, 20, 0, -20, 0], 0, 0)`
+- `/tmp/kilo/validate_links.py`: **49 checked, 12 broken** — the task-network red is gone; all 12 are the pre-existing museum/testing reds (see the entry below).
+- `python3 -m pytest tests/ --ignore=tests/test_remote_tui.py -q`: **296 passed, 5 failed, 14 skipped** — same 5 pre-existing `test_remote_sdl` failures.
+
+### Decisions and Caveats
+
+- The whole task network (task1/task2/task3 + all four bridges) now validates clean: every inter-zone link has safezone overlap and a shared pose, so all task links are bidirectional at the shared-pose hand-off.
+- The 12 remaining reds are museum/testing-network data issues that predate this work (sleeping/resting/testing zones) — separate scope.
+
+### Next Task
+
+Decide whether to address the 12 pre-existing museum/testing reds (sleeping/resting bridges + `testing/locked_band` A3 poses). No task-network work remains.
+
+### Instructions for the Next Task
+
+Run `/tmp/kilo/validate_links.py` to re-list the 12 reds. They cluster into: `resting/hold` ↔ `sleeping/breathe`; `sleeping/yawn` ↔ `sleeping_testing_bridge/bridge` / `sleeping_scanning_bridge/bridge` (no shared pose + safezone gaps); eight `testing/*` ↔ `testing/locked_band` (pose `[45,-30,42,0,-5,0]` outside testing safezone on A3); `sleeping_testing_bridge/bridge` ↔ `testing/locked`. Fixing them is data work (poses/safezones/routing) in `zones.json` the same way as this entry; confirm intended routing before changing shared poses.
+
+## 2026-10-26 — `find_shared_pose` `"x"`-wildcard comparison (runtime + validator + editor)
+
+### Status
+
+Completed. **Supersedes** the statement in the "A1 departure anchor" entry below that `find_shared_pose` "skips `'x'` poses (non-numeric)" — that was the *old* behavior. `find_shared_pose` now compares only *concrete* axes and treats `"x"` as a wildcard, so every action link is bidirectional-safe at the shared-pose hand-off.
+
+### Summary
+
+**Root cause:** the old `find_shared_pose` (`zones.py`) skipped any pose containing `"x"` (non-numeric) entirely. Once the user made bridge departure anchors `"x"` (copy-from-active, see the entry below), *no* shared pose was ever found for any link touching an `"x"` anchor — so the runtime safety gate discarded every auto bridge move, and the editor/validator flagged every such link red.
+
+**Fix (`rtr/state/zones.py` `find_shared_pose`):** axis-by-axis comparison. An `"x"` axis on either side is a wildcard — it has no static value and resolves to the robot's live position at the hand-off (identical for both poses, `machine.py:86-93` frozen base). A pair is a shared pose when every axis that is concrete in *both* poses matches within `margin=0.5` **and** at least one such axis exists (so an all-`"x"` pose does not trivially match everything; no all-`"x"` poses exist in the current data). Returns `(pose, index_in_a, index_in_b)` or `None`.
+
+**Runtime + gate needed no change:** `machine.py::_compute_handoff` and `safety/gate.py:104` already call `find_shared_pose`, so they now find the shared pose and resume from it (no shared pose → fall back to entry pose `poses[0]`).
+
+**Validator (`/tmp/kilo/validate_links.py`):** rewritten to mirror `gate.py` exactly — inter-zone: safezone overlap + `find_shared_pose(src, tgt) is None`; intra-zone: no shared-pose requirement, only flags connection poses outside the zone safezone.
+
+**Editor (`editor.html`):** added the JS `findSharedPose(pa, pb, margin)` mirroring the Python function; `edgeConflict` inter-zone now uses `findSharedPose(actionPoses(aA), actionPoses(aB))` (intra-zone logic unchanged).
+
+**Shadowing bug found and fixed this session:** `editor.html` contained *two* `findSharedPose` definitions — the new wildcard-aware one (line 1001) and the old fully-numeric one (line 1025, from the 2026-10-24 entry). In JS the later declaration wins, so the editor was still running the *old* semantics (skip any pose containing `"x"`) and would have kept flagging every `"x"`-anchor bridge link red. Removed the old duplicate and its now-dead `poseNumeric` helper.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/state/zones.py`: `find_shared_pose` rewritten — concrete-axis comparison, `"x"` wildcard, `concrete > 0` guard.
+- `realtimecontrol/rtr/editor.html`: JS `findSharedPose` (wildcard-aware) + `edgeConflict` inter-zone now call it; **removed** the old duplicate `findSharedPose` (was shadowing the new one) and the dead `poseNumeric` helper.
+- `/tmp/kilo/validate_links.py`: rewritten to mirror `gate.py` rules (inter-zone overlap + shared pose; intra-zone safezone-only).
+
+### Documentation
+
+None required — the `"x"` frozen/copy mechanism is documented in `behavior.py:306` and `machine.py:86-93`; this change aligns the shared-pose detection with that mechanism.
+
+### Architecture
+
+No architectural change. The shared-pose hand-off contract is unchanged; only the detection now honors the `"x"` wildcard the runtime already uses.
+
+### Validation
+
+- Shared-pose detection on real `zones.json` data (Python and extracted editor JS agree):
+  - `task2/locked` ↔ `task1_task2_bridge/bridge`: `(['x', -45, 20, 0, 40, 0], 0, 1)`
+  - `task1/scan` ↔ `task1_task2_bridge/bridge`: `([0, -90, 20, 0, 80, 0], 0, 0)`
+  - `task3/retreat` ↔ `task3_task1_bridge/bridge`: `(['x', -15, 20, 0, -20, 0], 0, 0)`
+  - `task1/scnr` ↔ `task2_task3_bridge/bridge`: `None`
+  - `task1/scan` ↔ `task1/scnr`: `None`
+- `node --check` on all 13 extracted `editor.html` script blocks: OK.
+- `python3 -m pytest tests/test_transition.py tests/test_safety_conflict.py -q`: 15 passed (existing tests use concrete poses; no regression).
+- `python3 -m pytest tests/ --ignore=tests/test_remote_tui.py -q`: **296 passed, 5 failed, 14 skipped** — the 5 failures are the same pre-existing `test_remote_sdl` TUI failures.
+- `/tmp/kilo/validate_links.py`: 50 checked, **13 broken** — ground truth below.
+
+### Ground truth: the 13 red links
+
+- **Task network (1):** `task1/scnr` ↔ `task2_task3_bridge/bridge` — `safezones do not overlap on A2, A5` + `no shared position`. Not fixable by adding a shared pose (the two safezones do not overlap on A2/A5); this is a topology/data question in `task1/scnr.next` (see Next Task).
+- **Museum/testing (12, pre-existing, out of scope this pass):** `resting/hold` ↔ `sleeping/breathe`; `sleeping/yawn` ↔ `sleeping_testing_bridge/bridge`; `sleeping/yawn` ↔ `sleeping_scanning_bridge/bridge`; eight `testing/*` ↔ `testing/locked_band` links (`pose outside testing safezone on A3`); `sleeping_testing_bridge/bridge` ↔ `testing/locked`.
+
+### Decisions and Caveats
+
+- All-`"x"` pose edge case: guarded by `concrete > 0`; current data has no all-`"x"` poses.
+- `task1/scan` ↔ `task1/scnr` has no shared pose but is **intra-zone**, so gate/validator do not require one — not red. The move is small and inside the `task1` safezone.
+- The museum/testing reds predate this work and are unchanged.
+
+### Next Task
+
+Two open data/topology decisions (both need user input):
+1. **`task1/scnr` → `task2_task3_bridge/bridge`:** the only task-network red. `scnr` sits in task1 (`["x", -85, 15, 0, 75, 0]`); `task2_task3_bridge` is a task2↔task3 bridge whose safezone does not overlap task1's on A2/A5. Candidate fix: retarget `task1/scnr.next` to `task1_task2_bridge/bridge` (the bridge that actually starts from task1), or drop the link — but this changes routing/behavior, so confirm intent first.
+2. **task2↔task3 bridges A1:** `task2_task3_bridge` and `task3_task2_bridge` still hold A1=0 constants on both poses, while every other bridge and every task-zone action pose uses A1=`"x"`. If the departure-anchor directive applies to all bridges, set both bridges' A1 to `"x"`.
+
+### Instructions for the Next Task
+
+- For (1): on disk, `task1/scnr` `next` is `[{zone: task1, action: scan}, {zone: task2_task3_bridge, action: bridge}]` and `scnr` `poses` is `[['x', -85, 15, 0, 75, 0]]`. The problematic entry is the second one. Note: merely retargeting it to `task1_task2_bridge/bridge` does NOT clear the red — `scnr`'s pose shares no concrete axis with that bridge (A2 -85 vs -90/-45). A shared pose must also be added (e.g. `['x', -90, 20, 0, 80, 0]`, which is inside the `task1` safezone and equals `task1_task2_bridge` `poses[0]`). Confirm the intended routing first. Re-run `/tmp/kilo/validate_links.py` (expect 12 reds if the link is fixed/dropped) and the pytest suite (expect 296 passed / 5 pre-existing SDL failures).
+- For (2): in `zones.json`, set `task2_task3_bridge` and `task3_task2_bridge` `poses[*]` A1 `0` → `"x"`. Re-run both checks; expect no change in red count (shared poses already match on the concrete axes).
+
+## 2026-10-26 — A1 departure anchor: constant → `"x"` (copy-from-active-pose)
+
+### Status
+
+Completed. **Supersedes** the "A1 constant (0)" entry below. The user corrected the mechanism: the bridge departure anchor's A1 must NOT be a hardcoded constant — it is `"x"`, the frozen/copy axis, which copies the robot's current A1 at transition commit. The user has already applied this to `zones.json`; this entry records and validates it.
+
+### Summary
+
+The earlier entry set `task1_task2_bridge` `poses[0]` A1 to a constant `0` to hold A1 flat. The user rejected that: a constant departure anchor forces a base rotation to a fixed value *before* the approach. The correct mechanism is the `"x"` frozen/copy axis (`behavior.py:306 resolve_x`): an axis set to `"x"` is copied from the robot's current pose (the `_frozen_base` captured at transition commit, `machine.py:93`) and is **never driven** (`behavior.py:368`). `find_shared_pose` skips `"x"` poses (non-numeric, `zones.py:103`), so a `"x"` departure anchor means "start from wherever A1 currently is" rather than "rotate to 0 first" — the base rotation is absorbed into the approach motion, not a separate pre-move.
+
+User-applied changes in `zones.json` (file grew 1505→1507 lines):
+- **All task-zone action poses** A1 → `"x"`, `variable_axes` → `[0,1,2,3,4,5]`: `task2/locked`, `task3/approach`, `task3/facefocus`, `task3/retreat`. (`task1/scan` kept A1=0.)
+- **New `task1/scnr` action**: pose `["x", -85, 15, 0, 75, 0]`, all axes variable, behavior `impatient`, `next` → `[task1/scan, task2_task3_bridge/bridge]`.
+- **`task1/scan`** `next` is now a list: `[task1_task2_bridge/bridge, task1/scnr]`.
+- **`task2/locked`** `next` is now a list: `[task2_task3_bridge/bridge, task1_task2_bridge/bridge]`.
+- **Bridges touching task1** both poses A1 → `"x"`: `task1_task2_bridge`, `task3_task1_bridge` (retreat to task1).
+- **Task2↔task3 bridges** (`task2_task3_bridge`, `task3_task2_bridge`) still hold A1=0 constants — not yet `"x"`.
+
+### Changes Made
+
+- `realtimecontrol/rtr/zones.json`: (user-applied) A1 `"x"` on task-zone poses + task1-touching bridges; new `task1/scnr` action; `next` fields converted to lists where routing branches.
+
+### Documentation
+
+None required — the `"x"` frozen/copy mechanism is already documented in `behavior.py:306` and `machine.py:86-93`; this is a data adjustment, not a new contract.
+
+### Architecture
+
+No architectural change. The `"x"` mechanism already exists in the runtime; this entry only records its application to the 3-task network data.
+
+### Validation
+
+- `python -m pytest tests/ -q --ignore=tests/test_remote_tui.py`: **296 passed, 5 failed, 14 skipped** — the 5 failures are the same pre-existing `test_remote_sdl` TUI failures; no new failures.
+- `/tmp/kilo/validate_links.py`: 50 checked, 13 broken. The task-network reds are the expected `"x"` no-shared-pose consequences (e.g. `task1/scnr <-> task2_task3_bridge/bridge`).
+
+### Decisions and Caveats
+
+- The `"x"` departure anchor means the base rotation is absorbed into the approach motion (copied from the active pose), not a separate pre-move. This is the user's stated intent.
+- **Open:** the task2↔task3 bridges (`task2_task3_bridge`, `task3_task2_bridge`) still use A1=0 constants. If the same rule applies, their departure anchors should also be `"x"` for consistency.
+
+### Next Task
+
+Confirm whether the task2↔task3 bridges should also get A1=`"x"` on the departure anchor.
+
+### Instructions for the Next Task
+
+If yes: edit `realtimecontrol/rtr/zones.json` `task2_task3_bridge` and `task3_task2_bridge` `poses[0]` A1 `0` → `"x"`. Re-run `/tmp/kilo/validate_links.py` and the pytest suite (expect the same pre-existing SDL/TUI failures).
+
 ## 2026-10-26 — Made A1 (base) constant during the task1→task2 bridge approach
 
 ### Status

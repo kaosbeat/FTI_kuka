@@ -65,13 +65,6 @@
         "velocity": 60
       }
     },
-    "sleeping_scanning_bridge": {
-      "out_port": null,
-      "command": {
-        "note": 60,
-        "velocity": 60
-      }
-    },
     "task1": {
       "out_port": null,
       "command": {
@@ -115,6 +108,27 @@
       }
     },
     "task3_task2_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "testing_locked_band": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "scanning_task1_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "sleeping_resting_bridge": {
       "out_port": null,
       "command": {
         "note": 60,
@@ -447,7 +461,20 @@
           "note": 60,
           "velocity": 60
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "sleeping_testing_bridge": {
@@ -456,16 +483,20 @@
           "note": 60,
           "velocity": 60
         },
-        "poses": []
-      }
-    },
-    "sleeping_scanning_bridge": {
-      "bridge": {
-        "start": {
-          "note": 60,
-          "velocity": 60
-        },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "task1": {
@@ -592,6 +623,33 @@
       }
     },
     "task3_task2_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "testing_locked_band": {
+      "locked_band": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "scanning_task1_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
+    },
+    "sleeping_resting_bridge": {
       "bridge": {
         "start": {
           "note": 60,

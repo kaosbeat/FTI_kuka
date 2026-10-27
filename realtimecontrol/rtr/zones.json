@@ -45,18 +45,18 @@
             ],
             [
               0,
-              -130,
+              -60,
               -9,
               0,
-              0,
+              60,
               0
             ],
             [
               -60,
-              -90,
+              -60,
               -9,
-              15,
-              10,
+              1,
+              60,
               0
             ]
           ],
@@ -71,10 +71,6 @@
           "behavior": "restless",
           "speed": 20,
           "loop": true,
-          "next": {
-            "zone": "sleeping",
-            "action": "breathe"
-          },
           "pose_imgs": [
             "pose_1792397354907_2e4d7151.png",
             "pose_1792351922635_a6b53eac.png",
@@ -84,7 +80,11 @@
             "MiniMax_H3_00083_..mp4",
             "MiniMax_H3_00082_..mp4",
             "MiniMax_H3_00077_..mp4"
-          ]
+          ],
+          "next": {
+            "zone": "sleeping_resting_bridge",
+            "action": "bridge"
+          }
         }
       }
     },
@@ -174,6 +174,14 @@
             {
               "zone": "sleeping",
               "action": "yawn"
+            },
+            {
+              "zone": "sleeping_testing_bridge",
+              "action": "bridge"
+            },
+            {
+              "zone": "sleeping_resting_bridge",
+              "action": "bridge"
             }
           ],
           "pose_imgs": [
@@ -278,10 +286,6 @@
               "action": "snore"
             },
             {
-              "zone": "sleeping_testing_bridge",
-              "action": "bridge"
-            },
-            {
               "zone": "sleeping_scanning_bridge",
               "action": "bridge"
             }
@@ -335,7 +339,7 @@
           "enabled": true,
           "poses": [
             [
-              45,
+              "x",
               -30,
               32,
               0,
@@ -372,7 +376,7 @@
               "action": "gentle"
             },
             {
-              "zone": "testing",
+              "zone": "testing_locked_band",
               "action": "locked_band"
             }
           ],
@@ -381,29 +385,7 @@
           ],
           "pose_videos": [
             "MiniMax_H3_00064_..mp4"
-          ],
-          "axis_bands": {
-            "0": [
-              -185,
-              185
-            ],
-            "1": [
-              -30,
-              -10
-            ],
-            "3": [
-              -15,
-              15
-            ],
-            "4": [
-              -20,
-              10
-            ],
-            "5": [
-              -15,
-              15
-            ]
-          }
+          ]
         },
         "intent": {
           "enabled": true,
@@ -442,10 +424,6 @@
             {
               "zone": "testing",
               "action": "gentle"
-            },
-            {
-              "zone": "testing",
-              "action": "locked_band"
             }
           ],
           "pose_imgs": [
@@ -492,10 +470,6 @@
             {
               "zone": "testing",
               "action": "gentle"
-            },
-            {
-              "zone": "testing",
-              "action": "locked_band"
             }
           ],
           "pose_imgs": [
@@ -541,10 +515,6 @@
             {
               "zone": "testing",
               "action": "curious"
-            },
-            {
-              "zone": "testing",
-              "action": "locked_band"
             }
           ],
           "pose_imgs": [
@@ -553,14 +523,48 @@
           "pose_videos": [
             "MiniMax_H3_00069_..mp4"
           ]
-        },
+        }
+      }
+    },
+    "testing_locked_band": {
+      "enabled": true,
+      "class": "track",
+      "mode_group": "event-sit-back",
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -30,
+          -10
+        ],
+        [
+          0,
+          32
+        ],
+        [
+          -15,
+          15
+        ],
+        [
+          -20,
+          10
+        ],
+        [
+          -15,
+          15
+        ]
+      ],
+      "speed": 20,
+      "actions": {
         "locked_band": {
           "enabled": true,
           "poses": [
             [
               45,
               -30,
-              42,
+              32,
               0,
               -5,
               0
@@ -574,24 +578,10 @@
           "behavior": "curious",
           "speed": 100,
           "loop": true,
-          "next": [
-            {
-              "zone": "testing",
-              "action": "locked"
-            },
-            {
-              "zone": "testing",
-              "action": "intent"
-            },
-            {
-              "zone": "testing",
-              "action": "curious"
-            },
-            {
-              "zone": "testing",
-              "action": "gentle"
-            }
-          ],
+          "next": {
+            "zone": "testing",
+            "action": "locked"
+          },
           "pose_imgs": [
             null
           ],
@@ -606,7 +596,7 @@
             ],
             "2": [
               0,
-              42
+              32
             ],
             "3": [
               -15,
@@ -685,7 +675,7 @@
             "MiniMax_H3_00063_..mp4"
           ],
           "next": {
-            "zone": "sleeping_scanning_bridge",
+            "zone": "scanning_task1_bridge",
             "action": "bridge"
           }
         }
@@ -699,12 +689,12 @@
           185
         ],
         [
-          -30,
+          -134,
           -10
         ],
         [
           0,
-          42
+          157
         ],
         [
           -15,
@@ -727,9 +717,25 @@
           "behavior": "bridge",
           "poses": [
             [
+              -90,
+              -134,
+              157,
+              3,
+              0,
+              0
+            ],
+            [
+              -90,
+              -134,
+              100,
+              3,
+              0,
+              0
+            ],
+            [
               45,
               -30,
-              42,
+              32,
               0,
               -5,
               0
@@ -737,75 +743,20 @@
           ],
           "variable_axes": [],
           "speed": 20,
+          "pose_imgs": [
+            null,
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null,
+            null
+          ],
           "next": {
             "zone": "testing",
             "action": "locked"
-          },
-          "pose_imgs": [
-            null
-          ],
-          "pose_videos": [
-            null
-          ]
-        }
-      }
-    },
-    "sleeping_scanning_bridge": {
-      "enabled": true,
-      "safezone": [
-        [
-          -185,
-          185
-        ],
-        [
-          -60,
-          -40
-        ],
-        [
-          -10,
-          -9
-        ],
-        [
-          0,
-          1
-        ],
-        [
-          60,
-          62
-        ],
-        [
-          -15,
-          15
-        ]
-      ],
-      "speed": 80,
-      "actions": {
-        "bridge": {
-          "enabled": true,
-          "loop": false,
-          "behavior": "bridge",
-          "poses": [
-            [
-              10,
-              -59,
-              -10,
-              0,
-              60,
-              0
-            ]
-          ],
-          "variable_axes": [],
-          "speed": 80,
-          "next": {
-            "zone": "scanning",
-            "action": "scnr"
-          },
-          "pose_imgs": [
-            null
-          ],
-          "pose_videos": [
-            null
-          ]
+          }
         }
       }
     },
@@ -929,16 +880,10 @@
           "behavior": "impatient",
           "speed": 20,
           "loop": true,
-          "next": [
-            {
-              "zone": "task1",
-              "action": "scan"
-            },
-            {
-              "zone": "task2_task3_bridge",
-              "action": "bridge"
-            }
-          ],
+          "next": {
+            "zone": "task1",
+            "action": "scan"
+          },
           "pose_imgs": [
             null
           ],
@@ -1267,7 +1212,7 @@
           "enabled": true,
           "poses": [
             [
-              0,
+              "x",
               -45,
               20,
               0,
@@ -1275,7 +1220,7 @@
               0
             ],
             [
-              0,
+              "x",
               -15,
               20,
               0,
@@ -1405,7 +1350,7 @@
           "enabled": true,
           "poses": [
             [
-              0,
+              "x",
               -15,
               20,
               0,
@@ -1413,7 +1358,7 @@
               0
             ],
             [
-              0,
+              "x",
               -45,
               20,
               0,
@@ -1439,33 +1384,212 @@
           ]
         }
       }
+    },
+    "scanning_task1_bridge": {
+      "enabled": true,
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -95,
+          -40
+        ],
+        [
+          -10,
+          25
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          60,
+          85
+        ],
+        [
+          -15,
+          15
+        ]
+      ],
+      "speed": 80,
+      "actions": {
+        "bridge": {
+          "enabled": true,
+          "loop": false,
+          "behavior": "bridge",
+          "poses": [
+            [
+              10,
+              -59,
+              -10,
+              0,
+              60,
+              0
+            ],
+            [
+              0,
+              -90,
+              20,
+              0,
+              80,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "speed": 80,
+          "next": {
+            "zone": "task1",
+            "action": "scan"
+          }
+        }
+      }
+    },
+    "sleeping_resting_bridge": {
+      "enabled": true,
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -134,
+          -40
+        ],
+        [
+          -10,
+          157
+        ],
+        [
+          -3,
+          3
+        ],
+        [
+          -20,
+          62
+        ],
+        [
+          -15,
+          15
+        ]
+      ],
+      "speed": 20,
+      "actions": {
+        "bridge": {
+          "enabled": true,
+          "loop": false,
+          "behavior": "bridge",
+          "poses": [
+            [
+              -90,
+              -134,
+              157,
+              3,
+              0,
+              0
+            ],
+            [
+              10,
+              -59,
+              -10,
+              0,
+              60,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "speed": 20,
+          "next": {
+            "zone": "resting",
+            "action": "hold"
+          }
+        }
+      }
+    },
+    "sleeping_scanning_bridge": {
+      "enabled": true,
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -134,
+          -40
+        ],
+        [
+          -10,
+          157
+        ],
+        [
+          -3,
+          3
+        ],
+        [
+          -20,
+          62
+        ],
+        [
+          -15,
+          15
+        ]
+      ],
+      "speed": 80,
+      "actions": {
+        "bridge": {
+          "enabled": true,
+          "loop": false,
+          "behavior": "bridge",
+          "poses": [
+            [
+              "x",
+              -134,
+              157,
+              3,
+              0,
+              0
+            ],
+            [
+              10,
+              -59,
+              -10,
+              0,
+              60,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "speed": 80,
+          "next": {
+            "zone": "scanning",
+            "action": "scnr"
+          }
+        }
+      }
     }
   },
   "layout": {
     "pos": {
       "resting": {
-        "x": 479.02371978759766,
-        "y": 11.794570922851562
+        "x": 435.21060943603516,
+        "y": -11.994301795959473
       },
       "sleeping": {
-        "x": 66.35023498535156,
-        "y": 11.794567108154297
+        "x": -208.76275825500488,
+        "y": 55.5375862121582
       },
       "testing": {
-        "x": 409.4798278808594,
-        "y": 212.442138671875
+        "x": 352.01202392578125,
+        "y": 149.3217043876648
       },
       "scanning": {
-        "x": 1741.4326171875,
-        "y": -281.10533714294434
+        "x": 751.8468627929688,
+        "y": 360.0712833404541
       },
       "sleeping_testing_bridge": {
-        "x": 237.915,
-        "y": 112.1184
-      },
-      "sleeping_scanning_bridge": {
-        "x": 903.8914,
-        "y": -134.6554
+        "x": 162.17116455078124,
+        "y": 112.53034152832032
       },
       "task1": {
         "x": 1200,
@@ -1494,14 +1618,30 @@
       "task3_task2_bridge": {
         "x": 1505.692626953125,
         "y": 539.7730407714844
+      },
+      "testing_locked_band": {
+        "x": 536.4475708007812,
+        "y": 186.4383087158203
+      },
+      "scanning_task1_bridge": {
+        "x": 988.0964050292969,
+        "y": 302.228497505188
+      },
+      "sleeping_resting_bridge": {
+        "x": 198.46544933319092,
+        "y": -146.0498971939087
+      },
+      "sleeping_scanning_bridge": {
+        "x": 256.27191066741943,
+        "y": 522.3564977645874
       }
     },
     "view": {
-      "x": 780.192067243741,
-      "y": 423.7813549070863,
-      "w": 1581.0220182485602,
-      "h": 284.57466322126686
+      "x": -1501.2099085988514,
+      "y": 18.371046222277755,
+      "w": 3514.113520182791,
+      "h": 1398.3451217441539
     },
-    "key": "resting,scanning,sleeping,sleeping_scanning_bridge,sleeping_testing_bridge,task1,task1_task2_bridge,task2,task2_task3_bridge,task3,task3_task1_bridge,task3_task2_bridge,testing"
+    "key": "resting,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1,task1_task2_bridge,task2,task2_task3_bridge,task3,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band"
   }
 }

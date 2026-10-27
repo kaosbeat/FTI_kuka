@@ -282,9 +282,11 @@ class Engine:
             m.commit_pending()
             return
 
-        # 1. Red-link conflict check.
+        # 1. Red-link conflict check. Pass the live pose so ``"x"`` (frozen /
+        # copy-from-previous) axes in the connection poses resolve to the robot's
+        # current position (the concrete value the robot will hold).
         conflict, issues = safety.check_conflict(
-            p["from_zone"], p["from_action"], p["zone"], p["action"]
+            p["from_zone"], p["from_action"], p["zone"], p["action"], curjpos
         )
         p["conflict"] = conflict
         p["issues"] = issues

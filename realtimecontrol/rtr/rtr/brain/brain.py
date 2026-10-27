@@ -389,8 +389,12 @@ class Brain:
         safety = self.machine.safety
         if safety is None:
             return True
+        # Pass the live pose so ``"x"`` (frozen / copy-from-previous) axes in the
+        # connection poses resolve to the robot's current position (the concrete
+        # value the robot will hold).
         conflict, _issues = safety.check_conflict(
-            self.machine.current_zone, self.machine.current_action, zone, action)
+            self.machine.current_zone, self.machine.current_action, zone, action,
+            self.machine._last_curjpos)
         return not conflict
 
     def _record_lost(self) -> None:

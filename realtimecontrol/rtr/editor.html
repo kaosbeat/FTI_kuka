@@ -988,18 +988,29 @@ function actionEndPose(a) {
   const ps = actionPoses(a);
   return ps.length ? ps[ps.length - 1] : null;
 }
-// True when every axis of the pose is a concrete number (no "x" frozen/copy axes).
-function poseNumeric(p) {
-  return Array.isArray(p) && p.every((x) => typeof x === "number" && !Number.isNaN(x));
-}
-// A pose shared by both lists (within `margin` on every concrete axis), or null.
-// Mirrors rtr.state.zones.find_shared_pose: the runtime hand-off requirement for an
-// inter-zone move. "x" axes have no static value and are skipped.
-function findSharedPose(posesA, posesB, margin = 0.5) {
-  for (const pa of posesA) {
-    if (!poseNumeric(pa)) continue;
-    for (const pb of posesB) {
-      if (poseNumeric(pb) && pa.every((v, k) => Math.abs(v - pb[k]) <= margin)) return pa;
+// Mirrors rtr.state.zones.find_shared_pose: find a pose shared by both pose lists.
+// An "x" axis (frozen / copy-from-previous) has no static value — it resolves to the
+// robot's live position at the hand-off — so it is a wildcard and is skipped. A pair
+// is a shared pose when every axis concrete in both poses matches within `margin` and
+// at least one such axis exists (an all-"x" pose does not trivially match everything).
+// Returns [pose, indexInA, indexInB] or null.
+function findSharedPose(pa, pb, margin) {
+  margin = margin || 0.5;
+  for (let i = 0; i < pa.length; i++) {
+    const a = pa[i];
+    if (!Array.isArray(a) || a.length !== 6) continue;
+    for (let j = 0; j < pb.length; j++) {
+      const b = pb[j];
+      if (!Array.isArray(b) || b.length !== 6) continue;
+      let concrete = 0, ok = true;
+      for (let k = 0; k < 6; k++) {
+        const va = a[k], vb = b[k];
+        if (va === "x" || vb === "x") continue; // wildcard: live position at hand-off
+        if (typeof va !== "number" || typeof vb !== "number") { ok = false; break; }
+        if (Math.abs(va - vb) > margin) { ok = false; break; }
+        concrete++;
+      }
+      if (ok && concrete > 0) return [a, i, j];
     }
   }
   return null;
@@ -1056,8 +1067,10 @@ function poseOutsideSafezone(pose, z) {
 // The conflict info for an action edge. Returns {any, issues: [strings]} for the red
 // marker + click-to-show detail.
 //
-// INTER-ZONE link: the two zones' safezones must overlap AND the shared position
-// (the source's end pose) must match the target's start pose within 0.5 on every axis.
+// INTER-ZONE link: the two zones' safezones must overlap AND the two actions must
+// share at least one pose (any anchor appearing in both lists) so the robot can hand
+// off there. An "x" axis is a wildcard (it resolves to the robot's live position at
+// the hand-off). When no pose is shared, the robot cannot cross.
 //
 // INTRA-ZONE link (both actions in the same zone): no shared-position requirement —
 // the robot moves freely within the zone, so any pose inside the zone's safezone is a
@@ -1080,19 +1093,13 @@ function edgeConflict(e) {
   } else {
     const gaps = zoneOverlapGaps(zA, zB);
     if (gaps.length) issues.push(`safezones do not overlap on ${gaps.join(", ")}`);
-    // A "x" (frozen / copy-from-previous) axis has no static value — it resolves to
-    // the robot's live position at the action's start — so it can never be a static
-    // mismatch. Compare only the axes where BOTH ends are concrete numbers.
-    if (end && start) {
-      const mismatch = [];
-      end.forEach((v, i) => {
-        if (v === "x" || start[i] === "x") return;
-        if (Math.abs(v - start[i]) >= 0.5) mismatch.push(AXES[i]);
-      });
-      if (mismatch.length) {
-        issues.push(`no shared position on ${mismatch.join(", ")}: ${e.from.zone}/${e.from.action} ends [${end.join(", ")}] but ` +
-                    `${e.to.zone}/${e.to.action} starts [${start.join(", ")}]`);
-      }
+    // Shared-position continuity (mirrors gate.py:104 / find_shared_pose): the two
+    // actions must share at least one pose (any anchor appearing in both lists) so the
+    // robot can hand off there. An "x" axis is a wildcard (live position at hand-off).
+    const src = actionPoses(aA), tgt = actionPoses(aB);
+    if (src.length && tgt.length && findSharedPose(src, tgt) === null) {
+      issues.push(`no shared position: ${e.from.zone}/${e.from.action} shares no pose with ` +
+                  `${e.to.zone}/${e.to.action}`);
     }
   }
   return { any: issues.length > 0, issues };
