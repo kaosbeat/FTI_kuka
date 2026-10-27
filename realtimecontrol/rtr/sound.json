@@ -134,6 +134,13 @@
         "note": 60,
         "velocity": 60
       }
+    },
+    "sleeping_scanning_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
     }
   },
   "actions": {
@@ -451,6 +458,14 @@
           {
             "note": 60,
             "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
           }
         ]
       }
@@ -657,7 +672,16 @@
         },
         "poses": []
       }
+    },
+    "sleeping_scanning_bridge": {
+      "bridge": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
+      }
     }
   },
-  "out_port": 0
+  "out_port": 7
 }
