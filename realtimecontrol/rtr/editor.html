@@ -7534,4 +7534,10 @@ $("ghostCollide").onclick = () => {
     $("ghostInfo").textContent = "clear";
     $("ghostInfo").style.color = "var(--accent)";
   } else {
-    $("ghostInfo")
+    $("ghostInfo").textContent = "COLLIDES: " + res.collisions.map((c) => c.a + "~" + c.b).join(", ");
+    $("ghostInfo").style.color = "#e05d5d";
+  }
+};
+</script>
+</body>
+</html>
