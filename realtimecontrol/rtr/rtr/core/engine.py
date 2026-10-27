@@ -206,7 +206,11 @@ class Engine:
                 move(target, self.machine.speed, blocking=False)
             else:
                 # Block: wait for this move to arrive before the next tick
-                # (the legacy kukapy behaviour).
+                # (the legacy kukapy behaviour). Publish the pre-move state
+                # first so WebSocket clients (camera_debug.html, render.html)
+                # keep receiving cam_telem during the blocking move; the
+                # unconditional publish below runs again after the move ends.
+                self._publish(curjpos, curpos, target)
                 if self.verbose:
                     print(f"[engine] tick#{tick_no} BLOCK-move start target={target}")
                 await asyncio.to_thread(move, target, self.machine.speed)

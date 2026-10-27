@@ -1,5 +1,48 @@
 # Task Handoff Log
 
+## 2026-10-27 — camera_debug.html / render.html stop receiving camera tracking updates during robot movements
+
+### Status
+
+Completed
+
+### Summary
+
+`camera_debug.html` and `render.html` stop receiving camera tracking updates (`cam_telem`) during robot movements. Root cause: in `rtr/core/engine.py:_tick()`, when `move_mode != "stream"`, the engine does `await asyncio.to_thread(move, target, speed)` which blocks the coroutine until the robot move completes. `self._publish()` (which sends the state frame — including `cam_telem`) runs only AFTER the move finishes. During a blocking move, no state frames are published, so WebSocket clients stop receiving camera telemetry and may time out / reconnect.
+
+Fix: call `self._publish(curjpos, curpos, target)` BEFORE the blocking move so clients at least receive the pre-move state (with current `cam_telem`) before the gap. The unconditional publish after the move still runs once the move ends. Stream mode (`move_mode == "stream"`) is unchanged — it already publishes every tick.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/core/engine.py` (line ~207): added `self._publish(curjpos, curpos, target)` inside the blocking-move `else` branch, before `await asyncio.to_thread(move, ...)`.
+
+### Documentation
+
+None required — the fix restores the existing behavior contract (state frames include `cam_telem`); no user-facing text changed.
+
+### Architecture
+
+No architectural impact. Publish-before-move is additive; the post-move publish is unchanged. Stream mode is untouched.
+
+### Validation
+
+- `python -m pytest tests/ -q --ignore=tests/test_remote_tui.py` — 299 passed, 6 failed, 14 skipped. The 6 failures (`test_remote_sdl` ×5, `test_transition` ×1) are pre-existing and unrelated (verified via `git stash` — same 6 fail on the clean tree).
+
+### Decisions and Caveats
+
+- Publishing before the move sends the state at move-start. During the move itself there are still no live updates (blocking mode inherently waits for completion); the pre-move publish at least gives clients a valid state frame before the gap and prevents the WebSocket from going silent long enough to time out.
+- No change to robot behavior, move timing, or the stream mode path.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+None.
+
+---
+
 ## 2026-10-27 — Suppress ConnectionResetError on HTTP static responses when client disconnects
 
 ### Status
