@@ -1,5 +1,102 @@
 # Task Handoff Log
 
+## 2026-10-27 — Suppress ConnectionResetError on HTTP static responses when client disconnects
+
+### Status
+
+Completed
+
+### Summary
+
+The HTTP static handler (`_serve_static`) raised `ConnectionResetError` (errno 104) when writing the response body to a client that had already disconnected (e.g. browser closed the tab, navigated away, or stopped polling `/assets/latest.jpg`). `socketserver` logs the traceback per request thread, which the operator associated with the robot stopping.
+
+Fix: added a `_wfile_write()` helper on the handler that wraps `self.wfile.write()` and swallows `ConnectionResetError`/`BrokenPipeError` (expected disconnects) while letting real errors through. `_serve_static`, `_send_json`, and `_send_text` now route through it.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/io/httpserver.py`:
+  - Added `Handler._wfile_write(data)` — writes to `wfile`, returns False on `ConnectionResetError`/`BrokenPipeError` instead of propagating.
+  - `_serve_static`, `_send_json`, `_send_text` call `self._wfile_write(...)` instead of `self.wfile.write(...)`.
+
+### Documentation
+
+None required — restores expected, silent handling of client disconnects; no user-facing behavior changed.
+
+### Architecture
+
+No architectural impact. The HTTP response path is unchanged; only the write is now guarded against the expected client-disconnect case.
+
+### Validation
+
+- `python3 -m py_compile rtr/io/httpserver.py` — SYNTAX_OK.
+
+### Decisions and Caveats
+
+- `ConnectionResetError` (ECONNRESET) and `BrokenPipeError` (EPIPE) are both subclasses of `OSError`; catching them specifically avoids masking genuine server errors (e.g. disk-full). Other `OSError`s still propagate.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+None.
+
+---
+
+## 2026-10-27 — Fix brain-tab save wiping per-behavior stay/triggers; restore truncated editor.html tail
+
+### Status
+
+Completed
+
+### Summary
+
+The brain tab of `editor.html` silently wiped the per-behavior next-selection fields (`stay`/`triggers`/`dwell_s`/`lock_duration_s`) on every save. Root cause: `_commitBrainDom()` rebuilt `BRAIN.behaviors` from scratch using only the motion params (`BEHAVIOR_PARAMS` keys like `freq`/`gain`/`sweep_amp`), discarding the next-selection fields that `setNext` writes live into `BRAIN.behaviors[name]` on every keystroke. So edits such as setting `vigilant` to not loop indefinitely never persisted, and `spontaneous` (which has no motion params) was wiped to `{}` entirely.
+
+Fix: `_commitBrainDom()` now reads the next-selection fields from the DOM (the authoritative save-time read, mirroring `_commitGroupsDom`) before replacing `b.behaviors`. Behavior cards now carry `data-name` so the per-behavior trigger checkboxes are queryable.
+
+During verification I discovered `editor.html` was truncated — a pre-existing issue introduced by the camera-overlay commit `3d339bb`: the file ended mid-statement at `$("ghostInfo")` and the main `<script>` (opened at line 741) was never closed (13 `<script>` vs 12 `</script>`). This blocked the editor from loading (syntax error) and the `test_groups_tab.js` harness. The truncated file was otherwise a full superset of the last complete version (`2b516c4` "zones") — only the final 7 lines (the collision-result display + `</script></body></html>`) were missing, recoverable verbatim from `2b516c4`. I restored them. I also fixed the `test_groups_tab.js` stub, which was missing `uiCamToggle` (added by the camera-overlay commit), causing a load-time null.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - `_commitBrainDom()` (line ~3348): now reads `stay`/`triggers`/`dwell_s`/`lock_duration_s` from the DOM before replacing `b.behaviors`, so the per-behavior loop settings survive a brain-tab save.
+  - Behavior cards (line ~2877): `card.dataset.name = name` so the per-behavior trigger checkboxes are queryable by `data-name`.
+  - Restored the truncated tail (line ~7537): the collision-result display + `</script></body></html>` (verbatim from the last complete version `2b516c4`).
+- `realtimecontrol/rtr/test_groups_tab.js`: added `uiCamToggle` to `STATIC_IDS` (the camera-overlay element the script references but the stub lacked).
+
+### Documentation
+
+None required — the fix restores the documented brain-tab save behavior (per-behavior stay/triggers persist); no user-facing text changed.
+
+### Architecture
+
+No architectural impact. The save path is unchanged in shape (DOM → `_commitBrainDom` → `b.behaviors` → `POST /api/brain`); the fix only makes `_commitBrainDom` preserve the next-selection fields it previously dropped. The server (`httpserver.py` `/api/brain` POST) writes the payload verbatim after `validate_brain_config`, so no server change was needed.
+
+### Validation
+
+- `node --check` on the extracted main inline script — SYNTAX_OK (310,311 bytes; the script is now complete/closed).
+- `node test_groups_tab.js` — ALL_TESTS_PASSED (20 assertions, incl. `payload has hunt/facefocus/autonomy/behaviors (no clobber)` and `cam_control` preservation).
+- Targeted brain-save verification (Node + mini-DOM) — BRAIN_SAVE_VERIFIED: `vigilant` round-trips `{freq:1, stay:0.25, triggers:["dwell","lock_duration"]}`; `spontaneous` (no motion params) round-trips `{stay:0.5, triggers:["dwell"]}` (previously wiped to `{}`).
+- Script-tag balance: 13 `<script>` / 13 `</script>`; file ends with `</html>` (7542 lines).
+
+### Decisions and Caveats
+
+- The truncation was pre-existing (introduced by `3d339bb` "camera overlay"; the last complete version is `2b516c4` "zones"). Both the working copy and HEAD were truncated; I restored only the missing 7-line tail — the camera-overlay work in the middle of the file was already intact.
+- The user was likely running a cached browser copy, which is why the editor appeared to work despite the on-disk truncation.
+- The `test_groups_tab.js` stub's mini-DOM selector now strips quotes from attribute values to match browser behavior for `[data-name="..."]` selectors (a test-harness fix, not an editor change).
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+None.
+
+---
+
 ## 2026-10-27 — Stop the robot driving to 0,0,0,0,0,0 on manual mode entry
 
 ### Status

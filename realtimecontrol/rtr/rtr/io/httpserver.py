@@ -832,11 +832,25 @@ def _make_handler(server: HttpServer):
                 self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
-            self.wfile.write(data)
+            self._wfile_write(data)
 
         # ------------------------------------------------------------------
         # Response helpers.
         # ------------------------------------------------------------------
+        def _wfile_write(self, data: bytes) -> bool:
+            """Write to the client, swallowing disconnects.
+
+            A browser that navigates away, closes a tab, or stops polling mid
+            response (e.g. the camera snapshot) resets the connection. That is
+            expected and must not take down the handler thread or noise the log.
+            Returns True if the write succeeded.
+            """
+            try:
+                self.wfile.write(data)
+                return True
+            except (ConnectionResetError, BrokenPipeError):
+                return False
+
         def _send_json(self, code: int, obj) -> None:
             body = json.dumps(obj).encode("utf-8")
             self.send_response(code)
@@ -844,7 +858,7 @@ def _make_handler(server: HttpServer):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            self._wfile_write(body)
 
         def _send_text(self, code: int, text: str) -> None:
             body = text.encode("utf-8")
@@ -853,6 +867,6 @@ def _make_handler(server: HttpServer):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            self._wfile_write(body)
 
     return Handler
