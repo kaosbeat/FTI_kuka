@@ -2874,6 +2874,7 @@ function buildBrainForm() {
     if (camGroup && camGroup !== lastCamGroup) mkCamGroupHead(camGroup);
     lastCamGroup = camGroup;
     const card = mkCard(name, BEHAVIOR_DESCRIPTIONS[name]);
+    card.dataset.name = name;
     if (camGroup) card.classList.add(CAMERA_BEHAVIOR_GROUPS[camGroup].accent);
     // Roaming indicator (top-left corner): roam = drives the variable axes (roams
     // within the zone safezone); fixed = holds a strict pose (no roaming).
@@ -3347,11 +3348,27 @@ function _commitBrainDom() {
   for (const name of Object.keys(BEHAVIOR_PARAMS)) {
     const defaults = BEHAVIOR_PARAMS[name];
     const keys = Object.keys(defaults);
-    if (!keys.length) { behaviors[name] = {}; continue; }
     const entry = {};
     for (const key of keys) {
       entry[key] = num("brainBh" + cap(name) + cap(key), defaults[key]);
     }
+    // Next-selection (the "loop" controls): stay / triggers / dwell_s / lock_duration_s.
+    // Read them from the DOM (the authoritative save-time read, mirroring
+    // _commitGroupsDom) so they are not dropped. Previously this rebuilt
+    // b.behaviors with only the motion params, silently wiping the stay/triggers
+    // the user set, so a saved brain.json lost the per-behavior loop settings.
+    const stayEl = $("brainBh" + cap(name) + "Stay");
+    if (stayEl) { const v = parseFloat(stayEl.value); if (!isNaN(v)) entry.stay = v; }
+    const card = $("brainCards").querySelector('.brainCard[data-name="' + name + '"]');
+    if (card) {
+      const trigs = [];
+      card.querySelectorAll("input[type=checkbox][data-trig]").forEach((x) => { if (x.checked) trigs.push(x.dataset.trig); });
+      if (trigs.length) entry.triggers = trigs;
+    }
+    const dwellEl = $("brainBh" + cap(name) + "DwellS");
+    if (dwellEl) { const v = parseFloat(dwellEl.value); if (!isNaN(v)) entry.dwell_s = v; }
+    const lockEl = $("brainBh" + cap(name) + "LockDurS");
+    if (lockEl) { const v = parseFloat(lockEl.value); if (!isNaN(v)) entry.lock_duration_s = v; }
     behaviors[name] = entry;
   }
   b.behaviors = behaviors;

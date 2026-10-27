@@ -1,6 +1,50 @@
 # Task Handoff Log
 
-## 2026-10-27 — Camera-debug overlay on the render page (`cam` flag in `render_ui`) + patches-tab toggle
+## 2026-10-27 — Stop the robot driving to 0,0,0,0,0,0 on manual mode entry
+
+### Status
+
+Completed
+
+### Summary
+
+Clicking "manual" in `realtimecontrol/rtr/client.html` (which sends `set_control_mode` `mode: "manual"`) used to drive the robot to `0,0,0,0,0,0`. Root cause: `StateMachine.set_control_mode` (rtr/state/machine.py) froze the robot on a freshly-read `curjpos`, which can read as all-zeros between controller/EKI frames, so the hold target became zeros and the robot drove there.
+
+Fix: entering manual mode now holds the robot at its last known good pose instead of re-reading curjpos. Precedence: `self.target` (refreshed every engine tick) → `self._last_curjpos` (retains the last good read; a bad read throws in the tick and does not clobber it) → fresh `curjpos` as last resort. An all-zeros pose is never written (no valid pose known → do not move). The action/transition are still cleared and auto-advance is suppressed, so the robot finishes the current action, stops, and waits for an explicit command — matching the documented manual-mode contract. `client.html` needed no change (its handler already just sends `set_control_mode`).
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/state/machine.py`: `set_control_mode` manual-entry hold now uses the last known good pose (`self.target` → `_last_curjpos` → `curjpos`) and skips writing an all-zeros pose, instead of unconditionally `self.target = list(curjpos)`.
+
+### Documentation
+
+None required — behavior is the documented manual-mode contract (robot holds where it is until an explicit command); no user-facing text changed.
+
+### Architecture
+
+No architectural impact.
+
+### Validation
+
+- `python -m pytest tests/test_state_machine.py tests/test_forced_behavior.py tests/test_zone_groups.py tests/test_brain_assertive.py tests/test_autoreturn.py` — 69 passed, 9 skipped.
+- Full suite `tests/ -q --ignore=tests/test_remote_tui.py` — 299 passed, 14 skipped; the 6 `test_remote_sdl`/`test_transition` failures and the `test_remote_tui.py` collection error pre-exist this change (verified via `git stash`) and are unrelated (SDL font/text expectations, string-pose test data, `rtr.flow` import).
+- Targeted sanity check: entering manual with `curjpos=[0]*6` holds a previously-set good target; with no known pose it writes nothing (no zeros).
+
+### Decisions and Caveats
+
+- All-six-zeros is treated as "no valid pose known" (a real KR60 joint pose is never all zero in normal operation), so the robot is never driven to zeros on a mode change.
+- If `self.target`/`_last_curjpos` are unset and `curjpos` is zeros, no target is written, so the engine issues no move command on that tick (robot stays put).
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+None.
+
+---
+
 
 ### Status
 

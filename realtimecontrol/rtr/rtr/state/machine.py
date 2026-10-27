@@ -293,8 +293,10 @@ class StateMachine:
             self._pending = None
             self.current_action = None
             self.action_index = 0
-            if curjpos is not None:
-                self.target = list(curjpos)
+            hold = self.target if self.target is not None else \
+                (self._last_curjpos if self._last_curjpos is not None else curjpos)
+            if hold is not None and any(v != 0 for v in hold):
+                self.target = list(hold)
                 self.target_kind = "joint"
         if self.control_mode == "assertive" and mode != "assertive":
             # Leaving assertive mode: drop the per-move speed (assertive_speed is
