@@ -32,6 +32,7 @@ or under pytest::
 
 import os
 import sys
+import time
 import types
 
 # Make the package importable when run directly.
@@ -361,7 +362,8 @@ def test_reconcile_closes_stale_specs_on_reload():
         s, holder = _sound({"channel": 0,
                             "zones": {"a": {"out_port": 0, "command": {"note": 10, "velocity": 50}}},
                             "modes": {}, "actions": {}})
-        out0 = s._get_out("a")
+        spec0, out0 = s._get_out("a")
+        assert spec0 == (0, None)
         assert (0, None) in s._open_outs
         # Reload with a table that no longer references port 0.
         holder["table"] = {"channel": 0,
@@ -389,6 +391,145 @@ def test_close_closes_all():
 
 
 # ---------------------------------------------------------------------------
+# Device changes (fake rtmidi): fallback, retry/backoff, dead device recovery.
+# ---------------------------------------------------------------------------
+def test_invalid_index_falls_back_to_auto():
+    # A zone out_port that no longer exists (index 5, only 2 ports): the open
+    # fails and the zone degrades to the auto candidate (first available port).
+    FakeMidiOut.instances = []
+    with _fake_rtmidi():
+        s, _ = _sound({"channel": 0,
+                       "zones": {"a": {"out_port": 5,
+                                        "command": {"note": 10, "velocity": 50}}},
+                       "modes": {}, "actions": {}})
+        s.on_event(Event.SNAPSHOT, _snap(zone="a"))
+        assert (5, None) not in s._open_outs
+        auto = s._open_outs.get((None, None))
+        assert auto is not None and auto.opened == ("port", 0)
+        assert auto.sent == [[0x90, 10, 50]]
+
+
+def test_name_open_resolves_by_index_when_no_string_outport():
+    # rtmidi 1.5.8 has no open_string_outport: the name resolves by enumeration
+    # (exact match on the port name).
+    FakeMidiOut.instances = []
+    with _fake_rtmidi():
+        s, _ = _sound({"channel": 0,
+                       "zones": {"a": {"out_port": None,
+                                        "command": {"note": 10, "velocity": 50}}},
+                       "modes": {}, "actions": {}, "out_device": "Fake:Port-1"})
+        s.on_event(Event.SNAPSHOT, _snap(zone="a"))
+        out = s._open_outs.get((None, "Fake:Port-1"))
+        assert out is not None and out.opened == ("port", 1)
+        assert out.sent == [[0x90, 10, 50]]
+
+
+def test_name_substring_matches_dynamic_suffix():
+    # A name that is a substring of the enumerated port (dynamic suffix) resolves
+    # to the first matching port.
+    FakeMidiOut.instances = []
+    with _fake_rtmidi():
+        s, _ = _sound({"channel": 0,
+                       "zones": {"a": {"out_port": None,
+                                        "command": {"note": 10, "velocity": 50}}},
+                       "modes": {}, "actions": {}, "out_device": "Fake:Port"})
+        s.on_event(Event.SNAPSHOT, _snap(zone="a"))
+        out = s._open_outs.get((None, "Fake:Port"))
+        assert out is not None and out.opened == ("port", 0)
+
+
+def test_name_open_uses_string_outport_when_available():
+    # A newer wrapper with open_string_outport: the name fast path is used.
+    FakeMidiOut.instances = []
+    saved = _fake_module.MidiOut
+    _fake_module.MidiOut = FakeMidiOutWithString
+    try:
+        with _fake_rtmidi():
+            s, _ = _sound({"channel": 0,
+                           "zones": {"a": {"out_port": None,
+                                            "command": {"note": 10, "velocity": 50}}},
+                           "modes": {}, "actions": {}, "out_device": "MyEngine"})
+            s.on_event(Event.SNAPSHOT, _snap(zone="a"))
+            out = s._open_outs.get((None, "MyEngine"))
+            assert out is not None and out.opened == ("string", "MyEngine")
+    finally:
+        _fake_module.MidiOut = saved
+
+
+def test_failed_open_discards_instance():
+    # A failed open must not leak the MidiOut instance (it is deleted).
+    FakeMidiOut.instances = []
+    FakeMidiOut.open_fail = True
+    try:
+        with _fake_rtmidi():
+            s, _ = _sound({"channel": 0,
+                           "zones": {"a": {"out_port": 0,
+                                            "command": {"note": 10, "velocity": 50}}},
+                           "modes": {}, "actions": {}})
+            spec, out = s._get_out("a")
+            assert out is None and spec is None
+            assert FakeMidiOut.instances and all(i.deleted for i in FakeMidiOut.instances)
+    finally:
+        FakeMidiOut.open_fail = False
+
+
+def test_failed_open_retries_after_backoff():
+    # Devices that will not open (gone / not ready): the first attempt fails and
+    # discards the instance, the next is skipped by the backoff (no new attempt),
+    # and after the backoff the retry succeeds when the device reappears.
+    FakeMidiOut.instances = []
+    FakeMidiOut.open_fail = True
+    try:
+        with _fake_rtmidi():
+            s, _ = _sound({"channel": 0,
+                           "zones": {"a": {"out_port": 0,
+                                            "command": {"note": 10, "velocity": 50}}},
+                           "modes": {}, "actions": {}}, retry_interval=0.05)
+            spec, out = s._get_out("a")
+            assert out is None and spec is None
+            n = len(FakeMidiOut.instances)
+            # The backoff skips the retry: no new attempt, no new instance.
+            s._get_out("a")
+            assert len(FakeMidiOut.instances) == n
+            # The device reappears; after the backoff the retry succeeds.
+            FakeMidiOut.open_fail = False
+            time.sleep(0.06)
+            spec, out = s._get_out("a")
+            assert spec == (0, None) and out is not None
+            assert out.opened == ("port", 0)
+            assert (0, None) not in s._open_failures
+    finally:
+        FakeMidiOut.open_fail = False
+
+
+def test_send_failure_drops_dead_handle_and_reopens():
+    # A device that dies after opening: the send fails, the dead handle is dropped
+    # (backed off), the message degrades to logging, and the next send reopens.
+    FakeMidiOut.instances = []
+    with _fake_rtmidi():
+        s, _ = _sound({"channel": 0,
+                       "zones": {"a": {"out_port": 0,
+                                        "command": {"note": 10, "velocity": 50}},
+                                  "b": {"out_port": 1,
+                                        "command": {"note": 20, "velocity": 60}}},
+                       "modes": {}, "actions": {}}, retry_interval=0.05)
+        s.on_event(Event.SNAPSHOT, _snap(zone="a"))
+        dead = s._open_outs[(0, None)]
+        dead.send_fail = True
+        # Zone change: a's note-off fails (dead), b's note-on goes to port 1.
+        s.on_event(Event.SNAPSHOT, _snap(zone="b"))
+        assert (0, None) not in s._open_outs  # the dead handle is dropped
+        assert dead.closed is True
+        assert s._open_outs[(1, None)].sent == [[0x90, 20, 60]]
+        # The next send on a reopens the device after the backoff.
+        time.sleep(0.06)
+        s.on_event(Event.SNAPSHOT, _snap(zone="a"))
+        fresh = s._open_outs.get((0, None))
+        assert fresh is not None and fresh is not dead
+        assert fresh.sent == [[0x90, 10, 50]]
+
+
+# ---------------------------------------------------------------------------
 # list_out_ports: {index, name} entries (fake rtmidi).
 # ---------------------------------------------------------------------------
 def test_list_out_ports_shape():
@@ -398,6 +539,16 @@ def test_list_out_ports_shape():
             {"index": 0, "name": "Fake:Port-0"},
             {"index": 1, "name": "Fake:Port-1"},
         ]
+
+
+def test_list_out_ports_releases_instance():
+    # The enumeration MidiOut is never handed over: it must be released.
+    FakeMidiOut.instances = []
+    with _fake_rtmidi():
+        s, _ = _sound({"channel": 0, "zones": {}, "modes": {}, "actions": {}})
+        s.list_out_ports()
+        assert len(FakeMidiOut.instances) == 1
+        assert FakeMidiOut.instances[0].deleted is True
 
 
 def main():

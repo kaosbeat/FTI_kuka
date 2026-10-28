@@ -1,5 +1,114 @@
 # Task Handoff Log
 
+## 2026-10-28 — Test: device-change tests for robust MIDI-out (fake rtmidi)
+
+### Status
+
+Completed
+
+### Summary
+
+Extended `tests/test_sound_out_ports.py` to cover the new device-change behavior of the Sound adapter. The fake rtmidi now mirrors python-rtmidi 1.5.8: `open_port` raises for an out-of-range index (with the real error text), there is **no** `open_string_outport` on the base fake, and instances expose `deleted`/`closed` state. New tests:
+
+- `test_invalid_index_falls_back_to_auto` — a zone `out_port` that no longer exists (index 5 of 2) fails and the zone degrades to the auto candidate (first available port) and still sends.
+- `test_name_open_resolves_by_index_when_no_string_outport` — the `out_device` name path resolves by enumeration (1.5.8 has no name open).
+- `test_name_substring_matches_dynamic_suffix` — a name that is a substring of the enumerated port (dynamic suffix) resolves to the first matching port.
+- `test_name_open_uses_string_outport_when_available` — the `FakeMidiOutWithString` subclass covers the newer-wrapper `open_string_outport` fast path.
+- `test_failed_open_discards_instance` — failed opens do not leak `MidiOut` instances (they are `delete()`d).
+- `test_failed_open_retries_after_backoff` — a failed spec is skipped within the backoff (no new attempt, no new instance) and the retry succeeds after the backoff once the device reappears; the failure entry is cleared on success.
+- `test_send_failure_drops_dead_handle_and_reopens` — a device that dies after opening: the send fails, the dead handle is dropped (closed, backoff started, message degraded to logging), and the next send reopens the port.
+- `test_list_out_ports_releases_instance` — the enumeration `MidiOut` is released.
+
+Fake updates: `open_port` range-validates and raises; `delete()` added; `open_string_outport` moved to the `FakeMidiOutWithString` subclass; class-level `open_fail` and per-instance `send_fail` switches; `_sound()` takes a `retry_interval` passthrough.
+
+### Changes Made
+
+- `realtimecontrol/rtr/tests/test_sound_out_ports.py`: new "Device changes" test section (8 tests); updated fake rtmidi (+ `FakeMidiOutWithString`); `retry_interval` on the `_sound()` helper; `import time`.
+- `realtimecontrol/rtr/tests/test_sound_out_ports.py`: fixed `test_reconcile_closes_stale_specs_on_reload` — `_get_out` now returns `(spec, out)`, so the test unpacks the tuple.
+
+### Documentation
+
+- Updated the test module docstring to list the new device-change coverage and the 1.5.8 fake semantics.
+
+### Architecture
+
+No architectural impact. Test-only.
+
+### Validation
+
+- `python tests/test_sound_out_ports.py` → ALL TESTS PASSED (27 tests).
+- `python -m pytest tests/ -q --ignore=tests/test_remote_tui.py` → **308 passed, 14 skipped, 5 failed** — all 5 failures are in `tests/test_remote_sdl.py` (UI text assertions, e.g. "THEME / LAYOUT" label), pre-existing at HEAD and unrelated to sound.
+- `tests/test_remote_tui.py` has a pre-existing collection error at HEAD: it imports `action_kind` from `rtr.flow`, which does not exist (both files unmodified from HEAD).
+- `ruff check rtr/sound/sound.py tests/test_sound_out_ports.py` → sound.py clean; the test file has the same 4 pre-existing E402s (the `sys.path.insert` pattern) as the HEAD version.
+
+### Decisions and Caveats
+
+- The retry/backoff tests use a small `retry_interval` (0.05 s) plus one 0.06 s sleep to stay fast while still exercising the real backoff path.
+- The fake's `open_port` raises a plain `Exception` carrying the real rtmidi message text; the adapter catches `Exception`, so the exact error type is irrelevant.
+
+### Next Task
+
+Handoff + final report (this entry and the implementation entry below).
+
+### Instructions for the Next Task
+
+- If the `test_remote_sdl.py` / `test_remote_tui.py` failures matter, they are a separate workstream (UI text drift / missing `action_kind` in `rtr.flow`) — not the sound adapter.
+
+---
+
+## 2026-10-28 — Implement: robust MIDI-out device handling in rtr/sound/sound.py
+
+### Status
+
+Completed
+
+### Summary
+
+Reworked the Sound adapter's MIDI-out connection so adding/removing MIDI devices no longer permanently kills sound (the startup error `MidiOutAlsa::openPort: the 'portNumber' argument (7) is invalid.`):
+
+- **Candidate spec chain**: `_candidate_specs(zone)` returns the ordered, deduped specs: zone `out_port` index → global `out_device` name → global `out_port` index → constructor default → auto (first available port). `_get_out` walks the chain: a cached handle wins; a previously failed spec is retried at most once per `retry_interval` (default `RETRY_INTERVAL = 5.0`, constructor kwarg); the first spec that opens is returned. `_get_out` now returns `(spec, out)`.
+- **Name path fixed for rtmidi 1.5.8**: `_open_named` uses `open_string_outport` when present, else resolves the name to an index by enumeration (exact match, then substring for dynamic suffixes). The old name branch always raised `AttributeError` on 1.5.8.
+- **Descriptive index errors**: `_open_indexed` range-checks before opening and raises with the list of available ports, so the log says what to configure.
+- **Dead-device recovery**: a `send_message` failure drops the dead handle (`_close_spec`), starts the backoff, and degrades the message to logging; the next message reopens (walking the whole candidate chain).
+- **Leak fixes**: `_open_one` discards (closes + deletes) the `MidiOut` instance on every failure path, including "no devices"; `list_out_ports` releases its enumeration instance in a `finally`.
+- **Reconcile**: `_reconcile_outs` computes the needed set as the union of *all* candidates over all zones and prunes stale `_open_failures`; `close()` clears `_open_failures`.
+- Retry state: `_open_failures: Dict[tuple, float]` (monotonic time per spec).
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/sound/sound.py`: module docstring + `RETRY_INTERVAL` constant; `Sound.__init__` (`retry_interval` kwarg, `_open_failures`); new helpers `_candidate_specs`, `_port_names`, `_find_port_index`, `_open_indexed`, `_open_named`, `_discard`; rewritten `_out_spec` (first candidate), `_open_one`, `_get_out`, `_send_bytes`, `_reconcile_outs`, `list_out_ports`, `close`.
+
+### Documentation
+
+- Module docstring updated: the fallback chain, retry/backoff, and dead-device detection are documented.
+- No `sound.json` / README changes needed: the existing `out_port` / `out_device` fields now behave as documented (the name path actually works; a stale index degrades instead of dying).
+
+### Architecture
+
+No architectural impact. Internal to the sound adapter; the data shape, events, and public API are unchanged (except `_get_out` returning `(spec, out)`).
+
+### Validation
+
+- `python tests/test_sound_out_ports.py` → ALL TESTS PASSED (27 tests, incl. the new device-change tests — see the test entry above).
+- `ruff check rtr/sound/sound.py` → clean.
+
+### Decisions and Caveats
+
+- The MIDI-**in** side (`rtr/io/midi.py`) was intentionally left unchanged: its failures are not cached and the controller port is a stable ALSA loopback. Possible follow-up if the controller port index ever shifts.
+- The auto candidate `(None, None)` opens port 0 (the first enumerated ALSA port), so a zone with no valid explicit config still degrades to a real device when one exists.
+- The implementation landed in commit `5cd796e` ("pose zonme"), which also contains unrelated pose-zone work (`behavior.py` / `zones.py` / `editor.html`).
+
+### Next Task
+
+Extend the tests for the device-change scenarios (done — see the entry above).
+
+### Instructions for the Next Task
+
+- The tests live in `tests/test_sound_out_ports.py`; the fake rtmidi mirrors 1.5.8 (no `open_string_outport`, range-checked `open_port`).
+- `_get_out` returns `(spec, out)` — callers in tests must unpack the tuple.
+
+---
+
 ## 2026-10-28 — editor.html: absolute/free wording, pose-zone toggle, and flow color
 
 ### Status
