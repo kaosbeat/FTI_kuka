@@ -395,7 +395,7 @@
     },
     "vigilant": {
       "freq": 1,
-      "stay": 0,
+      "stay": 0.4,
       "triggers": [
         "dwell"
       ]
