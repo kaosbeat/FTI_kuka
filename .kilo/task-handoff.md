@@ -1,5 +1,105 @@
 # Task Handoff Log
 
+## 2026-10-28 — IK core: pure JS forward kinematics + geometric Jacobian + DLS IK (validated vs Python)
+
+### Status
+
+Completed
+
+### Summary
+
+Built the JS inverse-kinematics core for drag-the-end-effector pose authoring. A new file `realtimecontrol/rtr/ik.js` holds the pure (no THREE / no DOM) KR60 kinematics, mirroring `rtr/robot/kinematics.py` exactly:
+
+- **FK** (`fkChain`/`fkPos`) takes joint angles in **degrees** (the KUKA A1..A6 convention) and returns the flange (tool0) position = the link_6 matrix translation (tool0 xyz is [0,0,0]). The matrix construction is identical to `rtr3d.js checkPoseCollision` (column-major 16-element arrays, `mats[j] = parent * T(xyz_j) * R(axis_j, q_j)`).
+- **Jacobian** (`jacobian`) returns the linear geometric Jacobian `J_v` (3x6), **per-radian**: column `j` is `z_j × (pos − p_j)`.
+- **Pseudo-inverse** (`pinv3`) is the damped minimum-norm pseudo-inverse (6x3) mapping a base-frame displacement (metres) to joint deltas in **radians**.
+- **IK** (`ikSolve`) is DLS with backtracking + hardware clamp. The critical units rule: the Jacobian is per-radian, so each joint delta is a radian quantity and is converted to degrees (`× 180/π`) before being applied to the degree-based FK. Treating the radian delta as degrees (the earlier broken IK) made every step ~57× too small.
+
+The Python reference (`/tmp/kilo/ik_ref.py`) uses the real `Chain` + the same DLS/backtracking/clamp parameters. The JS port matches it exactly (see Validation).
+
+### Changes Made
+
+- `realtimecontrol/rtr/ik.js` (new): pure KR60 IK module. Exposes `KR60IK = { JOINTS, HOME, DEFAULT_LIMITS, fkChain, fkPos, jacobian, pinv3, ikSolve }` on `globalThis` (and `module.exports` for Node). Chain data (`JOINTS`, `HOME`) is identical to `rtr3d.js`; `DEFAULT_LIMITS` mirrors `HW_LIMITS_FALLBACK`.
+- `/tmp/kilo/ik_ref.py` (scratch, outside the repo): Python reference that locks the target values.
+- `/tmp/kilo/ik_test.js` (scratch, outside the repo): Node harness that loads `ik.js` and compares against the locked reference.
+
+### Documentation
+
+- None required — the new module is self-documenting via its header comment (the FK/Jacobian/units contract is documented at the top of `ik.js`).
+
+### Architecture
+
+- New pure module `ik.js`, deliberately separate from `rtr3d.js` so it is THREE/DOM-free and testable in Node. It will be loaded via a `<script>` tag (before the editor inline script) and consumed by the drag logic; the chain is the same kr60ha xacro used by `rtr3d.js` and `kinematics.py`.
+
+### Validation
+
+- `node --check realtimecontrol/rtr/ik.js` → SYNTAX OK.
+- `node /tmp/kilo/ik_test.js` → **PASS**:
+  - HOME fk pos = `[1.17, 0.0, 1.64]` (max |err| vs Python = 0.000000).
+  - Displacement targets (dir = normalize([0.3,0,0.4])) from HOME: disp 0.05/0.15/0.30/0.45 → solved-pose max |err| = 0.000000 for all four, iteration counts 2/3/3/4 (all match the Python reference), residuals 0.000083/0.000021/0.000159/0.000095 (all match).
+  - Jacobian analytic-vs-finite-difference max |err| = 6.75e-7 (< 1e-3).
+
+### Decisions and Caveats
+
+- Kept the FK matrix convention identical to `checkPoseCollision` (not a fresh rewrite) so the IK's flange position and the rendered ghost arm's tool position are guaranteed to coincide (both derive from the same chain + convention).
+- `ikSolve` seeds from a concrete pose (the caller passes the resolved anchor) so successive drag steps stay on the same arm branch (no joint flips). Orientation is NOT solved (position-only, 3 of 6 DOF); the free axes are left to the existing behavior/axis system.
+- `ik.js` is not yet referenced by any HTML page — it is validated standalone and will be wired in the next task.
+
+### Next Task
+
+Implement the TCP drag handle in `rtr3d.js` (a THREE mesh at the flange, OrbitControls gating, camera-plane pointer projection) that calls `KR60IK.ikSolve`, and wire it in `editor.html` to write the solved pose to the currently-stepped ghost anchor.
+
+### Instructions for the Next Task
+
+- Load `ik.js` via a `<script src="ik.js"></script>` in `editor.html` (and `client.html` if it shares the 3D view) before the inline script, so `KR60IK` is available.
+- In `rtr3d.js`, add a drag-handle API: on pointerdown on the handle, disable `controls` (OrbitControls); project the pointer ray onto a camera-facing plane through the initial flange position; on each pointermove run `KR60IK.ikSolve(seedPose, draggedPoint, { limits: HW_LIMITS })`, seed from the previous solved pose, clamp to `HW_LIMITS`, and recompute FK of the clamped pose so the handle snaps to the actual flange. Expose it so the editor can supply `HW_LIMITS` and a callback with the solved pose.
+- In `editor.html`, target the currently-stepped ghost anchor `TABLE.zones[selectedZone].actions[selectedAction].poses[ghostIndex]`; on drag, write all 6 concrete numbers, update the ghost arm (`Robot3D.setTarget`), the safezone bars, and the pose-row inputs. `resolvePose` (line 5561) already resolves "x" axes for the seed.
+
+---
+
+## 2026-10-28 — UI: two-click interaction for collapsed bridge nodes (select, then open pose editor)
+
+### Status
+
+Completed
+
+### Summary
+
+Fixed the flow-tab click behavior for collapsed bridge-zone nodes. Previously a single click on the purple dot immediately opened the action/pose editor, so the node could not be "selected" to see its properties in the right pane. Now: first click selects the node (`flowSelect` → white stroke + zone properties in the right pane via `buildFlowDetail`/`buildZoneForm`); a second click while the node is already selected opens its single action's editor (`openActionEditor`). Dragging (reposition / connect) and clicking non-bridge nodes are unchanged.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html` (`flowDragEnd`): in the `!d.moved` branch, the collapsed-bridge case now checks `FLOW.sel` first — if the clicked bridge node is the currently selected node, open its first action's editor; otherwise just select it. Falls back to select when the zone has no actions.
+
+### Documentation
+
+- None required — behavior change is self-describing via the updated comment in `flowDragEnd`; no user-facing docs changed.
+
+### Architecture
+
+- No architectural impact. UI-only change to the click dispatch in the flow tab; data model and core untouched.
+
+### Validation
+
+- Extracted the inline script (lines 748–7609) and ran `node --check` → SYNTAX OK.
+- Could not run the page in a browser from this environment (depends on the live core over WebSocket + three.js/hydra-synth), so runtime UI verification was not performed.
+
+### Decisions and Caveats
+
+- Selection state is keyed on `FLOW.sel` (`type === "node"`, matching `zone`), the same state `applyFlowHighlight` uses for the white `fsel` stroke, so the second click is only armed after a visible selection.
+- The right pane already renders the full zone form for a selected node (`buildZoneForm`), so no new UI was needed to "see their properties".
+- If the user later finds two-clicks annoying, a "click dot again to edit" hint could be added to the flow detail pane for selected bridge nodes.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+- To verify in the browser: click a purple bridge dot once → node gets a white stroke and the right pane shows its zone form; click it again → the pose/action editor modal opens. Clicking a different node first resets the selection (first click selects it again).
+
+---
+
 ## 2026-10-28 — Fix: brain behavior next-selection params (lock_duration_s / dwell_s) lost on validate/reload
 
 ### Status
