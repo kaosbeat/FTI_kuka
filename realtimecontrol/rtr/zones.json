@@ -1140,7 +1140,15 @@
           "next": {
             "zone": "scan",
             "action": "scan"
-          }
+          },
+          "pose_imgs": [
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null
+          ]
         }
       }
     },
@@ -1201,7 +1209,15 @@
           "next": {
             "zone": "resting",
             "action": "hold"
-          }
+          },
+          "pose_imgs": [
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null
+          ]
         }
       }
     },
@@ -1262,7 +1278,15 @@
           "next": {
             "zone": "scanning",
             "action": "scnr"
-          }
+          },
+          "pose_imgs": [
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null
+          ]
         }
       }
     },
@@ -1473,7 +1497,33 @@
             3,
             4,
             5
-          ]
+          ],
+          "axis_bands": {
+            "0": [
+              -185,
+              185
+            ],
+            "1": [
+              -50,
+              -40
+            ],
+            "2": [
+              15,
+              25
+            ],
+            "3": [
+              0,
+              1
+            ],
+            "4": [
+              35,
+              45
+            ],
+            "5": [
+              -5,
+              5
+            ]
+          }
         },
         "intent": {
           "enabled": true,

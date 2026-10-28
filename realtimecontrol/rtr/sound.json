@@ -538,7 +538,16 @@
           "note": 60,
           "velocity": 60
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "task3_task1_bridge": {
@@ -565,7 +574,16 @@
           "note": 60,
           "velocity": 60
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "testing_locked_band": {
@@ -583,7 +601,16 @@
           "note": 60,
           "velocity": 60
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "sleeping_resting_bridge": {
@@ -592,7 +619,16 @@
           "note": 60,
           "velocity": 60
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "sleeping_scanning_bridge": {
@@ -601,7 +637,16 @@
           "note": 60,
           "velocity": 60
         },
-        "poses": []
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     },
     "scan": {

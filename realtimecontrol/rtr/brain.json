@@ -12,13 +12,13 @@
     "active": {
       "zones": [
         "scanning",
-        "scan",
-        "lock",
-        "inspect",
         "task1_task2_bridge",
         "task2_task3_bridge",
         "task3_task1_bridge",
-        "task3_task2_bridge"
+        "task3_task2_bridge",
+        "scan",
+        "lock",
+        "inspect"
       ],
       "behaviors": [],
       "enabled": true,
