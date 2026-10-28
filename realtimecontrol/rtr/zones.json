@@ -1771,10 +1771,10 @@
       }
     },
     "view": {
-      "x": 299.2213881897176,
-      "y": 62.57567204159102,
-      "w": 1747.1354874320612,
-      "h": 695.2246624490468
+      "x": -2151.9543280346124,
+      "y": -757.2809671647988,
+      "w": 4647.41513044174,
+      "h": 1849.3114235066396
     },
     "key": "inspect,lock,resting,scan,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band"
   }
