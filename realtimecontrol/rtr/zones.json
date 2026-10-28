@@ -870,11 +870,12 @@
             null
           ],
           "pose_videos": [
-            null,
-            null
+            "C1_C2__00007_..mp4",
+            "C1_D1_001..mp4"
           ]
         }
-      }
+      },
+      "pose": "bridge"
     },
     "task2_task3_bridge": {
       "enabled": true,
@@ -939,11 +940,12 @@
             null
           ],
           "pose_videos": [
-            null,
-            null
+            "D2_D3__00007_..mp4",
+            "D4_D5.mp4_00007_..mp4"
           ]
         }
-      }
+      },
+      "pose": "bridge"
     },
     "task3_task1_bridge": {
       "enabled": true,
@@ -1008,11 +1010,12 @@
             null
           ],
           "pose_videos": [
-            null,
-            null
+            "B1_C1_002..mp4",
+            "B1_B2_003..mp4"
           ]
         }
-      }
+      },
+      "pose": "bridge"
     },
     "task3_task2_bridge": {
       "enabled": true,
@@ -1077,11 +1080,12 @@
             null
           ],
           "pose_videos": [
-            null,
-            null
+            "D6_E1_00004_..mp4",
+            "D5_D6.mp4_00006_..mp4"
           ]
         }
-      }
+      },
+      "pose": "bridge"
     },
     "scanning_task1_bridge": {
       "enabled": true,
@@ -1150,7 +1154,8 @@
             null
           ]
         }
-      }
+      },
+      "pose": "bridge"
     },
     "sleeping_resting_bridge": {
       "enabled": true,
@@ -1288,7 +1293,8 @@
             null
           ]
         }
-      }
+      },
+      "pose": "bridge"
     },
     "scan": {
       "enabled": true,
@@ -1358,34 +1364,8 @@
             null
           ],
           "pose_videos": [
-            null
-          ],
-          "axis_bands": {
-            "0": [
-              -185,
-              185
-            ],
-            "1": [
-              -95,
-              -85
-            ],
-            "2": [
-              15,
-              25
-            ],
-            "3": [
-              0,
-              1
-            ],
-            "4": [
-              75,
-              85
-            ],
-            "5": [
-              -5,
-              5
-            ]
-          }
+            "C1_C2__00003_..mp4"
+          ]
         },
         "scnr": {
           "enabled": true,
@@ -1418,7 +1398,7 @@
             null
           ],
           "pose_videos": [
-            null
+            "C1_C2__00005_..mp4"
           ]
         }
       }
@@ -1488,7 +1468,7 @@
             null
           ],
           "pose_videos": [
-            null
+            "D2_D3__00005_..mp4"
           ],
           "variable_axes": [
             0,
@@ -1555,7 +1535,7 @@
             null
           ],
           "pose_videos": [
-            null
+            "D2_D3__00005_..mp4"
           ]
         }
       }
@@ -1615,7 +1595,7 @@
             null
           ],
           "pose_videos": [
-            null
+            "D6_E1_00002_..mp4"
           ],
           "variable_axes": [
             0,
@@ -1697,7 +1677,7 @@
             null
           ],
           "pose_videos": [
-            null
+            "D6_E1_00002_..mp4"
           ]
         }
       }
@@ -1718,8 +1698,8 @@
         "y": 149.3217043876648
       },
       "scanning": {
-        "x": 787.1046752929688,
-        "y": 442.0661563873291
+        "x": 840.81201171875,
+        "y": 295.7136478424072
       },
       "sleeping_testing_bridge": {
         "x": 162.17116455078124,
@@ -1734,32 +1714,32 @@
         "y": 443.7716064453125
       },
       "task3_task1_bridge": {
-        "x": 1283.111083984375,
-        "y": 619.24365234375
+        "x": 1327.7825927734375,
+        "y": 510.61065673828125
       },
       "task3_task2_bridge": {
-        "x": 1414.73779296875,
-        "y": 481.0314025878906
+        "x": 1556.07177734375,
+        "y": 491.56561279296875
       },
       "testing_locked_band": {
         "x": 536.4475708007812,
         "y": 186.4383087158203
       },
       "scanning_task1_bridge": {
-        "x": 988.0964050292969,
-        "y": 302.228497505188
+        "x": 965.9424743652344,
+        "y": 371.86530780792236
       },
       "sleeping_resting_bridge": {
         "x": 198.46544933319092,
         "y": -146.0498971939087
       },
       "sleeping_scanning_bridge": {
-        "x": 256.27191066741943,
-        "y": 522.3564977645874
+        "x": 265.6744680404663,
+        "y": 481.05052852630615
       },
       "scan": {
-        "x": 1200,
-        "y": 300
+        "x": 1104.66943359375,
+        "y": 317.4548645019531
       },
       "lock": {
         "x": 1558.8377685546875,
@@ -1771,10 +1751,10 @@
       }
     },
     "view": {
-      "x": -2151.9543280346124,
-      "y": -757.2809671647988,
-      "w": 4647.41513044174,
-      "h": 1849.3114235066396
+      "x": -2506.0006209106296,
+      "y": -661.3682529021002,
+      "w": 4490.786582113173,
+      "h": 1732.985107222995
     },
     "key": "inspect,lock,resting,scan,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band"
   }
