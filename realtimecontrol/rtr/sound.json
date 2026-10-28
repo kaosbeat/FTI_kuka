@@ -65,27 +65,6 @@
         "velocity": 60
       }
     },
-    "task1": {
-      "out_port": null,
-      "command": {
-        "note": 60,
-        "velocity": 60
-      }
-    },
-    "task2": {
-      "out_port": null,
-      "command": {
-        "note": 60,
-        "velocity": 60
-      }
-    },
-    "task3": {
-      "out_port": null,
-      "command": {
-        "note": 60,
-        "velocity": 60
-      }
-    },
     "task1_task2_bridge": {
       "out_port": null,
       "command": {
@@ -136,6 +115,27 @@
       }
     },
     "sleeping_scanning_bridge": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "scan": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "lock": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
+    },
+    "inspect": {
       "out_port": null,
       "command": {
         "note": 60,
@@ -514,84 +514,6 @@
         ]
       }
     },
-    "task1": {
-      "scan": {
-        "start": {
-          "note": 60,
-          "velocity": 60
-        },
-        "poses": [
-          {
-            "note": 60,
-            "velocity": 60
-          }
-        ]
-      },
-      "scnr": {
-        "start": {
-          "note": 60,
-          "velocity": 60
-        },
-        "poses": [
-          {
-            "note": 60,
-            "velocity": 60
-          }
-        ]
-      }
-    },
-    "task2": {
-      "locked": {
-        "start": {
-          "note": 60,
-          "velocity": 60
-        },
-        "poses": [
-          {
-            "note": 60,
-            "velocity": 60
-          }
-        ]
-      }
-    },
-    "task3": {
-      "approach": {
-        "start": {
-          "note": 60,
-          "velocity": 60
-        },
-        "poses": [
-          {
-            "note": 60,
-            "velocity": 60
-          }
-        ]
-      },
-      "facefocus": {
-        "start": {
-          "note": 60,
-          "velocity": 60
-        },
-        "poses": [
-          {
-            "note": 60,
-            "velocity": 60
-          }
-        ]
-      },
-      "retreat": {
-        "start": {
-          "note": 60,
-          "velocity": 60
-        },
-        "poses": [
-          {
-            "note": 60,
-            "velocity": 60
-          }
-        ]
-      }
-    },
     "task1_task2_bridge": {
       "bridge": {
         "start": {
@@ -680,6 +602,96 @@
           "velocity": 60
         },
         "poses": []
+      }
+    },
+    "scan": {
+      "scan": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      },
+      "scnr": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      }
+    },
+    "lock": {
+      "locked": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      },
+      "intent": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      }
+    },
+    "inspect": {
+      "approach": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      },
+      "facefocus": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      },
+      "retreat": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
       }
     }
   },

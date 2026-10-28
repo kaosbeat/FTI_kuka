@@ -12,9 +12,9 @@
     "active": {
       "zones": [
         "scanning",
-        "task1",
-        "task2",
-        "task3",
+        "scan",
+        "lock",
+        "inspect",
         "task1_task2_bridge",
         "task2_task3_bridge",
         "task3_task1_bridge",
@@ -361,10 +361,12 @@
     "locked": {
       "gain": 0.3,
       "sweep_amp": 0.5,
-      "stay": 1,
+      "stay": 0.3,
       "triggers": [
-        "dwell"
-      ]
+        "lost_lock",
+        "lock_duration"
+      ],
+      "lock_duration_s": 15
     },
     "curious": {
       "gain": 0.3,
@@ -380,8 +382,9 @@
       "sweep_amp": 0.5,
       "stay": 1,
       "triggers": [
-        "dwell"
-      ]
+        "lock_duration"
+      ],
+      "lock_duration_s": 10
     },
     "gentle": {
       "gain": 0.3,
@@ -407,10 +410,12 @@
       ]
     },
     "spontaneous": {
-      "stay": 0,
+      "stay": 0.3,
       "triggers": [
-        "dwell"
-      ]
+        "dwell",
+        "new_lock"
+      ],
+      "lock_duration_s": 3
     },
     "soothing": {
       "freq": 0.5,
@@ -425,8 +430,8 @@
       "amp_scale": 0.3,
       "stay": 0,
       "triggers": [
-        "lock_duration",
-        "dwell"
+        "dwell",
+        "lock_duration"
       ],
       "lock_duration_s": 1
     },
@@ -435,8 +440,8 @@
       "amp_scale": 0.3,
       "stay": 0,
       "triggers": [
-        "lock_duration",
-        "dwell"
+        "dwell",
+        "lock_duration"
       ],
       "lock_duration_s": 1
     },
@@ -445,8 +450,8 @@
       "amp_scale": 0.5,
       "stay": 0,
       "triggers": [
-        "lock_duration",
-        "dwell"
+        "dwell",
+        "lock_duration"
       ],
       "lock_duration_s": 1
     },
@@ -455,8 +460,8 @@
       "amp_scale": 0.3,
       "stay": 0,
       "triggers": [
-        "lock_duration",
-        "dwell"
+        "dwell",
+        "lock_duration"
       ],
       "lock_duration_s": 1
     },

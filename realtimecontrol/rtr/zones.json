@@ -807,355 +807,6 @@
         }
       }
     },
-    "task1": {
-      "enabled": true,
-      "class": "scan",
-      "mode_group": "event-sit-back",
-      "safezone": [
-        [
-          -185,
-          185
-        ],
-        [
-          -95,
-          -85
-        ],
-        [
-          15,
-          25
-        ],
-        [
-          0,
-          1
-        ],
-        [
-          75,
-          85
-        ],
-        [
-          -5,
-          5
-        ]
-      ],
-      "speed": 20,
-      "actions": {
-        "scan": {
-          "enabled": true,
-          "poses": [
-            [
-              0,
-              -90,
-              20,
-              0,
-              80,
-              0
-            ]
-          ],
-          "variable_axes": [
-            0,
-            1,
-            2,
-            3
-          ],
-          "behavior": "spontaneous",
-          "speed": 20,
-          "loop": true,
-          "dwell_s": 35,
-          "next": [
-            {
-              "zone": "task1_task2_bridge",
-              "action": "bridge"
-            },
-            {
-              "zone": "task1",
-              "action": "scnr"
-            }
-          ],
-          "pose_imgs": [
-            null
-          ],
-          "pose_videos": [
-            null
-          ],
-          "axis_bands": {
-            "0": [
-              -185,
-              185
-            ],
-            "1": [
-              -95,
-              -85
-            ],
-            "2": [
-              15,
-              25
-            ],
-            "3": [
-              0,
-              1
-            ],
-            "4": [
-              75,
-              85
-            ],
-            "5": [
-              -5,
-              5
-            ]
-          }
-        },
-        "scnr": {
-          "enabled": true,
-          "poses": [
-            [
-              "x",
-              -85,
-              15,
-              0,
-              75,
-              0
-            ]
-          ],
-          "variable_axes": [
-            0,
-            1,
-            2,
-            3,
-            4,
-            5
-          ],
-          "behavior": "impatient",
-          "speed": 20,
-          "loop": true,
-          "next": {
-            "zone": "task1",
-            "action": "scan"
-          },
-          "pose_imgs": [
-            null
-          ],
-          "pose_videos": [
-            null
-          ]
-        }
-      }
-    },
-    "task2": {
-      "enabled": true,
-      "class": "track",
-      "mode_group": "event-sit-back",
-      "safezone": [
-        [
-          -185,
-          185
-        ],
-        [
-          -50,
-          -40
-        ],
-        [
-          15,
-          25
-        ],
-        [
-          0,
-          1
-        ],
-        [
-          35,
-          45
-        ],
-        [
-          -5,
-          5
-        ]
-      ],
-      "speed": 20,
-      "actions": {
-        "locked": {
-          "enabled": true,
-          "poses": [
-            [
-              "x",
-              -45,
-              20,
-              0,
-              40,
-              0
-            ]
-          ],
-          "behavior": "locked",
-          "speed": 40,
-          "loop": true,
-          "next": [
-            {
-              "zone": "task2_task3_bridge",
-              "action": "bridge"
-            },
-            {
-              "zone": "task1_task2_bridge",
-              "action": "bridge"
-            }
-          ],
-          "pose_imgs": [
-            null
-          ],
-          "pose_videos": [
-            null
-          ],
-          "variable_axes": [
-            0,
-            1,
-            2,
-            3,
-            4,
-            5
-          ]
-        }
-      }
-    },
-    "task3": {
-      "enabled": true,
-      "class": "approach",
-      "mode_group": "event-sit-back",
-      "safezone": [
-        [
-          -185,
-          185
-        ],
-        [
-          -20,
-          -10
-        ],
-        [
-          15,
-          25
-        ],
-        [
-          -10,
-          10
-        ],
-        [
-          -25,
-          -15
-        ],
-        [
-          -15,
-          15
-        ]
-      ],
-      "speed": 40,
-      "actions": {
-        "approach": {
-          "enabled": true,
-          "poses": [
-            [
-              "x",
-              -15,
-              20,
-              0,
-              -20,
-              0
-            ]
-          ],
-          "behavior": "aggressive",
-          "speed": 100,
-          "loop": true,
-          "next": {
-            "zone": "task3",
-            "action": "facefocus"
-          },
-          "pose_imgs": [
-            null
-          ],
-          "pose_videos": [
-            null
-          ],
-          "variable_axes": [
-            0,
-            1,
-            2,
-            3,
-            4,
-            5
-          ]
-        },
-        "facefocus": {
-          "enabled": true,
-          "poses": [
-            [
-              "x",
-              -15,
-              20,
-              0,
-              -20,
-              0
-            ]
-          ],
-          "behavior": "gentle",
-          "speed": 20,
-          "loop": true,
-          "next": {
-            "zone": "task3",
-            "action": "retreat"
-          },
-          "pose_imgs": [
-            null
-          ],
-          "pose_videos": [
-            null
-          ],
-          "variable_axes": [
-            0,
-            1,
-            2,
-            3,
-            4,
-            5
-          ]
-        },
-        "retreat": {
-          "enabled": true,
-          "poses": [
-            [
-              "x",
-              -15,
-              20,
-              0,
-              -20,
-              0
-            ]
-          ],
-          "variable_axes": [
-            0,
-            1,
-            2,
-            3,
-            4,
-            5
-          ],
-          "behavior": "calm",
-          "speed": 40,
-          "loop": false,
-          "next": [
-            {
-              "zone": "task3_task1_bridge",
-              "action": "bridge"
-            },
-            {
-              "zone": "task3_task2_bridge",
-              "action": "bridge"
-            }
-          ],
-          "pose_imgs": [
-            null
-          ],
-          "pose_videos": [
-            null
-          ]
-        }
-      }
-    },
     "task1_task2_bridge": {
       "enabled": true,
       "safezone": [
@@ -1211,7 +862,7 @@
           "speed": 20,
           "loop": false,
           "next": {
-            "zone": "task2",
+            "zone": "lock",
             "action": "locked"
           },
           "pose_imgs": [
@@ -1280,7 +931,7 @@
           "speed": 40,
           "loop": false,
           "next": {
-            "zone": "task3",
+            "zone": "inspect",
             "action": "approach"
           },
           "pose_imgs": [
@@ -1349,7 +1000,7 @@
           "speed": 40,
           "loop": false,
           "next": {
-            "zone": "task1",
+            "zone": "scan",
             "action": "scan"
           },
           "pose_imgs": [
@@ -1418,7 +1069,7 @@
           "speed": 40,
           "loop": false,
           "next": {
-            "zone": "task2",
+            "zone": "lock",
             "action": "locked"
           },
           "pose_imgs": [
@@ -1487,7 +1138,7 @@
           "variable_axes": [],
           "speed": 80,
           "next": {
-            "zone": "task1",
+            "zone": "scan",
             "action": "scan"
           }
         }
@@ -1614,6 +1265,392 @@
           }
         }
       }
+    },
+    "scan": {
+      "enabled": true,
+      "class": "scan",
+      "mode_group": "event-sit-back",
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -95,
+          -85
+        ],
+        [
+          15,
+          25
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          75,
+          85
+        ],
+        [
+          -5,
+          5
+        ]
+      ],
+      "speed": 20,
+      "actions": {
+        "scan": {
+          "enabled": true,
+          "poses": [
+            [
+              0,
+              -90,
+              20,
+              0,
+              80,
+              0
+            ]
+          ],
+          "variable_axes": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "behavior": "spontaneous",
+          "speed": 20,
+          "loop": true,
+          "dwell_s": 35,
+          "next": [
+            {
+              "zone": "task1_task2_bridge",
+              "action": "bridge"
+            },
+            {
+              "zone": "scan",
+              "action": "scnr"
+            }
+          ],
+          "pose_imgs": [
+            null
+          ],
+          "pose_videos": [
+            null
+          ],
+          "axis_bands": {
+            "0": [
+              -185,
+              185
+            ],
+            "1": [
+              -95,
+              -85
+            ],
+            "2": [
+              15,
+              25
+            ],
+            "3": [
+              0,
+              1
+            ],
+            "4": [
+              75,
+              85
+            ],
+            "5": [
+              -5,
+              5
+            ]
+          }
+        },
+        "scnr": {
+          "enabled": true,
+          "poses": [
+            [
+              "x",
+              -85,
+              15,
+              0,
+              75,
+              0
+            ]
+          ],
+          "variable_axes": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "behavior": "impatient",
+          "speed": 20,
+          "loop": true,
+          "next": {
+            "zone": "scan",
+            "action": "scan"
+          },
+          "pose_imgs": [
+            null
+          ],
+          "pose_videos": [
+            null
+          ]
+        }
+      }
+    },
+    "lock": {
+      "enabled": true,
+      "class": "track",
+      "mode_group": "event-sit-back",
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -50,
+          -40
+        ],
+        [
+          15,
+          25
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          35,
+          45
+        ],
+        [
+          -5,
+          5
+        ]
+      ],
+      "speed": 20,
+      "actions": {
+        "locked": {
+          "enabled": true,
+          "poses": [
+            [
+              "x",
+              -45,
+              20,
+              0,
+              40,
+              0
+            ]
+          ],
+          "behavior": "locked",
+          "speed": 40,
+          "loop": true,
+          "next": [
+            {
+              "zone": "task2_task3_bridge",
+              "action": "bridge"
+            },
+            {
+              "zone": "task1_task2_bridge",
+              "action": "bridge"
+            },
+            {
+              "zone": "lock",
+              "action": "intent"
+            }
+          ],
+          "pose_imgs": [
+            null
+          ],
+          "pose_videos": [
+            null
+          ],
+          "variable_axes": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        },
+        "intent": {
+          "enabled": true,
+          "poses": [
+            [
+              "x",
+              -45,
+              20,
+              0,
+              40,
+              0
+            ]
+          ],
+          "variable_axes": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "behavior": "intent",
+          "speed": 20,
+          "loop": true,
+          "next": {
+            "zone": "task2_task3_bridge"
+          },
+          "pose_imgs": [
+            null
+          ],
+          "pose_videos": [
+            null
+          ]
+        }
+      }
+    },
+    "inspect": {
+      "enabled": true,
+      "class": "approach",
+      "mode_group": "event-sit-back",
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -20,
+          -10
+        ],
+        [
+          15,
+          25
+        ],
+        [
+          -10,
+          10
+        ],
+        [
+          -25,
+          -15
+        ],
+        [
+          -15,
+          15
+        ]
+      ],
+      "speed": 40,
+      "actions": {
+        "approach": {
+          "enabled": true,
+          "poses": [
+            [
+              "x",
+              -15,
+              20,
+              0,
+              -20,
+              0
+            ]
+          ],
+          "behavior": "aggressive",
+          "speed": 100,
+          "loop": true,
+          "next": {
+            "zone": "inspect",
+            "action": "facefocus"
+          },
+          "pose_imgs": [
+            null
+          ],
+          "pose_videos": [
+            null
+          ],
+          "variable_axes": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        },
+        "facefocus": {
+          "enabled": true,
+          "poses": [
+            [
+              "x",
+              -15,
+              20,
+              0,
+              -20,
+              0
+            ]
+          ],
+          "behavior": "gentle",
+          "speed": 20,
+          "loop": true,
+          "next": {
+            "zone": "inspect",
+            "action": "retreat"
+          },
+          "pose_imgs": [
+            null
+          ],
+          "pose_videos": [
+            null
+          ],
+          "variable_axes": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        },
+        "retreat": {
+          "enabled": true,
+          "poses": [
+            [
+              "x",
+              -15,
+              20,
+              0,
+              -20,
+              0
+            ]
+          ],
+          "variable_axes": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "behavior": "calm",
+          "speed": 40,
+          "loop": false,
+          "next": [
+            {
+              "zone": "task3_task1_bridge",
+              "action": "bridge"
+            },
+            {
+              "zone": "task3_task2_bridge",
+              "action": "bridge"
+            }
+          ],
+          "pose_imgs": [
+            null
+          ],
+          "pose_videos": [
+            null
+          ]
+        }
+      }
     }
   },
   "layout": {
@@ -1638,33 +1675,21 @@
         "x": 162.17116455078124,
         "y": 112.53034152832032
       },
-      "task1": {
-        "x": 1200,
-        "y": 300
-      },
-      "task2": {
-        "x": 1546.448974609375,
-        "y": 291.95489501953125
-      },
-      "task3": {
-        "x": 1809.205810546875,
-        "y": 629.5083618164062
-      },
       "task1_task2_bridge": {
-        "x": 1361.1380615234375,
-        "y": 455.9021911621094
+        "x": 1368.5714111328125,
+        "y": 346.26068115234375
       },
       "task2_task3_bridge": {
-        "x": 1760.4398193359375,
-        "y": 400.1890869140625
+        "x": 1741.490966796875,
+        "y": 443.7716064453125
       },
       "task3_task1_bridge": {
         "x": 1283.111083984375,
         "y": 619.24365234375
       },
       "task3_task2_bridge": {
-        "x": 1505.692626953125,
-        "y": 539.7730407714844
+        "x": 1414.73779296875,
+        "y": 481.0314025878906
       },
       "testing_locked_band": {
         "x": 536.4475708007812,
@@ -1681,14 +1706,26 @@
       "sleeping_scanning_bridge": {
         "x": 256.27191066741943,
         "y": 522.3564977645874
+      },
+      "scan": {
+        "x": 1200,
+        "y": 300
+      },
+      "lock": {
+        "x": 1558.8377685546875,
+        "y": 332.4341735839844
+      },
+      "inspect": {
+        "x": 1729.781494140625,
+        "y": 579.21728515625
       }
     },
     "view": {
-      "x": -558.0915433925695,
-      "y": -316.8222923513042,
-      "w": 4647.415130441751,
-      "h": 1849.3114235066448
+      "x": 299.2213881897176,
+      "y": 62.57567204159102,
+      "w": 1747.1354874320612,
+      "h": 695.2246624490468
     },
-    "key": "resting,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1,task1_task2_bridge,task2,task2_task3_bridge,task3,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band"
+    "key": "inspect,lock,resting,scan,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band"
   }
 }
