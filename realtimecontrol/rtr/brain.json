@@ -365,8 +365,7 @@
       "triggers": [
         "lost_lock",
         "lock_duration"
-      ],
-      "lock_duration_s": 15
+      ]
     },
     "curious": {
       "gain": 0.3,
@@ -383,8 +382,7 @@
       "stay": 1,
       "triggers": [
         "lock_duration"
-      ],
-      "lock_duration_s": 10
+      ]
     },
     "gentle": {
       "gain": 0.3,
@@ -415,7 +413,8 @@
         "dwell",
         "new_lock"
       ],
-      "lock_duration_s": 3
+      "dwell_s": 5,
+      "lock_duration_s": 5
     },
     "soothing": {
       "freq": 0.5,
