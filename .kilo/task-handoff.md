@@ -1,5 +1,56 @@
 # Task Handoff Log
 
+## 2026-10-28 — UI: collapse bridge-zone nodes in the flow tab (small purple dot)
+
+### Status
+
+Completed
+
+### Summary
+
+Collapsed bridge-zone nodes in the flow tab of `editor.html`. A bridge zone (a pose zone of type `"bridge"`, i.e. a single in/out handoff) now renders as a small purple dot with the zone name below, instead of a full rectangular block with action rows. Clicking the dot still opens the action editor for its single action; the node can still be dragged to reposition and dropped on another node to draw a connection. Newly created bridge zones (via `bridgePlan`) now get `pose: "bridge"` so they are collapsed too. The purple fill matches the existing bridge-node purple (`#a06fd0`). The layout reserves the full column width but a reduced height (`BRIDGE_H = 40` vs `78`), so bridge nodes pack tighter vertically.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html` (CSS): added `.fnode.fnodeBridge .fnodeBody { fill: #a06fd0; }` and `.fnodeBridgeLabel { fill: var(--text); font-size: 11px; }` for the collapsed dot + name label.
+- `realtimecontrol/rtr/editor.html` (constants/helpers): added `BRIDGE_R = 9`, `BRIDGE_CY = 16`, `BRIDGE_H = 40`; added `isBridgeZone(name)` (true when `z.pose === "bridge"`, null-guarded); `nodeH(name)` now returns `BRIDGE_H` for bridge zones.
+- `realtimecontrol/rtr/editor.html` (`flowAddNode`): bridge zones render a `circle` (dot at column center) + a name label instead of the rect + sublabel + action rows; non-bridge nodes unchanged.
+- `realtimecontrol/rtr/editor.html` (`flowAddEdge`): inter-zone edge anchors use the dot center (`NODE_W/2`, `BRIDGE_CY`) for bridge zones instead of the row side.
+- `realtimecontrol/rtr/editor.html` (`flowDragMove`): the temporary drag line's start point uses `BRIDGE_CY` for bridge zones.
+- `realtimecontrol/rtr/editor.html` (`flowDragEnd`): a click (no move) on a collapsed bridge node opens its first action's editor (`openActionEditor`); falls back to node-select if it has no actions.
+- `realtimecontrol/rtr/editor.html` (`bridgePlan`): the created zone now includes `pose: "bridge"`.
+
+### Documentation
+
+- None required — the change is self-describing via the added CSS comment and the `isBridgeZone` / constant comments; no user-facing docs changed.
+
+### Architecture
+
+- No architectural impact. UI-only change to the flow-tab rendering of bridge zones; the zone/edge data model and the core are untouched.
+
+### Validation
+
+- Extracted the inline script (lines 748–7605) and ran `node --check` → SYNTAX OK.
+- Manually reviewed all modified functions (`flowAddNode`, `flowAddEdge`, `flowDragMove`, `flowDragEnd`, `nodeH`, `isBridgeZone`, `bridgePlan`) for balanced braces and correct anchor/hit-test geometry.
+- Could not run the page in a browser from this environment (it depends on the live core over WebSocket + three.js/hydra-synth), so runtime UI verification was not performed.
+
+### Decisions and Caveats
+
+- Collapse is keyed on `z.pose === "bridge"` (the field that already makes bridge nodes purple), not on a structural "one in / one out" graph analysis — simpler and matches the visible purple nodes the user referred to.
+- Bridge nodes keep the full `NODE_W` column width (only the height shrinks) so the uniform BFS column grid and persisted layouts are not disturbed; the dot is centered in its column.
+- The live-state accent stroke on a bridge dot is overridden by the purple `fnodePose` stroke (same pre-existing CSS ordering as the current non-collapsed bridge nodes); the selected-state white stroke and the `off` dimming still apply.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+- If the user wants bridge nodes to also shrink horizontally (not just vertically), that requires per-column widths in `flowAutoLayout`/`flowFitView`/`flowNodeAt` (currently a uniform `NODE_W` grid) — a larger change.
+- If "move" pose zones (`z.pose === "move"`) should also collapse, extend `isBridgeZone` (and the `bridgePlan` equivalent) to include them.
+
+---
+
 ## 2026-10-28 — Test: device-change tests for robust MIDI-out (fake rtmidi)
 
 ### Status
