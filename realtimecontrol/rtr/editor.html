@@ -165,6 +165,11 @@
   .fnode.fnodePose .fnodeBody { stroke: #a06fd0; stroke-width: 2; }
   .fnode.fsel .fnodeBody { stroke: #ffffff; stroke-width: 2.5; }
   .fnode.off { opacity: 0.45; }
+  /* Collapsed bridge-zone node: a bridge zone has a single in/out handoff, so it
+     renders as a small purple dot (the zone name below) instead of a full block.
+     Clicking it still opens the editor; it can still be dragged / linked. */
+  .fnode.fnodeBridge .fnodeBody { fill: #a06fd0; }
+  .fnodeBridgeLabel { fill: var(--text); font-size: 11px; }
   .fnode { cursor: move; }
   .fedge { fill: none; stroke: var(--dim); stroke-width: 2; }
   .fedge.fedgeCustom { stroke: var(--accent); }
@@ -869,6 +874,16 @@ function flowSaveLayout() {
   }, 800);
 }
 const NODE_W = 140, NODE_H = 70;
+// Collapsed bridge-zone node geometry: a bridge zone has a single in/out handoff,
+// so it renders as a small purple dot (the zone name below) instead of a full
+// block. The dot sits at BRIDGE_CY within a BRIDGE_H-tall box; the layout still
+// reserves the full NODE_W column width, so the dot centers in its column.
+const BRIDGE_R = 9, BRIDGE_CY = 16, BRIDGE_H = 40;
+// A bridge zone is a pose zone of type "bridge" (one in / one out handoff).
+function isBridgeZone(name) {
+  const z = TABLE && TABLE.zones ? TABLE.zones[name] : null;
+  return !!(z && z.pose === "bridge");
+}
 // Flow action rows (Step 4): the first action row sits at FA_Y0 (below the label/sub),
 // each row is FA_ROW tall. nodeH grows the node to fit its action rows (NODE_H is the min).
 const FA_Y0 = 54, FA_ROW = 16;
@@ -877,6 +892,7 @@ function nodeActionCount(name) {
   return z && z.actions ? Object.keys(z.actions).length : 0;
 }
 function nodeH(name) {
+  if (isBridgeZone(name)) return BRIDGE_H;
   return Math.max(NODE_H, FA_Y0 + nodeActionCount(name) * FA_ROW + 8);
 }
 function rowY(name, an) {
@@ -6606,8 +6622,12 @@ function flowAddEdge(layer, e) {
     d = `M ${x1} ${y1} C ${x1 - k} ${y1}, ${x2 - k} ${y2}, ${x2} ${y2}`;
   } else {
     const bRight = b.x >= a.x;
-    x1 = a.x + (bRight ? NODE_W : 0); y1 = a.y + ry1;
-    x2 = b.x + (bRight ? 0 : NODE_W); y2 = b.y + ry2;
+    // Bridge zones collapse to a dot: anchor at the dot center, not the row side.
+    const fb = isBridgeZone(e.from.zone), tb = isBridgeZone(e.to.zone);
+    x1 = fb ? a.x + NODE_W / 2 : a.x + (bRight ? NODE_W : 0);
+    y1 = fb ? a.y + BRIDGE_CY : a.y + ry1;
+    x2 = tb ? b.x + NODE_W / 2 : b.x + (bRight ? 0 : NODE_W);
+    y2 = tb ? b.y + BRIDGE_CY : b.y + ry2;
     d = edgePath(x1, y1, x2, y2);
   }
   const conflict = edgeConflict(e);
@@ -6699,42 +6719,52 @@ function flowRenderGroups() {
 function flowAddNode(layer, name) {
   const z = TABLE.zones[name];
   const p = FLOW.pos[name] || { x: 40, y: 40 };
+  const isBridge = isBridgeZone(name);
   const isPoseZone = z.pose && POSE_ZONES.includes(z.pose);
-  const g = svgEl("g", { class: "fnode" + (isPoseZone ? " fnodePose" : ""), "data-zone": name, transform: `translate(${p.x},${p.y})` });
-  g.appendChild(svgEl("rect", { width: NODE_W, height: nodeH(name), rx: 10, class: "fnodeBody" }));
-  const label = svgEl("text", { x: NODE_W / 2, y: 24, class: "fnodeLabel", "text-anchor": "middle" });
-  label.textContent = name;
-  g.appendChild(label);
-  const sub = svgEl("text", { x: NODE_W / 2, y: 42, class: "fnodeSub", "text-anchor": "middle" });
-  sub.textContent = flowSubLabel(name);
-  g.appendChild(sub);
-  // Action rows: discreet, read-only (editing is in the modal). The label is the
-  // action name + its behavior; looping actions append a ↻ marker. Connection dots
-  // are drawn by the edges (at the row's side), so a row with no link shows none.
-  // A mousedown on a row starts an action-aware drag (source = this action); a click
-  // (no move) opens the action editor.
-  if (z.actions) {
-    Object.keys(z.actions).forEach((an) => {
-      const act = z.actions[an];
-      const ry = rowY(name, an);
-      const hit = svgEl("rect", { x: 0, y: ry - FA_ROW / 2, width: NODE_W, height: FA_ROW, fill: "transparent" });
-      hit.addEventListener("mousedown", (e) => { e.stopPropagation(); flowDragStart(e, name, an); });
-      g.appendChild(hit);
-      const beh = (act.behavior && BEHAVIORS.includes(act.behavior)) ? act.behavior : "calm";
-      const txt = svgEl("text", { x: 8, y: ry + 4, class: "faRow", "text-anchor": "start" });
-      const lbl = svgEl("tspan", { class: "faLabel" });
-      lbl.textContent = an;
-      txt.appendChild(lbl);
-      const bh = svgEl("tspan", { class: "faBehavior", dx: 4 });
-      bh.textContent = beh;
-      txt.appendChild(bh);
-      if (act.loop !== false) {
-        const lp = svgEl("tspan", { class: "faLoop", dx: 3 });
-        lp.textContent = "↻";
-        txt.appendChild(lp);
-      }
-      g.appendChild(txt);
-    });
+  const g = svgEl("g", { class: "fnode" + (isPoseZone ? " fnodePose" : "") + (isBridge ? " fnodeBridge" : ""), "data-zone": name, transform: `translate(${p.x},${p.y})` });
+  if (isBridge) {
+    // Collapsed: a small purple dot at the column center + the zone name below.
+    // No action rows (a bridge has a single handoff); clicking opens the editor.
+    g.appendChild(svgEl("circle", { cx: NODE_W / 2, cy: BRIDGE_CY, r: BRIDGE_R, class: "fnodeBody" }));
+    const lbl = svgEl("text", { x: NODE_W / 2, y: BRIDGE_CY + BRIDGE_R + 11, class: "fnodeBridgeLabel", "text-anchor": "middle" });
+    lbl.textContent = name;
+    g.appendChild(lbl);
+  } else {
+    g.appendChild(svgEl("rect", { width: NODE_W, height: nodeH(name), rx: 10, class: "fnodeBody" }));
+    const label = svgEl("text", { x: NODE_W / 2, y: 24, class: "fnodeLabel", "text-anchor": "middle" });
+    label.textContent = name;
+    g.appendChild(label);
+    const sub = svgEl("text", { x: NODE_W / 2, y: 42, class: "fnodeSub", "text-anchor": "middle" });
+    sub.textContent = flowSubLabel(name);
+    g.appendChild(sub);
+    // Action rows: discreet, read-only (editing is in the modal). The label is the
+    // action name + its behavior; looping actions append a ↻ marker. Connection dots
+    // are drawn by the edges (at the row's side), so a row with no link shows none.
+    // A mousedown on a row starts an action-aware drag (source = this action); a click
+    // (no move) opens the action editor.
+    if (z.actions) {
+      Object.keys(z.actions).forEach((an) => {
+        const act = z.actions[an];
+        const ry = rowY(name, an);
+        const hit = svgEl("rect", { x: 0, y: ry - FA_ROW / 2, width: NODE_W, height: FA_ROW, fill: "transparent" });
+        hit.addEventListener("mousedown", (e) => { e.stopPropagation(); flowDragStart(e, name, an); });
+        g.appendChild(hit);
+        const beh = (act.behavior && BEHAVIORS.includes(act.behavior)) ? act.behavior : "calm";
+        const txt = svgEl("text", { x: 8, y: ry + 4, class: "faRow", "text-anchor": "start" });
+        const lbl = svgEl("tspan", { class: "faLabel" });
+        lbl.textContent = an;
+        txt.appendChild(lbl);
+        const bh = svgEl("tspan", { class: "faBehavior", dx: 4 });
+        bh.textContent = beh;
+        txt.appendChild(bh);
+        if (act.loop !== false) {
+          const lp = svgEl("tspan", { class: "faLoop", dx: 3 });
+          lp.textContent = "↻";
+          txt.appendChild(lp);
+        }
+        g.appendChild(txt);
+      });
+    }
   }
   g.addEventListener("mousedown", (e) => flowDragStart(e, name));
   layer.appendChild(g);
@@ -6834,7 +6864,7 @@ function flowDragMove(ev) {
   // connection is bidirectional).
   const arrow = $("flowDragArrow");
   if (arrow) {
-    const cx = d.startNode.x + NODE_W / 2, cy = d.startNode.y + nodeH(d.from) / 2;
+    const cx = d.startNode.x + NODE_W / 2, cy = d.startNode.y + (isBridgeZone(d.from) ? BRIDGE_CY : nodeH(d.from) / 2);
     arrow.setAttribute("d", edgePath(cx, cy, pt.x, pt.y));
     arrow.style.display = "";
   }
@@ -6850,10 +6880,14 @@ function flowDragEnd(ev) {
   const svg = $("flowSvg");
   const pt = svgPoint(svg, ev);
   if (!d.moved) {
-    // A click (no move): open the action editor if the drag started on a row, else
-    // select the zone node.
+    // A click (no move): open the action editor if the drag started on a row; a
+    // collapsed bridge node (no rows) opens its single action's editor; else select.
     if (d.srcAction) openActionEditor(name, d.srcAction);
-    else flowSelect({ type: "node", zone: name });
+    else if (isBridgeZone(name)) {
+      const an = Object.keys(TABLE.zones[name].actions || {})[0];
+      if (an) openActionEditor(name, an);
+      else flowSelect({ type: "node", zone: name });
+    } else flowSelect({ type: "node", zone: name });
     return;
   }
   const target = flowNodeAt(pt, name);
@@ -6914,6 +6948,7 @@ function bridgePlan(from, to) {
   const speed = Math.max(zA.speed || 20, zB.speed || 20);
   const zone = {
     enabled: true,
+    pose: "bridge",
     safezone: safezone,
     speed: speed,
     actions: {

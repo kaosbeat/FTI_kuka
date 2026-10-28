@@ -366,6 +366,11 @@ def _validate_behaviors_section(data: Any) -> dict:
     by the type of its default: numeric keys (``gain``/``freq``/``stay``/``dwell_s``/
     ``lock_duration_s``/...) via :func:`_num`, the ``triggers`` list via
     :func:`_str_list`.
+
+    The optional next-selection overrides (``dwell_s`` / ``lock_duration_s``) are
+    preserved when present on **any** behavior, even when the behavior's defaults
+    don't carry the key — the editor sets them per-behavior and the runtime trigger
+    logic (``brain._behavior_triggers_fired``) reads them off the behavior entry.
     """
     if data is not None and not isinstance(data, dict):
         raise ValueError("'behaviors' must be an object")
@@ -381,6 +386,11 @@ def _validate_behaviors_section(data: Any) -> dict:
                 out[key] = _str_list(entry.get(key), f"behaviors.{name}.{key}", default)
             else:
                 out[key] = _num(entry.get(key), f"behaviors.{name}.{key}", default)
+        for key in ("dwell_s", "lock_duration_s"):
+            if key in out:
+                continue
+            if key in entry and entry[key] is not None:
+                out[key] = _num(entry[key], f"behaviors.{name}.{key}", 0.0)
         result[name] = out
     return result
 
