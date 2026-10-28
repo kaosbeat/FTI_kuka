@@ -11,7 +11,15 @@ message. This test asserts, with a fake rtmidi (no hardware):
 - Zone-entry / note-off / mode-CC messages route to the active zone's out device (one
   ``MidiOut`` per distinct device, opened lazily and cached).
 - ``_reconcile_outs`` closes stale out ports on reload; ``close`` closes all.
-- ``list_out_ports`` returns ``{index, name}`` entries.
+- ``list_out_ports`` returns ``{index, name}`` entries and releases its enumeration
+  instance.
+- Device changes: an invalid index falls back to the next candidate (auto), a missing
+  name resolves by enumeration index, failed opens are retried after the backoff (and
+  discard the failed instance), and a dead device is dropped on send and reopened.
+
+The fake rtmidi mirrors the installed python-rtmidi 1.5.8: ``open_port`` raises for an
+out-of-range index and there is **no** ``open_string_outport`` (the name path resolves
+by enumeration); a subclass adds it to cover newer wrappers.
 
 Run directly (no pytest needed)::
 
@@ -41,33 +49,56 @@ from rtr.sound import Sound, validate_sound_data
 # A fake rtmidi so no real MIDI hardware is touched (per-test, save/restore).
 # ---------------------------------------------------------------------------
 class FakeMidiOut:
-    """Records opens/sends per instance; reports two fake out ports."""
+    """Records opens/sends per instance; reports two fake out ports.
+
+    Mirrors python-rtmidi 1.5.8: ``open_port`` raises for an out-of-range index and
+    there is no ``open_string_outport``. ``open_fail`` (class-level) simulates a
+    device that will not open (gone / not ready); ``send_fail`` (per-instance)
+    simulates a device that dies after opening.
+    """
 
     instances = []
+    open_fail = False
 
     def __init__(self):
-        self.opened = None  # ("port", idx) or ("string", name)
+        self.opened = None  # ("port", idx)
         self.sent = []
         self.closed = False
+        self.deleted = False
+        self.send_fail = False
         FakeMidiOut.instances.append(self)
 
     def get_port_count(self):
         return 2
 
     def open_port(self, idx):
+        if FakeMidiOut.open_fail:
+            raise Exception("open failed (device not available)")
+        if not isinstance(idx, int) or idx < 0 or idx >= self.get_port_count():
+            raise Exception(
+                f"MidiOutAlsa::openPort: the 'portNumber' argument ({idx}) is invalid.")
         self.opened = ("port", idx)
-
-    def open_string_outport(self, name):
-        self.opened = ("string", name)
 
     def close_port(self):
         self.closed = True
+
+    def delete(self):
+        self.deleted = True
 
     def get_ports(self):
         return ["Fake:Port-0", "Fake:Port-1"]
 
     def send_message(self, msg):
+        if self.send_fail:
+            raise Exception("send failed (device gone)")
         self.sent.append(list(msg))
+
+
+class FakeMidiOutWithString(FakeMidiOut):
+    """A newer-wrapper fake: ``open_string_outport`` is available (name fast path)."""
+
+    def open_string_outport(self, name):
+        self.opened = ("string", name)
 
 
 _fake_module = types.ModuleType("rtmidi")
@@ -88,12 +119,12 @@ def _fake_rtmidi():
             sys.modules.pop("rtmidi", None)
 
 
-def _sound(table, out_port=None, out_device=None, enabled=True):
+def _sound(table, out_port=None, out_device=None, enabled=True, retry_interval=5.0):
     """A Sound over a mutable table; returns (sound, table_holder)."""
     holder = {"table": table}
     bus = StateBus()
     s = Sound(bus, sound_loader=lambda: holder["table"], out_port=out_port,
-              out_device=out_device, enabled=enabled)
+              out_device=out_device, enabled=enabled, retry_interval=retry_interval)
     return s, holder
 
 

@@ -26,13 +26,24 @@ The global ``channel`` (0-15) is applied when a message is converted to bytes.
 When no MIDI-out device is available the adapter degrades to **logging** each message
 it would send (e.g. ``[sound] note ch0 48 vel60``), so the mapping is testable without
 hardware. The core keeps running either way.
+
+Device changes (adding / removing MIDI devices) are tolerated: the ALSA port *indices*
+shift as devices appear and disappear, so an opening that fails (invalid index,
+disappeared device, no devices yet) is **retried** on a backoff, a dead device is
+detected on send and reopened, and a stale index falls back to the next candidate
+(global ``out_device`` name → global ``out_port`` → auto first-available port).
 """
 
 import json
+import time
 from typing import Any, Dict, Optional
 
 from ..core.bus import StateBus
 from ..core.commands import Event, Snapshot
+
+# Seconds between open-retry attempts for a spec that failed (the device may
+# (re)appear: hotplug, a sound engine starting, the ALSA list shifting).
+RETRY_INTERVAL = 5.0
 
 # ---------------------------------------------------------------------------
 # Built-in fallback mapping.
@@ -224,19 +235,27 @@ class Sound:
     Each zone has its own out device (``zones[z].out_port``, an index). A single
     ``MidiOut`` per distinct device is opened lazily and cached in ``_open_outs``;
     zone-entry, action, and pose messages route to the active zone's out device.
+
+    Open failures (invalid index, missing device) are retried on a backoff
+    (``retry_interval``) so a device that appears later is picked up, and a device
+    that disappears is detected on send and reopened. See the module docstring.
     """
 
     def __init__(self, bus: StateBus, sound_loader, out_port: Optional[int] = None,
-                 out_device: Optional[str] = None, enabled: bool = True):
+                 out_device: Optional[str] = None, enabled: bool = True,
+                 retry_interval: float = RETRY_INTERVAL):
         self.bus = bus
         self.enabled = enabled
         self._sound_loader = sound_loader
         # Global fallbacks for the out device; a zone's own out_port wins.
         self._out_port_default = out_port
         self._out_device_default = out_device
+        self._retry_interval = retry_interval
         self._data: Dict[str, Any] = {}
         # Lazy cache of open out ports, keyed by the (port_index, device_name) spec.
         self._open_outs: Dict[tuple, Any] = {}
+        # Last failed-open time (monotonic) per spec: the backoff for retries.
+        self._open_failures: Dict[tuple, float] = {}
         self._last_zone: Optional[str] = None
         self._last_mode: Optional[str] = None
         self._last_action: Optional[str] = None
@@ -312,22 +331,87 @@ class Sound:
             return op
         return None
 
-    def _out_spec(self, zone) -> tuple:
-        """The ``(port_index, device_name)`` to open for ``zone``.
+    def _candidate_specs(self, zone) -> list:
+        """The ordered ``(port_index, device_name)`` specs to try for ``zone``.
 
         Precedence: the zone's own ``out_port`` (index) → the global ``out_device``
         (name) → the global ``out_port`` (index) → the constructor out_port → auto
-        (the first available port).
+        (the first available port). Duplicates are dropped, order preserved.
         """
+        specs = []
         zop = self._zone_out_port(zone)
         if zop is not None:
-            return (zop, None)
-        if self._effective_out_device():
-            return (None, self._effective_out_device())
+            specs.append((zop, None))
+        od = self._effective_out_device()
+        if od:
+            specs.append((None, od))
         op = self._effective_out_port()
         if op is not None:
-            return (op, None)
-        return (None, None)  # auto: first available port
+            specs.append((op, None))
+        specs.append((None, None))  # auto: first available port
+        seen = []
+        for s in specs:
+            if s not in seen:
+                seen.append(s)
+        return seen
+
+    def _out_spec(self, zone) -> tuple:
+        """The primary ``(port_index, device_name)`` spec for ``zone`` (first candidate)."""
+        return self._candidate_specs(zone)[0]
+
+    # ------------------------------------------------------------------
+    # Opening helpers (robust to the ALSA device list changing).
+    # ------------------------------------------------------------------
+    def _port_names(self, midi) -> list:
+        """The out-port names as plain strings (empty when enumeration fails)."""
+        try:
+            ports = midi.get_ports()
+        except Exception:  # noqa: BLE001
+            return []
+        return [p.name if hasattr(p, "name") else p for p in ports]
+
+    def _find_port_index(self, midi, name) -> Optional[int]:
+        """The index of the out port named ``name`` (exact match, else substring)."""
+        names = self._port_names(midi)
+        if name in names:
+            return names.index(name)
+        for i, n in enumerate(names):
+            if name in n:  # tolerate dynamic suffixes (client id, port number)
+                return i
+        return None
+
+    def _open_indexed(self, midi, idx) -> None:
+        """Open ``idx``; a descriptive error when the index is out of range."""
+        count = midi.get_port_count()
+        if idx >= count:
+            avail = ", ".join(f"{i}: {n}" for i, n in enumerate(self._port_names(midi)))
+            avail = avail or "(none)"
+            raise ValueError(f"port index {idx} invalid ({count} available: {avail})")
+        midi.open_port(idx)
+
+    def _open_named(self, midi, name) -> None:
+        """Open the out port named ``name`` (by name, or by the resolved index)."""
+        if hasattr(midi, "open_string_outport"):
+            midi.open_string_outport(name)
+            return
+        idx = self._find_port_index(midi, name)
+        if idx is None:
+            avail = ", ".join(f"{i}: {n}" for i, n in enumerate(self._port_names(midi)))
+            avail = avail or "(none)"
+            raise ValueError(f"no out port named {name!r} (available: {avail})")
+        midi.open_port(idx)
+
+    @staticmethod
+    def _discard(midi) -> None:
+        """Release a ``MidiOut`` instance that was not handed over (best effort)."""
+        try:
+            midi.close_port()  # safe on a never-opened port
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            midi.delete()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _open_one(self, spec: tuple) -> Any:
         """Open one ``MidiOut`` for the ``(port_index, device_name)`` spec; None on failure."""
@@ -338,29 +422,50 @@ class Sound:
             print("[sound] rtmidi not installed; logging only")
             return None
         try:
-            out = rtmidi.MidiOut()
+            midi = rtmidi.MidiOut()
+        except Exception as exc:  # noqa: BLE001 - sound must not kill the core
+            print(f"[sound] could not create MIDI out: {exc}; logging only")
+            return None
+        try:
             if device_name:
-                out.open_string_outport(device_name)
+                self._open_named(midi, device_name)
             elif port_index is not None:
-                out.open_port(port_index)
+                self._open_indexed(midi, port_index)
             else:
                 # No explicit port: pick the first available out device, if any.
-                count = out.get_port_count()
-                if count == 0:
+                if midi.get_port_count() == 0:
                     print("[sound] no MIDI out devices; logging only")
+                    self._discard(midi)
                     return None
-                out.open_port(0)
-            return out
+                midi.open_port(0)
+            return midi
         except Exception as exc:  # noqa: BLE001 - sound must not kill the core
             print(f"[sound] could not open MIDI out: {exc}; logging only")
+            self._discard(midi)
             return None
 
-    def _get_out(self, zone) -> Any:
-        """The open ``MidiOut`` for ``zone`` (opened lazily); None when unavailable."""
-        spec = self._out_spec(zone)
-        if spec not in self._open_outs:
-            self._open_outs[spec] = self._open_one(spec)
-        return self._open_outs[spec]
+    def _get_out(self, zone):
+        """The open ``MidiOut`` for ``zone`` (opened lazily, retried): ``(spec, out)``.
+
+        Walks the candidate specs in order: a cached handle wins; a previously failed
+        spec is retried at most once per ``retry_interval`` (the device may (re)appear);
+        the first spec that opens is returned. ``(None, None)`` when none is available.
+        """
+        now = time.monotonic()
+        for spec in self._candidate_specs(zone):
+            out = self._open_outs.get(spec)
+            if out is not None:
+                return spec, out
+            last = self._open_failures.get(spec)
+            if last is not None and now - last < self._retry_interval:
+                continue
+            self._open_failures[spec] = now
+            out = self._open_one(spec)
+            if out is not None:
+                self._open_outs[spec] = out
+                self._open_failures.pop(spec, None)
+                return spec, out
+        return None, None
 
     def _close_spec(self, spec: tuple) -> None:
         """Close (and evict) a single cached out port."""
@@ -373,10 +478,15 @@ class Sound:
 
     def _reconcile_outs(self) -> None:
         """Close out ports no longer referenced by any zone (e.g. after a reload)."""
-        needed = {self._out_spec(z) for z in self._data.get("zones", {})}
+        needed = set()
+        for z in self._data.get("zones", {}):
+            needed.update(self._candidate_specs(z))
         for spec in list(self._open_outs):
             if spec not in needed:
                 self._close_spec(spec)
+        for spec in list(self._open_failures):
+            if spec not in needed:
+                self._open_failures.pop(spec, None)
 
     def list_out_ports(self) -> list:
         """The available MIDI out ports (empty when rtmidi is unavailable).
@@ -390,11 +500,18 @@ class Sound:
             return []
         try:
             midi = rtmidi.MidiOut()
+        except Exception:  # noqa: BLE001 - enumeration must not kill the core
+            return []
+        try:
             ports = midi.get_ports()
             return [{"index": i, "name": p.name if hasattr(p, "name") else p}
                     for i, p in enumerate(ports)]
-        except Exception:  # noqa: BLE001 - enumeration must not kill the core
-            return []
+        finally:
+            # The enumeration instance is never opened: release it.
+            try:
+                midi.delete()
+            except Exception:  # noqa: BLE001
+                pass
 
     # ------------------------------------------------------------------
     # Event handling.
@@ -469,14 +586,19 @@ class Sound:
 
     def _send_bytes(self, zone, msg) -> None:
         """Send raw MIDI bytes on ``zone``'s out device (log when none is open)."""
-        out = self._get_out(zone)
+        spec, out = self._get_out(zone)
         if out is None:
             self._log_bytes(msg)
             return
         try:
             out.send_message(msg)
         except Exception as exc:  # noqa: BLE001
-            print(f"[sound] send error: {exc}")
+            # The device likely disappeared: drop the dead handle so the next
+            # message reopens (backed off), and degrade this message to logging.
+            self._close_spec(spec)
+            self._open_failures[spec] = time.monotonic()
+            print(f"[sound] send error: {exc}; reopening the out port")
+            self._log_bytes(msg)
 
     def _send_msg(self, msg: dict, zone: str) -> None:
         """Convert a data-driven message to bytes and send it on ``zone``'s out."""
@@ -508,6 +630,7 @@ class Sound:
     def close(self) -> None:
         for spec in list(self._open_outs):
             self._close_spec(spec)
+        self._open_failures.clear()
 
 
 def make_sound(bus: StateBus, sound_loader, enabled: bool,

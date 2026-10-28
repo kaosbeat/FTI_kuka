@@ -1,5 +1,159 @@
 # Task Handoff Log
 
+## 2026-10-28 — editor.html: absolute/free wording, pose-zone toggle, and flow color
+
+### Status
+
+Completed
+
+### Summary
+
+Finished the `editor.html` work for the new axis model and the pose-zone (bridge/move) concept:
+
+- Rewrote all remaining "frozen" wording/comments to the absolute/free model: a pose axis is a **number (absolute — pinned)** or **`"x"` (free — resolved at runtime to the robot's live value)**. Renamed the misleading `frozen` local in the axis-bar rendering to `isFree`; the `frozenX` CSS class name is kept as a stable internal identifier.
+- Added the **pose-zone toggle** to the zone form: a `pose zone` select with `none` / `bridge` / `move` (writes/deletes `z.pose`). Added a `POSE_ZONES = ["bridge", "move"]` constant and a `z.pose` validation rule mirroring the core's `zones.py` check.
+- Gave pose zones a **distinct flow color**: a `fnodePose` class (purple stroke `#a06fd0`) on flow nodes when `z.pose` is set, and the zone's pose type now appears in the node sublabel (`bridge · N act`).
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - Added `const POSE_ZONES = ["bridge", "move"];` (line ~746).
+  - Added `.fnode.fnodePose .fnodeBody { stroke: #a06fd0; stroke-width: 2; }` (CSS, line ~165).
+  - `flowAddNode`: adds the `fnodePose` class when `z.pose` is a pose zone.
+  - `flowSubLabel`: appends the pose type (`bridge`/`move`) to the node sublabel.
+  - `buildZoneForm`: added the `pose zone` select row (none/bridge/move).
+  - `validate()`: added the `z.pose` must-be-in-`POSE_ZONES` rule.
+  - Rewrote the remaining "frozen" comments to absolute/free; renamed `frozen` → `isFree` in the axis-bar rendering.
+
+### Documentation
+
+- Updated the `editor.html` pose help text, axis-input tooltips, and FK/pose-resolution comments to the absolute/free model (part of this and the prior wording pass).
+
+### Architecture
+
+- No architectural impact. This is UI-only: it surfaces the existing `z.pose` field (already validated by the core `zones.py`) and the absolute/free axis grammar already implemented in `behavior.py`/`zones.py`.
+
+### Validation
+
+- `python3 -c "..."` to extract the inline `<script>` and `node --check` → JS SYNTAX OK.
+- (The axis-system tests were verified green earlier in this session: `python3 -m pytest tests/test_state_machine.py tests/test_transition.py tests/test_cam_test.py tests/test_bridge_behavior.py -q` → 52 passed, 9 skipped.)
+
+### Decisions and Caveats
+
+- The `frozenX` CSS class name is intentionally left as-is (stable identifier, not user-facing wording).
+- The `pose zone` select deletes `z.pose` when "none" is chosen, so the field is optional in the data (matching the core, where `Zone.pose` returns `None` when unset).
+- **3D pose editor scope: FK only (confirmed with the user).** The FK side already works and is sufficient: editing an action's 6 axis values drives `Robot3D.setTarget` → the ghost arm + `checkPoseCollision` in the zones tab. The **IK** side (interactive end-effector dragging to solve joint values) was explicitly **not** requested — `kinematics.py` has FK + geometric Jacobian + `pinv3` building blocks but no IK solver, and none was added. If interactive IK is wanted later, it would need a JS solver + a drag-the-tool UI in `#robot3d`.
+
+### Next Task
+
+No immediate next task identified. The axis-system (absolute/free) work and its `editor.html` surface (wording, pose-zone toggle, flow color, FK 3D pose editor) are complete.
+
+### Instructions for the Next Task
+
+- If interactive IK is requested later: `rtr/robot/kinematics.py` has FK + a geometric Jacobian + `pinv3` (damped least-squares building blocks) but **no IK solver function**. A JS IK would need (a) a solver (iterate Jacobian/pinv toward a target end-effector pose) and (b) an interaction UI (drag the tool in the `#robot3d` view; `rtr3d.js` currently uses `OrbitControls` for camera-only).
+- The FK pose editor is verified working in the zones tab: the action editor's 6 axis inputs call `onChanged()` → `updateGhost()` → `Robot3D.setTarget(resolvePose(pose))`, and `Robot3D.checkPoseCollision(pose)` reports collisions.
+
+---
+
+## 2026-10-28 — Research: rtmidi 1.5.8 API facts for robust MIDI-out device handling
+
+### Status
+
+Completed
+
+### Summary
+
+Confirmed the python-rtmidi 1.5.8 facts that constrain the MIDI-out robustness work (the startup error `[sound] could not open MIDI out: MidiOutAlsa::openPort: the 'portNumber' argument (7) is invalid.` comes from `rtr/sound/sound.py:355`):
+
+- `MidiOut` methods (1.5.8): `open_port`, `close_port`, `send_message`, `get_ports` (returns `list[str]`), `get_port_count`, `delete`, `is_port_open()` (method), `is_deleted` (property), `open_virtual_port`, `set_port_name`, `set_error_callback`.
+- **No `open_string_outport`** in 1.5.8 — the name-based branch at `sound.py:343` always raises `AttributeError`, so the `out_device` (name) path never worked on this install.
+- `open_port(idx)` with `idx >= count` raises `InvalidPortError` (MRO: `InvalidPortError → RtMidiError → ValueError → Exception`): "MidiOutAlsa::openPort: the 'portNumber' argument (N) is invalid."
+- `close_port()` on a never-opened instance is safe (no raise); `delete()` on a fresh instance is safe and marks it deleted — usable to release failed/unused `MidiOut` instances.
+- The ALSA out-port list is dynamic: a probe returned 17 ports (Midi Through, rtpmidi, PipeWire, qpwgraph, SuperCollider in0–in9, RtMidiIn, Protokol). Indices shift as apps start/stop — the root cause of the user's error (configured index 7 went invalid).
+
+### Changes Made
+
+- None (investigation only).
+
+### Documentation
+
+None required — findings recorded here; they feed the implementation task.
+
+### Architecture
+
+No architectural impact.
+
+### Validation
+
+- Live probes against the installed rtmidi 1.5.8 (`python3 -c` scripts): API dir listing, `InvalidPortError` MRO, `close_port`/`delete` on fresh + opened instances, `get_ports()` return type, live port enumeration.
+
+### Decisions and Caveats
+
+- Name-based opening must be implemented as "enumerate `get_ports()`, match by name (exact, else substring), `open_port(idx)`", keeping `open_string_outport` as a fast path when a newer rtmidi provides it.
+- `MidiOut` instances must be released (`close_port` + `delete`) on failed opens and in `list_out_ports`, since retry logic will create instances repeatedly.
+
+### Next Task
+
+Implement the robust MIDI-out handling in `rtr/sound/sound.py` (see the analysis entry below).
+
+### Instructions for the Next Task
+
+Use the facts above: range-check indices before `open_port` (with the available-port list in the error), resolve names by enumeration when `open_string_outport` is absent, add retry-with-backoff for failed opens, evict dead handles on `send_message` failure, and release abandoned `MidiOut` instances.
+
+---
+
+## 2026-10-28 — Analyse: MIDI-out device handling in sound.py and its fragility points
+
+### Status
+
+Completed
+
+### Summary
+
+Mapped the MIDI-out device lifecycle in `realtimecontrol/rtr/rtr/sound/sound.py` (the source of the user's startup error) and identified why adding/removing MIDI devices breaks it:
+
+1. **Index fragility** — a zone's `out_port` / the global `out_port` is an *index* into the current ALSA enumeration. Adding/removing a device shifts indices, so a previously-valid index (7) becomes invalid → `InvalidPortError` on the first snapshot after startup.
+2. **Name path broken** — the `out_device` (name) branch calls `rtmidi.MidiOut.open_string_outport`, which does not exist in the installed rtmidi 1.5.8 → always `AttributeError` → the robust path is unusable.
+3. **Permanent failure cache** — `_open_outs[spec] = None` on failure; the failure is cached forever, so a device that appears later (hotplug, SuperCollider starting) is never picked up.
+4. **No dead-device detection** — when an open device disappears, `send_message` raises; the error is logged but the dead handle stays cached forever (no reopen attempt).
+5. **Leaks** — `list_out_ports` creates a `MidiOut` per call and never releases it; `_open_one` abandons the instance on a failed open.
+6. **Opaque errors** — the failure log has no list of available ports, so the config cannot be fixed from the log.
+
+Flow: `Sound.__init__` → `reload()` (reconcile = close-only; opens are lazy) → first `SNAPSHOT` → `_send_msg` → `_send_bytes` → `_get_out(zone)` → `_out_spec(zone)` (precedence: zone `out_port` → global `out_device` → global `out_port` → constructor `out_port` → auto port 0) → `_open_one(spec)`.
+
+Fix design (for the implementation task): per-zone **candidate spec chain** (zone index → global name → global index → auto), name resolution by enumeration (exact then substring match), index range-check with available ports in the error, retry-with-backoff for failed opens (`retry_interval`, default 5 s), evict-and-retry on `send_message` failure, and release of abandoned instances.
+
+### Changes Made
+
+- None (investigation only).
+
+### Documentation
+
+None required — analysis recorded here.
+
+### Architecture
+
+No architectural impact (analysis of existing structure).
+
+### Validation
+
+- Code reading: `rtr/sound/sound.py` (full), `rtr/io/midi.py` (MIDI-in section), `main.py`, `sound.json`, `tests/test_sound_out_ports.py`, `tests/test_sound_enabled.py`, `.kilo/plans/1789210975965-midi-out-plan.md`.
+
+### Decisions and Caveats
+
+- Scope: the MIDI-**out** adapter (`sound.py`) is where the reported error originates and where the fragility is visible. The MIDI-**in** adapter (`rtr/io/midi.py`) opens by index too, but failures are not cached (a `reload` retries) and the controller port is a stable ALSA loopback; it is left unchanged and noted as a possible follow-up.
+- Falling back to the next candidate (global name → global index → auto) when a configured index is invalid is the chosen robustness behavior: sound degrades to a working device or to logging instead of dying, with an actionable log line listing the available ports.
+
+### Next Task
+
+Implement the robust MIDI-out handling in `rtr/sound/sound.py`.
+
+### Instructions for the Next Task
+
+Modify only the MIDI-out connection section of `Sound` (keep the data layer and `_on_snapshot` untouched): add `_candidate_specs`, name resolution helpers, index range-check, retry/backoff state (`_open_failures`), dead-handle eviction in `_send_bytes`, instance release in `_open_one`/`list_out_ports`, and a `retry_interval` constructor kwarg. Extend `tests/test_sound_out_ports.py` (the fake rtmidi needs: range-checking `open_port`, `delete`, a failure flag, and a no-`open_string_outport` variant to mirror rtmidi 1.5.8).
+
+---
+
 ## 2026-10-27 — camera_debug.html / render.html stop receiving camera tracking updates during robot movements
 
 ### Status

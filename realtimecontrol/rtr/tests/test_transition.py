@@ -36,7 +36,7 @@ sys.path.insert(0, ROOT)
 
 from rtr.state.zones import Zones, load_state_data, validate_state_data
 from rtr.state.machine import StateMachine
-from rtr.state.behavior import clamp, hardware_clamp
+from rtr.state.behavior import clamp, hardware_clamp, resolve_x
 from rtr.robot.sim import SimRobot
 
 
@@ -52,6 +52,10 @@ def _run_transition(zones, start_zone, start_action, target_zone, target_action,
     target action's entry pose. Returns ``(committed, final_zone, transitioning)``.
     """
     home = list(zones.get(start_zone).action_entry_pose(start_action))
+    # The entry pose may carry "x" (free-axis) markers; the sim needs a concrete
+    # joint pose. Resolve them to a neutral value, mirroring production (the brain
+    # resolves "x" via resolve_x against the robot's live position before it moves).
+    home = resolve_x(home, [0.0] * 6)
     sim = SimRobot(home=home, tick_hz=20.0)
     machine = StateMachine(zones, initial_zone=start_zone, tick_hz=20.0)
     machine.play_action(start_action)

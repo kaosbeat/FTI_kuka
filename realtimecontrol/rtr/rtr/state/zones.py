@@ -10,10 +10,13 @@ Every action uses a single unified form:
 - ``poses``: a non-empty ordered list of full 6-axis *anchor* poses the robot
   steps through (on the machine's cadence). A single-anchor action (``poses:
   [[...]]``) is a resting pose; a multi-anchor action steps through them.
-- ``variable_axes``: a list of axis indices (0-5) driven by the behaviour policy
-  (the wiggle). Default ``[]`` (no wiggle — the anchors are held exactly).
-- ``behavior``: one of :data:`BEHAVIORS`. Default ``"calm"``. ``calm`` / ``bridge``
-  are no-op policies (they drive no variable axes).
+- ``poses`` axes are absolute (a number — pinned to that value) or free (``"x"`` —
+  driven by the action's behavior). The free axes are the ``"x"`` markers.
+- ``variable_axes``: legacy list of axis indices (0-5) driven by the behaviour
+  policy. Default ``[]``. A ``"x"`` pose axis is free regardless of this list; the
+  effective free axes are the union of the ``"x"`` markers and this list.
+- ``behavior``: one of :data:`BEHAVIORS`. Default ``"calm"``. The behavior is the
+  value source for the free (``"x"``) axes; ``calm`` drives none of them.
 - ``speed``: a single move-speed number (absent → the zone speed).
 - ``loop``: bool, default ``true``. ``false`` = run once, then hand off via ``next``.
 - ``next``: a single ``{zone, action}`` dict or an ordered list of them (unchanged).
@@ -55,9 +58,11 @@ HARDWARE_LIMITS: List[Tuple[float, float]] = [
 
 # Behavior names: the policies that drive variable axes.
 #
-# ``bridge`` is a no-op policy for bridge zones: it drives NO variable axes and does
-# NO random movement. A bridge action holds its specific (curated) poses so the robot
-# can transition safely between zones. It is the only behaviour a bridge zone may use.
+# ``bridge`` is the pose-zone policy: A1 (axis 0) is the free axis (kept within its
+# safezone band) and A2–A6 stay pinned to the programmed pose. It does NO random
+# movement — a bridge action holds its specific (curated) poses so the robot can
+# transition safely between zones. A bridge action may only drive A1 (see
+# :func:`_validate_action`).
 BEHAVIORS = (
     "locked", "intent", "vigilant", "curious", "restless", "spontaneous", "gentle", "calm",
     "soothing", "agitated", "aggressive", "exhilarated", "impatient", "drowsy",
@@ -70,6 +75,13 @@ MODE_GROUPS = ("museum-closed", "event-sit-back", "stage-takeover")
 # Engagement-ladder class vocabulary (kept in sync with ``rtr.brain.config.ZONE_CLASSES``;
 # defined here rather than imported to avoid the state↔brain import cycle).
 ZONE_CLASSES = ("ignore", "scan", "track", "farfocus", "approach", "facefocus", "retreat")
+
+# Pose-zone sub-types. A zone marked ``pose`` is a *pose zone*: it holds a rigid,
+# fully-constrained pose whose only free axis is A1 (axis 0). ``bridge`` is a pose
+# zone used to link safe zones (the former "bridge zones"); ``move`` is a pose zone
+# used to perform a curated multi-pose move (a "show-off" move) rather than a plain
+# transition. Absent / other = a regular zone (not a pose zone).
+POSE_ZONES = ("bridge", "move")
 
 # The engagement classes in which the robot actively tracks a locked person. Their
 # actions use ``axis_bands`` (per-axis min/max bands) instead of the legacy
@@ -84,7 +96,7 @@ MODES = ("wander", "random", "action", "track", "hold")
 
 
 def _pose_numeric(p) -> bool:
-    """True when every axis of the pose is a real number (no ``"x"`` frozen axes)."""
+    """True when every axis of the pose is a real number (no ``"x"`` free axes)."""
     return (isinstance(p, list)
             and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in p))
 
@@ -97,7 +109,7 @@ def find_shared_pose(poses_a: List[List[float]], poses_b: List[List[float]],
     (scanning A in order, B in order) that match on every *concrete* axis, or
     ``None`` when no shared pose exists.
 
-    An ``"x"`` axis (frozen / copy-from-previous) has no static value — it
+    An ``"x"`` axis (free) has no static value — it
     resolves to the robot's live position at the hand-off, which is the same for
     both poses — so it is a wildcard and is skipped in the comparison. A pair is a
     shared pose when every axis that is concrete in both poses matches within
@@ -533,10 +545,11 @@ def _validate_action(name: str, a: dict, all_zone_names: set) -> None:
     beh = a.get("behavior", "calm")
     if not (isinstance(beh, str) and beh in BEHAVIORS):
         raise ValueError(f"action {name!r}: behavior must be one of {BEHAVIORS}")
-    # ``bridge`` is a no-op policy (like ``calm``): it drives no variable axes. An
-    # action may not pair it with a non-empty ``variable_axes`` list.
-    if beh == "bridge" and va:
-        raise ValueError(f"action {name!r}: 'bridge' is a no-op behaviour and must not drive variable axes")
+    # ``bridge`` is the pose-zone policy: A1 (axis 0) is the free axis (managed within
+    # its safezone band) and A2–A6 stay pinned. A bridge action may drive ONLY A1 —
+    # any other variable axis would break the "constrained except A1" invariant.
+    if beh == "bridge" and va and not all(x == 0 for x in va):
+        raise ValueError(f"action {name!r}: 'bridge' may only drive A1 (axis 0), the pose-zone free axis")
     spd = a.get("speed")
     if spd is not None and not _is_num(spd):
         raise ValueError(f"action {name!r}: speed must be a number")
@@ -572,6 +585,8 @@ def _validate_zone(name: str, z: dict, all_names: set) -> None:
         raise ValueError(f"zone {name!r}: mode_group must be one of {MODE_GROUPS}")
     if "class" in z and not (isinstance(z["class"], str) and z["class"] in ZONE_CLASSES):
         raise ValueError(f"zone {name!r}: class must be one of {ZONE_CLASSES}")
+    if "pose" in z and not (isinstance(z["pose"], str) and z["pose"] in POSE_ZONES):
+        raise ValueError(f"zone {name!r}: pose must be one of {POSE_ZONES}")
     sz = z.get("safezone")
     if not (isinstance(sz, list) and len(sz) == 6):
         raise ValueError(f"zone {name!r}: safezone must be a list of 6 [lo, hi] pairs")
@@ -646,6 +661,16 @@ class Zone:
     def cls(self) -> str:
         """The zone's engagement-ladder class (default ``"scan"`` when absent)."""
         return self.data.get("class", "scan")
+
+    @property
+    def pose(self) -> Optional[str]:
+        """The pose-zone sub-type (``"bridge"`` / ``"move"``), or None for a regular zone.
+
+        A pose zone holds a rigid, fully-constrained pose whose only free axis is A1
+        (axis 0). See :data:`POSE_ZONES`.
+        """
+        p = self.data.get("pose")
+        return p if isinstance(p, str) and p in POSE_ZONES else None
 
     @property
     def enabled(self) -> bool:

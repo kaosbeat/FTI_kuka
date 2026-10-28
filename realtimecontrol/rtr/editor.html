@@ -162,6 +162,7 @@
   .fnodeLabel { fill: var(--text); font-size: 15px; font-weight: bold; }
   .fnodeSub { fill: var(--dim); font-size: 11px; }
   .fnode.flive .fnodeBody { stroke: var(--accent); stroke-width: 2.5; }
+  .fnode.fnodePose .fnodeBody { stroke: #a06fd0; stroke-width: 2; }
   .fnode.fsel .fnodeBody { stroke: #ffffff; stroke-width: 2.5; }
   .fnode.off { opacity: 0.45; }
   .fnode { cursor: move; }
@@ -743,6 +744,7 @@
 
 const AXES = ["A1", "A2", "A3", "A4", "A5", "A6"];
 const BEHAVIORS = ["calm", "restless", "spontaneous", "vigilant", "locked", "intent", "curious", "gentle", "soothing", "drowsy", "agitated", "aggressive", "impatient", "exhilarated", "bridge"];
+const POSE_ZONES = ["bridge", "move"];
 const NAV_COMMANDS = ["next_action", "next_zone", "back", "retrigger", "next_pose"];
 const $ = (id) => document.getElementById(id);
 
@@ -990,7 +992,7 @@ function actionEndPose(a) {
   return ps.length ? ps[ps.length - 1] : null;
 }
 // Mirrors rtr.state.zones.find_shared_pose: find a pose shared by both pose lists.
-// An "x" axis (frozen / copy-from-previous) has no static value — it resolves to the
+// An "x" axis (free) has no static value — it resolves to the
 // robot's live position at the hand-off — so it is a wildcard and is skipped. A pair
 // is a shared pose when every axis concrete in both poses matches within `margin` and
 // at least one such axis exists (an all-"x" pose does not trivially match everything).
@@ -4394,8 +4396,8 @@ function deletePoseVideo(zn, an, pi) {
 function renderPosePreview(pose, el, safezone) {
   el.innerHTML = "";
   if (!pose || pose.length !== 6) { el.textContent = "no pose"; return; }
-  // "x" (frozen / copy-from-previous) axes have no static value; use 0 for the FK
-  // schematic so the pose stays finite.
+  // "x" (free) axes have no static value; use 0 for the FK schematic so the pose
+  // stays finite.
   const px = (v) => (typeof v === "number" ? v : 0);
   const [a1, a2, a3, a4, a5, a6] = [px(pose[0]), px(pose[1]), px(pose[2]), px(pose[3]), px(pose[4]), px(pose[5])];
   const rad = (d) => d * Math.PI / 180;
@@ -4463,10 +4465,10 @@ function renderPosePreview(pose, el, safezone) {
   AXES.forEach((n, i) => {
     const v = pose[i];
     const nx = px(v);
-    const frozen = (v === "x");
+    const isFree = (v === "x");
     const bar = document.createElement("div");
     bar.className = "aePrevBar";
-    const lbl = document.createElement("span"); lbl.className = "lbl"; lbl.textContent = n + (frozen ? " (x)" : "");
+    const lbl = document.createElement("span"); lbl.className = "lbl"; lbl.textContent = n + (isFree ? " (x)" : "");
     bar.appendChild(lbl);
     const track = document.createElement("div"); track.className = "track";
     const val = document.createElement("span"); val.className = "val";
@@ -4475,12 +4477,12 @@ function renderPosePreview(pose, el, safezone) {
       const span = hi - lo || 1;
       const frac = Math.max(0, Math.min(1, (nx - lo) / span));
       const mark = document.createElement("div");
-      mark.className = "mark" + (frozen ? " frozenX" : ((nx < lo || nx > hi) ? " oob" : ""));
+      mark.className = "mark" + (isFree ? " frozenX" : ((nx < lo || nx > hi) ? " oob" : ""));
       mark.style.left = (frac * 100) + "%";
       track.appendChild(mark);
     }
     bar.appendChild(track);
-    val.textContent = frozen ? "x" : (Math.round(nx * 10) / 10);
+    val.textContent = isFree ? "x" : (Math.round(nx * 10) / 10);
     bar.appendChild(val);
     el.appendChild(bar);
   });
@@ -4756,7 +4758,7 @@ function buildActionEditor() {
   psec.appendChild(h3("poses"));
   const poseHelp = document.createElement("div");
   poseHelp.className = "hint";
-  poseHelp.textContent = 'Each axis in a pose is one of three states: VARIABLE (in variable_axes — wiggles around the anchor), PINNED (a number — holds the anchor value), or "x" FROZEN (copies the robot\'s value on that axis at the action\'s start — e.g. the camera-lock pose — and holds it for the whole action). Type x in an axis field to freeze it.';
+  poseHelp.textContent = 'Each axis in a pose is either ABSOLUTE (a number — pinned to that value) or FREE ("x" — driven by the action\'s behavior: face-tracking tracks the face, spontaneous is random, bridge holds or face-tracks). Type x in an axis field to make it free; type a number to pin it.';
   psec.appendChild(poseHelp);
   // The pose rows sit in the body; the sticky preview lives in the top-right
   // #aePreviewCol (shared with axis_bands). The preview shows the first pose by
@@ -4782,9 +4784,9 @@ function buildActionEditor() {
       inp.value = isX ? "x" : (p[i] != null ? p[i] : 0);
       if (isX) {
         inp.classList.add("frozenX");
-        inp.title = AXES[i] + ' — frozen ("x"): copies the robot\'s value on this axis at the action\'s start (e.g. the camera-lock pose) and holds it for the whole action.';
+        inp.title = AXES[i] + ' — free ("x"): driven by the action\'s behavior (face-tracking tracks the face, spontaneous is random, bridge holds or face-tracks).';
       } else {
-        inp.title = AXES[i] + ' — pinned: holds this anchor value. Add the axis to variable_axes to make it wiggle, or type "x" to freeze it from the action start.';
+        inp.title = AXES[i] + ' — absolute: pinned to this value. Type "x" to make it free (driven by the action\'s behavior).';
         if (z.safezone) {
           const [lo, hi] = z.safezone[i];
           if (p[i] < lo || p[i] > hi) inp.classList.add("oob");
@@ -4867,7 +4869,7 @@ function buildActionEditor() {
     let n = 0;
     if (z.safezone) a.poses.forEach((p) => {
       for (let i = 0; i < 6; i++) {
-        if (p[i] === "x") continue;  // frozen axis: no static value to clamp
+        if (p[i] === "x") continue;  // free axis: no static value to clamp
         const [lo, hi] = z.safezone[i];
         if (p[i] < lo || p[i] > hi) n++;
       }
@@ -4879,7 +4881,7 @@ function buildActionEditor() {
   clampR.onclick = () => {
     if (z.safezone) a.poses.forEach((p) => {
       for (let i = 0; i < 6; i++) {
-        if (p[i] === "x") continue;  // frozen axis: holds the action-start value
+        if (p[i] === "x") continue;  // free axis: driven by the behavior, not clamped here
         const [lo, hi] = z.safezone[i];
         if (p[i] < lo) p[i] = lo;
         else if (p[i] > hi) p[i] = hi;
@@ -5536,10 +5538,10 @@ function runValidateScan(mode) {
 // passes through. A 2-pose action scans 2 + ACTION_SCAN_PATH_STEPS poses.
 const ACTION_SCAN_PATH_STEPS = 8;
 
-// Resolve a pose's frozen ("x") axes to the robot's current joint values, producing a
-// concrete 6-value pose. A frozen axis holds where the axis is, so it resolves to the
-// real arm's current value. This keeps the scan's path sampling (and any arithmetic on
-// the pose) from producing a NaN — "x" * a number is NaN, which blanks the arm.
+// Resolve a pose's free ("x") axes to the robot's current joint values, producing a
+// concrete 6-value pose. A free axis takes the arm's current value, so it resolves to
+// the real arm's current value. This keeps the scan's path sampling (and any arithmetic
+// on the pose) from producing a NaN — "x" * a number is NaN, which blanks the arm.
 function resolvePose(pose) {
   const cur = Robot3D.getJoints();
   return pose.map((v, j) => (v === "x" ? (typeof cur[j] === "number" ? cur[j] : 0) : v));
@@ -5558,8 +5560,8 @@ function runActionScan() {
     $("valResult").innerHTML = `<span style="color:var(--dim)">selected action has no poses</span>`;
     return;
   }
-  // Resolve frozen ("x") axes to the robot's current values so every scanned pose is
-  // concrete (a frozen axis holds where the axis is; sampling over an "x" would be NaN).
+  // Resolve free ("x") axes to the robot's current values so every scanned pose is
+  // concrete (a free axis takes the arm's current value; sampling over an "x" would be NaN).
   const rp = ps.map((p) => resolvePose(p));
   const poses = [];
   for (let i = 0; i < rp.length; i++) {
@@ -5663,7 +5665,7 @@ function stopValidateScan() {
 function checkValidateNow() {
   const raw = currentGhostPose();
   if (!raw) { $("valResult").innerHTML = `<span style="color:var(--dim)">no pose to check</span>`; return; }
-  const pose = resolvePose(raw);  // frozen ("x") axes -> concrete, so display/check never hit NaN
+  const pose = resolvePose(raw);  // free ("x") axes -> concrete, so display/check never hit NaN
   const res = Robot3D.checkPoseCollision(pose);
   if (!res) { $("valResult").innerHTML = `<span style="color:var(--dim)">collision engine not ready</span>`; return; }
   if (res.bodies.length === 0) {
@@ -5843,6 +5845,29 @@ function buildZoneForm(containerEl, titleEl, name, onChanged, showPoses) {
   clsRow.appendChild(clsLab);
   el.appendChild(clsRow);
 
+  // pose-zone type (bridge / move): a zone whose actions are pose anchors with a
+  // free ("x") axis, driven by the zone's behavior at runtime.
+  const poseRow = document.createElement("div");
+  poseRow.className = "row";
+  const poseLab = document.createElement("label");
+  poseLab.className = "inline";
+  poseLab.innerHTML = "pose zone <select>";
+  const poseSel = poseLab.querySelector("select");
+  const poseOpts = ["", ...POSE_ZONES];
+  for (const pv of poseOpts) {
+    const o = document.createElement("option");
+    o.value = pv; o.textContent = pv || "none";
+    poseSel.appendChild(o);
+  }
+  poseSel.value = z.pose && POSE_ZONES.includes(z.pose) ? z.pose : "";
+  poseSel.onchange = (e) => {
+    if (e.target.value) z.pose = e.target.value;
+    else delete z.pose;
+    onChanged();
+  };
+  poseRow.appendChild(poseLab);
+  el.appendChild(poseRow);
+
   // safezone (lo / hi per axis)
   el.appendChild(h3("safezone (lo / hi)"));
   const sz = document.createElement("div");
@@ -5984,7 +6009,7 @@ function buildActionList(container, name, z, rebuild, onChanged, showPoses) {
         const p = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
         for (let i = 0; i < 6; i++) {
           const inp = document.createElement("input");
-          // Text (not number) so a frozen "x" axis renders instead of an empty field.
+          // Text (not number) so a free "x" axis renders instead of an empty field.
           inp.type = "text"; inp.inputMode = "decimal";
           const isX = p[i] === "x";
           inp.value = isX ? "x" : (p[i] != null ? p[i] : 0);
@@ -6059,7 +6084,7 @@ function currentGhostPose() {
 function updateGhost() {
   const pose = currentGhostPose();
   const z = TABLE.zones[selectedZone];
-  // Resolve frozen ("x") axes to the robot's current value so the ghost shows a concrete
+  // Resolve free ("x") axes to the robot's current value so the ghost shows a concrete
   // pose (an "x" driven straight to the engine would blank the arm — see resolvePose).
   if (pose) Robot3D.setTarget(resolvePose(pose));
   const ps = ghostPoses(selectedAction);
@@ -6105,6 +6130,9 @@ function validate() {
       });
     }
     if (!isNum(z.speed)) errs.push(`${name}: speed must be a number`);
+    // Zone-level pose type: optional, one of POSE_ZONES (bridge / move).
+    if (z.pose !== undefined && !POSE_ZONES.includes(z.pose))
+      errs.push(`${name}: pose must be one of ${POSE_ZONES.join("/")}`);
     // Zone-level exits: optional list of [zone, action] pairs; each zone must exist.
     // Mirrors the core's zones._validate_zone, which rejects a dangling exit target
     // with a 400 — surfacing it here keeps the save from failing server-side.
@@ -6130,7 +6158,7 @@ function validate() {
         errs.push(`${name}/${an}: legacy base_pose/pos — use the unified poses list`); continue;
       }
       if (!Array.isArray(a.poses) || !a.poses.length) { errs.push(`${name}/${an}: poses needs at least 1 anchor`); continue; }
-      // A pose axis is a number OR "x" (frozen / copy-from-previous — resolved at
+      // A pose axis is a number (absolute — pinned) OR "x" (free — resolved at
       // runtime to the robot's live value), mirroring the core's zones._validate_action.
       const isPoseVal = (v) => isNum(v) || v === "x";
       a.poses.forEach((p, i) => { if (!Array.isArray(p) || p.length !== 6 || !p.every(isPoseVal)) errs.push(`${name}/${an}: pose ${i} needs 6 numbers or "x"`); });
@@ -6437,7 +6465,8 @@ function flowSubLabel(name) {
     return `${FLOW.live.mode || "—"} / ${FLOW.live.action || "—"}`;
   }
   const n = Object.keys(z.actions || {}).length;
-  return n ? `${n} act` : "—";
+  const base = n ? `${n} act` : "—";
+  return z.pose && POSE_ZONES.includes(z.pose) ? `${z.pose} · ${base}` : base;
 }
 
 // Deterministic auto-layout: columns by BFS depth from `init` (else the first
@@ -6670,7 +6699,8 @@ function flowRenderGroups() {
 function flowAddNode(layer, name) {
   const z = TABLE.zones[name];
   const p = FLOW.pos[name] || { x: 40, y: 40 };
-  const g = svgEl("g", { class: "fnode", "data-zone": name, transform: `translate(${p.x},${p.y})` });
+  const isPoseZone = z.pose && POSE_ZONES.includes(z.pose);
+  const g = svgEl("g", { class: "fnode" + (isPoseZone ? " fnodePose" : ""), "data-zone": name, transform: `translate(${p.x},${p.y})` });
   g.appendChild(svgEl("rect", { width: NODE_W, height: nodeH(name), rx: 10, class: "fnodeBody" }));
   const label = svgEl("text", { x: NODE_W / 2, y: 24, class: "fnodeLabel", "text-anchor": "middle" });
   label.textContent = name;

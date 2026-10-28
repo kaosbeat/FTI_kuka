@@ -1,12 +1,11 @@
 """Behaviour policies: the motion math for the state machine.
 
-These are the variable-axis behaviour policies and the clamp helpers. Each behaviour
-drives the *variable* axes of the current action while the *non-variable* axes are
+These are the behaviour policies and the clamp helpers. Each behaviour drives the
+*free* (``"x"``) axes of the current action while the *absolute* (numbered) axes are
 held at the current anchor pose (``poses[action_index]``). The
 :class:`~rtr.state.machine.StateMachine`'s per-tick ``step`` dispatches to
 :func:`build_target` for every action: it reads the current anchor, applies the
-wiggle (variable axes + behaviour) on top, and advances the anchor index on the
-configured cadence.
+behavior on the free axes, and advances the anchor index on the configured cadence.
 
 Camera-driven behaviours (``locked`` / ``intent`` / ``curious``) read the camera telemetry
 the brain stashes on ``machine.camera_state`` each tick — the brain no longer nudges
@@ -304,13 +303,12 @@ def hardware_clamp(pose: List[float]) -> List[float]:
 
 
 def resolve_x(pose, ref):
-    """Resolve ``"x"`` (frozen / copy-from-previous) axes in a pose to ``ref``.
+    """Resolve ``"x"`` (free-axis) markers in a pose to concrete values from ``ref``.
 
-    A pose axis set to the string ``"x"`` means "copy the robot's current value on
-    this axis and freeze it for the action" (e.g. the camera-lock pose's A1 when a
-    claw action starts). Returns a new pose with every ``"x"`` replaced by the
-    matching value from ``ref`` (the frozen base, or the live ``curjpos`` as a
-    fallback); non-``"x"`` axes are copied through unchanged.
+    A pose axis set to the string ``"x"`` is a *free* axis: it has no static value of
+    its own and takes the value from ``ref`` (the robot's live position at the
+    hand-off) so the pose is concrete. Numbered axes are absolute (pinned to that
+    value) and are copied through unchanged.
     """
     if not isinstance(pose, list):
         return pose
@@ -321,13 +319,15 @@ def resolve_x(pose, ref):
 def build_target(machine, curjpos: List[float]):
     """Compute the target pose for the current action this tick.
 
-    Reads the *current* anchor (``poses[action_index]``), applies the action's wiggle
-    (variable axes + behaviour) on top, and returns the pose. The non-variable axes
-    stay at the current anchor; the variable axes are driven by the action's
-    behaviour. When ``machine.forced_behavior`` is set (live test override), the
-    forced behavior's policy runs on the action's variable axes instead of the
-    action's declared behavior. Returns ``None`` if there is no active action or
-    the action has no ``poses``.
+    Reads the *current* anchor (``poses[action_index]``) and returns the target pose.
+    Each axis is either absolute (a number — pinned to the pose value) or free
+    (``"x"`` — driven by the action's behavior: face-tracking tracks the face,
+    ``spontaneous`` is random, ``bridge`` holds or face-tracks, ...). The free axes
+    start at the robot's current value and are driven from there; the absolute axes
+    hold their pose value. When ``machine.forced_behavior`` is set (live test
+    override), the forced behavior's policy runs on the free axes instead of the
+    action's declared behavior. Returns ``None`` if there is no active action or the
+    action has no ``poses``.
     """
     if not machine.current_action:
         machine.servo_state = {}
@@ -356,16 +356,19 @@ def build_target(machine, curjpos: List[float]):
         var_axes = [ax for ax, (lo, hi) in sorted(axis_bands.items()) if lo != hi]
     else:
         idx = machine.action_index if 0 <= machine.action_index < len(poses) else 0
-        # ``"x"`` axes (frozen / copy-from-previous) take the frozen base — the
-        # robot's position captured at the action's transition commit — falling back
-        # to the live curjpos when no frozen base is set (a restart without a
-        # transition). Non-``"x"`` axes stay at the anchor pose value.
-        frozen = getattr(machine, "_frozen_base", None)
-        ref = frozen if frozen is not None else curjpos
-        anchor = resolve_x(poses[idx], ref)
-        var_axes = zone.action_variable_axes(name)
-        # A ``"x"`` axis is frozen (never driven), even if listed in variable_axes.
-        var_axes = [ax for ax in var_axes if poses[idx][ax] != "x"]
+        # Absolute/free axis system: a pose axis is a number (absolute — pinned to
+        # that value) or ``"x"`` (free — driven by the action's behavior). The free
+        # axes are the ``"x"`` markers; the behavior is the single source of their
+        # value (face-tracking tracks the face, spontaneous is random, ...). This
+        # applies to every axis and every system (pose zones and regular zones).
+        free_axes = [ax for ax in range(6) if poses[idx][ax] == "x"]
+        # Legacy ``variable_axes`` are still driven (kept for zones not yet migrated
+        # to the absolute/free form); a ``"x"`` axis is free regardless of that list.
+        var_axes = list(set(free_axes) | set(zone.action_variable_axes(name)))
+        # Anchor: a free (``"x"``) axis starts at the robot's current value (the
+        # behavior drives it from there); an absolute axis is pinned to the pose value.
+        anchor = [curjpos[ax] if poses[idx][ax] == "x" else poses[idx][ax]
+                 for ax in range(6)]
 
     # Forced behavior (live test override): run this behavior's policy on the
     # action's variable axes regardless of the action's declared behavior.
@@ -381,9 +384,10 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action, axis_ban
     ``axis_bands`` (the active-class per-axis ``[min, max]`` bands, or ``None``) is
     threaded to the servo so its clamp uses the band ∩ safezone floor.
     """
-    # ``calm`` and ``bridge`` are no-op policies: they drive no variable axes (a bridge
-    # action holds its curated poses so the robot transitions safely between zones).
-    if not var_axes or behavior in ("calm", "bridge"):
+    # ``calm`` is a no-op policy: it drives no variable axes. ``bridge`` is the
+    # pose-zone transition policy: it drives the free axis (A1) to hold its value by
+    # default, or to keep the face direction when a face is locked (see :func:`_apply_bridge`).
+    if not var_axes or behavior == "calm":
         return
 
     limits = effective(machine)
@@ -396,7 +400,9 @@ def _apply_behavior(machine, pose, var_axes, behavior, curjpos, action, axis_ban
         if isinstance(g, (int, float)) and not isinstance(g, bool) and g:
             image_gain = g
 
-    if behavior in ("locked", "curious", "intent"):
+    if behavior == "bridge":
+        _apply_bridge(machine, pose, var_axes, curjpos, action, axis_bands)
+    elif behavior in ("locked", "curious", "intent"):
         _apply_camera(machine, pose, var_axes, behavior, curjpos, image_gain, action, axis_bands)
     elif behavior == "gentle":
         _apply_face(machine, pose, var_axes, curjpos, image_gain, action, behavior, axis_bands)
@@ -492,6 +498,31 @@ def _apply_face(machine, pose, var_axes, curjpos, gain, action, behavior, axis_b
     dx *= face
     dy *= face
     _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior, axis_bands)
+
+
+def _apply_bridge(machine, pose, var_axes, curjpos, action, axis_bands=None) -> None:
+    """Drive the free bridge axis (A1): hold by default, track the face when face-locked.
+
+    The bridge is the pose-zone transition policy. The free axis (A1, axis 0) is held
+    at the robot's current value by default so the robot transitions safely between
+    zones. When a face is locked (the brain stashed a valid face on
+    ``machine.face_state``), A1 keeps the face direction: the face offset drives the
+    free axis via the image Jacobian (reusing :func:`_servo`). Non-free axes are
+    absolute (pinned to the pose value) and are not driven here.
+    """
+    state = machine.face_state or {}
+    face_locked = bool(state.get("ok")) and state.get("id") is not None
+    if not face_locked:
+        return  # hold: the free axis stays at its current value (no motion)
+    # Face-locked: keep the face direction (drive the free axis to track the face).
+    dx = state.get("dx", 0.0)
+    dy = state.get("dy", 0.0)
+    if not isinstance(dx, (int, float)) or isinstance(dx, bool):
+        dx = 0.0
+    if not isinstance(dy, (int, float)) or isinstance(dy, bool):
+        dy = 0.0
+    gain = _bp(machine, "bridge", "gain", _DEFAULT_IMAGE_GAIN)
+    _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, "bridge", axis_bands)
 
 
 def _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior, axis_bands=None) -> None:
