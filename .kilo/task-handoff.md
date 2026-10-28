@@ -1,5 +1,54 @@
 # Task Handoff Log
 
+## 2026-10-28 — Fix: brain behavior next-selection params (lock_duration_s / dwell_s) lost on validate/reload
+
+### Status
+
+Completed
+
+### Summary
+
+The per-behavior next-selection params set in the brain tab (`lock_duration_s`, `dwell_s`) were silently lost, so the edits appeared "not saved". The POST to `/api/brain` writes the payload **verbatim** to `brain.json` (the edits WERE on disk, e.g. `locked.lock_duration_s: 15`), but `validate_brain_config` → `_validate_behaviors_section` (config.py) kept only the keys present in the behavior's `DEFAULT_BEHAVIORS` entry. That dropped `lock_duration_s` for every behavior except agitated/aggressive/exhilarated/impatient (the four whose defaults carry it), and `dwell_s` for **all** behaviors (no default carries it). The running core builds `machine.behavior_params` from the validated config (`brain.py:131`), and GET `/api/brain` also serves the validated config — so the runtime never saw the edits.
+
+Fix: `_validate_behaviors_section` now preserves the optional next-selection overrides (`dwell_s`, `lock_duration_s`) when present on any behavior, type-checked via `_num` (null = absent, non-numeric/bool rejected). The runtime (`brain._behavior_triggers_fired`) already reads both off the behavior entry for any behavior, so no other code change was needed.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/brain/config.py`: `_validate_behaviors_section` — after the defaults loop, copy `dwell_s` / `lock_duration_s` from the raw entry when present (skipping keys already covered by the defaults); docstring updated to document the preserved overrides.
+- `realtimecontrol/rtr/tests/test_brain_behavior_params.py`: new regression test file (7 tests): `lock_duration_s` kept for a behavior without a default; kept for every `DEFAULT_BEHAVIORS` behavior; `dwell_s` kept for every behavior; default backfill when absent; `stay`/`triggers` still validated; explicit null treated as absent; bad types (string/bool) rejected.
+
+### Documentation
+
+- Updated the `_validate_behaviors_section` docstring (the preserved-override contract). No user-facing docs needed.
+
+### Architecture
+
+No architectural impact. The save path is unchanged in shape (editor DOM → `_commitBrainDom` → POST → verbatim write → validate on reload); the fix only stops the validator from stripping the two optional per-behavior keys the runtime reads.
+
+### Validation
+
+- `python tests/test_brain_behavior_params.py` → ALL TESTS PASSED (7 tests).
+- `python3 -m pytest tests/test_brain_behavior_params.py tests/test_brain_autonomy_dwell.py tests/test_midi_brain_trigger.py tests/test_zone_groups.py tests/test_brain_assertive.py tests/test_brain_action_cam.py -q` → 57 passed.
+- Full suite `python3 -m pytest tests/ -q --ignore=tests/test_remote_tui.py` → 308 passed, 14 skipped, 5 failed — the 5 `test_remote_sdl` failures and the `test_remote_tui.py` collection error are pre-existing (verified via `git stash` on the clean tree).
+- Verified against the real `brain.json`: `locked` now keeps `lock_duration_s: 15.0`, `intent` keeps `10.0`, `spontaneous` keeps `3.0`, `agitated` keeps its `1.0` default; a `dwell_s: 7.5` edit on `locked` survives; explicit null is treated as absent; string/bool values raise `ValueError`.
+
+### Decisions and Caveats
+
+- The client side was already fixed earlier (the 2026-10-27 "Fix brain-tab save wiping per-behavior stay/triggers" entry): `_commitBrainDom` reads the fields from the DOM. This entry fixes the remaining server-side loss.
+- The change landed in commit `f3db044` ("stufff"), which also contains the user's own `editor.html` work.
+- A **running core must be restarted** to pick up the fix (the old process still runs the old `config.py` code; a `RELOAD_BRAIN` hot-reload only reloads the config data, not the code). After restart, the existing `brain.json` edits (locked=15, intent=10, spontaneous=3) take effect immediately — no re-save needed.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+- If the params are still "lost" after a core restart, check that the core process actually restarted (old code in memory keeps the old validator). Verify with: `python3 -c "import importlib.util, json; ..."` against `validate_brain_config` as done in this task, or read `machine.behavior_params` from the running core.
+- The editor's per-behavior controls: `stay` / `triggers` / `dwell_s` / `lock_duration_s` are on every behavior card in the brain tab (`brainBh<Name>Stay|DwellS|LockDurS` inputs + trigger checkboxes).
+
+---
+
 ## 2026-10-28 — UI: collapse bridge-zone nodes in the flow tab (small purple dot)
 
 ### Status

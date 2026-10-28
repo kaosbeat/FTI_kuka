@@ -6879,14 +6879,18 @@ function flowDragEnd(ev) {
   const name = d.from;
   const svg = $("flowSvg");
   const pt = svgPoint(svg, ev);
-  if (!d.moved) {
+    if (!d.moved) {
     // A click (no move): open the action editor if the drag started on a row; a
-    // collapsed bridge node (no rows) opens its single action's editor; else select.
+    // collapsed bridge node (no rows) selects on the first click (properties in the
+    // right pane) and opens its single action's editor on a second click (already
+    // selected); else select.
     if (d.srcAction) openActionEditor(name, d.srcAction);
     else if (isBridgeZone(name)) {
-      const an = Object.keys(TABLE.zones[name].actions || {})[0];
-      if (an) openActionEditor(name, an);
-      else flowSelect({ type: "node", zone: name });
+      if (FLOW.sel && FLOW.sel.type === "node" && FLOW.sel.zone === name) {
+        const an = Object.keys(TABLE.zones[name].actions || {})[0];
+        if (an) openActionEditor(name, an);
+        else flowSelect({ type: "node", zone: name });
+      } else flowSelect({ type: "node", zone: name });
     } else flowSelect({ type: "node", zone: name });
     return;
   }
