@@ -1,5 +1,309 @@
 # Task Handoff Log
 
+## 2026-10-28 — Flow validate button: comprehensive `flowProblems()` (every stop-problem, not just dead-ends)
+
+### Status
+
+Completed
+
+### Summary
+
+Extended the flow tab's **validate** button from a dead-end-only check to a comprehensive
+`flowProblems()` that enumerates **everything in the zone table that could make the robot
+stop moving**. It reuses the existing dead-end mirror (`deadEndProblems()`) and adds a
+`_linkProblemJS()` helper (mirrors the core's `_action_entry_valid` refusal reasons) plus
+new checks for the other freeze mechanisms the core enforces: anchor poses outside the
+safezone/hardware (clamped → unreachable → freeze), `axis_bands` not overlapping the
+safezone (servo clamp floor empty → freeze), zero zone/action speed (moves at 0), and zones
+with no enabled action (cannot be entered). The button now lists every problem tagged by
+kind, marks the offending nodes (red outline via the existing `applyFlowHighlight` →
+`FLOW.badProblems` → `.fbad` path), and clicking one navigates to the zone.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - Added `_linkProblemJS(entry, zones)` after `deadEndProblems()` — returns a
+    human-readable reason for an invalid next/exit target, or null. Mirrors the core's
+    `zones._action_entry_valid` (zone exists + enabled, action exists + enabled).
+  - Added `flowProblems()` — walks every zone/action and pushes `{zone, action?, kind,
+    message}` for each of: `dead-end` (via `deadEndProblems()`), `red-link` (action `next`
+    + zone `exits` via `_linkProblemJS`), `safezone`/`hardware` (every anchor pose axis vs
+    `z.safezone[ax]` and `HW_LIMITS[ax]`), `band` (`axis_bands` not overlapping the
+    safezone, same overlap test as `zoneOverlapGaps`), `speed` (zone/action speed ≤ 0), and
+    `no-actions` (no enabled action in the zone). Reuses `actionPoses(a)`, `AXES`,
+    `HW_LIMITS` (already loaded from `/api/limits`).
+  - Rewired `$("flowValidate").onclick` to call `flowProblems()` instead of
+    `deadEndProblems()`; each panel item is now `[kind] zone/action: message` (was
+    `zone: message`); the "no problems" note reads "no problems — the flow will keep the
+    robot moving". Click-to-navigate unchanged.
+  - Updated the `#flowValidate` button `title` to describe the full stop-problem scope.
+- `realtimecontrol/rtr/README.md`: rewrote the flow-tab validate-button section (was
+  "checks dead-ends only") to document `flowProblems()` and the seven problem kinds, and
+  note that the authoritative rejection is still the core's 400 on `POST /api/zones`.
+
+### Documentation
+
+- `realtimecontrol/rtr/README.md` updated: the flow-tab validate-button section now
+  documents `flowProblems()` and enumerates the seven problem kinds (dead-end, red-link,
+  safezone, hardware, band, speed, no-actions) with the freeze mechanism for each.
+
+### Architecture
+
+- No architectural impact. This is a client-side (browser JS) extension of the existing
+  flow-validation UI. The JS remains a separate code path from the Python core (the browser
+  cannot run the core validator); it is a best-effort mirror so the operator sees stop
+  problems before Save. The authoritative rejection is unchanged: the core's
+  `validate_state_data` (400 on `POST /api/zones`). The new checks mirror core behavior
+  (`_action_entry_valid` for red-links; safezone/hardware clamp, axis_bands overlap, speed,
+  and enabled-action rules for the others) but are not a substitute for core validation.
+
+### Validation
+
+- `node --check` on the extracted inline `<script>` of `editor.html` → **SYNTAX OK**.
+- Functional test (extracted `flowProblems`/`deadEndProblems`/`_linkProblemJS`/
+  `_actionEntryValidJS`/`_hasValidNextJS`/`_hasValidExitJS`/`actionPoses` + `AXES`/
+  `HW_LIMITS` into a node harness with a mock `TABLE`): a table with one healthy zone pair,
+  one dead-end, one red-link zone, one out-of-safezone/hardware pose, one non-overlapping
+  band, one zero-speed zone+action, and one no-actions zone produced exactly the expected
+  counts per kind (dead-end 1, red-link 2, safezone 2, hardware 1, band 1, speed 2,
+  no-actions 1) and **zero** false positives on the healthy zones. **ALL ASSERTIONS PASS**.
+- Confirmed `applyFlowHighlight` keys off `p.zone` only (line ~7329), so every new problem
+  object (all carry `zone`) marks its node correctly.
+
+### Decisions and Caveats
+
+- `flowProblems()` is a **superset** of `deadEndProblems()` (it calls it) — dead-ends are
+  not double-reported; the other kinds are additive.
+- The safezone/hardware checks flag **every** out-of-range anchor pose axis (not just
+  inter-zone hand-off poses), because the core clamps *every* commanded target to
+  safezone ∩ hardware. This is more aggressive than the existing `edgeConflict()`
+  (which only checks connection poses) but matches the freeze mechanism.
+- `no-actions` fires when a zone has no enabled action; it is informational (the core
+  still lets you save such a zone, but `trigger_action` refuses to enter it).
+- The JS is a mirror, not the source of truth; a zone that passes `flowProblems()` can
+  still be rejected by the core (structural rules, bridge/variable-axis invariants, etc.).
+  Conversely the core can accept a table the JS flags (e.g. a dead-end the JS mirrors but
+  the core only rejects on Save).
+
+### Next Task
+
+Manual browser check: open the flow tab, click **validate**, confirm the problem list shows
+the tagged kinds (not just dead-ends), that offending nodes get the red `.fbad` outline, and
+that clicking a problem selects + centres on the zone.
+
+### Instructions for the Next Task
+
+- `realtimecontrol/rtr/editor.html`: the new functions are `flowProblems()` (~line 6538),
+  `_linkProblemJS()` (~line 6509), and the rewired `$("flowValidate").onclick` (~line 8066).
+  The `#flowProblems` panel is at line ~534; the button `title` at line ~528. To adjust a
+  problem kind, edit the corresponding block in `flowProblems()`. Keep the JS mirrors in
+  lock-step with `zones.py` if the core's validation rules change.
+
+## 2026-10-28 — Poses tab: dedicated 3D pose authoring (stable ghost, pose-drag + number inputs, clamp/copy/load)
+
+### Status
+
+Completed
+
+### Summary
+
+Added a dedicated **poses** tab to `editor.html` for stable 3D IK pose authoring. The ghost is the authored (scratch) pose, driven by pose-drag + the six number inputs, never by the 20 Hz WS state stream. Reuses the `Robot3D` singleton via view-gating (the same mount/unmount pattern as the validate tab): the `#robot3d` DOM node moves into the poses mount on entry, the WS `Robot3D.update` is gated with `!posesView`, and the poses tab owns the ghost via pose-drag + number inputs. The real arm is hidden while authoring.
+
+Features:
+- **3D view** with the ghost = the authored pose (real arm hidden).
+- **6 number inputs** (A1..A6) for the scratch pose; editing drives the ghost + drag handle.
+- **Pose-drag**: drag the flange handle to shape the pose (IK solves, writes back to the scratch pose).
+- **Zone dropdown + "clamp to safezone"** button (clamps each axis to the selected zone's safezone).
+- **"copy pose"** button → sets `POSE_CLIP` (the existing in-memory clipboard); the AE paste button in the zones/flow action editor already handles pasting.
+- **"load from"** picker → seeds the scratch from any existing zone/action's first pose.
+- **FK readout** (flange xyz) for the current scratch pose.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - Header: added `<button id="tabPoses">poses</button>` after the zones tab.
+  - Added `<main id="posesMain">` (3D mount `#posesRobot3dMount`, 6 inputs `#posesInputs`, zone select `#posesZoneSel` + clamp button, copy button, load picker + button, FK readout `#posesInfo`).
+  - Added `posesView` state var; wired `switchView("poses")` (display/className, the 3-way mount/unmount, drag enable/disable, real-arm hide/restore).
+  - Gated the WS `Robot3D.update` with `!posesView` (the authored ghost must not be overwritten by the live stream).
+  - Added `mountRobot3dPoses()` (moves `#robot3d` into the poses mount; `unmountRobot3dValidate()` returns it home).
+  - Added the poses-tab JS: `scratchPose` state, `buildPosesInputs`/`updatePosesInputs`/`posesInputOnInput`, `posesOnPose`/`posesOnEnd`, `buildPosesSelectors`, `posesClamp`, `posesCopy`, `posesLoad`, `updatePosesInfo`, `posesEnter`/`posesLeave`.
+  - `syncPoseDrag`: added `!posesView` to the `want` condition so the zones-tab drag is disabled in the poses view.
+  - Wired the poses tab + button onclick handlers in the boot section.
+- `realtimecontrol/rtr/README.md`: added the poses tab to the editor capabilities list and a dedicated section (scratch-pose model, drag, clamp/copy/load, view-gating).
+
+### Documentation
+
+- `realtimecontrol/rtr/README.md` updated: the editor capabilities list (new poses-tab bullet) and a dedicated **poses** tab section (authored scratch pose, pose-drag + number inputs, the `!posesView` WS gate, clamp/copy/load, session-only scratch).
+
+### Architecture
+
+- The poses tab extends the existing **view-gated singleton** pattern: the `Robot3D` singleton is shared between the zones, validate, and poses tabs; the `#robot3d` DOM node is moved between mounts and the WS `Robot3D.update` is gated per-view. The poses tab is the third owner of the ghost (zones = target pose, validate = inspected pose, poses = authored pose). No change to `rtr3d.js` (the pose-drag API `enablePoseDrag`/`disablePoseDrag`/`poseDragSetPose` is reused as-is) or to the pose data shape.
+
+### Validation
+
+- `node --check` on the extracted inline `<script>` of `editor.html` (7261 lines) → **SYNTAX OK**.
+- Verified all poses references resolve (grep): `posesMain`/`posesRobot3dMount`/`posesZoneSel`/`posesLoadSel`/`posesInputs`/`posesInfo`/`posesClamp`/`posesCopy`/`posesLoad`/`posesEnter`/`posesLeave`/`posesView`/`scratchPose`/`posesDragOn`/`mountRobot3dPoses`.
+- The poses tab is a client-only feature (browser JS in an HTML file); there is no Python test for it. The pose-drag + IK path it reuses was already validated against the Python reference (see the earlier IK-drag handoff entry).
+
+### Decisions and Caveats
+
+- **Option 1 (reuse the singleton + view-gating)** was chosen over a `rtr3d.js` factory refactor: minimal diff, no new 3D scene, and the existing mount/unmount + WS-gate pattern already proven by the validate tab.
+- The scratch pose is **session-only** (not persisted); the user copies it into a zone/flow action to persist it (via the existing `POSE_CLIP` + AE paste button). Drag `onEnd` does NOT auto-persist.
+- `posesLeave()` restores the real arm to visible (`setRobotRealVisible(true)`); the validate tab's `valMeshRobReal` toggle is a separate concern, so a minor visibility desync can occur when round-tripping poses → validate (the user can re-toggle).
+- The "load from" picker splits `zn/an` on the first `/`; zone/action names containing `/` would break the split (edge case; current zone names are simple identifiers).
+
+### Next Task
+
+Manual browser check: enter the poses tab, confirm the real arm is hidden and the ghost is the authored pose, drag the handle, edit the number inputs, clamp to a zone safezone, copy the pose, and paste it into a zone/flow action.
+
+### Instructions for the Next Task
+
+- The poses tab JS lives in `editor.html` (the `// Poses tab: dedicated 3D pose authoring` section, ~line 6290). The scratch pose is `scratchPose` (6-value deg array). `posesEnter`/`posesLeave` own the 3D node + drag + real-arm visibility. `POSE_CLIP` is the shared clipboard (set by `posesCopy`, consumed by the AE `pastePose`).
+- To test: open `editor.html`, click the **poses** tab. The real arm should disappear and the ghost should show the scratch pose. Drag the flange handle (IK shapes the pose); edit the A1..A6 inputs; pick a zone and click **clamp to safezone**; click **copy pose**, then open a zone/flow action editor and click **paste pose**.
+
+## 2026-10-28 — Auto-mode `(zone, None)` stall: re-arm + watchdog + STRICT dead-end validation + flow-editor "validate" button
+
+### Status
+
+Completed
+
+### Summary
+
+Implemented the approved combined recovery for the auto-mode `(zone, None)` stall (the state where `current_zone` is set, `current_action is None`, no `pending`, no transition — the robot holds the last pose forever) and added the user-mandated STRICT dead-end validation plus a flow-editor "validate" button.
+
+Three-layer recovery (primary → prevention → backstop):
+- **#1 re-arm (primary):** `brain.py` `_rearm_stuck` plays an enabled + non-blocked action in the current zone (prefers a looping one) to escape the hold. It must skip `_blocked_candidates`; if none is valid it is a no-op and lets the watchdog backstop act.
+- **#4 dead-end validation (prevention, STRICT):** `zones.py` `_validate_no_dead_ends` now **rejects** zone data that would dead-end (a non-looping action with no valid `next` in a multi-action zone with no valid `exit`), so the bad data never loads. Single-action zones are exempt (the runtime auto-returns them).
+- **#3 watchdog (backstop):** `brain.py` `_handle_stuck` counts stuck ticks; at `_stuck_threshold()` (default 10, configurable via `autonomy.stuck_threshold`) it clears `_blocked_candidates` so the next tick can re-plan.
+
+The client (`editor.html`) mirrors the core's dead-end check so Save is blocked and the flow tab's new **validate** button surfaces the same problems (list, red-mark offending nodes, click-to-navigate).
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/brain/brain.py`:
+  - `__init__`: added `self._stuck_ticks = 0` and `self._blocked_candidates: set`.
+  - `_autonomy_tick`: split the early-bait (a `(zone, None)` stall increments `_stuck_ticks` and calls `_handle_stuck`; a productive tick resets it to 0).
+  - `_handle_stuck(zone)`: increments `_stuck_ticks`; tries `_rearm_stuck` (resets on success); at threshold, clears `_blocked_candidates` and logs.
+  - `_rearm_stuck(zone)`: picks an enabled, non-blocked action (prefers looping) and plays it; returns whether it acted.
+  - `_stuck_threshold()`: returns `autonomy.stuck_threshold` (a number > 0) else 10.
+- `realtimecontrol/rtr/rtr/state/zones.py`:
+  - Added `_zone_enabled`, `_action_table`, `_action_entry_valid`, `_has_valid_next`, `_has_valid_exit`, `_validate_no_dead_ends` and wired `_validate_no_dead_ends` into `validate_state_data` (after the per-zone checks). A target is valid when the zone exists + is enabled and the action is named, exists, and is enabled (`loop`/`enabled` both default true).
+- `realtimecontrol/rtr/rtr/brain/config.py`: `validate_brain_config` now **preserves** the optional `autonomy.stuck_threshold` (previously dropped, which silently forced the default 10).
+- `realtimecontrol/rtr/editor.html`:
+  - Added JS dead-end helpers `_actionEntryValidJS` / `_hasValidNextJS` / `_hasValidExitJS` / `deadEndProblems()` (exact mirror of `zones._validate_no_dead_ends`: `loop` default true, `enabled` default true, single-action zones exempt).
+  - Wired dead-end problems into `validate()` so **Save** is blocked (mirrors the core's 400).
+  - Added the flow-tab **validate** button (`#flowValidate`) + a `#flowProblems` panel: lists problems, marks offending nodes (`.fbad` red stroke via `applyFlowHighlight` + `FLOW.badProblems`), and clicking a problem selects the zone, opens its detail form, and centres the view (`flowCenterOn`).
+  - Added `flowCenterOn(name)` (pans the viewBox to centre a node, keeping zoom). Added `.flowProblems` / `.fpItem` / `.fbad` CSS and a `FLOW.badProblems` field.
+- `realtimecontrol/rtr/README.md`: documented the client-side dead-end mirror (the "valid target" rule + Save-blocked) and the flow-tab **validate** button (mark + list + click-to-navigate).
+- `realtimecontrol/rtr/tests/test_stuck_recovery.py` (new, 12 tests): re-arm ×3, watchdog ×2, threshold config, stuck-reset, validation ×5, trigger A.
+- `realtimecontrol/rtr/tests/test_autoreturn.py` (new): conformed to STRICT validation — the multi-action "hold" fixture is now an **expected-rejected** case (was a passing "does not auto-return" case under the legacy hold).
+- `realtimecontrol/rtr/tests/test_transition.py`: added valid `next` links to the non-looping actions in the `_shared_pose_zones` fixtures so the strict validation accepts them (3 tests).
+
+### Documentation
+
+- `README.md` updated: the client-side dead-end-validation section and the flow-tab **validate** button section (both new). The core's dead-end rule and the "hold is the operator's choice point" runtime semantics are already documented in the `zones.py` / `machine.py` docstrings (unchanged).
+
+### Architecture
+
+- Three-layer recovery is the architectural change: **prevention** (STRICT validation rejects dead-end data at load) is the new first line; **re-arm** (primary runtime escape) and the **watchdog** (backstop that clears blocked candidates) remain for the cases validation can't catch (e.g. a zone whose action is disabled/renamed at runtime, or a blocked candidate). The client mirrors the prevention layer so the operator sees the problem before Save. No change to the data shape, the `reload_zones` hot-reload path, or the `POST /api/zones` 400 contract.
+
+### Validation
+
+- `python -m pytest tests/test_stuck_recovery.py tests/test_autoreturn.py tests/test_transition.py -q` → **25 passed**.
+- `python -m pytest tests/ --ignore=tests/test_remote_tui.py -q` → **327 passed, 14 skipped, 5 failed** — the 5 `test_remote_sdl.py` failures are pre-existing (verified earlier via `git stash` on the clean tree); the `test_remote_tui.py` collection error is also pre-existing (imports `action_kind` from `rtr.flow`, which does not exist).
+- `node --check` on the extracted inline `<script>` of `editor.html` → SYNTAX OK (the JS dead-end helpers, `validate()` wiring, the validate button, `flowCenterOn`, and `applyFlowHighlight` all parse).
+- Verified the JS `deadEndProblems()` semantics match `zones._validate_no_dead_ends` line-for-line (defaults `loop=true`/`enabled=true`, single-action exemption, valid-target rule).
+
+### Decisions and Caveats
+
+- **STRICT was the user's explicit decision** (via the clarification question): reject the hold data at load rather than keep the legacy "hold = operator's choice point" and rely only on the runtime re-arm. The runtime re-arm/watchdog are retained as a backstop for runtime-only dead-ends (disabled/renamed action, blocked candidate) that validation at load cannot see.
+- The JS mirror is a **separate** code path from the Python core (the browser can't run the Python validator). It is kept in lock-step with `zones._validate_no_dead_ends`; if the core rule changes, both must be updated. The authoritative rejection is still the core's 400 on `POST /api/zones`.
+- The flow-tab **validate** button checks **dead-ends only** (the same check Save blocks on); the full `validate()` (poses, exits, modes, exitposes) still runs on Save.
+- `ruff`/`mypy` are not in the active pyenv; Python syntax was verified via `ast.parse` + the full test suite. The JS was verified via `node --check`.
+
+### Next Task
+
+No immediate next task identified. All four approved items are done: STRICT dead-end validation (core + client), the re-arm + watchdog backstop, the flow-editor problem-node marking, and the "validate flow" button (list + click-to-navigate).
+
+### Instructions for the Next Task
+
+- To verify the validate button in a browser: open the flow tab, click **validate**; offending nodes turn red, a problem list appears below the canvas, and clicking a problem selects the zone and centres it. A clean flow shows "no problems".
+- If the dead-end rule changes in `zones.py`, update `editor.html` `deadEndProblems()` / `_actionEntryValidJS` / `_hasValidNextJS` / `_hasValidExitJS` to match, and re-run `tests/test_stuck_recovery.py`.
+- The 5 `test_remote_sdl.py` failures and the `test_remote_tui.py` collection error are a separate, pre-existing workstream (UI text drift / missing `action_kind` in `rtr.flow`) — not related to this work.
+
+---
+
+## 2026-10-28 — Interactive 3D pose drag: drag the ghost flange to author a pose (IK fill)
+
+### Status
+
+Completed
+
+### Summary
+
+Implemented interactive pose authoring in the zones-tab 3D view: the user drags the robot's end-effector (flange) and IK fills the currently-selected 6-joint pose row. The drag loop is owned by `rtr3d.js` (pointer mechanics + IK solve + ghost drive + handle snap); `editor.html` supplies the seed pose, hardware limits, and write-back callbacks.
+
+Architecture (Option A — chosen): `rtr3d.js` exposes a pose-drag API; `editor.html` wires it to the selected anchor. On pointerdown over the handle, OrbitControls is disabled, the pointer ray is projected onto a camera-facing plane through the flange (normal = camera → flange), and each pointermove runs `KR60IK.ikSolve(seed, target, { limits, lam:0.1, maxIter:60, tol:0.0004 })`, seeding from the previously solved pose so the arm stays on one branch. The solved pose drives the ghost via `setTarget`, the handle snaps to `fkPos(solved)`, and `onPose` writes all 6 concrete numbers back to the anchor. On pointerup, OrbitControls is re-enabled and `onEnd` resyncs the UI.
+
+A drag writes all 6 axes as concrete numbers (a free `"x"` axis becomes concrete during the drag; the user can re-mark `"x"` in the row afterwards). The editor persists via its explicit save button — `onEnd` does **not** auto-persist; it resyncs the form/bars/ghost and sets `saveMsg` = "pose updated — save to persist".
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr3d.js`:
+  - Added the pose-drag state (`poseDrag`, `poseDragHandle`, `pendingPoseDragOpts`) and the `update()` ghost guard (skips the state-stream `s.target` branch while `poseDrag.active`, so the IK drag owns the ghost; the 20Hz live-state drive doesn't fight it).
+  - Added `pointerNdc`, `poseDragOnDown/Move/Up`, `enablePoseDrag`, `disablePoseDrag`, `poseDragSetPose`; added `enablePoseDrag`/`disablePoseDrag`/`poseDragSetPose` to the returned API.
+  - Handle = `THREE.Group` with an invisible hit sphere (r=0.09) + visible sphere (r=0.045, color `0x37d0ff`) at the ghost flange; positioned via `KR60IK.fkPos(pose)` (Z-up world frame = THREE scene frame).
+  - **Boot race fix:** `enablePoseDrag` is called at boot (before the STL arm finishes loading, `running` is still false). Added a `pendingPoseDragOpts` mechanism: if `running`/`scene` aren't ready yet, the opts are stored and applied automatically once `running = true` (in the arm-build path). `enablePoseDrag` returns `true` when accepted (immediately or pending) and `false` only when `ik.js` is missing. `disablePoseDrag` clears the pending opts.
+- `realtimecontrol/rtr/editor.html`:
+  - Added `<script src="ik.js"></script>` after `rtr3d.js` (inline script now starts line 748; inline JS = lines 749–7717).
+  - Tagged pose rows with `pr.dataset.an = an; pr.dataset.pi = pi;` in `buildActionList` so the selected anchor's row inputs can be found without rebuilding the form during a drag.
+  - Added the pose-drag section after `stepGhost`: `POSE_DRAG_HOME`, `poseDragOn`, `updatePoseRowInputs`, `updateBarMarksFromPose`, `poseDragOnPose`, `poseDragOnEnd`, `syncPoseDrag(force)`.
+  - `updatePoseRowInputs()` updates the 6 inputs + `frozenX` class in place (form is not rebuilt during a drag). `updateBarMarksFromPose(pose)` moves the `#bmark{i}` markers without rebuilding the bars DOM (drag fires per pointer move). `poseDragOnPose` writes all 6 concrete numbers (rounded to 3 decimals) to `a.poses[pi]`.
+  - `syncPoseDrag(force)`: `want = !validateView && !!selectedZone && !!selectedAction && ghostPoses(selectedAction).length > 0`; cheap re-seed via `poseDragSetPose` when already on (no `force`), else `enablePoseDrag` (rebuilds the handle, picks up fresh `HW_LIMITS`).
+  - Wired `syncPoseDrag()` into all selection/state hooks: `selectZone` (after `updateGhost`), the zones-tab default `onChanged`, `copyAction` else-branch, `closeActionEditor` else-branch, tab switch (validateView → disable; else → `syncPoseDrag()`), `addR` handler, `loadLimits` (if `poseDragOn` → `syncPoseDrag(true)`).
+- `/tmp/kilo/ik_test.js` (scratch): Node harness — fixed the Jacobian finite-difference check to perturb in **radians** (convert to degrees for FK, divide by the radian step) to compare against the per-radian Jacobian; the earlier version perturbed in degrees (a 180/π ≈ 57× error).
+- `/tmp/kilo/drag_sim.js` (scratch): Node simulation that mirrors the rtr3d.js drag math (camera-facing plane → pointer projection → IK seed chain → FK snap) without THREE, to verify the pipeline is stable.
+
+### Documentation
+
+- None required — the pose-drag contract is documented in the header comment added to `rtr3d.js` (the drag loop, the camera-plane projection, and the `ik.js` dependency) and the section comment in `editor.html` (what a drag writes and the save-to-persist model).
+
+### Architecture
+
+- The drag loop is split by responsibility: `rtr3d.js` owns the 3D/pointer/IK mechanics (it already owns the scene, camera, OrbitControls, ghost, and `setTarget`), and `editor.html` owns the data (which anchor, its seed pose, `HW_LIMITS`, and where to write the result). `ik.js` remains a pure THREE/DOM-free module consumed by both.
+- The `update()` ghost guard is the only change to the existing 20Hz state-driven ghost path: while a drag is active the drag's `setTarget` owns the ghost, so the live-state stream doesn't fight the IK. This keeps the two drive sources from oscillating.
+- OrbitControls gating is safe (verified in the local `OrbitControls.js`): its `pointerdown` listener registers before `poseDragOnDown` (created at init vs. later `enablePoseDrag`), so it starts its drag state first; disabling `controls.enabled` in `poseDragOnDown` makes its `pointermove` a no-op for the rest of the drag, and its `onPointerUp` cleans up state regardless of `enabled`.
+
+### Validation
+
+- `node --check realtimecontrol/rtr/ik.js` → SYNTAX OK.
+- `node --check realtimecontrol/rtr/rtr3d.js` → SYNTAX OK.
+- `sed -n '749,7717p' editor.html > /tmp/kilo/editor_inline.js && node --check /tmp/kilo/editor_inline.js` → SYNTAX OK (inline JS extracted after the edits).
+- `node /tmp/kilo/ik_test.js` → **PASS**: HOME fk pos `[1.17, 0.0, 1.64]`; displacement cases 0.05/0.15/0.30/0.45 all match the Python reference (iters 2/3/3/4, pose max |err| < 5e-7, residuals 8.27e-5/2.14e-5/1.59e-4/9.53e-5); Jacobian analytic-vs-finite-difference max |err| = 5.849e-7 (< 1e-3).
+- `node /tmp/kilo/drag_sim.js` → pipeline verified: within the reachable workspace the handle tracks the pointer exactly (steps 1–6, err < 0.0002), the pose is continuous and stays inside `HW_LIMITS` every step. When the pointer leaves the reachable volume (steps 7–10) the IK correctly moves the handle to the closest reachable pose and holds it there — it never commands an impossible pose. (The harness's "FAIL" lines for steps 7–10 are the expected workspace-boundary condition, not a defect.)
+
+### Decisions and Caveats
+
+- **Workspace boundary (expected behavior):** dragging the pointer beyond what the arm can physically reach stops the handle at the closest reachable pose (IK can't converge further; it holds the last valid pose). This is correct 6-DOF behavior and matches a real robot: you can't command an unreachable pose. No clamping-to-nearest-reachable-point was added (the IK already degrades gracefully to the boundary); the pointer/handle visually separate only when the pointer is outside the reachable volume, which the user can read as "too far."
+- **Position-only IK (3 of 6 DOF):** orientation is not solved; the free axes are left to the existing behavior/axis system. A drag writes all 6 concrete numbers so the arm stays on a single branch.
+- **Persistence:** `onEnd` does not auto-save; the user clicks the existing save button. `saveMsg` flags the dirty state.
+- **Boot race:** the editor calls `syncPoseDrag` → `enablePoseDrag` at boot, before the STL arm is built. The `pendingPoseDragOpts` mechanism defers the enable until `running = true` so the handle comes up once the arm loads.
+- **TDZ note:** `poseDragOn` is declared later in the file but referenced in `loadLimits` at call time — safe (function bodies are evaluated after the full script loads).
+- **Pre-existing unrelated failures** (not caused by this work — this session only touched `rtr3d.js`, `editor.html`, `ik.js` and the handoff doc):
+  - `tests/test_transition.py`: 5 failures, all from the **uncommitted** dead-end validation added to `rtr/state/zones.py` (the `ValueError` at zones.py:703, `_has_valid_exit`). The test fixtures use zones the new validation now rejects. This is prior-session work, not the JS drag feature. `tests/test_bridge_behavior.py` fully passed (12/12 of the combined run).
+  - `tests/test_remote_tui.py` collection error; `tests/test_remote_sdl.py` failures at HEAD; `tests/test_sound_out_ports.py::test_reconcile_closes_stale_specs_on_reload` fails due to earlier uncommitted `rtr/sound/sound.py` changes.
+
+### Next Task
+
+Optional regression check: run the axis-system / `"x"`-home pytest suite (`tests/test_transition.py`, `tests/test_bridge_behavior.py`) to confirm no regression from the editor/rtr3d edits. No implementation work remains for the drag feature.
+
+### Instructions for the Next Task
+
+- Run `cd realtimecontrol/rtr && python -m pytest tests/test_transition.py tests/test_bridge_behavior.py` and confirm the previously-passing 52/skipped-9 result is unchanged.
+- If a regression appears, the suspect surface is the `update()` ghost guard in `rtr3d.js` (the only change to the existing ghost path) or the `syncPoseDrag` hooks in `editor.html`.
+
+---
+
 ## 2026-10-28 — IK core: pure JS forward kinematics + geometric Jacobian + DLS IK (validated vs Python)
 
 ### Status

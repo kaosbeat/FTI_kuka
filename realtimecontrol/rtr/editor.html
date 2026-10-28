@@ -158,6 +158,16 @@
   #flowSvgWrap { height: 560px; border: 1px solid var(--border); border-radius: 6px;
                  background: #0d0f13; overflow: hidden; }
   #flowSvg { width: 100%; height: 100%; display: block; }
+  .flowProblems { margin-top: 8px; border: 1px solid var(--border); border-radius: 6px;
+                  background: #0d0f13; padding: 8px 10px; max-height: 240px; overflow: auto; }
+  .flowProblems h3 { margin: 0 0 6px; font-size: 13px; }
+  .flowProblems .fpItem { display: block; width: 100%; text-align: left; cursor: pointer;
+                           font-size: 12px; padding: 4px 6px; border: 1px solid var(--border);
+                           border-radius: 4px; background: #161a22; color: var(--text); margin-bottom: 4px; }
+  .flowProblems .fpItem:hover { border-color: var(--accent); }
+  .flowProblems .fpItem.ok { color: var(--dim); cursor: default; }
+  .fnode.fbad .fnodeBody { stroke: #e05555; stroke-width: 2.5; }
+  .fnode.fbad .fnodeLabel { fill: #e05555; }
   .fnodeBody { fill: #22262f; stroke: var(--border); stroke-width: 1.5; }
   .fnodeLabel { fill: var(--text); font-size: 15px; font-weight: bold; }
   .fnodeSub { fill: var(--dim); font-size: 11px; }
@@ -368,6 +378,7 @@
   <input id="host" value="ws://localhost:8765" spellcheck="false">
   <button id="connect">connect</button>
   <button id="tabZones" class="active">zones</button>
+  <button id="tabPoses">poses</button>
   <button id="tabPatches">patches</button>
   <button id="tabMidi">midi</button>
   <button id="tabFlow">flow</button>
@@ -416,6 +427,26 @@
     </div>
     <h3>live state</h3>
     <div id="liveState"><span style="color:var(--dim);font-size:13px">waiting…</span></div>
+  </section>
+</main>
+
+<main id="posesMain" style="display:none">
+  <section>
+    <h2>poses — 3d authoring</h2>
+    <div id="posesRobot3dMount"></div>
+    <div class="row" style="margin-top:6px"><span id="posesInfo" style="font-size:12px;color:var(--dim)">drag the handle or edit the values</span></div>
+    <h3>scratch pose (A1..A6)</h3>
+    <div class="row" id="posesInputs"></div>
+    <div class="row" style="margin-top:6px">
+      <span style="font-size:12px;color:var(--dim)">zone</span>
+      <select id="posesZoneSel"></select>
+      <button id="posesClamp" class="small">clamp to safezone</button>
+      <button id="posesCopy">copy pose</button>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <select id="posesLoadSel"></select>
+      <button id="posesLoad" class="small">load into scratch</button>
+    </div>
   </section>
 </main>
 
@@ -494,11 +525,13 @@
       <button id="flowDelZone" class="small">remove</button>
       <button id="flowAutoLayout" class="small">auto layout</button>
       <button id="flowFit" class="small">fit view</button>
+      <button id="flowValidate" title="Check the flow for everything that could stop the robot (dead-ends, broken links, poses outside the safezone/hardware, zero speed, ...); click a problem to jump to it">validate</button>
       <span style="font-size:11px;color:var(--dim)">drag a node onto another to draw an arrow · click a node/arrow to select · wheel = zoom · middle-drag = pan</span>
     </div>
     <div id="flowSvgWrap">
       <svg id="flowSvg"></svg>
     </div>
+    <div id="flowProblems" class="flowProblems" style="display:none"></div>
   </section>
   <section>
     <h2 id="flowDetailTitle">flow detail</h2>
@@ -744,6 +777,7 @@
 <script src="hydra-synth.js"></script>
 <script src="collide.js"></script>
 <script src="rtr3d.js"></script>
+<script src="ik.js"></script>
 <script>
 "use strict";
 
@@ -835,6 +869,7 @@ let groupsView = false;
 let camView = false;
 const grpOpen = {};  // group name -> bool (zone-list collapse; default open)
 let validateView = false;
+let posesView = false;
 let robotconfigView = false;
 let valScanTimer = null;   // active scan animation frame id
 // Flow-tab state. Node positions + the user's viewBox persist to zones.json under
@@ -849,6 +884,7 @@ const FLOW = {
   layoutKey: null, // the zone-name set the current layout was computed for
   view: null,      // {x,y,w,h} viewBox — the user's zoom/pan (null until first fit)
   pan: null,       // {ctm, startScreen, startView} middle-drag pan state
+  badProblems: [], // [{zone, action, message}] from the validate button (marks .fbad nodes)
 };
 // The zone-name set the current layout was computed for (the layoutKey value).
 function flowLayoutKey() { return Object.keys(TABLE.zones).sort().join(","); }
@@ -1230,7 +1266,9 @@ function connect() {
       // pose setter); the core's live pose must not overwrite an inspected pose.
       // The core is in manual mode (holding its pose) while the tab is open, so
       // skipping its drive here keeps the inspected pose stable.
-      if (!validateView) Robot3D.update({ joints: m.joints, target: m.target, patch: m.patch });
+      // In the poses tab the ghost is the authored pose (pose-drag + inputs); the
+      // core's live stream must not overwrite it. Same rationale as the validate tab.
+      if (!validateView && !posesView) Robot3D.update({ joints: m.joints, target: m.target, patch: m.patch });
       // Render-page UI state (HUD / code-overlay / camera-overlay toggles).
       if (m.render_ui) {
         renderUi = {
@@ -1365,6 +1403,10 @@ async function loadLimits() {
     }
   } catch (e) {}
   buildHwLimitsRow();
+  // The pose-drag IK clamps to HW_LIMITS; pick up freshly loaded limits if the
+  // handle is already up (the fallback floor is identical, so this is a no-op
+  // unless the API reports something different).
+  if (poseDragOn) syncPoseDrag(true);
 }
 
 // Render the per-axis hardware limits as a compact reference row (a static floor —
@@ -5034,7 +5076,7 @@ function copyAction(zn, an) {
   z.actions[nn] = copy;
   meshNewAction(zn, nn);  // wire the copy into the zone's intra-zone mesh (it + siblings)
   if (flowView) { flowRender(); buildFlowDetail(); }
-  else { selectedAction = nn; buildZoneForm(); buildZoneList(); }
+  else { selectedAction = nn; buildZoneForm(); buildZoneList(); syncPoseDrag(); }
 }
 
 // ---------------------------------------------------------------------------
@@ -5245,7 +5287,7 @@ function closeActionEditor() {
   $("actionEditor").classList.remove("open");
   AE.zone = null; AE.action = null;
   if (flowView) { flowRender(); buildFlowDetail(); }
-  else buildZoneForm();
+  else { buildZoneForm(); syncPoseDrag(); }
 }
 
 // ---------------------------------------------------------------------------
@@ -5255,21 +5297,23 @@ function closeActionEditor() {
 function switchView(v) {
   const wasPatch = patchView;
   const wasValidate = validateView;
+  const wasPoses = posesView;
   patchView = v === "patches";
   midiView = v === "midi";
   flowView = v === "flow";
    brainView = v === "brain";
    groupsView = v === "groups";
    camView = v === "cam";
-   validateView = v === "validate";
-   robotconfigView = v === "robotconfig";
+    validateView = v === "validate";
+    posesView = v === "poses";
+    robotconfigView = v === "robotconfig";
   if (wasPatch && !patchView) commitPatchEditor();  // leaving the patches view: commit
   // While in the validate tab, put the core in manual mode so the brain's
   // autonomy/hunt loop does not retarget the pose while inspecting zones.
   // Restore to auto (the core default) when leaving the tab.
   if (validateView && !wasValidate) send({ cmd: "set_control_mode", mode: "manual" });
   else if (!validateView && wasValidate) send({ cmd: "set_control_mode", mode: "auto" });
-  const other = patchView || midiView || flowView || brainView || groupsView || camView || validateView || robotconfigView;
+  const other = patchView || midiView || flowView || brainView || groupsView || camView || validateView || posesView || robotconfigView;
   $("zoneMain").style.display = other ? "none" : "";
   $("patchesMain").style.display = patchView ? "" : "none";
   $("midiMain").style.display = midiView ? "" : "none";
@@ -5278,6 +5322,7 @@ function switchView(v) {
   $("groupsMain").style.display = groupsView ? "" : "none";
   $("camMain").style.display = camView ? "" : "none";
   $("validateMain").style.display = validateView ? "" : "none";
+  $("posesMain").style.display = posesView ? "" : "none";
   $("robotconfigMain").style.display = robotconfigView ? "" : "none";
   $("tabZones").className = other ? "" : "active";
   $("tabPatches").className = patchView ? "active" : "";
@@ -5287,12 +5332,29 @@ function switchView(v) {
   $("tabBrain").className = brainView ? "active" : "";
   $("tabCam").className = camView ? "active" : "";
   $("tabValidate").className = validateView ? "active" : "";
+  $("tabPoses").className = posesView ? "active" : "";
   $("tabRobotConfig").className = robotconfigView ? "active" : "";
-  // Move the shared 3D singleton between the zones and validate tabs. Leaving
-  // the tab stops any running scan so it does not keep driving the (now
+  // Move the shared 3D singleton between the zones, validate, and poses tabs.
+  // Leaving the tab stops any running scan so it does not keep driving the (now
   // core-owned) arm in the background.
-  if (validateView) { mountRobot3dValidate(); buildValidateForm(); }
-  else { stopValidateScan(); unmountRobot3dValidate(); }
+  if (validateView) {
+    mountRobot3dValidate(); buildValidateForm();
+    // The 3D singleton (and its ghost) is owned by the validate logic there; the
+    // zones-tab pose drag must not drive it.
+    poseDragOn = false; Robot3D.disablePoseDrag();
+    if (wasPoses) posesLeave();
+  }
+  else if (posesView) {
+    stopValidateScan();
+    // The ghost is the authored pose; the zones-tab pose drag must not drive it.
+    poseDragOn = false; Robot3D.disablePoseDrag();
+    posesEnter();
+  }
+  else {
+    stopValidateScan(); unmountRobot3dValidate();
+    if (wasPoses) posesLeave();
+    syncPoseDrag();
+  }
   if (midiView) {
     // Show/hide the In/Out sub-views based on midiSubView.
     $("midiOutView").style.display = midiSubView === "out" ? "" : "none";
@@ -5782,6 +5844,7 @@ function selectZone(name) {
   buildZoneForm();
   buildBars();
   updateGhost();
+  syncPoseDrag();
 }
 
 // ---------------------------------------------------------------------------
@@ -5810,7 +5873,7 @@ function numGrid(id, values, oninput) {
 function buildZoneForm(containerEl, titleEl, name, onChanged, showPoses) {
   if (containerEl === undefined) {
     containerEl = $("zoneForm"); titleEl = $("zoneTitle"); name = selectedZone;
-    onChanged = () => { buildZoneList(); buildBars(); updateGhost(); };
+    onChanged = () => { buildZoneList(); buildBars(); updateGhost(); syncPoseDrag(); };
   }
   if (showPoses === undefined) showPoses = true;
   const rebuild = () => buildZoneForm(containerEl, titleEl, name, onChanged, showPoses);
@@ -6018,10 +6081,13 @@ function buildActionList(container, name, z, rebuild, onChanged, showPoses) {
         ? "variable axes: " + a.variable_axes.map((i) => AXES[i]).join(", ")
         : "fixed anchors";
       box.appendChild(axes);
-      // One row per anchor pose (6 values + ×).
+      // One row per anchor pose (6 values + ×). The data attrs let the pose-drag
+      // update the selected anchor's inputs in place (updatePoseRowInputs).
       a.poses.forEach((pose, pi) => {
         const pr = document.createElement("div");
         pr.className = "poseRow";
+        pr.dataset.an = an;
+        pr.dataset.pi = pi;
         const p = Array.isArray(pose) && pose.length === 6 ? pose : [0,0,0,0,0,0];
         for (let i = 0; i < 6; i++) {
           const inp = document.createElement("input");
@@ -6054,6 +6120,7 @@ function buildActionList(container, name, z, rebuild, onChanged, showPoses) {
         a.poses = a.poses || [];
         a.poses.push([0,0,0,0,0,0]);
         rebuild();
+        syncPoseDrag();
       };
       box.appendChild(addR);
     }
@@ -6125,11 +6192,454 @@ function stepGhost(dir) {
   if (!ps.length) return;
   ghostIndex = (ghostIndex + dir + ps.length) % ps.length;
   updateGhost();
+  syncPoseDrag();
+}
+
+// ---------------------------------------------------------------------------
+// Interactive pose authoring: drag the ghost's flange in the 3D preview.
+// The handle is owned by rtr3d.js (enablePoseDrag / disablePoseDrag / poseDragSetPose);
+// the editor seeds it from the selected anchor pose and writes IK results back to the
+// anchor. A drag writes all 6 axes as concrete numbers (a free "x" axis becomes
+// concrete during the drag; it can be re-marked "x" in the row afterwards).
+// ---------------------------------------------------------------------------
+const POSE_DRAG_HOME = [0, -90, 90, 0, 90, 0];
+let poseDragOn = false;
+
+// The selected anchor's pose-row inputs, updated in place. The form is not rebuilt
+// during a drag, so the row the user is looking at must not go stale.
+function updatePoseRowInputs() {
+  const ps = ghostPoses(selectedAction);
+  if (!ps.length) return;
+  const pi = ghostIndex % ps.length;
+  const pose = ps[pi];
+  const rows = document.querySelectorAll("#zoneForm .poseRow[data-an]");
+  for (const r of rows) {
+    if (r.dataset.an !== selectedAction || parseInt(r.dataset.pi, 10) !== pi) continue;
+    const inps = r.querySelectorAll("input");
+    for (let i = 0; i < 6 && i < inps.length; i++) {
+      inps[i].value = pose[i];
+      inps[i].classList.toggle("frozenX", pose[i] === "x");
+    }
+    break;
+  }
+}
+
+// Move the safezone bar markers for a pose without rebuilding the bars DOM
+// (buildBars() rebuilds every row; the drag fires this on every pointer move).
+function updateBarMarksFromPose(pose) {
+  const z = TABLE.zones[selectedZone];
+  if (!z || !z.safezone) return;
+  for (let i = 0; i < 6; i++) {
+    const mark = $("bmark" + i);
+    if (!mark) continue;
+    const [lo, hi] = z.safezone[i];
+    const v = pose[i];
+    const pct = hi > lo ? ((v - lo) / (hi - lo)) * 100 : 50;
+    mark.style.left = Math.max(0, Math.min(100, pct)) + "%";
+  }
+}
+
+// One IK step of the drag: the anchor takes the solved pose (concrete 6-value).
+function poseDragOnPose(pose) {
+  const z = TABLE.zones[selectedZone];
+  const a = z && z.actions ? z.actions[selectedAction] : null;
+  if (!a || !Array.isArray(a.poses) || !a.poses.length) return;
+  const pi = ghostIndex % a.poses.length;
+  a.poses[pi] = pose.map((v) => Math.round(v * 1000) / 1000);
+  updatePoseRowInputs();
+  updateBarMarksFromPose(a.poses[pi]);
+}
+
+// The drag is over: the anchor already holds the last solved pose (written on every
+// pointer move); resync the UI (form / bars / ghost) and flag the table as dirty.
+function poseDragOnEnd() {
+  buildZoneList();
+  buildBars();
+  updateGhost();
+  $("saveMsg").textContent = "pose updated — save to persist";
+  $("saveMsg").className = "";
+}
+
+// (Re)sync the pose-drag handle with the zones-tab selection. Enabled while an action
+// with anchor poses is selected in the zones tab (the 3D singleton moves to the
+// validate tab there, so the drag is disabled in that view). The seed is the ghost's
+// current concrete pose, so a drag continues from wherever the ghost is. ``force``
+// rebuilds the handle (picks up new HW_LIMITS) instead of just re-seeding it.
+function syncPoseDrag(force) {
+  const want = !validateView && !posesView && !!selectedZone && !!selectedAction && ghostPoses(selectedAction).length > 0;
+  if (!want) {
+    if (poseDragOn) { poseDragOn = false; Robot3D.disablePoseDrag(); }
+    return;
+  }
+  const gp = currentGhostPose();
+  const pose = gp ? resolvePose(gp) : POSE_DRAG_HOME;
+  if (poseDragOn && !force) {
+    Robot3D.poseDragSetPose(pose);
+  } else {
+    // enablePoseDrag returns false only when ik.js is missing; it may also be
+    // pending until the 3D arm finishes loading (applied automatically).
+    poseDragOn = Robot3D.enablePoseDrag({
+      pose,
+      limits: HW_LIMITS,
+      onPose: poseDragOnPose,
+      onEnd: poseDragOnEnd,
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Poses tab: dedicated 3D pose authoring. The ghost is the authored (scratch)
+// pose, driven by pose-drag + the number inputs, never by the WS state stream.
+// Reuses the Robot3D singleton (moved into the poses mount on entry).
+// ---------------------------------------------------------------------------
+let scratchPose = POSE_DRAG_HOME.slice();  // the authored 6-value pose
+let posesDragOn = false;
+
+// Build the 6 number inputs (A1..A6) for the scratch pose.
+function buildPosesInputs() {
+  const box = $("posesInputs");
+  box.innerHTML = "";
+  for (let i = 0; i < 6; i++) {
+    const inp = document.createElement("input");
+    inp.id = "posesA" + (i + 1);
+    inp.type = "text"; inp.inputMode = "decimal";
+    inp.value = scratchPose[i];
+    inp.oninput = posesInputOnInput;
+    box.appendChild(inp);
+  }
+}
+
+// Write scratchPose into the 6 inputs (drag / load / clamp sync the fields).
+function updatePosesInputs() {
+  for (let i = 0; i < 6; i++) {
+    const inp = $("posesA" + (i + 1));
+    if (inp) inp.value = scratchPose[i];
+  }
+}
+
+// Read the 6 inputs into scratchPose and drive the ghost + drag handle.
+function posesInputOnInput() {
+  for (let i = 0; i < 6; i++) {
+    const v = parseFloat($("posesA" + (i + 1)).value);
+    scratchPose[i] = isNaN(v) ? 0 : v;
+  }
+  Robot3D.setTarget(scratchPose);
+  Robot3D.poseDragSetPose(scratchPose);
+  updatePosesInfo();
+}
+
+// One IK step of the drag: the scratch pose takes the solved pose (concrete 6-value).
+function posesOnPose(pose) {
+  scratchPose = pose.map((v) => Math.round(v * 1000) / 1000);
+  updatePosesInputs();
+  updatePosesInfo();
+}
+
+// The drag is over: resync the UI.
+function posesOnEnd() {
+  updatePosesInputs();
+  updatePosesInfo();
+}
+
+// Populate the zone dropdown (clamp-to-safezone) and the load-from picker.
+function buildPosesSelectors() {
+  const zones = (TABLE && TABLE.zones) ? TABLE.zones : {};
+  const sel = $("posesZoneSel");
+  sel.innerHTML = "";
+  const names = Object.keys(zones).filter((n) => zones[n] && zones[n].safezone);
+  for (const n of names) {
+    const o = document.createElement("option");
+    o.value = n; o.textContent = n;
+    sel.appendChild(o);
+  }
+  if (selectedZone && zones[selectedZone] && zones[selectedZone].safezone) sel.value = selectedZone;
+  const loadSel = $("posesLoadSel");
+  loadSel.innerHTML = "";
+  const opt0 = document.createElement("option");
+  opt0.value = ""; opt0.textContent = "— load from —";
+  loadSel.appendChild(opt0);
+  for (const zn in zones) {
+    const acts = zones[zn].actions || {};
+    for (const an in acts) {
+      const a = acts[an];
+      if (!a || !Array.isArray(a.poses) || !a.poses.length) continue;
+      const o = document.createElement("option");
+      o.value = zn + "/" + an;
+      o.textContent = zn + " / " + an;
+      loadSel.appendChild(o);
+    }
+  }
+}
+
+// Clamp the scratch pose to the selected zone's safezone.
+function posesClamp() {
+  const zn = $("posesZoneSel").value;
+  const z = (TABLE && TABLE.zones) ? TABLE.zones[zn] : null;
+  if (!z || !z.safezone) return;
+  for (let i = 0; i < 6; i++) {
+    const [lo, hi] = z.safezone[i];
+    if (scratchPose[i] < lo) scratchPose[i] = lo;
+    else if (scratchPose[i] > hi) scratchPose[i] = hi;
+  }
+  Robot3D.setTarget(scratchPose);
+  Robot3D.poseDragSetPose(scratchPose);
+  updatePosesInputs();
+  updatePosesInfo();
+}
+
+// Copy the scratch pose to the clipboard (POSE_CLIP) so it can be pasted into a
+// zone/flow action.
+function posesCopy() {
+  POSE_CLIP = scratchPose.slice();
+  $("posesInfo").textContent = "pose copied — paste into a zone/flow action";
+}
+
+// Load the first pose of the selected zone/action into the scratch.
+function posesLoad() {
+  const v = $("posesLoadSel").value;
+  if (!v) return;
+  const slash = v.indexOf("/");
+  const zn = v.slice(0, slash), an = v.slice(slash + 1);
+  const a = (TABLE && TABLE.zones[zn] && TABLE.zones[zn].actions) ? TABLE.zones[zn].actions[an] : null;
+  if (!a || !Array.isArray(a.poses) || !a.poses.length) return;
+  scratchPose = a.poses[0].map((x) => (typeof x === "number" ? x : 0));
+  Robot3D.setTarget(scratchPose);
+  Robot3D.poseDragSetPose(scratchPose);
+  updatePosesInputs();
+  updatePosesInfo();
+}
+
+// Show a short FK readout (flange xyz) for the scratch pose.
+function updatePosesInfo() {
+  const el = $("posesInfo");
+  if (!el || typeof KR60IK === "undefined") return;
+  try {
+    const p = KR60IK.fkPos(scratchPose);
+    el.textContent = "flange: (" + p[0].toFixed(3) + ", " + p[1].toFixed(3) + ", " + p[2].toFixed(3) + ")";
+  } catch (e) { el.textContent = ""; }
+}
+
+// Enter the poses tab: move the 3D node, hide the real arm, enable the poses drag.
+function posesEnter() {
+  mountRobot3dPoses();
+  buildPosesSelectors();
+  buildPosesInputs();
+  Robot3D.setRobotRealVisible(false);
+  ghostVisible = true;
+  Robot3D.setGhostVisible(true);
+  posesDragOn = Robot3D.enablePoseDrag({
+    pose: scratchPose,
+    limits: HW_LIMITS,
+    onPose: posesOnPose,
+    onEnd: posesOnEnd,
+  });
+  Robot3D.setTarget(scratchPose);
+  updatePosesInfo();
+}
+
+// Leave the poses tab: disable the poses drag, restore the real arm.
+function posesLeave() {
+  if (posesDragOn) { posesDragOn = false; Robot3D.disablePoseDrag(); }
+  Robot3D.setRobotRealVisible(true);
 }
 
 // ---------------------------------------------------------------------------
 // Save (validate + POST the whole table).
 // ---------------------------------------------------------------------------
+// Dead-end helpers (mirror the core's zones._validate_no_dead_ends). A target
+// (next / exit entry) is valid when the zone exists and is enabled and the action
+// is named, exists in that zone, and is enabled.
+function _actionEntryValidJS(entry, zones) {
+  const tz = entry.zone, ta = entry.action;
+  if (typeof tz !== "string" || !zones[tz]) return false;
+  const zt = zones[tz];
+  if (zt.enabled === false) return false;
+  const acts = (zt.actions && typeof zt.actions === "object" && !Array.isArray(zt.actions)) ? zt.actions : {};
+  if (typeof ta !== "string" || !acts[ta]) return false;
+  const taData = acts[ta];
+  if (!taData || typeof taData !== "object" || Array.isArray(taData)) return false;
+  return taData.enabled !== false;
+}
+
+function _hasValidNextJS(a, zones) {
+  const n = a.next;
+  let items;
+  if (n && typeof n === "object" && !Array.isArray(n)) items = [n];
+  else if (Array.isArray(n)) items = n;
+  else return false;
+  return items.some((e) => e && typeof e === "object" && !Array.isArray(e) && _actionEntryValidJS(e, zones));
+}
+
+function _hasValidExitJS(z, zones) {
+  const e = z.exits;
+  if (!Array.isArray(e)) return false;
+  return e.some((pair) => Array.isArray(pair) && pair.length === 2 &&
+    _actionEntryValidJS({ zone: pair[0], action: pair[1] }, zones));
+}
+
+// Structured dead-end problems for the flow tab's "validate" button: one entry per
+// offending (zone, action). Mirrors the core's zones._validate_no_dead_ends so the
+// client can surface the same problems the server would reject with a 400.
+function deadEndProblems() {
+  const out = [];
+  for (const name of Object.keys(TABLE.zones)) {
+    const z = TABLE.zones[name];
+    if (!z || typeof z !== "object" || Array.isArray(z)) continue;
+    const acts = (z.actions && typeof z.actions === "object" && !Array.isArray(z.actions)) ? z.actions : {};
+    const actNames = Object.keys(acts);
+    if (actNames.length <= 1) continue; // single-action zones have the auto-return fallback
+    const zoneHasValidExit = _hasValidExitJS(z, TABLE.zones);
+    for (const an of actNames) {
+      const a = acts[an];
+      if (!a || typeof a !== "object" || Array.isArray(a)) continue;
+      if (a.loop !== false) continue; // looping (or loop-unset) actions do not dead-end
+      if (_hasValidNextJS(a, TABLE.zones)) continue; // the action has a valid next
+      if (zoneHasValidExit) continue; // the zone has a valid exit
+      out.push({ zone: name, action: an,
+        message: `action "${an}" is non-looping with no valid next and the zone has no valid exit (dead-end)` });
+    }
+  }
+  return out;
+}
+
+// A next/exit target is "red" (broken) when it does not name a valid target.
+// Returns a human-readable reason, or null when the target is valid. Mirrors the
+// runtime's _try_go refusal reasons (machine.py) so the editor shows why a link
+// would be dropped.
+function _linkProblemJS(entry, zones) {
+  const tz = entry.zone, ta = entry.action;
+  if (typeof tz !== "string" || !zones[tz]) return `zone "${tz}" does not exist`;
+  const zt = zones[tz];
+  if (zt.enabled === false) return `zone "${tz}" is disabled`;
+  const acts = (zt.actions && typeof zt.actions === "object" && !Array.isArray(zt.actions)) ? zt.actions : {};
+  if (typeof ta !== "string" || !acts[ta]) return `action "${ta}" not found in zone "${tz}"`;
+  if (acts[ta].enabled === false) return `action "${ta}" in zone "${tz}" is disabled`;
+  return null;
+}
+
+// Comprehensive flow problems: everything in the zone table that could make the
+// robot STOP moving. Each problem is {zone, action?, kind, message}. The validate
+// button lists them, marks the offending nodes, and clicking one navigates there.
+// Kinds (each one is a way the robot ends up frozen):
+//   "dead-end"   a non-looping action with no valid next in a multi-action zone with
+//                no valid exit (the robot holds the last pose forever).
+//   "red-link"   a next/exit pointing at a non-existent/disabled zone or a
+//                missing/disabled action (the runtime refuses the link; if it is the
+//                only way out, the robot stops).
+//   "safezone"   an anchor pose axis outside the zone's safezone (the core clamps it
+//                to the edge, so the robot chases an unreachable pose and freezes).
+//   "hardware"   an anchor pose axis outside the hardware limits (the robot cannot
+//                physically reach it).
+//   "band"       an axis_bands entry that does not overlap the safezone (the servo's
+//                clamp floor is empty, so it freezes).
+//   "speed"      a zone/action speed of 0 (the robot moves at zero speed).
+//   "no-actions" a zone with no enabled action (it cannot be entered, so any link to
+//                it is dead).
+function flowProblems() {
+  const out = [];
+  const zones = TABLE.zones;
+  const isNum = (v) => typeof v === "number" && !isNaN(v);
+  for (const name of Object.keys(zones)) {
+    const z = zones[name];
+    if (!z || typeof z !== "object" || Array.isArray(z)) continue;
+    const acts = (z.actions && typeof z.actions === "object" && !Array.isArray(z.actions)) ? z.actions : {};
+    const actNames = Object.keys(acts);
+
+    // A zone with no enabled action cannot be entered (trigger_action refuses it), so
+    // any link to it is dead.
+    const anyEnabled = actNames.some((an) => acts[an] && typeof acts[an] === "object" && acts[an].enabled !== false);
+    if (!anyEnabled)
+      out.push({ zone: name, kind: "no-actions",
+        message: `no enabled actions — the zone cannot be entered (any link to it is dead)` });
+
+    // Zone speed of 0: the robot moves at zero speed while in this zone.
+    if (isNum(z.speed) && z.speed <= 0)
+      out.push({ zone: name, kind: "speed",
+        message: `zone speed is ${z.speed} — the robot moves at zero speed` });
+
+    for (const an of actNames) {
+      const a = acts[an];
+      if (!a || typeof a !== "object" || Array.isArray(a)) continue;
+
+      // Action speed of 0: the robot moves at zero speed while running this action.
+      if (isNum(a.speed) && a.speed <= 0)
+        out.push({ zone: name, action: an, kind: "speed",
+          message: `action "${an}" speed is ${a.speed} — the robot moves at zero speed` });
+
+      // Anchor poses outside the safezone / hardware: the core clamps every target to
+      // the effective floor (safezone ∩ hardware), so a pose outside it is unreachable
+      // and the robot freezes at the edge.
+      const poses = actionPoses(a);
+      poses.forEach((p, i) => {
+        if (!Array.isArray(p) || p.length !== 6) return;
+        for (let ax = 0; ax < 6; ax++) {
+          if (typeof p[ax] !== "number") continue;
+          const sz = z.safezone && z.safezone[ax];
+          if (Array.isArray(sz) && isNum(sz[0]) && isNum(sz[1])) {
+            if (p[ax] < sz[0] || p[ax] > sz[1])
+              out.push({ zone: name, action: an, kind: "safezone",
+                message: `action "${an}" pose ${i} ${AXES[ax]}=${p[ax]} is outside the safezone [${sz[0]}, ${sz[1]}] — clamped to the edge, the robot freezes` });
+          }
+          const hw = HW_LIMITS[ax];
+          if (Array.isArray(hw) && isNum(hw[0]) && isNum(hw[1])) {
+            if (p[ax] < hw[0] || p[ax] > hw[1])
+              out.push({ zone: name, action: an, kind: "hardware",
+                message: `action "${an}" pose ${i} ${AXES[ax]}=${p[ax]} is outside the hardware limits [${hw[0]}, ${hw[1]}] — the robot cannot reach it` });
+          }
+        }
+      });
+
+      // axis_bands that do not overlap the safezone: the band ∩ safezone floor is
+      // empty, so the servo clamps to a point and freezes.
+      const ab = a.axis_bands;
+      if (ab && typeof ab === "object" && !Array.isArray(ab)) {
+        for (const k of Object.keys(ab)) {
+          const ax = parseInt(k, 10);
+          if (isNaN(ax) || ax < 0 || ax > 5) continue;
+          const band = ab[k];
+          if (!Array.isArray(band) || band.length !== 2 || !isNum(band[0]) || !isNum(band[1])) continue;
+          const sz = z.safezone && z.safezone[ax];
+          if (!Array.isArray(sz) || !isNum(sz[0]) || !isNum(sz[1])) continue;
+          if (Math.max(band[0], sz[0]) >= Math.min(band[1], sz[1]))
+            out.push({ zone: name, action: an, kind: "band",
+              message: `action "${an}" axis_bands[${AXES[ax]}]=[${band[0]}, ${band[1]}] does not overlap the safezone [${sz[0]}, ${sz[1]}] — the servo freezes` });
+        }
+      }
+
+      // Red links: the action's `next` entries pointing at invalid targets.
+      const n = a.next;
+      if (n) {
+        const items = Array.isArray(n) ? n : [n];
+        items.forEach((t, ti) => {
+          if (!t || typeof t !== "object" || Array.isArray(t)) return;
+          const reason = _linkProblemJS(t, zones);
+          if (reason)
+            out.push({ zone: name, action: an, kind: "red-link",
+              message: `action "${an}" next[${ti}] → ${reason}` });
+        });
+      }
+    }
+
+    // Red links: the zone's `exits` pointing at invalid targets.
+    if (z.exits && Array.isArray(z.exits)) {
+      z.exits.forEach((e, i) => {
+        if (!Array.isArray(e) || e.length !== 2) return;
+        const reason = _linkProblemJS({ zone: e[0], action: e[1] }, zones);
+        if (reason)
+          out.push({ zone: name, kind: "red-link",
+            message: `exit[${i}] → ${reason}` });
+      });
+    }
+  }
+
+  // Dead ends: a non-looping action with no valid next in a multi-action zone with no
+  // valid exit would leave the robot holding the last pose forever.
+  for (const p of deadEndProblems())
+    out.push({ zone: p.zone, action: p.action, kind: "dead-end", message: p.message });
+
+  return out;
+}
+
 function validate() {
   const errs = [];
   const isNum = (v) => typeof v === "number" && !isNaN(v);
@@ -6205,6 +6715,10 @@ function validate() {
       }
     }
   }
+  // Dead-end problems (mirror the core's zones._validate_no_dead_ends): a non-looping
+  // action with no valid next in a multi-action zone with no valid exit would leave
+  // the robot holding forever. The core rejects this with a 400 on save.
+  for (const p of deadEndProblems()) errs.push(`${p.zone}: ${p.message}`);
   return errs;
 }
 
@@ -6553,6 +7067,18 @@ function flowFitView() {
   flowApplyView();
 }
 
+// Pan the view so ``name`` is centred, keeping the current zoom (w/h). Used by the
+// validate button's click-to-navigate.
+function flowCenterOn(name) {
+  const p = FLOW.pos[name];
+  const v = FLOW.view;
+  if (!p || !v) return;
+  const cx = p.x + NODE_W / 2, cy = p.y + nodeH(name) / 2;
+  FLOW.view = { x: cx - v.w / 2, y: cy - v.h / 2, w: v.w, h: v.h };
+  flowApplyView();
+  flowSaveLayout();
+}
+
 // Apply the current (possibly user-zoomed/panned) viewBox to the svg element.
 function flowApplyView() {
   const svg = $("flowSvg");
@@ -6800,6 +7326,7 @@ function flowRender() {
 // In-place live/selection refresh (no SVG rebuild — an arrow-drag must survive a
 // state frame). Updates node classes + sublabels and (re)marks the selected edge.
 function applyFlowHighlight() {
+  const badZones = new Set((FLOW.badProblems || []).map((p) => p.zone));
   Object.keys(TABLE.zones).forEach((n) => {
     const g = FLOW.nodeEls[n];
     if (!g) return;
@@ -6808,6 +7335,7 @@ function applyFlowHighlight() {
     g.classList.toggle("flive", isLive);
     g.classList.toggle("fsel", isSel);
     g.classList.toggle("off", TABLE.zones[n].enabled === false);
+    g.classList.toggle("fbad", badZones.has(n));
     const sub = g.querySelector(".fnodeSub");
     if (sub) sub.textContent = flowSubLabel(n);
   });
@@ -7354,6 +7882,12 @@ function unmountRobot3dValidate() {
   else home.appendChild(el);
   _triggerResize();
 }
+// The poses tab owns the 3D singleton too (the authored-pose ghost). Move the
+// #robot3d node into the poses mount; unmountRobot3dValidate returns it home.
+function mountRobot3dPoses() {
+  $("posesRobot3dMount").appendChild($("robot3d"));
+  _triggerResize();
+}
 // --- Cam tab: virtual-camera 3D preview + real-camera snapshot ---
 // The virtual camera renders the shared scene from a second renderer mounted at the
 // camera rig; the lens selector picks wide/close (drives the projection fov + offset).
@@ -7484,6 +8018,7 @@ $("addZone").onclick = addZone;
 $("renameZone").onclick = renameZone;
 $("delZone").onclick = delZone;
   $("tabZones").onclick = () => switchView("zones");
+  $("tabPoses").onclick = () => switchView("poses");
   $("tabPatches").onclick = () => switchView("patches");
   $("tabMidi").onclick = () => switchView("midi");
   $("tabFlow").onclick = () => switchView("flow");
@@ -7492,6 +8027,9 @@ $("delZone").onclick = delZone;
    $("tabCam").onclick = () => switchView("cam");
    $("tabValidate").onclick = () => switchView("validate");
    $("tabRobotConfig").onclick = () => switchView("robotconfig");
+$("posesClamp").onclick = posesClamp;
+$("posesCopy").onclick = posesCopy;
+$("posesLoad").onclick = posesLoad;
   buildValPoseSetter();
   $("valPoseGo").onclick = applyValPose;
   $("valCopyCollision").onclick = copyValCollisionPose;
@@ -7521,6 +8059,40 @@ $("flowAutoLayout").onclick = () => {
   flowRender();
 };
 $("flowFit").onclick = () => { flowFitView(); flowSaveLayout(); flowRender(); };
+// Validate: check the flow for EVERYTHING that could make the robot stop moving
+// (dead-ends, broken links, poses outside the safezone/hardware, zero speed, ...),
+// mark the offending nodes, and list the problems. Clicking a problem selects the
+// zone and centres the view on it (take the operator straight to the problem).
+$("flowValidate").onclick = () => {
+  const probs = flowProblems();
+  FLOW.badProblems = probs;
+  flowRender(); // re-applies the .fbad marking via applyFlowHighlight
+  const panel = $("flowProblems");
+  panel.style.display = "block";
+  panel.innerHTML = "";
+  const h = document.createElement("h3");
+  h.textContent = probs.length ? `${probs.length} problem(s)` : "no problems";
+  panel.appendChild(h);
+  if (!probs.length) {
+    const ok = document.createElement("button");
+    ok.className = "fpItem ok";
+    ok.textContent = "no problems — the flow will keep the robot moving";
+    panel.appendChild(ok);
+    return;
+  }
+  for (const p of probs) {
+    const item = document.createElement("button");
+    item.className = "fpItem";
+    item.textContent = `[${p.kind}] ${p.zone}${p.action ? "/" + p.action : ""}: ${p.message}`;
+    item.onclick = () => {
+      FLOW.sel = { type: "node", zone: p.zone };
+      flowRender();
+      buildFlowDetail();
+      flowCenterOn(p.zone);
+    };
+    panel.appendChild(item);
+  }
+};
 // View controls: wheel = zoom (around the cursor), middle-drag = pan.
 $("flowSvg").addEventListener("wheel", (e) => { e.preventDefault(); flowZoomAt(e); }, { passive: false });
 $("flowSvg").addEventListener("mousedown", (e) => { if (e.button === 1) { e.preventDefault(); flowPanStart(e); } });

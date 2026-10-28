@@ -496,9 +496,17 @@ def validate_brain_config(data: Any) -> dict:
         raise ValueError("'autonomy.events' must be an object")
     events = events or {}
     ae = a["events"]
+    # Optional stuck watchdog threshold (a number > 0); None when absent (the brain
+    # falls back to its built-in default of 10 ticks).
+    stuck_threshold = autonomy.get("stuck_threshold")
+    if stuck_threshold is not None and not (
+            isinstance(stuck_threshold, (int, float))
+            and not isinstance(stuck_threshold, bool) and stuck_threshold > 0):
+        raise ValueError("'autonomy.stuck_threshold' must be a number > 0")
     autonomy_cfg = {
         "enabled": _bool(autonomy.get("enabled"), "autonomy.enabled", a["enabled"]),
         "dwell_s": _num(autonomy.get("dwell_s"), "autonomy.dwell_s", a["dwell_s"]),
+        "stuck_threshold": stuck_threshold,
         "events": {
             "midi": _bool(events.get("midi"), "autonomy.events.midi", ae["midi"]),
             "camera": _bool(events.get("camera"), "autonomy.events.camera", ae["camera"]),

@@ -467,6 +467,7 @@ a `zones.json` without them works exactly as before.
   shared catalog; the "+ add action" button adds to the current zone), and edit each
   action (enabled, name, pose rows, per-pose speed),
 - step through an action's poses locally with the ghost (target) arm,
+- author a pose in the dedicated **poses** tab (drag the ghost flange + edit the 6 axes; clamp to a zone safezone; copy to paste into any zone/flow action),
 - **Save** the whole table (`POST /api/zones` → the core hot-reloads, so `client.html` and
   the live robot pick it up immediately), and **Play** an action over the WebSocket.
 
@@ -478,6 +479,15 @@ falls outside its zone's safezone **or** the hardware floor). The per-axis **har
 limits** are shown as a reference row in the 3D preview panel (loaded from `GET
 /api/limits`, falling back to a built-in constant that mirrors the xacro).
 
+The client also mirrors the core's **dead-end validation** (`zones._validate_no_dead_ends`):
+a **non-looping** action with **no valid `next`** in a **multi-action** zone that has **no
+valid `exit`** would leave the robot holding the last pose forever once the action
+completes (the auto-return fallback only applies to single-action zones). A target is
+"valid" when the zone exists and is enabled and the action is named, exists in that zone,
+and is enabled (`loop` / `enabled` both default true). `validate()` collects these as
+problems, so **Save** is blocked (the core rejects the same data with a 400). The flow
+tab's **validate** button surfaces the same problems (see below).
+
 The **action editor** is a modal opened from a zone's action list (the **edit** button on
 each action row) or by clicking an action row in the flow tab. It edits one action's
 **kind** / **loop** / **enabled**, its **poses** (one row per pose, with add / swap /
@@ -487,6 +497,16 @@ the pose count). It has a live hydra **patch preview** (a second, lazily-created
 canvas that re-evals the action's patch code as you type) and saves all three tables in
 parallel (`POST /api/zones` + `/api/sound` + `/api/patches`), re-running the client-side
 `validate()` (which now also checks the `kind` / `loop` / `target` rules) before posting.
+
+The **poses** tab is a dedicated 3D pose-authoring surface. Its ghost is the **authored
+(scratch) pose**, driven by pose-drag (drag the flange handle; IK solves and writes back)
+and the six **A1..A6 number inputs** — never by the 20 Hz WebSocket state stream (the
+`Robot3D.update` call is gated with `!posesView`, the same view-gating the validate tab
+uses). The real arm is hidden while authoring. A **zone** dropdown + **clamp to safezone**
+button clamps each axis to the selected zone's safezone; **copy pose** puts the scratch
+pose on the shared clipboard (`POSE_CLIP`), which the action editor's **paste pose** button
+consumes; the **load from** picker seeds the scratch from any existing zone/action's first
+pose. The scratch pose is session-only (copy it into an action to persist it).
 
 The **flow** tab (4th tab) is a 2D SVG **flowchart** of the zone graph: **nodes** are the
 zones (label = the "mood"; small text = the default mode + action count, or the live
@@ -501,6 +521,33 @@ button (clears the override), and "remove link" (deletes the exit + any `exitpos
 entry). Node positions are auto-laid-out by BFS depth from `init` and are draggable
 (session-only, not persisted); wheel zooms, middle-drag pans. The flow edits mutate the
 table in place, so the same **Save** posts them (`POST /api/zones`).
+
+The flow tab has a **validate** button: it runs `flowProblems()`, which enumerates
+**everything in the zone table that could make the robot stop moving**, **marks** every
+offending node (red outline), and lists the problems in a panel below the canvas.
+**Clicking a problem** selects the zone, opens its detail form, and **centres the view** on
+it — taking the operator straight to the problem. A green "no problems" note is shown when
+the flow is clean. Each problem is tagged with a kind:
+
+- **dead-end** — a non-looping action with no valid `next` in a multi-action zone with no
+  valid `exit` (the core rejects this in `zones._validate_no_dead_ends`; the robot would
+  hold the last pose forever).
+- **red-link** — a `next`/`exit` pointing at a non-existent/disabled zone or a
+  missing/disabled action (the runtime refuses the link; if it is the only way out, the
+  robot stops).
+- **safezone** — an anchor pose axis outside the zone's safezone (the core clamps every
+  target to safezone ∩ hardware, so the robot chases an unreachable pose and freezes).
+- **hardware** — an anchor pose axis outside the hardware limits (the robot cannot
+  physically reach it).
+- **band** — an `axis_bands` entry that does not overlap the safezone (the servo's clamp
+  floor is empty, so it freezes).
+- **speed** — a zone/action speed of 0 (the robot moves at zero speed).
+- **no-actions** — a zone with no enabled action (it cannot be entered, so any link to it
+  is dead).
+
+(The button checks these *operational* stop-problems; the full `validate()` — poses, exits,
+modes, exitposes, structural rules — still runs on **Save** and the authoritative rejection
+is the core's 400 on `POST /api/zones`.)
 
 Each node also shows its **actions as rows** (one per action, stacked below the label): an
 **entry** action is a left-aligned row with a connector dot on the left, an **exit** action

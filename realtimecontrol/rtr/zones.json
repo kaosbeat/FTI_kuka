@@ -36,8 +36,8 @@
           "enabled": true,
           "poses": [
             [
-              10,
-              -59,
+              40.217,
+              -40,
               -10,
               0,
               60,
@@ -1751,10 +1751,10 @@
       }
     },
     "view": {
-      "x": -2506.0006209106296,
-      "y": -661.3682529021002,
-      "w": 4490.786582113173,
-      "h": 1732.985107222995
+      "x": -499.3482067017902,
+      "y": -162.88418486602473,
+      "w": 1276.5618257890126,
+      "h": 492.6225266088592
     },
     "key": "inspect,lock,resting,scan,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band"
   }

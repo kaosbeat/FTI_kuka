@@ -84,6 +84,11 @@ class Brain:
         # auto mode. The brain skips these on the next autonomy tick. Cleared when
         # the current (zone, action) changes or a candidate commits.
         self._blocked_candidates: set = set()
+        # Stuck watchdog: counts consecutive autonomy ticks where the robot is in a
+        # (zone, None) state (a zone is set but no action is active, no pending
+        # move, no transition). Used to re-arm a stuck robot and, as a backstop,
+        # to clear the blocked-candidate set once re-arming keeps failing.
+        self._stuck_ticks: int = 0
         # Runtime group navigation: a single active group at a time. ``active_group``
         # is the enabled group name (None when no group is active); ``group_nav``
         # holds the (zone, action) waypoints to walk (the start is stripped) and
@@ -1064,9 +1069,20 @@ class Brain:
             self._update_lock_tracking()
             return
         zone, action = cur
-        if not zone or not action:
+        if not zone:
+            # No zone at all: not a stuck state (the robot is between zones).
+            self._stuck_ticks = 0
             self._update_lock_tracking()
             return
+        if not action:
+            # Stuck: a zone is set but no action is active (no pending move and no
+            # transition, guarded above). Re-arm the robot, or let the watchdog
+            # backstop handle a persistent stuck state.
+            self._handle_stuck(zone)
+            self._update_lock_tracking()
+            return
+        # Normal path: the robot has a zone and an action; it is not stuck.
+        self._stuck_ticks = 0
         # The current action must loop for autonomy to consider advancing (a
         # non-looping action has no "next" to follow in the same zone).
         z = self.machine.zones.get(zone)
@@ -1088,6 +1104,67 @@ class Brain:
         if (self.machine.current_zone, self.machine.current_action) == cur:
             self._autonomy_action_start_ts = time.time()
         self._update_lock_tracking()
+
+    # ------------------------------------------------------------------
+    # Stuck-state recovery (auto mode).
+    # ------------------------------------------------------------------
+    def _handle_stuck(self, zone: str) -> None:
+        """Recover a stuck robot (a zone is set but no action is active).
+
+        Called from :meth:`_autonomy_tick` when the robot is in a ``(zone, None)``
+        state: ``current_zone`` set, ``current_action`` None, no pending move, no
+        transition. This happens when a non-looping action completes and its
+        hand-off is either discarded by the safety gate (auto mode) or dead-ends on
+        invalid/disabled ``next``/``exits`` data, or when a zone reload removes the
+        current action.
+
+        Tries to re-arm the robot by playing a valid action in the current zone. On
+        success the stuck counter resets. On failure the counter increments; once it
+        reaches the threshold the watchdog clears the blocked-candidate set (so a
+        previously-discarded target can be retried) and logs a warning.
+        """
+        self._stuck_ticks += 1
+        if self._rearm_stuck(zone):
+            self._stuck_ticks = 0
+            return
+        if self._stuck_ticks >= self._stuck_threshold():
+            self._blocked_candidates.clear()
+            self._stuck_ticks = 0
+            print(f"[brain] stuck in {zone!r} after {self._stuck_threshold()} ticks; "
+                  f"cleared blocked candidates to retry")
+
+    def _rearm_stuck(self, zone: str) -> bool:
+        """Re-arm a stuck robot by playing a valid action in the current zone.
+
+        Prefers an enabled, looping, non-blocked action (the robot keeps moving in
+        the zone so the brain can then decide to advance). Falls back to the first
+        enabled, non-blocked action. Returns the bool from :meth:`play_action`;
+        no-op (False) when there is no valid action to play.
+        """
+        z = self.machine.zones.get(zone)
+        if z is None or not z.enabled:
+            return False
+        # Prefer an enabled, looping, non-blocked action.
+        for name in z.actions():
+            if (z.action_enabled(name) and z.action_loops(name)
+                    and (zone, name) not in self._blocked_candidates):
+                return self.machine.play_action(name)
+        # Fallback: the first enabled, non-blocked action (even non-looping).
+        for name in z.actions():
+            if z.action_enabled(name) and (zone, name) not in self._blocked_candidates:
+                return self.machine.play_action(name)
+        return False
+
+    def _stuck_threshold(self) -> int:
+        """The number of stuck ticks before the watchdog clears blocked candidates.
+
+        Reads the optional ``autonomy.stuck_threshold`` (a number > 0); falls back
+        to 10 ticks.
+        """
+        t = self._autonomy_cfg().get("stuck_threshold")
+        if isinstance(t, (int, float)) and not isinstance(t, bool) and t > 0:
+            return int(t)
+        return 10
 
     # ------------------------------------------------------------------
     # Assertive mode (random safe destinations).

@@ -112,6 +112,13 @@ const Robot3D = (() => {
   let camViewRenderer = null, camViewCamera = null, camViewContainer = null;
   let camViewLensName = null, camViewDims = { w: 0, h: 0 };
   let _camViewPos = null, _camViewQuat = null, _camViewOrientMat = null, _camViewScale = null;
+  // Pose drag (interactive pose authoring): a small handle at the ghost flange that the
+  // user drags; each pointer move projects the pointer onto a camera-facing plane and
+  // solves IK (ik.js) from the previous pose, driving the ghost. Owned by the editor via
+  // opts.onPose / opts.onEnd. Requires the KR60IK global (ik.js) to be loaded.
+  let poseDrag = null;         // { opts, seed, active, plane, ray }
+  let poseDragHandle = null;   // THREE.Group (visual sphere + invisible hit proxy)
+  let pendingPoseDragOpts = null;  // enablePoseDrag before the arm is built; applied at running
 
   function rotFromRpy(r) {
     const Rx = new THREE.Matrix4().makeRotationX(r[0]);
@@ -923,6 +930,12 @@ const Robot3D = (() => {
       setJoints(rotors, HOME);
       setJoints(rotorsT, HOME);
       running = true;
+      // A pose-drag enable requested before the arm was built comes up now.
+      if (pendingPoseDragOpts) {
+        const o = pendingPoseDragOpts;
+        pendingPoseDragOpts = null;
+        enablePoseDrag(o);
+      }
       if (collisionEnabled) setupCollision();
       const attach = (toolObj, toolCollisionObj) => {
         try {
@@ -972,7 +985,12 @@ const Robot3D = (() => {
       }
       setJoints(rotors, s.joints);
     }
-    if (s.target) { setJoints(rotorsT, s.target); lastTarget = s.target; }
+    if (s.target) {
+      // During a pose drag the drag loop owns the ghost (setTarget per IK step); the
+      // state stream's target must not fight it.
+      if (poseDrag && poseDrag.active) { }
+      else { setJoints(rotorsT, s.target); lastTarget = s.target; }
+    }
     // Push the core's resolved hydra patch onto the tool screen (the robot's screen
     // follows the live state); only re-eval when the code actually changes.
     if (screenHydra && typeof s.patch === "string" && s.patch && s.patch !== screenPatchCode) {
@@ -1193,5 +1211,122 @@ const Robot3D = (() => {
     console.log("[collision] " + (collisionOn ? "enabled" : "disabled") + " (runtime)");
   }
 
-  return { init, update, setTarget, getJoints, screenResolution, setGhostVisible, setRobotRealVisible, setRobotCollisionVisible, setToolCollisionVisible, setEnvRealVisible, setEnvCollisionVisible, setCameraFovVisible, setCameraRigVisible, setCameraView, setCameraViewLens, getCamViewLens, collisions, checkPoseCollision, reloadEnv, diagCollision, diagEnv, setCollisionEnabled };
+  // ------------------------------------------------------------------
+  // Pose drag: drag the ghost's flange (end-effector) to author a pose.
+  // The editor enables this for the selected anchor pose; each pointer move
+  // projects the pointer onto a camera-facing plane through the flange and
+  // solves IK (ik.js) from the previous pose, so the arm stays continuous.
+  // The ghost is driven with setTarget(); update() skips the state stream's
+  // target while a drag is active. Requires the KR60IK global (ik.js).
+  // ------------------------------------------------------------------
+  function pointerNdc(e) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    const y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    return new THREE.Vector2(x, y);
+  }
+
+  function poseDragOnDown(e) {
+    if (!poseDrag || poseDrag.active) return;
+    const ndc = pointerNdc(e);
+    if (!ndc) return;
+    poseDrag.ray.setFromCamera(ndc, camera);
+    if (!poseDrag.ray.intersectObjects(poseDragHandle.children, false).length) return;
+    poseDrag.active = true;
+    // OrbitControls' pointerdown ran first (its listener is registered at init);
+    // disabling here makes its pointermove a no-op for the rest of the drag, and it
+    // cleans up its state on pointerup regardless.
+    controls.enabled = false;
+    // Camera-facing plane through the flange: the pointer's world position on it is
+    // the IK target. (Normal = camera -> flange.)
+    const h = poseDragHandle.position;
+    const n = new THREE.Vector3().subVectors(h, camera.position).normalize();
+    poseDrag.plane.setFromNormalAndCoplanarPoint(n, h);
+    poseDrag.seed = (poseDrag.seed || HOME).slice();
+  }
+
+  function poseDragOnMove(e) {
+    if (!poseDrag || !poseDrag.active) return;
+    const ndc = pointerNdc(e);
+    if (!ndc) return;
+    poseDrag.ray.setFromCamera(ndc, camera);
+    const pt = new THREE.Vector3();
+    if (!poseDrag.ray.ray.intersectPlane(poseDrag.plane, pt)) return;
+    const res = KR60IK.ikSolve(poseDrag.seed, [pt.x, pt.y, pt.z], {
+      limits: poseDrag.opts.limits, lam: 0.1, maxIter: 60, tol: 0.0004,
+    });
+    poseDrag.seed = res.pose;
+    setTarget(res.pose);
+    const fp = KR60IK.fkPos(res.pose);
+    poseDragHandle.position.set(fp[0], fp[1], fp[2]);
+    if (poseDrag.opts.onPose) poseDrag.opts.onPose(res.pose, fp, res.err);
+  }
+
+  function poseDragOnUp() {
+    if (!poseDrag || !poseDrag.active) return;
+    poseDrag.active = false;
+    controls.enabled = true;
+    if (poseDrag.opts.onEnd && poseDrag.seed) {
+      poseDrag.opts.onEnd(poseDrag.seed, KR60IK.fkPos(poseDrag.seed));
+    }
+  }
+
+  // Returns true when the request was accepted (immediately, or pending until the
+  // arm is built); false when ik.js is missing (nothing to retry).
+  function enablePoseDrag(opts) {
+    if (typeof KR60IK === "undefined") {
+      if (typeof logFn === "function") logFn("pose drag unavailable (ik.js missing)");
+      return false;
+    }
+    if (!running || !scene) {
+      pendingPoseDragOpts = opts || {};
+      return true;
+    }
+    disablePoseDrag();
+    poseDrag = { opts: opts || {}, seed: null, active: false, plane: new THREE.Plane(), ray: new THREE.Raycaster() };
+    const g = new THREE.Group();
+    g.add(new THREE.Mesh(
+      new THREE.SphereGeometry(0.09, 12, 12),
+      new THREE.MeshBasicMaterial({ visible: false })  // hit proxy (easier to grab)
+    ));
+    g.add(new THREE.Mesh(
+      new THREE.SphereGeometry(0.045, 16, 16),
+      new THREE.MeshBasicMaterial({ color: 0x37d0ff })
+    ));
+    scene.add(g);
+    poseDragHandle = g;
+    if (opts && opts.pose) poseDragSetPose(opts.pose);
+    renderer.domElement.addEventListener("pointerdown", poseDragOnDown);
+    window.addEventListener("pointermove", poseDragOnMove);
+    window.addEventListener("pointerup", poseDragOnUp);
+    return true;
+  }
+
+  function disablePoseDrag() {
+    pendingPoseDragOpts = null;
+    if (poseDrag) {
+      renderer.domElement.removeEventListener("pointerdown", poseDragOnDown);
+      window.removeEventListener("pointermove", poseDragOnMove);
+      window.removeEventListener("pointerup", poseDragOnUp);
+      poseDrag = null;
+    }
+    if (poseDragHandle) {
+      scene.remove(poseDragHandle);
+      poseDragHandle = null;
+    }
+  }
+
+  // (Re)seed the drag: the handle snaps to the pose's flange and the IK starts
+  // from it on the next drag.
+  function poseDragSetPose(pose) {
+    if (!poseDrag || !pose) return;
+    poseDrag.seed = pose.slice();
+    if (poseDragHandle) {
+      const p = KR60IK.fkPos(pose);
+      poseDragHandle.position.set(p[0], p[1], p[2]);
+    }
+  }
+
+  return { init, update, setTarget, getJoints, screenResolution, setGhostVisible, setRobotRealVisible, setRobotCollisionVisible, setToolCollisionVisible, setEnvRealVisible, setEnvCollisionVisible, setCameraFovVisible, setCameraRigVisible, setCameraView, setCameraViewLens, getCamViewLens, collisions, checkPoseCollision, reloadEnv, diagCollision, diagEnv, setCollisionEnabled, enablePoseDrag, disablePoseDrag, poseDragSetPose };
 })();

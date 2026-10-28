@@ -609,6 +609,102 @@ def _validate_zone(name: str, z: dict, all_names: set) -> None:
         _validate_action(an, a, all_names)
 
 
+def _zone_enabled(z: dict) -> bool:
+    """Whether a zone dict is enabled (default True when the flag is absent)."""
+    if not isinstance(z, dict):
+        return False
+    return bool(z.get("enabled", True))
+
+
+def _action_table(z: dict) -> dict:
+    """A zone dict's action table as a dict (empty when absent or malformed)."""
+    a = z.get("actions", {})
+    return a if isinstance(a, dict) else {}
+
+
+def _action_entry_valid(entry: dict, zones: dict) -> bool:
+    """Whether a next/exit entry names a valid target.
+
+    A target is valid when the zone exists and is enabled and the action is named,
+    exists in that zone, and is enabled.
+    """
+    tz = entry.get("zone")
+    ta = entry.get("action")
+    if not isinstance(tz, str) or tz not in zones:
+        return False
+    if not _zone_enabled(zones[tz]):
+        return False
+    tz_actions = _action_table(zones[tz])
+    if not isinstance(ta, str) or ta not in tz_actions:
+        return False
+    ta_data = tz_actions[ta]
+    if not isinstance(ta_data, dict):
+        return False
+    return bool(ta_data.get("enabled", True))
+
+
+def _has_valid_next(a: dict, zones: dict) -> bool:
+    """Whether an action dict has a valid ``next`` candidate (any entry valid)."""
+    n = a.get("next")
+    if isinstance(n, dict):
+        items = [n]
+    elif isinstance(n, list):
+        items = n
+    else:
+        return False
+    return any(isinstance(e, dict) and _action_entry_valid(e, zones) for e in items)
+
+
+def _has_valid_exit(z: dict, zones: dict) -> bool:
+    """Whether a zone dict has a valid ``exit`` candidate (any pair valid).
+
+    Exits are stored as ``[zone, action]`` pairs (not dicts); each is checked the
+    same way as a next entry.
+    """
+    e = z.get("exits")
+    if not isinstance(e, list):
+        return False
+    return any(
+        isinstance(pair, list) and len(pair) == 2
+        and _action_entry_valid({"zone": pair[0], "action": pair[1]}, zones)
+        for pair in e
+    )
+
+
+def _validate_no_dead_ends(zones: dict) -> None:
+    """Reject zones that would dead-end the robot (raise ``ValueError``).
+
+    A non-looping action with no valid ``next`` in a zone with no valid ``exit``
+    would leave the robot holding the last pose forever once the action completes
+    (the auto-return fallback only applies to single-action zones). Multi-action
+    zones are the operator's choice points and must never dead-end silently.
+    Single-action zones are exempt: the runtime auto-returns them to the previous
+    zone (see :meth:`StateMachine._advance_after_action`).
+    """
+    for name, z in zones.items():
+        if not isinstance(z, dict):
+            continue
+        acts = _action_table(z)
+        if not acts:
+            continue
+        # Single-action zones have the runtime auto-return fallback; exempt.
+        if len(acts) == 1:
+            continue
+        exits = _has_valid_exit(z, zones)
+        for an, a in acts.items():
+            if not isinstance(a, dict):
+                continue
+            if a.get("loop", True):
+                continue  # looping actions do not dead-end
+            if _has_valid_next(a, zones):
+                continue  # the action has a valid next
+            if exits:
+                continue  # the zone has a valid exit
+            raise ValueError(
+                f"zone {name!r}: action {an!r} is non-looping with no valid next "
+                f"and the zone has no valid exit (dead-end)")
+
+
 def validate_state_data(data) -> dict:
     """Validate a full zone/pose data table. Returns ``data`` or raises ``ValueError``."""
     if not isinstance(data, dict):
@@ -619,6 +715,7 @@ def validate_state_data(data) -> dict:
     names = set(zones)
     for name, z in zones.items():
         _validate_zone(name, z, names)
+    _validate_no_dead_ends(zones)
     for key in ("poses", "lin_poses"):
         if key in data:
             table = data[key]

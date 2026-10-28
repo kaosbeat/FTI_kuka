@@ -153,14 +153,20 @@ def _shared_pose_zones():
 
     The shared pose is p2 = [2,0,0,0,0,0] (index 1 in A, index 2 in B), so the
     handoff resumes B at index 3 (p6).
+
+    The non-looping actions carry a ``next`` (a -> b, b -> a) so the zone passes the
+    strict dead-end validation; the tests never drive an action to completion, so the
+    ``next`` is not exercised.
     """
     return validate_state_data({"zones": {
         "z": {"safezone": [[-10, 10]] * 6, "speed": 1, "actions": {
             "a": {"poses": [[1, 0, 0, 0, 0, 0], [2, 0, 0, 0, 0, 0], [3, 0, 0, 0, 0, 0]],
-                  "loop": False},
+                  "loop": False,
+                  "next": {"zone": "z", "action": "b"}},
             "b": {"poses": [[4, 0, 0, 0, 0, 0], [5, 0, 0, 0, 0, 0],
-                             [2, 0, 0, 0, 0, 0], [6, 0, 0, 0, 0, 0]],
-                  "loop": False},
+                              [2, 0, 0, 0, 0, 0], [6, 0, 0, 0, 0, 0]],
+                  "loop": False,
+                  "next": {"zone": "z", "action": "a"}},
         }}}
     })["zones"]
 
@@ -218,8 +224,10 @@ def test_no_shared_pose_falls_back_to_entry_pose():
     """When the actions share no pose, the handoff is the target's entry pose at index 0."""
     data = validate_state_data({"zones": {
         "z": {"safezone": [[-10, 10]] * 6, "speed": 1, "actions": {
-            "a": {"poses": [[1, 0, 0, 0, 0, 0]], "loop": False},
-            "b": {"poses": [[8, 0, 0, 0, 0, 0], [9, 0, 0, 0, 0, 0]], "loop": False},
+            "a": {"poses": [[1, 0, 0, 0, 0, 0]], "loop": False,
+                  "next": {"zone": "z", "action": "b"}},
+            "b": {"poses": [[8, 0, 0, 0, 0, 0], [9, 0, 0, 0, 0, 0]], "loop": False,
+                  "next": {"zone": "z", "action": "a"}},
         }}}
     })
     z = Zones(data["zones"])
@@ -256,7 +264,8 @@ def test_shared_pose_is_last_anchor_non_looping_hands_off():
     is not left dangling)."""
     data = validate_state_data({"zones": {
         "a": {"safezone": [[-10, 10]] * 6, "speed": 1, "actions": {
-            "x": {"poses": [[1, 0, 0, 0, 0, 0], [2, 0, 0, 0, 0, 0]], "loop": False},
+            "x": {"poses": [[1, 0, 0, 0, 0, 0], [2, 0, 0, 0, 0, 0]], "loop": False,
+                  "next": {"zone": "a", "action": "end"}},
             # "fin" holds the shared pose [2,0,0,0,0,0] as its only (last) anchor and
             # is non-looping; after the handoff there is nothing left to play.
             "fin": {"poses": [[2, 0, 0, 0, 0, 0]], "loop": False,
