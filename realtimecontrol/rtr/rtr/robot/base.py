@@ -47,3 +47,12 @@ class RobotBase(ABC):
 
         ``blocking`` follows the same contract as :meth:`move_joint`.
         """
+
+    def recover(self) -> None:
+        """Attempt to recover a dead connection (no-op for the sim).
+
+        The real KUKA (via kukapy) overrides this to disconnect + reconnect the
+        EKI session. The sim has no connection to recover, so this is a no-op.
+        Called by the engine's watchdog when a KukaError is raised.
+        """
+        pass

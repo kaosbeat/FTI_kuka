@@ -114,6 +114,16 @@ class Engine:
                 else:
                     self._seen_exceptions[sig] += 1
                     print(f"[engine] tick#{tick_no} EXCEPTION: {exc!r}")
+                # EKI stall recovery: when a KukaError (stalled handshake, dead
+                # socket, or framing desync) is raised, attempt to recover the
+                # connection so the engine can continue without a full restart.
+                if KukaError is not None and isinstance(exc, KukaError):
+                    print(f"[engine] tick#{tick_no} KukaError: attempting EKI recovery")
+                    try:
+                        await asyncio.to_thread(self.robot.recover)
+                        print(f"[engine] tick#{tick_no} EKI recovery succeeded")
+                    except Exception as rec_exc:
+                        print(f"[engine] tick#{tick_no} EKI recovery failed: {rec_exc}")
                 self.bus.publish(Event.SAFETY_ALERT, {
                     "type": "engine_exception",
                     "error": str(exc),

@@ -89,6 +89,12 @@ class Brain:
         # move, no transition). Used to re-arm a stuck robot and, as a backstop,
         # to clear the blocked-candidate set once re-arming keeps failing.
         self._stuck_ticks: int = 0
+        # Zone-dwell watchdog: tracks how long the robot has been in the current
+        # zone. In auto mode, when the zone dwell exceeds the threshold the brain
+        # forces the robot to advance to a different zone (the robot should never
+        # stay in the same zone too long). Manual mode disables the watchdog.
+        self._zone_entry_ts: float = 0.0
+        self._zone_entry_name: Optional[str] = None
         # Runtime group navigation: a single active group at a time. ``active_group``
         # is the enabled group name (None when no group is active); ``group_nav``
         # holds the (zone, action) waypoints to walk (the start is stripped) and
@@ -1055,6 +1061,10 @@ class Brain:
             # Clear blocked candidates when the state changes (the old blocked
             # targets are no longer relevant).
             self._clear_blocked_if_changed()
+        # Zone-dwell tracking: reset the zone entry timer when the zone changes.
+        if self.machine.current_zone != self._zone_entry_name:
+            self._zone_entry_name = self.machine.current_zone
+            self._zone_entry_ts = time.time()
         # The camera intent follows the action (applied on every action change,
         # regardless of whether autonomy is on).
         cur_cam = (self.machine.current_zone, self.machine.current_action)
@@ -1103,6 +1113,18 @@ class Brain:
         # trigger instead of re-firing every tick.
         if (self.machine.current_zone, self.machine.current_action) == cur:
             self._autonomy_action_start_ts = time.time()
+        # Zone-dwell watchdog: force the robot to leave the current zone when the
+        # zone dwell expires (auto mode only; manual mode disables the watchdog).
+        # The robot should never stay in the same zone too long.
+        if (self.machine.control_mode == "auto"
+                and self.machine.current_zone is not None
+                and self.machine.current_zone == zone
+                and not self.machine.transitioning
+                and not self.machine.pending):
+            now = time.time()
+            dwell = self._zone_dwell_s()
+            if (now - self._zone_entry_ts) >= dwell:
+                self._force_zone_advance(zone)
         self._update_lock_tracking()
 
     # ------------------------------------------------------------------
@@ -1165,6 +1187,63 @@ class Brain:
         if isinstance(t, (int, float)) and not isinstance(t, bool) and t > 0:
             return int(t)
         return 10
+
+    def _zone_dwell_s(self) -> float:
+        """The maximum time the robot may stay in a zone before being forced to leave.
+
+        Reads the optional ``autonomy.zone_dwell_s`` (seconds > 0); falls back to
+        30.0 s. In auto mode the robot should never stay in the same zone longer
+        than this threshold (unless in manual mode, where the watchdog is disabled).
+        """
+        t = self._autonomy_cfg().get("zone_dwell_s")
+        if isinstance(t, (int, float)) and not isinstance(t, bool) and t > 0:
+            return float(t)
+        return 30.0
+
+    def _force_zone_advance(self, zone: str) -> None:
+        """Force the robot to leave the current zone (zone-dwell watchdog).
+
+        Called when the zone dwell exceeds the threshold in auto mode. Prefers a
+        valid candidate in a *different* zone (from the action's ``next`` list or
+        the zone-level ``exits``). When no different-zone candidate exists, logs a
+        warning (the robot cannot leave; the zone is isolated).
+
+        The advance uses the same safety-gated path as normal autonomy:
+        ``trigger_action`` (cross-zone) or ``play_action`` (same-zone, but we
+        prefer different-zone so this should be cross-zone).
+        """
+        m = self.machine
+        z = m.zones.get(zone)
+        if z is None:
+            return
+        # Collect different-zone candidates: first from the current action's next
+        # list, then from the zone-level exits.
+        action = m.current_action
+        cands: list = []
+        if action:
+            for entry in z.action_next_list(action):
+                tz = entry.get("zone")
+                ta = entry.get("action")
+                if isinstance(tz, str) and tz != zone and isinstance(ta, str):
+                    if m.zones.has(tz) and m.zones.get(tz).enabled:
+                        if ta in m.zones.get(tz).actions() and m.zones.get(tz).action_enabled(ta):
+                            if (tz, ta) not in self._blocked_candidates:
+                                cands.append((tz, ta))
+        for tz, ta in z.exits():
+            if tz != zone and (tz, ta) not in cands:
+                if m.zones.has(tz) and m.zones.get(tz).enabled:
+                    if ta in m.zones.get(tz).actions() and m.zones.get(tz).action_enabled(ta):
+                        if (tz, ta) not in self._blocked_candidates:
+                            cands.append((tz, ta))
+        if cands:
+            tz, ta = random.choice(cands)
+            m.trigger_action(tz, ta)
+            print(f"[brain] zone-dwell watchdog: forcing advance from {zone!r} "
+                  f"to {tz}/{ta} (zone dwell exceeded {self._zone_dwell_s():.0f}s)")
+        else:
+            print(f"[brain] zone-dwell watchdog: no different-zone candidate for "
+                  f"{zone!r} (zone dwell exceeded {self._zone_dwell_s():.0f}s); "
+                  f"cannot force advance")
 
     # ------------------------------------------------------------------
     # Assertive mode (random safe destinations).

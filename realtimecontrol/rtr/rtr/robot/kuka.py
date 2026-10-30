@@ -90,6 +90,28 @@ class KukaRobot(RobotBase):
     def move_linear(self, pose: List[float], speed: float, blocking: bool = True) -> None:
         self._move(pose, speed, blocking, linear=True)
 
+    def recover(self) -> None:
+        """Attempt to recover a dead EKI connection: disconnect + reconnect.
+
+        Called by the engine's watchdog when a ``KukaError`` is raised from a
+        kukapy call (stalled handshake, dead socket, or framing desync). The
+        reconnect re-establishes the EKI session so the engine can continue
+        without a full restart. Raises the original error if the reconnect fails.
+        """
+        if self._robot is None:
+            return
+        try:
+            self._robot.disconnect()
+        except Exception:
+            pass
+        self._robot = None
+        try:
+            self.connect()
+            print("[kuka] EKI connection recovered")
+        except Exception as exc:
+            print(f"[kuka] EKI recovery failed: {exc}")
+            raise
+
     def set_joint_offsets(self, offsets: List[float]) -> None:
         """Update the joint home offset (hot-reload from the robot config)."""
         self._joint_offsets = list(offsets)
