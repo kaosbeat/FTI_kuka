@@ -135,11 +135,18 @@ def _normalize_zone_entry(raw: Any, where: str) -> dict:
     """Return a zone entry in the per-zone shape ``{out_port, command}``.
 
     A legacy bare-message entry (``{note, velocity}`` etc.) is wrapped as
-    ``{out_port: None, command: <msg>}``; an already-wrapped entry is returned as-is.
+    ``{out_port: None, command: <msg>}``. An already-wrapped entry (carrying
+    ``command`` or ``out_port``) is returned as-is, including a zone with **no
+    command** (``{out_port: <n>}`` or ``{}``) — such a zone sends nothing on entry
+    (its actions / poses still play on the zone's out device).
     """
-    if isinstance(raw, dict) and "command" in raw:
+    if not isinstance(raw, dict):
+        return {"out_port": None, "command": None}
+    if "command" in raw or "out_port" in raw:
         return raw
-    return {"out_port": None, "command": raw}
+    if any(k in raw for k in ("note", "velocity", "cc", "value", "program")):
+        return {"out_port": None, "command": raw}
+    return {"out_port": None, "command": None}
 
 
 def validate_sound_data(data: Any) -> dict:
@@ -184,7 +191,9 @@ def validate_sound_data(data: Any) -> dict:
         if op is not None:
             if not (isinstance(op, int) and not isinstance(op, bool) and op >= 0):
                 raise ValueError(f"zones[{name!r}].out_port must be a non-negative int or null")
-        validate_message(entry.get("command"), f"zones[{name!r}].command")
+        cmd = entry.get("command")
+        if cmd is not None:
+            validate_message(cmd, f"zones[{name!r}].command")
     for zone, acts in data["actions"].items():
         if not isinstance(acts, dict):
             raise ValueError(f"actions[{zone!r}]: must be an object")
@@ -525,12 +534,17 @@ class Sound:
     def _zone_command(self, zone) -> Any:
         """The zone entry's command message (read from the per-zone ``{out_port, command}``).
 
-        Falls back to the entry itself for a legacy bare-message table (unvalidated),
-        so the adapter is robust to raw tables in tests.
+        Returns ``None`` for a wrapped entry without a command (the zone sends nothing
+        on entry). Falls back to the entry itself for a legacy bare-message table
+        (unvalidated), so the adapter is robust to raw tables in tests.
         """
         entry = self._data.get("zones", {}).get(zone)
-        if isinstance(entry, dict) and "command" in entry:
-            return entry["command"]
+        if isinstance(entry, dict):
+            if "command" in entry:
+                return entry["command"]
+            if "out_port" in entry:
+                return None
+            return entry
         return entry
 
     def _on_snapshot(self, snap: Snapshot) -> None:
@@ -548,7 +562,9 @@ class Sound:
                 if isinstance(prev_msg, dict) and "note" in prev_msg:
                     self._note_off(prev_msg, prev)
             if snap.zone in zones:
-                self._send_msg(self._zone_command(snap.zone), snap.zone)
+                msg = self._zone_command(snap.zone)
+                if isinstance(msg, dict):
+                    self._send_msg(msg, snap.zone)
 
         # 2. action start: send the action's start message (or its first pose).
         if snap.action != self._last_action:

@@ -1,5 +1,539 @@
 # Task Handoff Log
 
+## 2026-10-29 — Restored test_groups_tab.js STATIC_IDS (stale id list broke the harness load)
+
+### Status
+
+Completed
+
+### Summary
+
+`test_groups_tab.js` (the groups-tab DOM-stub test) was failing to **load** — the main `<script>` in `editor.html` now references element ids that were added after this test's `STATIC_IDS` list was written, so the mini-DOM harness threw `Cannot set properties of null (setting 'onclick')` before any assertion ran. Replaced its stale `STATIC_IDS` with the corrected id list (the one carried by `test_flow_tab.js`), which is a superset covering every id the script references. The test now loads and passes.
+
+### Changes Made
+
+- `realtimecontrol/rtr/test_groups_tab.js` (line 182): replaced the stale `STATIC_IDS` array with the corrected list. The new list adds the ids the script gained since the test was written — `limitsForm` (the limits card), the `poses*` ids (poses tab), `flowValidate` / `flowProblems` (flow validate), `midiInCb` / `midiOutCb` / `midiAllList` (the in/out toggle split), and `aeSaveStatus` — and drops the removed `midiMasterCb`.
+
+### Documentation
+
+- None required — internal test-harness fix; no behavior or config change.
+
+### Architecture
+
+- No architectural impact. Test-only change (the DOM-stub harness's pre-created element ids now match the current script).
+
+### Validation
+
+- `node test_groups_tab.js` → **ALL_TESTS_PASSED** (was failing to load before the fix).
+- `node test_flow_tab.js` → **ALL_TESTS_PASSED** (unchanged; the source of the corrected id list).
+
+### Decisions and Caveats
+
+- The corrected list is a **superset** of the old one, so it covers any id the script references now or will reference; the harness only needs the ids to exist, not to be an exact match.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+N/A
+
+## 2026-10-29 — Robotconfig limits card: hardware limits read-only + editable soft limits
+
+### Status
+
+Completed
+
+### Summary
+
+The robotconfig tab gained a per-axis **limits** card. It shows the **hardware** joint limits (the physical floor from the kr60ha xacro — `HARDWARE_LIMITS`, loaded from `/api/limits` with a built-in fallback) as **read-only** reference cells, and a **soft** limit per axis as **editable** cells. The soft limit defaults to the hardware limit (no extra restriction) and can be tightened to restrict movement further; the in-app copy states the effective limit for an axis is the intersection of the soft and hardware limits. The soft limits are persisted with the robot config (`saveRobotConfig()` → POST `/api/robotconfig` → `robotconfig.json` → hot-reload).
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - CSS (line ~111): added `.limitsGrid` (a 5-column grid: axis / hw min / hw max / soft min / soft max), `.limitsGrid input[type=number]`, `.limitsGrid input[readonly]` (dimmed + transparent — the HW cells), and `.limitsGrid .limitsHead`.
+  - HTML (line ~693–701): added the `<h2>limits</h2>` section with a `midiHelp` paragraph (hardware = uneditable safety floor; soft = additional configurable restriction; effective = intersection) and the `<div id="limitsForm"></div>` mount.
+  - `normalizeRobotConfig(data)` (line ~3712): added `soft_limits` normalization — a 6-element array of `[min,max]` pairs. A malformed pair falls back to `HW_LIMITS[idx]`; a missing/malformed list defaults every axis to `HW_LIMITS` (no extra restriction). The key is returned in the config.
+  - `buildLimitsForm()` (line ~3785, new): builds a header row + 6 axis rows. HW min/max are `<input type=number readonly>` (styled via `.limitsGrid input[readonly]`); soft min/max are editable `<input type=number>` carrying `data-axis` / `data-bound` (`lo` / `hi`).
+  - `buildRobotConfigForm()` (line ~3782): now calls `buildLimitsForm()` so the card renders on robotconfig-tab entry.
+  - `loadLimits()` (line ~1464): after loading `HW_LIMITS` (API → xacro fallback), rebuilds the card if in the robotconfig view (`if (robotconfigView && ROBOT_CONFIG) buildLimitsForm();`).
+  - `saveRobotConfig()` (line ~3845): reads the editable (non-readonly) inputs from `#limitsForm`, builds the `soft_limits` array (a non-number falls back to the current config value), and includes it in the POST payload to `/api/robotconfig`.
+
+### Documentation
+
+- The in-app `midiHelp` paragraph in the limits section describes the hardware/soft distinction and the intersection rule. No README or config-schema change.
+
+### Architecture
+
+- The `robotconfig.json` data model gains a `soft_limits` field (a 6×2 list of `[min,max]`), persisted via the existing POST `/api/robotconfig` path. The core's `validate_robot_config` (`rtr/robot/config.py`) preserves `soft_limits` **verbatim** — it only type-checks `joint_offsets_deg` and `patch_mode` — so the field flows to disk + hot-reload without a schema change. **The Python core does not yet consume `soft_limits`**: the runtime clamp still uses the hardware floor (`HARDWARE_LIMITS`) ∩ safezone, so the soft limit is currently a persisted, front-end-editable restriction that is not yet enforced by the core (see Decisions).
+
+### Validation
+
+- `node --check` on the extracted inline `<script>` of `editor.html` → **SYNTAX OK**.
+- `node /tmp/kilo/test_limits.js` (the limits DOM test) → **5/5 passed**:
+  - `normalizeRobotConfig` defaults `soft_limits` to `HW_LIMITS`,
+  - `normalizeRobotConfig` preserves explicit `soft_limits`,
+  - `normalizeRobotConfig` handles malformed `soft_limits` (falls back to `HW_LIMITS`),
+  - `buildLimitsForm` builds a header + 6 axis rows,
+  - `saveRobotConfig` reads the soft limits correctly from the form.
+
+### Decisions and Caveats
+
+- **`soft_limits` is front-end-only for now.** It is displayed, editable, and saved to `robotconfig.json`, but the Python core does not read it — the effective clamp at runtime is still `HARDWARE_LIMITS` ∩ safezone. The card therefore currently *documents* the soft limit and persists it, but does not yet *enforce* it. Wiring it into the core clamp (e.g. clamping to `soft ∩ hardware ∩ safezone`) is the natural follow-up to make the restriction real.
+- HW cells are read-only **inputs** (not plain text) so the grid columns stay visually aligned; they are styled dimmed/transparent (`.limitsGrid input[readonly]`) to read as a reference, not a control.
+- `saveRobotConfig()` reads soft values by the **non-readonly** inputs in `#limitsForm` (index `i*2` / `i*2+1`), so a stale or empty field falls back to the last-known `ROBOT_CONFIG.soft_limits` value rather than corrupting the payload.
+
+### Next Task
+
+Optional: wire the persisted `soft_limits` into the core's clamp so the soft restriction is actually enforced at runtime (currently persisted but not consumed). Also optional: restore `test_groups_tab.js`'s stale `STATIC_IDS` (it currently fails to load because the script gained poses/limits/flow-validate ids after that test was written; the corrected id list is in `test_flow_tab.js`).
+
+### Instructions for the Next Task
+
+- To enforce soft limits in the core: `soft_limits` is already on `ROBOT_CONFIG` (JS) and on the on-disk `robotconfig.json` (persisted via POST `/api/robotconfig`, hot-reloaded by `Cmd.RELOAD_ROBOT_CONFIG`). On the Python side, `validate_robot_config` in `rtr/robot/config.py` preserves `soft_limits` verbatim; add a `robot_config_soft_limits(config)` helper (mirror `robot_config_offsets`) and thread the per-axis soft bounds into the same clamp that currently uses `HARDWARE_LIMITS` (the safezone ∩ hardware intersection in `rtr/state/zones.py`). Keep the default = hardware limit (no extra restriction) so existing configs are unaffected.
+- To restore `test_groups_tab.js`: replace its stale `STATIC_IDS` array with the corrected id list (the one at the top of `test_flow_tab.js`), which includes the `limitsForm` / poses / flow-validate ids the script now references.
+
+## 2026-10-29 — Flow tab: smarter autofit, bridge-between-endpoints layout, trackpad pan
+
+### Status
+
+Completed
+
+### Summary
+
+Three improvements to the flow tab (the node-graph editor) in `editor.html`:
+1. **Autofit** (`flowFitView`) now fits the content tightly, matches the canvas's aspect ratio (no empty letterbox bands), centres the view on the content's centre, and clamps the zoom scale to `[0.35, 6.0]` so nodes are never absurdly tiny or huge.
+2. **Bridge layout**: a bridge zone now renders at the geometric midpoint of the two nodes it connects — both in `flowBridge` (the manual "insert bridge" action) and in `flowAutoLayout` (which gives a bridge a *fractional* column depth = the mean of its endpoints' BFS depths so it lands in the column between them, then recentres it vertically on the endpoints' midpoint).
+3. **Trackpad / pan**: the pan was rewritten from a middle-button-only `mousedown` to pointer events with `setPointerCapture`. The **middle button now pans anywhere** (including over nodes), and the **left button pans when pressed on empty canvas** (a left press that does not move is still a background click = deselect). Node dragging is gated to the left button so a middle-drag over a node pans instead of dragging. The hint text was updated to match.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - `flowFitView()` (line ~7539): rewritten. Computes tight content bounds (min/max over every node's corners) + `PAD=40`, centres on the content centre, expands the smaller side to match the canvas aspect ratio (`ar = elW/elH`, fallback 800×560), clamps the fit scale `s = vw/elW` to `[0.35, 6.0]`, and stores `FLOW.view = {x: cx - vw/2, y: cy - vh/2, w: vw, h: vh}`.
+  - `flowAutoLayout(names)` (line ~7462): added a bridge post-pass. After the BFS-depth column layout, each in-scope bridge is (a) given a fractional depth = the mean of its neighbours' BFS depths (computed from a `bfsDepth` snapshot so bridge-to-bridge links stay stable), and (b) recentred at the midpoint of its neighbours' node centres (`x = cx - NODE_W/2`, `y = cy - BRIDGE_CY`). Only in-scope bridges move, so a manually placed bridge survives a partial relayout.
+  - `flowBridge(from, to)` (line ~8032): placement now puts the bridge's connection dot at the true geometric midpoint between the two endpoints (`midX = (pa.x+pb.x+NODE_W)/2`, `midY = (pa.y+nodeH(from)/2 + pb.y+nodeH(to)/2)/2`); the box top-left is `x = midX - NODE_W/2`, `y = midY - BRIDGE_CY`.
+  - Pan rewritten as `flowPanDown` / `flowPanMove` / `flowPanUp` (lines ~7610–7649): pointer events + `setPointerCapture` (the pan survives the pointer leaving the canvas); the middle button pans anywhere, the left button pans only when `e.target === svg`; a 3px click threshold distinguishes a click from a pan; the pan delta inverts the frozen `getScreenCTM()` (`dx/ctm.a`, `dy/ctm.d`); a non-moved left release deselects (background click).
+  - Node / action-row `mousedown` handlers (lines ~7802, ~7821): gated to the left button (`if (e.button !== 0) return;`) so a middle-drag over a node pans (see Decisions).
+  - SVG event handlers (lines ~8642–8645): replaced the old `mousedown`(button===1) + `click` handlers with `pointerdown/pointermove/pointerup/pointercancel` → `flowPanDown/flowPanMove/flowPanUp/flowPanUp`. The `wheel` → `flowZoomAt` handler is unchanged.
+  - Hint text (line 559): now reads "… wheel = zoom · drag empty canvas / middle-drag = pan".
+- `realtimecontrol/rtr/test_flow_tab.js` (new): a Node DOM-stub test that loads the main `<script>` into a `vm` sandbox (reusing the `test_groups_tab.js` mini-DOM harness), seeds a `TABLE` with a chain plus a bridge zone, and verifies the fractional bridge column depth, the bridge vertical-centring, the fit-view aspect/centring, and the fit-scale clamp.
+
+### Documentation
+
+- In-app hint text (line 559) updated to describe the new pan/zoom behaviour. No config schema or README change.
+
+### Architecture
+
+- The flow view model is unchanged in shape: `FLOW.view` is still the `{x,y,w,h}` viewBox and `FLOW.pan` still holds the pointer-pan state (now `{id, button, ctm, startX, startY, startView, moved}`). The change is behavioural: pan is pointer-captured (so it survives the pointer leaving the canvas) and the middle button is a pan-anywhere gesture. The auto-layout contract is extended: bridge zones are placed at the midpoint of their endpoints (a fractional column depth). This is a visual/layout improvement and does not change the on-disk zone/connection data.
+
+### Validation
+
+- `node --check` on the extracted inline `<script>` → SYNTAX OK.
+- `node test_flow_tab.js` (new) → **10/10 passed**:
+  - bridge lands at fractional column 1.5 (x=355, between b=250 and c=460),
+  - bridge centred vertically at the endpoints' midpoint (y=63; the dot at y+BRIDGE_CY = 79 = the midpoint),
+  - fit view aspect matches the canvas (2:1) and is centred on the content (320, 79),
+  - fit scale clamped to the MIN bound.
+- The new test's `STATIC_IDS` was regenerated from the script because the old list in `test_groups_tab.js` is stale: the script now references poses/limits/flow-validate ids that were added after that test was written (the groups test now also fails to load for the same reason).
+
+### Decisions and Caveats
+
+- **Middle-button pans ANYWHERE (even over nodes) — "Option B".** Because `flowDragStart` does not check the pointer button, the node and action-row `mousedown` listeners are gated to `button === 0`. A middle-drag that STARTS over a node now pans (previously it dragged the node). That is the intended tradeoff: the middle button is a pan gesture everywhere; the left button is the node-drag / connect gesture.
+- The fit-scale clamp (`[0.35, 6.0]`) is a heuristic to keep nodes legible, not a value derived from the content. Very sparse or very dense flows may feel under/over-zoomed at the clamp boundary.
+- `flowAutoLayout` only recentres bridges that are in the relayout scope (`sel`); a bridge the user placed by hand (outside the scope) keeps its position, matching the existing "manual layout survives a partial relayout" behaviour.
+
+### Next Task
+
+Write the pending **robotconfig limits-card** handoff entry. The limits-card work (hardware safelimits shown read-only + softlimits editable) was completed and validated in a prior session but its handoff entry was never written.
+
+### Instructions for the Next Task
+
+The limits-card work lives in `editor.html` (the `#limitsForm` element and the `loadLimits()` / limits-form build/save functions) plus its backend. Reconstruct the exact changes from `git diff` on `editor.html` (filter for `limits`/`Limits`), confirm `node --check` and the limits DOM test still pass, then write a handoff entry at the top of this file describing: the read-only hardware-safelimits display, the editable softlimits, and the save path. Mark it complete once the entry is written.
+
+## 2026-10-29 — MIDI out: make mappings removable + list all mapped MIDI
+
+### Status
+
+Completed
+
+### Summary
+
+The MIDI-out mapping and the per-action sound editor auto-seeded a default note (`{note: 60, velocity: 60}`) into every zone entry and every action, so you could never make a zone/action silent — removing a mapping would just get re-seeded on the next rebuild. Now: (1) a zone's entry sound and an action's start/pose sounds are all **optional** and can be removed (and removal survives save + reload); (2) unmapped zones/actions show an **"+ add sound"** button instead of a pre-filled default; (3) a new **"all mapped keys"** list on the in-tab shows every currently-mapped MIDI-in key (nav, capture, group, zone command, zone action) in one place, each editable / re-learnable / removable. The core (`sound.py`) was made to accept a zone with **no** `command` (it simply sends nothing on entry; its actions/poses still play on the zone's out device). Adding a mapping still uses the existing per-section UI — the list is read/edit/remove, not an adder.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/sound/sound.py`:
+  - `_normalize_zone_entry()` (line ~134): now returns a wrapped entry as-is when it carries `command` **or** `out_port` (so `{out_port: <n>}` and `{}` are valid "no command" zones), only wraps a dict as a legacy bare message when it actually has message fields (`note`/`velocity`/`cc`/`value`/`program`), and normalizes anything else to `{out_port: None, command: None}`. Previously any dict without `command` was wrapped as a bare message (so `{}` would have been wrapped and then rejected).
+  - `validate_sound_data()` (line ~187): validates a zone's `command` **only when present** (`cmd is not None`), so a zone with no command passes.
+  - `_zone_command()` (line ~525): returns `None` for a wrapped entry without a `command` (the zone sends nothing on entry); still falls back to the entry itself for a legacy bare-message table.
+  - `_on_snapshot()` (line ~564): guards the zone-entry send with `isinstance(msg, dict)` before `_send_msg`, so a `None` command sends nothing (previously it would have crashed or sent garbage on a no-command zone).
+- `realtimecontrol/rtr/editor.html`:
+  - `loadSound()` (line ~1484): stops seeding a default command — normalizes each zone to `{out_port, command}` **without** filling in a default command (wraps a legacy bare entry, gives a missing entry an `out_port` only); ensures per-zone `actions` containers exist **without** per-action seeding.
+  - `buildMidiOutForm()` (line ~1629): zone-entry command is add/edit/**remove** (no default seed); the actions list is the **union** of the zone's table actions and its sound actions, so unmapped actions show "+ add sound" and mapped ones are editable/removable; action start is add/edit/remove; per-pose rows got a remove (×) button and "+ pose" now uses `freshMsg("note")`; "+ action" creates an entry without a seeded start.
+  - `reconcileActionSound()` (line ~4171): returns `null` when the action has no sound entry (no longer creates one) and only **trims** the pose list to the action's pose count (no padding).
+  - Action editor sound section: handles the no-entry and no-start cases (shows "+ add sound" / "+ add start"), and adds per-pose remove (×) + a "+ pose" button.
+  - `validateSound()` (line ~1800): skips zone `command` validation when it is null/undefined.
+  - **New** `buildMidiAllList()` (line ~2345) + `#midiAllList` section in the in-view HTML (line ~650): lists every mapped MIDI-in key (nav, capture, group, zone command, zone action) with an editable value, a "learn" (re-learn) button, and a remove (×) button; shows an empty-state hint when nothing is mapped. Wired into `buildMidiInForm()`.
+  - Fixed the **group-learn** websocket handler (line ~1375): added a `midiLearnPending.group` branch so a learned group key is written to `MIDI.groups[group]` (previously group learns fell through to the zone branch and were silently lost).
+
+### Documentation
+
+- None required — the in-app `title` tooltips on the new add/remove buttons and the "all mapped keys" section describe each control; no config schema or README change (the sound data model already documented `command` as the per-zone message; it is now simply optional).
+
+### Architecture
+
+- The sound data model (`sound.json`) is unchanged in shape: `zones[zn]` is still `{out_port, command}` — `command` is now simply optional. This is a relaxation, not a breaking change: existing saved configs with commands are untouched, and a zone without a command is a valid, intentional state (silent on entry). The core's `_zone_command` / `_on_snapshot` now treat a missing command as "send nothing" rather than an error.
+
+### Validation
+
+- `node --check` on the extracted `editor.html` inline script → OK.
+- `python -m pytest tests/test_sound_out_ports.py tests/test_midi_in.py tests/test_midi_brain_trigger.py tests/test_sound_enabled.py` → **100 passed, 1 skipped** (was 97 before adding 3 new tests).
+- New tests in `tests/test_sound_out_ports.py`: `test_validate_accepts_zone_without_command` (a `{out_port}`-only zone is accepted, no `command` key added), `test_validate_accepts_empty_zone_entry` (`{}` → `{out_port: None, command: None}`, not wrapped as a bare message), `test_no_command_zone_sends_nothing_on_entry` (entering a no-command zone sends nothing; its action still plays on the zone's out device).
+- Manual functional check of `_normalize_zone_entry` / `_zone_command` for all four zone shapes (`{out_port}`, `{}`, bare message, `{out_port, command}`) → correct.
+- The full suite has 5 pre-existing failures in `tests/test_remote_sdl.py` + a collection error in `tests/test_remote_tui.py` (SDL "THEME / LAYOUT" text assertions + a TUI urwid deprecation) — **unrelated** to this change (those tests don't reference sound/midi, and this change only touched `sound.py` + `editor.html`).
+
+### Decisions and Caveats
+
+- `SOUND_FALLBACK` (the last-resort mapping used only when both `/api/sound` and `sound.json` fail, e.g. `file://`) still carries default notes for every zone. That is intentional: it mirrors the core's `ZONE_NOTES` and is only used when there is no real config to preserve. In the **normal** flow (API up), a zone with no command in the real config stays command-less — that is the actual "no auto-seed" fix.
+- The "all mapped keys" list is **not** an adder: new keys are still created in the per-section UI (global navigation / capture / groups / zones) above it. The list only surfaces existing mappings for edit/re-learn/remove. This matches the request ("adding still uses the existing interface").
+- Removing a zone's entry sound via the × button sets `delete zd.command`; the entry keeps its `out_port`. Removing an action's sound drops the whole entry (`delete acts[name]`), so the action returns to the unmapped "+ add sound" state.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+If extending the "all mapped keys" list to also allow **adding** a key in place, add a per-row "+ learn" that calls the matching `midiLearn(...)` with the right args (nav → `midiLearn(null, null, nav, MIDI.nav.in_port)`, capture → `midiLearn(null, null, null, null, true, MIDI.capture.in_port)`, group → `midiLearn(null, null, null, null, null, null, name, MIDI.groups.in_port)`, zone command → `midiLearn(zone, null)`, zone action → `midiLearn(zone, action)`) — those exact calls are already in the `buildMidiAllList()` `learn` callbacks; a new-key flow would need a way to name the target first (the per-section UI provides that). Keep `buildMidiInForm()` as the single rebuild that re-renders the list.
+
+## 2026-10-29 — MIDI page: split the master toggle into separate in/out toggles
+
+### Status
+
+Completed
+
+### Summary
+
+The MIDI page had a single **master** on/off checkbox (`midiMasterCb`) that drove both sides of MIDI at once: `MIDI.enabled` (the core ignores all incoming controller keys) and `SOUND.enabled` (the core sends no outgoing MIDI/sound messages). Per the request, the one switch was split into **two independent switches**: **midi in on/off** (controls `MIDI.enabled`) and **midi out on/off** (controls `SOUND.enabled`), so each side can be enabled/disabled independently. Toggling either still saves both tables (`saveMidiAll()` → POST `/api/midi` + `/api/sound`) so the core hot-reloads each side, exactly as the master toggle did.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - HTML (line ~587): replaced the single `midiMaster` label/`midiMasterCb` checkbox with two labels — `midiInTgl`/`midiInCb` ("midi in on/off") and `midiOutTgl`/`midiOutCb` ("midi out on/off") — each with its own `title` describing the side it controls. The out/in sub-tab buttons are unchanged.
+  - `refreshMidiMaster()` (line ~5441): now syncs **both** checkboxes independently — `midiInCb.checked = !!MIDI.enabled`, `midiOutCb.checked = !!SOUND.enabled` (previously one checkbox set to `MIDI.enabled && SOUND.enabled`).
+  - Replaced `onMidiMasterToggle()` with `onMidiInToggle()` (sets `MIDI.enabled` from `midiInCb`) and `onMidiOutToggle()` (sets `SOUND.enabled` from `midiOutCb`); each calls `refreshMidiMaster()` + `saveMidiAll()`.
+  - Event wiring (line ~8211): `$("midiInCb").onchange = onMidiInToggle; $("midiOutCb").onchange = onMidiOutToggle;` (replaced the single `midiMasterCb` binding).
+  - The in-tab's own per-zone "enabled" checkbox (line ~2017) already sets `MIDI.enabled` and calls `refreshMidiMaster()`, so it now correctly drives the new in-toggle too — no change needed there.
+
+### Documentation
+
+- None required — the in-app `title` tooltips on both checkboxes describe each side; no config schema or README change.
+
+### Architecture
+
+- No architectural impact. Same data model (`MIDI.enabled` in midi.json, `SOUND.enabled` in sound.json), same save path (`saveMidiAll`). Only the UI control granularity changed from one combined switch to two independent ones.
+
+### Validation
+
+- `node --check` on the extracted `editor.html` inline script → OK. While validating, found and fixed a **pre-existing** syntax bug (from earlier uncommitted robotconfig soft-limits work, not this change): `saveRobotConfig()` had `limitsEl.querySelectorAll("input[type=number]:not([readonly])"` missing its closing `)` in a ternary (line ~3680). Added the `)` so the script parses.
+
+### Decisions and Caveats
+
+- Both toggles still save **both** tables (not just the one they control), preserving the previous master behavior that a toggle hot-reloads the core on both sides. This is the existing `saveMidiAll()` contract; a per-side single-POST would be a future refinement.
+- The old combined "on = both on" semantic is gone: the two checkboxes now reflect their own side's state independently, so it is possible (and intended) for in and out to differ.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+If refining the save behavior so each toggle only POSTs its own table, add a per-side save (e.g. `saveMidiIn()` → POST `/api/midi`, `saveMidiOut()` → POST `/api/sound`) and call the matching one from `onMidiInToggle`/`onMidiOutToggle` instead of `saveMidiAll()`. Keep `refreshMidiMaster()` as the single source that mirrors `MIDI.enabled`/`SOUND.enabled` into the two checkboxes.
+
+## 2026-10-29 — Poses 3D view: Cartesian X/Y/Z drag arrows on the pose-drag handle
+
+### Status
+
+Completed
+
+### Summary
+
+The poses (and zones) 3D view authors a pose by dragging the ghost's flange. The "blue dot" (`poseDragHandle` in `rtr3d.js`) was a free-drag handle: dragging it projected the pointer onto a camera-facing plane through the flange and solved IK for the full 3D target, so every axis moved together. Per the request ("add XYZ arrows I can drag, the blue dot remains and keeps its current behavior"), three **Cartesian axis arrows** (X/Y/Z) were added to the same handle. Dragging a colored arrow moves the flange along **one** world axis only — the other two axes stay put — giving a true Cartesian single-axis move, while the blue dot keeps its existing free-drag behavior untouched.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr3d.js`:
+  - `buildAxisArrows(group)` (line ~1262): builds the three arrows as children of the pose-drag handle group. Each arrow is a colored shaft (`CylinderGeometry`) + arrowhead (`ConeGeometry`) + an invisible fat-cylinder hit proxy, all carrying `userData.axis = "x"|"y"|"z"` so a raycast hitting any part of an arrow resolves the axis. Each sub-group is rotated via `quaternion.setFromUnitVectors(+Z, axisDir)` so its local +Z points along the world axis (the shaft is authored along +Z). Colors: X `0xff5a5a`, Y `0x5ae08a`, Z `0x5a8aff`.
+  - `enablePoseDrag(opts)` (line ~1360): initializes the new state fields `axis: null, axisStart: null, axisVec: null` on the `poseDrag` object, and calls `buildAxisArrows(g)` so the arrows render with the handle.
+  - `poseDragOnDown` (line ~1290): the raycast now uses `intersectObjects(poseDragHandle.children, true)` (recursive, so arrow sub-groups are hit). The **closest** hit's `userData.axis` decides the drag mode: an arrow (`axis` set) starts a Cartesian axis drag and records `poseDrag.axisVec` (the world-axis unit vector) and `poseDrag.axisStart` (flange position at grab); the blue dot (no axis) keeps the free drag. The camera-facing plane is still set through the flange, fixed for the drag.
+  - `poseDragOnMove` (line ~1319): added an axis-drag branch. For an axis drag the target is `axisStart + ((pt - axisStart) · axisVec) * axisVec` — the pointer's displacement on the fixed plane projected onto the single grabbed axis (so the other two world axes stay fixed). The free-drag path (target = pointer point on the plane) is unchanged. Both call `KR60IK.ikSolve(poseDrag.seed, [tx,ty,tz], …)` and update the handle via `fkPos(res.pose)` as before.
+- `realtimecontrol/rtr/editor.html`:
+  - `posesInfo` hint (line 458): updated to "drag the handle for a free move, or drag the X/Y/Z arrows for a Cartesian axis move; edit the values".
+
+### Documentation
+
+- None required — this is an interactive UI enhancement to the existing pose-drag feature; the in-app hint text was updated to describe the new arrows. No config schema, README, or architecture doc change.
+
+### Architecture
+
+- No architectural impact. The change is internal to the pose-drag module in `rtr3d.js`. The arrows are children of the existing `poseDragHandle` group (which is only ever translated, never rotated), so they translate with the flange but keep a fixed world-axis orientation. The IK pipeline (`ik.js`) is reused unchanged; the axis constraint is applied to the target *before* IK, so it is a presentation/input change, not a kinematics change.
+
+### Validation
+
+- `node --check realtimecontrol/rtr/rtr3d.js` → OK (no syntax errors).
+- Focused Node test (`/tmp/kilo/test_axis_drag.js`) running the **real** `ik.js` against the exact axis-drag math mirrored from `poseDragOnMove`: 9 assertions, ALL PASSED. Confirms for each world axis (x/y/z) that (a) the two other world axes of the target stay fixed at the start position, and (b) IK converges on the single-axis target (err < tol). Also confirms the free-drag target (pointer point) still converges, and that a small 2 cm +X axis drag converges and lands the flange at the target x.
+- `node --check` on the `editor.html` inline script change is not separately run (the change is a single static HTML text node, no JS logic).
+
+### Decisions and Caveats
+
+- The arrows are children of the **shared** pose-drag handle, so they appear in both the poses tab and the zones tab (both call `enablePoseDrag`). This was accepted as a pure enhancement; free-drag is preserved in both.
+- `poseDragOnDown` still disables `OrbitControls` on a successful grab (existing behavior), so grabbing an arrow does not rotate the camera.
+- The axis drag projects the pointer displacement onto a **fixed** camera-facing plane through the flange at grab time (same plane the free drag uses). Because only the component along the grabbed axis is used, the effective travel per pointer pixel is smaller than a free drag — expected for a 1D constraint.
+- The arrow hit proxies (`HIT_R=0.04`) are larger than the visible shafts so the arrows are easy to grab; the blue dot's own hit proxy (`SphereGeometry(0.09)`) is unchanged.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+If extending this: the axis-drag target in `poseDragOnMove` currently uses the pointer displacement along the grabbed axis (`along = (pt - axisStart)·axisVec`). If a finer/coarser feel is wanted, scale `along` there (e.g. a sensitivity factor). The arrow geometry constants (`LEN`, `SHAFT_R`, `HEAD_R`, `HEAD_LEN`, `HIT_R`) are local to `buildAxisArrows` and can be tuned without touching the drag logic. The `poseDrag` object now carries `axis`/`axisStart`/`axisVec`; any new drag mode should follow the same pattern (set on `poseDragOnDown`, consume in `poseDragOnMove`, reset by `disablePoseDrag` which nulls the whole `poseDrag`).
+
+## 2026-10-29 — Poses tab: save the authored pose directly to a zone/action
+
+### Status
+
+Completed
+
+### Summary
+
+On the **poses** tab, the only way to move an authored (scratch) pose into a zone/action was the indirect copy→paste dance: `copy pose` stashed it in `POSE_CLIP`, then you had to open the action editor (or a flow action row) and hit `paste pose`. Added a **direct** path: a **"save to"** zone/action dropdown + an **"add pose"** button in the poses tab's left controls panel. Pick the target action and click **add pose** and the current scratch pose is appended to that action's `poses` list and the whole table is persisted immediately. This is the "save the pose directly to a zone/action block (selected from dropdown)" request. The target picker lists **all** actions (including pose-less ones), so you can add the first pose to a brand-new action.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - HTML (poses tab left panel, line ~459-467): added a `posesSaveSel` dropdown + `posesAddPose` "add pose" button row (grouped with the existing `posesLoadSel` "load from" picker), and a `posesSaveMsg` status line.
+  - `buildPosesSavePicker()` (line ~6427): populates the "save to" picker. Unlike `buildPosesLoadPicker` (which skips pose-less actions — you can only load what exists), it lists **every** action so a pose can be added to an action that has none yet.
+  - `setPosesSaveMsg(msg)` (line ~6447): writes the poses-tab save status line.
+  - `posesAddPose()` (line ~6456): reads the selected `zn/an`, appends the rounded scratch pose (3 decimals) to `a.poses`, **and** extends the parallel `pose_imgs` / `pose_videos` arrays with a `null` slot (mirroring `pastePose`, so the action editor's per-pose image/video UI stays in sync). Rebuilds both pickers (the new pose is now loadable), shows a status, then calls `saveZones()` to persist (the same path the top "save" button uses in this view).
+  - `posesEnter()` (line ~6571): now calls `buildPosesSavePicker()` alongside `buildPosesLoadPicker()` on tab entry.
+  - Event wiring (line ~8190): `$("posesAddPose").onclick = posesAddPose;` next to the other poses-button handlers.
+
+### Documentation
+
+- None required — the editor's own UI behavior changed (a new direct save-to-action control on the poses tab); no config schema, doc, or help-text change. The button carries an inline `title` explaining what it does.
+
+### Architecture
+
+- No architectural impact. Internal JS change to the poses tab; reuses the existing zone/action data model (`actions[an].poses` + parallel `pose_imgs`/`pose_videos`) and the existing `saveZones()` persistence path. Did **not** embed a full action-editor instance on the left (that would require refactoring the global `AE` modal state); the dropdown + button satisfies the core "save to a selected zone/action" request with a smaller, lower-risk change.
+
+### Validation
+
+- `node --check` on the extracted inline script (script #1, ~7.5 KB of new/changed lines; full inline script re-extracted end-to-end) → OK (no syntax errors).
+- Focused Node test (`/tmp/kilo/test_addpose.js`) running the **real** extracted function code against a mocked DOM + `TABLE`: 17 assertions, ALL PASSED. Covers: picker lists all actions (incl. pose-less) + leading placeholder; no append + message when no target selected; append to an existing action (pose appended, values rounded to 3 decimals, `pose_imgs`/`pose_videos` stay in sync, `saveZones()` called once, status names the target); first pose added to a pose-less action (pose list created, imgs/videos seeded with `null`); unknown zone/action → no append + "not found" message.
+
+### Decisions and Caveats
+
+- Chose **append** (not replace) so repeated "add pose" clicks accumulate the authored sequence, matching the anchor-pose-list model the action editor uses.
+- `saveZones()` runs `validate()`; if validation blocks the POST, the pose is still appended to the in-memory `TABLE` (consistent state) and the existing top `#saveMsg` reports the error — the user can fix and re-save. The local `posesSaveMsg` says "saving…" so the outcome is visible in the top status bar.
+- Pose values are rounded to 3 decimals on append (consistent with `posesOnPose`'s drag rounding).
+- The poses tab's "load from" picker and the new "save to" picker are rebuilt on tab entry; if the zone set changes while already in the poses tab (e.g. a zone added in the zones tab), the pickers refresh on the next entry — same existing behavior as the load picker.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+If extending this: the target picker (`posesSaveSel`) currently lists every action flat as `zn / an`. A follow-up could group options by zone, or add an "insert at index" control (mirroring `pastePose(zn, an, index)`) so a pose can be placed mid-sequence rather than always appended. The `saveZones()` call is synchronous-in-effect but the POST is async; if a dedicated "added ✓" confirmation is wanted, thread the result of `saveZones()` back into `posesSaveMsg` (currently the top `#saveMsg` carries the outcome).
+
+## 2026-10-29 — New-zone safezone now defaults to the currently shown zone's limits (was hardcoded)
+
+### Status
+
+Completed
+
+### Summary
+
+In the zones tab (and the flow tab), clicking **"+ add zone"** created the new zone with a **stale, hardcoded safezone** (`[[-94,122],[-134,34],[-119,157],[-349,349],[-118,118],[-357,357]]`) that no longer matched the real hardware limits. `addZone()` now derives the new zone's safezone from the **currently shown zone's safezone** (the editor's "current limits"), so the limits you see carry over into the new zone. When no zone is selected, or the shown zone has no safezone yet, it falls back to the **hardware joint limits** (`HW_LIMITS`, loaded from `/api/limits`, mirroring the kr60ha xacro).
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - `addZone()` (line ~7772): replaced the hardcoded `safezone` array with a dynamic default. The currently shown zone is resolved as `FLOW.sel.zone` in the flow tab, otherwise `selectedZone`; its `safezone` is deep-copied (`.map((p) => [p[0], p[1]])`) into the new zone. Fallback to `HW_LIMITS` when no zone is selected or the shown zone's safezone is missing/short.
+  - No other new-zone safezone defaults exist: line 820 is the `file://` fallback data (the `resting` seed zone, not a new-zone default) and line 7563 is the validate-tab scan result builder.
+
+### Documentation
+
+- None required — the editor's own UI behavior changed (new zones inherit current limits); no config schema, doc, or help-text change.
+
+### Architecture
+
+- No architectural impact. Internal JS change to the new-zone default in the editor; the zone data model (`safezone: [lo,hi] × 6`) and the `/api/limits` flow are unchanged.
+
+### Validation
+
+- `node --check` on the extracted inline script (script #1, ~340 KB) → OK (no syntax errors).
+- Manual logic check: zones tab with a selected zone → new zone copies its safezone; no selection / shown zone without safezone → new zone uses `HW_LIMITS` (`[[-185,185],[-135,35],[-95,158],[-180,180],[-55,100],[-150,150]]` fallback).
+
+### Decisions and Caveats
+
+- Chose "currently shown zone's safezone" over the hardware limits as the primary default, because the user asked for "the current limits" (what the editor is showing) rather than the raw hardware floor. The hardware limits remain the floor/fallback.
+- The inherited safezone is a **deep copy**, not a reference, so later editing one zone's safezone never mutates another.
+- Caveat: if the currently shown zone itself has a too-wide safezone (values beyond the hardware floor), the new zone inherits that too — the editor does not re-clamp to `HW_LIMITS` on creation (consistent with existing behavior; the core still clamps at runtime).
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+N/A
+
+## 2026-10-28 — Per-axis desync: freq-based sweep/oscillation behaviors no longer move all axes in lockstep
+
+### Status
+
+Completed
+
+### Summary
+
+The `freq`-based sweeping behaviors looked mechanical because every variable axis rode the **same** sine: `_apply_scan` (vigilant) and `_apply_oscillation` (soothing / agitated / aggressive / exhilarated / impatient / drowsy) both computed a single shared phase `t = machine.tick * 0.1 * freq` and applied it to every variable axis, so all axes moved in lockstep at the same speed. Added a per-axis desync so each axis sweeps at its own rate and starting point — the motion now reads as organic/random instead of one rigid wave. No config or UI change: the desync is a built-in of the two policies.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/state/behavior.py`:
+  - New helper `_axis_desync(axis)` → returns a stable `(phase, freq_mult)` per axis, both derived deterministically from the axis number (a `sin`-based hash), so they are stable across ticks (no jitter) but differ per axis. `phase` ∈ [0, 2π), `freq_mult` ∈ [0.7, 1.3).
+  - `_apply_scan` (vigilant): each axis now uses `t = base * freq_mult + phase` instead of the shared `t`.
+  - `_apply_oscillation` (the six animal behaviors): same per-axis `t = base * freq_mult + phase`. Amplitude/clamp logic unchanged.
+- `realtimecontrol/rtr/tests/test_forced_behavior.py`:
+  - `test_build_target_uses_forced_behavior`: the old assertion pinned the tick-0 scan value to the safezone **center** (`== 0.0`), which the desync intentionally breaks. Updated to assert the axis is driven out of the anchor and stays within the safezone (`-100 <= v <= 100`).
+
+### Documentation
+
+- The two policy docstrings now describe the per-axis desync. No operator-facing doc change needed — the config schema and brain-tab cards are unchanged (the desync is always-on, not a tunable param).
+
+### Architecture
+
+- No architectural impact. Internal change to the motion math in `rtr/state/behavior.py`; the state-machine dispatch, safezone clamp, and brain config are untouched.
+
+### Validation
+
+- `python3 tests/test_forced_behavior.py` → ALL TESTS PASSED (updated assertion).
+- `python3 tests/test_brain_behavior_params.py` → ALL TESTS PASSED.
+- `python3 -m pytest tests/ --ignore=tests/test_remote_tui.py` → 327 passed, 14 skipped. The 5 `test_remote_sdl.py` failures are **pre-existing** (verified: they fail identically on the original `behavior.py` — they assert SDL TUI help-text strings like "THEME / LAYOUT", unrelated to behavior motion). The `test_remote_tui.py` collection error is a pre-existing urwid import issue.
+- Verified the fix directly (`/tmp/kilo/verify_desync.py`): old motion had zero spread across axes at every tick (all 0.000, perfect lockstep); the new motion spreads 142–200° per tick with 6 distinct phases and 6 distinct frequency multipliers.
+- `ruff check rtr/state/behavior.py` → All checks passed. `mypy rtr/state/behavior.py` → 0 errors in behavior.py (the 14 reported errors are pre-existing in other files: kuka.py, zones.py, machine.py, __init__.py).
+
+### Decisions and Caveats
+
+- Desync is derived from the **axis number** (not randomized per tick or per behavior start), so it is deterministic and stable — the same axis always gets the same phase/rate. This avoids jitter and keeps the motion reproducible. It is not currently a tunable brain param; making the `freq_mult` range (currently 0.7–1.3) adjustable per behavior would be a natural follow-up if the operator wants to dial how "random" the sweep is.
+- `machine.tick` is a global, ever-growing counter (not reset per behavior), so the desynced sweep continues its phase/rate across behavior transitions — no re-sync jump on entry. The policies already set the pose to the sine value directly (not relative to the anchor), so this matches existing entry behavior.
+
+### Next Task
+
+Optional: expose the per-axis desync amount as a per-behavior brain param (e.g. a `desync` knob 0–1 that scales the `freq_mult` spread from 1.0 = fully in-sync up to the current 0.7–1.3 spread), wired through `brain.json` + the brain-tab card, so the operator can choose how much variation each behavior has.
+
+### Instructions for the Next Task
+
+- In `rtr/state/behavior.py`, `_axis_desync(axis)` currently hard-codes `freq_mult = 0.7 + 0.6 * h2`. To make it tunable, add a `spread` argument (default 1.0) and compute `freq_mult = 1.0 + (h2 - 0.5) * 0.6 * spread` (so `spread=0` → all 1.0 = old lockstep, `spread=1` → current behavior). Thread a `_bp(machine, behavior, "desync", 1.0)` value from `_apply_scan` / `_apply_oscillation`. Add the key to `DEFAULT_BEHAVIORS` in `rtr/brain/config.py` and the brain-tab card in `editor.html`. Keep the safezone clamp; the desync only changes phase/rate, never the bounds.
+
+## 2026-10-28 — Poses tab: square 3D window that fills the vertical space (controls take the remaining width)
+
+### Status
+
+Completed
+
+### Summary
+
+Changed the poses tab layout so the 3D window is a **square that fills the vertical space** and the controls occupy the **remaining width** on the left (previously the 3D was a fixed 420px-tall box in a fixed 380px column). The 3D section's height is now set at runtime to the space left below the header (computed from the main's viewport offset, so a wrapping header is handled), and `aspect-ratio: 1` keeps `#robot3d` square (width follows the height). The grid changed from `1fr 380px` to `1fr auto` so the 3D column is sized by the square and the controls column (`1fr`) takes the rest.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - CSS: `#posesMain` grid columns `1fr 380px` → `1fr auto`; added `#poses3dSection` (flex column), `#posesRobot3dMount { flex: 1; min-height: 0 }`, and `#posesRobot3dMount #robot3d { aspect-ratio: 1; width: auto; height: 100% }` (replaced the fixed `height: 420px`).
+  - HTML: gave the poses 3D section `id="poses3dSection"`.
+  - JS: added `sizePoses3d()` — sets the 3D section height to `window.innerHeight - main.offsetTop - 16` (min 320px) and triggers a resize; wired it into `posesEnter()` and a `window` resize listener gated on `posesView`.
+- `realtimecontrol/rtr/README.md`: updated the poses-tab paragraph to describe the square 3D window filling the vertical space and the controls taking the remaining width.
+
+### Documentation
+
+- `realtimecontrol/rtr/README.md` updated: poses-tab layout description now reflects the square 3D window filling the vertical space.
+
+### Architecture
+
+- No architectural impact. Client-side (browser JS/CSS) layout change to the poses tab. Reuses the existing `_triggerResize()` and the rtr3d.js window-resize handler (which reads `container.clientWidth/clientHeight`), so the renderer/camera aspect follow the new square size.
+
+### Validation
+
+- `node --check` on the extracted inline `<script>` of `editor.html` → OK.
+- Grep confirmed the new identifiers (`poses3dSection`, `sizePoses3d`, `#posesRobot3dMount`) are consistent and the old `height: 420px` is gone.
+- Manual browser verification (square window fills vertical, controls fit left, resize behavior) still pending.
+
+### Decisions and Caveats
+
+- The 3D height is computed at runtime (not a fixed `calc(100vh - N)`) so a wrapping header is handled correctly; the offset is measured from `#posesMain.getBoundingClientRect().top`.
+- On a narrow viewport the square (height-sized) can leave little width for the controls; acceptable per the operator's design intent (wide-screen use).
+
+### Next Task
+
+Manual browser verification of the square-fill-vertical poses layout.
+
+### Instructions for the Next Task
+
+Open `editor.html`, click the poses tab. Verify: (1) the 3D window is square and fills the vertical space, (2) the controls fit in the remaining width on the left, (3) resizing the window keeps the 3D square and the canvas/renderer resize correctly, (4) switching to another tab and back re-sizes correctly.
+
+## 2026-10-28 — Poses tab restyle: landscape layout, joint-pose tool, live collision, clamp-to-loaded-safezone, oob ghost coloring
+
+### Status
+
+Completed
+
+### Summary
+
+Restyled the poses tab per operator feedback. (1) **Landscape layout**: `#posesMain` is now a two-column grid (`1fr 380px`) — controls/info left, 3D window right (420px tall). (2) **Joint-pose tool**: six plain text inputs replaced by the validate-tab grid pattern (`buildPosesGrid`): per-axis up/down bump buttons (shift=10, plain=1) + number input. (3) **Collision checker**: `checkPosesCollision()` runs `Robot3D.checkPoseCollision(scratchPose)` immediately on every pose change and reports in `#posesCollide`. (4) **Clamp to loaded safezone**: `#posesZoneSel` removed; `posesClamp()` clamps to the safezone of the zone picked in the load-from picker via `loadedSafezone()`. (5) **OOB ghost coloring**: `updatePosesOob()` highlights grid inputs outside the safezone (`.oob`) and recolors matching ghost links red via new `Robot3D.setGhostAxisColors()`; `posesLeave()` resets ghost colors.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - CSS: added `#posesMain` (two-col grid), `#posesRobot3dMount #robot3d` (420px), `.posesGrid`, `.posesGrid input.oob`, `.posesCollide`.
+  - HTML `#posesMain`: restructured to two sections (left controls/info + right 3D mount). Removed `#posesInputs`, `#posesZoneSel`.
+  - JS: new `buildPosesGrid`, `loadedSafezone`, `applyScratchPose`, `updatePosesOob`, `checkPosesCollision`, `buildPosesLoadPicker`, rewritten `posesClamp`/`posesEnter`/`posesLeave`. Removed `buildPosesInputs`/`buildPosesSelectors`.
+- `realtimecontrol/rtr/rtr3d.js`:
+  - `makeMats("ghost")` returns per-name materials (was one shared ghost material).
+  - Added `ghostLinkMats` captured after ghost arm build.
+  - Added `setGhostAxisColors(colors)` — recolors individual ghost links; null restores `COLOR_GHOST`. Exposed in returned API.
+- `realtimecontrol/rtr/README.md`: updated poses-tab section (landscape layout, joint-pose tool, live collision, clamp-to-loaded-safezone, oob ghost coloring) and the poses bullet in the feature list.
+
+### Documentation
+
+- `realtimecontrol/rtr/README.md` updated: poses-tab paragraph rewritten to describe landscape layout, joint-pose tool, immediate collision check, clamp-to-loaded-safezone, and oob ghost recoloring. Feature-list bullet updated.
+
+### Architecture
+
+- No architectural impact. Client-side (browser JS) restyle of the poses tab. New `Robot3D.setGhostAxisColors` API is additive (per-link ghost materials instead of one shared material; no behavior change for the validate tab or zones view since they never call it).
+
+### Validation
+
+- `node --check` on `rtr3d.js` → OK.
+- `node --check` on extracted inline `<script>` of `editor.html` → OK.
+- Grep confirmed no stale identifiers (`posesInputs`, `posesZoneSel`, `posesA1`–`posesA6`, `buildPosesInputs`, `buildPosesSelectors`).
+- Grep confirmed `setGhostAxisColors` is defined in `rtr3d.js` and exposed in the returned API; called from `editor.html` (updatePosesOob + posesLeave).
+- Manual browser verification (layout, bump buttons, collision, clamp, ghost recolor, reset on leave) still pending.
+
+### Decisions and Caveats
+
+- Did not add validate-tab collision-mesh toggles to the poses tab: `Robot3D` exposes only setters for those states, making cross-tab button-state sync awkward.
+- `setGhostAxisColors` is a no-op until the ghost arm has built (`ghostLinkMats` is null before GLTF load completes), same pattern as `setGhostVisible`.
+
+### Next Task
+
+Manual browser verification of the restyled poses tab.
+
+### Instructions for the Next Task
+
+Open `editor.html` in a browser, click the poses tab. Verify: (1) landscape layout (controls left, 3D right), (2) up/down bump buttons tweak the pose (shift=10), (3) collision line updates immediately on every change, (4) pick a zone/action in the load picker, hit clamp, and confirm axes clamp to that zone's safezone, (5) axes outside the safezone get red `.oob` styling in the grid and red links on the ghost, (6) leaving the poses tab resets ghost colors.
+
 ## 2026-10-28 — Flow validate button: comprehensive `flowProblems()` (every stop-problem, not just dead-ends)
 
 ### Status

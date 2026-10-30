@@ -66,6 +66,9 @@ const Robot3D = (() => {
   // Ghost (target) arm visibility — toggled per view by the page's button. Stored so
   // a toggle before the meshes finish loading still applies once the arm is built.
   let ghostVisible = true;
+  // The ghost's per-link materials (link_1..link_6), captured once the arm builds.
+  // The poses tab recolors them to flag axes outside the loaded safezone.
+  let ghostLinkMats = null;
   // Mesh visibility toggles (validate tab). robotReal = the orange/black KR60 visual
   // (link meshes + pedestal + tool); robotCollision = the red wireframe collision
   // geometry; envReal = the rendered environment GLB; envCollision = the low-res
@@ -116,8 +119,8 @@ const Robot3D = (() => {
   // user drags; each pointer move projects the pointer onto a camera-facing plane and
   // solves IK (ik.js) from the previous pose, driving the ghost. Owned by the editor via
   // opts.onPose / opts.onEnd. Requires the KR60IK global (ik.js) to be loaded.
-  let poseDrag = null;         // { opts, seed, active, plane, ray }
-  let poseDragHandle = null;   // THREE.Group (visual sphere + invisible hit proxy)
+   let poseDrag = null;         // { opts, seed, active, axis, axisStart, axisVec, plane, ray }
+   let poseDragHandle = null;   // THREE.Group (blue dot + invisible hit proxy + X/Y/Z arrows)
   let pendingPoseDragOpts = null;  // enablePoseDrag before the arm is built; applied at running
 
   function rotFromRpy(r) {
@@ -131,11 +134,18 @@ const Robot3D = (() => {
   // A material factory: returns a material for a named mesh of this arm.
   function makeMats(kind) {
     if (kind === "ghost") {
-      const m = new THREE.MeshStandardMaterial({
-        color: COLOR_GHOST, metalness: 0.1, roughness: 0.8,
-        transparent: true, opacity: 0.22,
-      });
-      return () => m;
+      // Per-link materials so the poses tab can recolor individual ghost axes
+      // (e.g. an axis that has moved outside the safezone) independently.
+      const byName = {};
+      return (name) => {
+        if (!byName[name]) {
+          byName[name] = new THREE.MeshStandardMaterial({
+            color: COLOR_GHOST, metalness: 0.1, roughness: 0.8,
+            transparent: true, opacity: 0.22,
+          });
+        }
+        return byName[name];
+      };
     }
     // Current arm: real KUKA colors.
     const black = new THREE.MeshStandardMaterial({ color: COLOR_BLACK, metalness: 0.4, roughness: 0.55 });
@@ -921,6 +931,9 @@ const Robot3D = (() => {
       rotors = cur.rot; toolNode = cur.tool;
       const tgt = buildArm(geos, ghostMat, null, true, ghostRoot);
       rotorsT = tgt.rot;
+      // Capture the ghost's per-link materials (the ghost factory caches one per name,
+      // so these are the very instances the link meshes use).
+      ghostLinkMats = [1, 2, 3, 4, 5, 6].map((j) => ghostMat("link_" + j));
       // The robot real mesh = the current arm's link meshes + the pedestal + the tool.
       // Collected so the validate tab can hide/show the visual arm independently of the
       // ghost and the collision overlays (which share the rotor chain).
@@ -1023,6 +1036,18 @@ const Robot3D = (() => {
   function setGhostVisible(v) {
     ghostVisible = !!v;
     if (ghostRoot) ghostRoot.visible = ghostVisible;
+  }
+
+  // Recolor individual ghost links (the poses tab flags the axes that have moved
+  // outside the loaded safezone). ``colors[j]`` is a color value; null restores the
+  // default ghost green. No-op until the arm has built.
+  function setGhostAxisColors(colors) {
+    if (!ghostLinkMats) return;
+    for (let j = 0; j < 6; j++) {
+      const m = ghostLinkMats[j];
+      if (!m) continue;
+      m.color.set((colors && typeof colors[j] === "number") ? colors[j] : COLOR_GHOST);
+    }
   }
 
   // Show/hide the robot's real (visual) mesh — the orange/black KR60 (link meshes +
@@ -1227,22 +1252,67 @@ const Robot3D = (() => {
     return new THREE.Vector2(x, y);
   }
 
+  // Build the three Cartesian axis arrows (X/Y/Z) as children of the pose-drag handle,
+  // so the flange can be nudged along a single world axis instead of the free
+  // (all-axis) drag. Each arrow is a colored shaft + arrowhead plus an invisible
+  // fat-cylinder hit proxy; every mesh carries userData.axis so poseDragOnDown can tell
+  // which axis was grabbed. The sub-group is rotated so its local +Z points along the
+  // world axis (the shaft is authored along +Z). They translate with the handle but
+  // keep a fixed world orientation (the handle group is never rotated).
+  function buildAxisArrows(group) {
+    const AXES = [
+      { name: "x", color: 0xff5a5a, dir: [1, 0, 0] },
+      { name: "y", color: 0x5ae08a, dir: [0, 1, 0] },
+      { name: "z", color: 0x5a8aff, dir: [0, 0, 1] },
+    ];
+    const LEN = 0.2, SHAFT_R = 0.018, HEAD_R = 0.05, HEAD_LEN = 0.06, HIT_R = 0.04;
+    AXES.forEach((a) => {
+      const sub = new THREE.Group();
+      sub.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 0, 1),
+        new THREE.Vector3(a.dir[0], a.dir[1], a.dir[2])
+      );
+      const shaftLen = LEN - HEAD_LEN;
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(SHAFT_R, SHAFT_R, shaftLen, 8, 1),
+        new THREE.MeshBasicMaterial({ color: a.color }));
+      shaft.position.z = shaftLen / 2;
+      const head = new THREE.Mesh(new THREE.ConeGeometry(HEAD_R, HEAD_LEN, 12),
+        new THREE.MeshBasicMaterial({ color: a.color }));
+      head.position.z = LEN - HEAD_LEN / 2;
+      const hit = new THREE.Mesh(new THREE.CylinderGeometry(HIT_R, HIT_R, LEN, 6, 1),
+        new THREE.MeshBasicMaterial({ visible: false }));
+      hit.position.z = LEN / 2;
+      [shaft, head, hit].forEach((m) => { m.userData.axis = a.name; sub.add(m); });
+      group.add(sub);
+    });
+  }
+
   function poseDragOnDown(e) {
     if (!poseDrag || poseDrag.active) return;
     const ndc = pointerNdc(e);
     if (!ndc) return;
     poseDrag.ray.setFromCamera(ndc, camera);
-    if (!poseDrag.ray.intersectObjects(poseDragHandle.children, false).length) return;
+    const hits = poseDrag.ray.intersectObjects(poseDragHandle.children, true);
+    if (!hits.length) return;
+    // The closest hit decides the drag mode: a colored arrow (userData.axis) starts a
+    // Cartesian axis drag; the blue dot (no axis) keeps the free (all-axis) drag.
+    const axis = hits[0].object.userData && hits[0].object.userData.axis;
+    poseDrag.axis = axis || null;
+    poseDrag.axisVec = axis
+      ? new THREE.Vector3(axis === "x" ? 1 : 0, axis === "y" ? 1 : 0, axis === "z" ? 1 : 0)
+      : null;
     poseDrag.active = true;
     // OrbitControls' pointerdown ran first (its listener is registered at init);
     // disabling here makes its pointermove a no-op for the rest of the drag, and it
     // cleans up its state on pointerup regardless.
     controls.enabled = false;
-    // Camera-facing plane through the flange: the pointer's world position on it is
-    // the IK target. (Normal = camera -> flange.)
+    // Camera-facing plane through the flange (fixed for the drag): the pointer's world
+    // position on it is the IK target (full for the free drag, one axis for an arrow).
+    // (Normal = camera -> flange.)
     const h = poseDragHandle.position;
     const n = new THREE.Vector3().subVectors(h, camera.position).normalize();
     poseDrag.plane.setFromNormalAndCoplanarPoint(n, h);
+    poseDrag.axisStart = h.clone();
     poseDrag.seed = (poseDrag.seed || HOME).slice();
   }
 
@@ -1253,7 +1323,20 @@ const Robot3D = (() => {
     poseDrag.ray.setFromCamera(ndc, camera);
     const pt = new THREE.Vector3();
     if (!poseDrag.ray.ray.intersectPlane(poseDrag.plane, pt)) return;
-    const res = KR60IK.ikSolve(poseDrag.seed, [pt.x, pt.y, pt.z], {
+    // Free drag (blue dot): the flange goes to the pointer's world position on the
+    // plane. Axis drag (an arrow): only the component of the pointer's displacement
+    // (from the drag start) along the grabbed axis moves the flange, so the other two
+    // world axes stay put — a Cartesian single-axis move.
+    let tx, ty, tz;
+    if (poseDrag.axis) {
+      const along = new THREE.Vector3().subVectors(pt, poseDrag.axisStart).dot(poseDrag.axisVec);
+      tx = poseDrag.axisStart.x + along * poseDrag.axisVec.x;
+      ty = poseDrag.axisStart.y + along * poseDrag.axisVec.y;
+      tz = poseDrag.axisStart.z + along * poseDrag.axisVec.z;
+    } else {
+      tx = pt.x; ty = pt.y; tz = pt.z;
+    }
+    const res = KR60IK.ikSolve(poseDrag.seed, [tx, ty, tz], {
       limits: poseDrag.opts.limits, lam: 0.1, maxIter: 60, tol: 0.0004,
     });
     poseDrag.seed = res.pose;
@@ -1284,7 +1367,7 @@ const Robot3D = (() => {
       return true;
     }
     disablePoseDrag();
-    poseDrag = { opts: opts || {}, seed: null, active: false, plane: new THREE.Plane(), ray: new THREE.Raycaster() };
+    poseDrag = { opts: opts || {}, seed: null, active: false, axis: null, axisStart: null, axisVec: null, plane: new THREE.Plane(), ray: new THREE.Raycaster() };
     const g = new THREE.Group();
     g.add(new THREE.Mesh(
       new THREE.SphereGeometry(0.09, 12, 12),
@@ -1294,6 +1377,8 @@ const Robot3D = (() => {
       new THREE.SphereGeometry(0.045, 16, 16),
       new THREE.MeshBasicMaterial({ color: 0x37d0ff })
     ));
+    // Cartesian X/Y/Z arrows: drag one to move the flange along that world axis.
+    buildAxisArrows(g);
     scene.add(g);
     poseDragHandle = g;
     if (opts && opts.pose) poseDragSetPose(opts.pose);
@@ -1328,5 +1413,5 @@ const Robot3D = (() => {
     }
   }
 
-  return { init, update, setTarget, getJoints, screenResolution, setGhostVisible, setRobotRealVisible, setRobotCollisionVisible, setToolCollisionVisible, setEnvRealVisible, setEnvCollisionVisible, setCameraFovVisible, setCameraRigVisible, setCameraView, setCameraViewLens, getCamViewLens, collisions, checkPoseCollision, reloadEnv, diagCollision, diagEnv, setCollisionEnabled, enablePoseDrag, disablePoseDrag, poseDragSetPose };
+  return { init, update,     setTarget, getJoints, screenResolution, setGhostVisible, setGhostAxisColors, setRobotRealVisible, setRobotCollisionVisible, setToolCollisionVisible, setEnvRealVisible, setEnvCollisionVisible, setCameraFovVisible, setCameraRigVisible, setCameraView, setCameraViewLens, getCamViewLens, collisions, checkPoseCollision, reloadEnv, diagCollision, diagEnv, setCollisionEnabled, enablePoseDrag, disablePoseDrag, poseDragSetPose };
 })();

@@ -108,6 +108,12 @@
   .grpZoneRow label { font-size: 12px; }
   .warn { color: #e0a030; font-size: 12px; }
   .hwlims { display: flex; flex-wrap: wrap; gap: 3px 10px; font-size: 11px; color: var(--dim); margin-bottom: 8px; }
+  .limitsGrid { display: grid; grid-template-columns: 40px 72px 72px 72px 72px; gap: 4px; align-items: center; margin-bottom: 6px; }
+  .limitsGrid span { font-size: 12px; color: var(--dim); }
+  .limitsGrid input[type=number] { width: 100%; background: #0d0f13; color: var(--text);
+      border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; font: inherit; }
+  .limitsGrid input[readonly] { color: var(--dim); border-color: transparent; background: transparent; }
+  .limitsGrid .limitsHead { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; }
   #tabZones { font-size: 12px; }
   .sndMain { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); align-items: start; }
   .sndRow { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
@@ -142,6 +148,22 @@
     .valPoseGrid input[type=number] { -moz-appearance: textfield; }
     .valPoseGrid input[type=number]::-webkit-inner-spin-button,
     .valPoseGrid input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+   /* Poses tab: landscape layout — controls/info left (remaining width), square 3D
+      window right. The 3D section's height is set at runtime (sizePoses3d) to fill
+      the vertical space; aspect-ratio keeps #robot3d square (width follows height). */
+   #posesMain { display: grid; gap: 16px; grid-template-columns: 1fr auto; align-items: start; }
+   #posesMain section { position: sticky; top: 8px; }
+   #poses3dSection { display: flex; flex-direction: column; }
+   #posesRobot3dMount { flex: 1; min-height: 0; }
+   #posesRobot3dMount #robot3d { aspect-ratio: 1; width: auto; height: 100%; }
+   .posesGrid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin-bottom: 6px; }
+   .posesGrid input[type=number] { -moz-appearance: textfield; }
+   .posesGrid input[type=number]::-webkit-inner-spin-button,
+   .posesGrid input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+   .posesGrid input.oob { border-color: #e05d5d; color: #e05d5d; }
+   .posesCollide { font-size: 12px; line-height: 1.6; }
+   .posesCollide .ok { color: var(--accent); }
+   .posesCollide .bad { color: #e05d5d; }
    .valAxis { display: grid; grid-template-columns: 36px 1fr 1fr; gap: 4px; margin-bottom: 4px; align-items: center; }
   .valAxis span { font-size: 11px; color: var(--dim); }
   .patchList .grp { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
@@ -433,20 +455,28 @@
 <main id="posesMain" style="display:none">
   <section>
     <h2>poses — 3d authoring</h2>
-    <div id="posesRobot3dMount"></div>
-    <div class="row" style="margin-top:6px"><span id="posesInfo" style="font-size:12px;color:var(--dim)">drag the handle or edit the values</span></div>
+    <div class="row"><span id="posesInfo" style="font-size:12px;color:var(--dim)">drag the handle for a free move, or drag the X/Y/Z arrows for a Cartesian axis move; edit the values</span></div>
     <h3>scratch pose (A1..A6)</h3>
-    <div class="row" id="posesInputs"></div>
-    <div class="row" style="margin-top:6px">
-      <span style="font-size:12px;color:var(--dim)">zone</span>
-      <select id="posesZoneSel"></select>
+    <div class="posesGrid" id="posesGrid"></div>
+    <div class="row">
+      <select id="posesLoadSel"></select>
+      <button id="posesLoad" class="small">load</button>
+    </div>
+    <div class="row">
+      <select id="posesSaveSel"></select>
+      <button id="posesAddPose" class="small" title="Append the scratch pose to this action's pose list and save it">add pose</button>
+    </div>
+    <div class="row">
       <button id="posesClamp" class="small">clamp to safezone</button>
       <button id="posesCopy">copy pose</button>
     </div>
-    <div class="row" style="margin-top:6px">
-      <select id="posesLoadSel"></select>
-      <button id="posesLoad" class="small">load into scratch</button>
-    </div>
+    <div id="posesSaveMsg" style="font-size:12px;color:var(--dim);margin-bottom:6px"></div>
+    <h3>collision</h3>
+    <div id="posesCollide" class="posesCollide"><span style="color:var(--dim)">checks as you move</span></div>
+  </section>
+  <section id="poses3dSection">
+    <h2>3d preview</h2>
+    <div id="posesRobot3dMount"></div>
   </section>
 </main>
 
@@ -526,7 +556,7 @@
       <button id="flowAutoLayout" class="small">auto layout</button>
       <button id="flowFit" class="small">fit view</button>
       <button id="flowValidate" title="Check the flow for everything that could stop the robot (dead-ends, broken links, poses outside the safezone/hardware, zero speed, ...); click a problem to jump to it">validate</button>
-      <span style="font-size:11px;color:var(--dim)">drag a node onto another to draw an arrow · click a node/arrow to select · wheel = zoom · middle-drag = pan</span>
+      <span style="font-size:11px;color:var(--dim)">drag a node onto another to draw an arrow · click a node/arrow to select · wheel = zoom · drag empty canvas / middle-drag = pan</span>
     </div>
     <div id="flowSvgWrap">
       <svg id="flowSvg"></svg>
@@ -555,10 +585,15 @@
       From now on that key moves the robot to the next zone.</div>
   </section>
   <div class="row" id="midiToggleRow" style="margin-bottom:12px;align-items:center">
-    <label id="midiMaster" style="margin-right:12px;display:inline-flex;align-items:center;gap:6px;font-size:12px">
-      <input type="checkbox" id="midiMasterCb"
-        title="Master MIDI on/off. Off = the core ignores ALL incoming MIDI keys AND sends no outgoing MIDI (sound) messages.">
-      <span id="midiMasterLbl">midi master on/off</span>
+    <label id="midiInTgl" style="margin-right:12px;display:inline-flex;align-items:center;gap:6px;font-size:12px">
+      <input type="checkbox" id="midiInCb"
+        title="MIDI in on/off. Off = the core ignores ALL incoming MIDI controller keys.">
+      <span id="midiInLbl">midi in on/off</span>
+    </label>
+    <label id="midiOutTgl" style="margin-right:12px;display:inline-flex;align-items:center;gap:6px;font-size:12px">
+      <input type="checkbox" id="midiOutCb"
+        title="MIDI out on/off. Off = the core sends no outgoing MIDI (sound) messages.">
+      <span id="midiOutLbl">midi out on/off</span>
     </label>
     <button id="midiTabOut" class="small" title="The robot PLAYS music: sounds the robot sends to a MIDI device.">out</button>
     <button id="midiTabIn" class="small" title="You CONTROL the robot: keys on a MIDI controller that make the robot act.">in</button>
@@ -613,6 +648,12 @@
         robot to that zone; each action's key triggers just that action.</p>
       <div id="midiZones"></div>
     </section>
+    <section>
+      <h2>all mapped keys</h2>
+      <p class="midiHelp">Every MIDI key currently mapped, in one list. Edit a value, re-learn it,
+        or remove it. Add new keys in the sections above.</p>
+      <div id="midiAllList"></div>
+    </section>
     <div class="row" style="margin-top:8px">
       <button id="midiStopLearn" class="small" style="display:none" title="Cancel the current learn.">stop learn</button>
       <span id="midiStatus" style="font-size:12px;color:var(--dim)"></span>
@@ -648,6 +689,15 @@
     <div class="row" style="margin-top:12px">
       <button id="robotConfigReset" class="small">reset to zero</button>
     </div>
+  </section>
+  <section>
+    <h2>limits</h2>
+    <p class="midiHelp">Per-axis joint limits.
+       <b>hardware</b> = the physical joint limits from the xacro (uneditable — the hard safety floor).
+       <b>soft</b> = an additional configurable limit (editable — tighten to restrict movement further).
+       The effective limit for each axis is the intersection of the soft limit and the hardware limit.
+       Defaults to the hardware limit (no extra restriction).</p>
+    <div id="limitsForm"></div>
   </section>
   <section>
     <h2>patch config</h2>
@@ -1335,6 +1385,9 @@ function connect() {
         } else if (midiLearnPending.nav_name) {
           if (!MIDI.nav) MIDI.nav = {};
           MIDI.nav[midiLearnPending.nav_name] = m.key;
+        } else if (midiLearnPending.group) {
+          if (!MIDI.groups || typeof MIDI.groups !== "object") MIDI.groups = {};
+          MIDI.groups[midiLearnPending.group] = m.key;
         } else {
           const z = MIDI.zones[midiLearnPending.zone];
           if (z) {
@@ -1407,6 +1460,8 @@ async function loadLimits() {
   // handle is already up (the fallback floor is identical, so this is a no-op
   // unless the API reports something different).
   if (poseDragOn) syncPoseDrag(true);
+  // Rebuild the limits card in the robotconfig tab if we're there.
+  if (robotconfigView && ROBOT_CONFIG) buildLimitsForm();
 }
 
 // Render the per-axis hardware limits as a compact reference row (a static floor —
@@ -1453,23 +1508,21 @@ async function loadSound() {
     }
     delete SOUND.modes;
   }
-  // Seed per-zone entries: ensure each zone has {out_port, command} (filling missing).
+  // Normalize per-zone entries to {out_port, command} WITHOUT seeding a default
+  // command (a zone with no command sends nothing on entry; the user adds one in the
+  // MIDI-out view). A legacy bare-message entry is wrapped; a missing entry gets an
+  // out_port only. Removing a zone's sound therefore survives save + reload.
   Object.keys(TABLE.zones || {}).forEach((zn) => {
-    if (!SOUND.zones[zn] || typeof SOUND.zones[zn] !== "object") {
-      SOUND.zones[zn] = { out_port: null, command: { note: 60, velocity: 60 } };
-    } else {
-      if (SOUND.zones[zn].out_port === undefined) SOUND.zones[zn].out_port = null;
-      if (!SOUND.zones[zn].command) SOUND.zones[zn].command = { note: 60, velocity: 60 };
-    }
+    let z = SOUND.zones[zn];
+    if (!z || typeof z !== "object" || Array.isArray(z)) { z = {}; SOUND.zones[zn] = z; }
+    const bare = z.note !== undefined || z.cc !== undefined || z.program !== undefined;
+    if (bare) { SOUND.zones[zn] = { out_port: null, command: z }; return; }
+    if (z.out_port === undefined) z.out_port = null;
   });
-  // Seed the action list per zone: for each zone, ensure SOUND.actions[zone] exists
-  // and seed each of that zone's actions (only filling missing entries), so an edited
-  // mapping keeps its own actions.
+  // Ensure the per-zone action containers exist (no per-action seeding: an action
+  // with no sound entry sends nothing and can be given one in the MIDI-out view).
   Object.keys(TABLE.zones || {}).forEach((zn) => {
     if (!SOUND.actions[zn]) SOUND.actions[zn] = {};
-    Object.keys(TABLE.zones[zn].actions || {}).forEach((an) => {
-      if (!SOUND.actions[zn][an]) SOUND.actions[zn][an] = { start: { note: 60, velocity: 60 }, poses: [] };
-    });
   });
   try {
     const r = await fetch("/api/sound/ports", { cache: "no-store" });
@@ -1621,10 +1674,10 @@ function buildMidiOutForm() {
     return;
   }
 
-  const zd = SOUND.zones[zn] || (SOUND.zones[zn] = { out_port: null, command: { note: 60, velocity: 60 } });
+  const zd = SOUND.zones[zn] || (SOUND.zones[zn] = { out_port: null });
   const rebuild = () => buildMidiOutForm();
 
-  // zone-entry out port picker + command message
+  // zone-entry out port picker
   const row = document.createElement("div");
   row.className = "sndRow";
   const lbl = document.createElement("span");
@@ -1633,7 +1686,7 @@ function buildMidiOutForm() {
   row.appendChild(lbl);
   const sel = document.createElement("select");
   sel.className = "sndOutPort";
-  sel.title = "The sound the robot plays when it enters this zone.";
+  sel.title = "The MIDI device this zone's sounds (entry + actions + poses) go to. 'global' = the device above.";
   const none = document.createElement("option");
   none.value = ""; none.textContent = "global";
   sel.appendChild(none);
@@ -1646,22 +1699,65 @@ function buildMidiOutForm() {
   sel.value = (op === null || op === undefined) ? "" : String(op);
   sel.onchange = () => { zd.out_port = sel.value === "" ? null : parseInt(sel.value, 10); };
   row.appendChild(sel);
-  row.appendChild(msgEditor(zd.command, (fresh) => { zd.command = fresh; rebuild(); }));
   detail.appendChild(row);
 
-  // actions (read-only attributes from the table; editable start + poses)
+  // zone-entry command message (add / edit / remove — no default seed)
+  const cmdRow = document.createElement("div");
+  cmdRow.className = "sndRow";
+  const cmdLbl = document.createElement("span");
+  cmdLbl.className = "sndName"; cmdLbl.textContent = "entry";
+  cmdLbl.title = "The sound the robot plays when it enters this zone. Remove it to stay silent on entry.";
+  cmdRow.appendChild(cmdLbl);
+  if (zd.command) {
+    cmdRow.appendChild(msgEditor(zd.command, (fresh) => { zd.command = fresh; rebuild(); }));
+    const cmdX = document.createElement("button");
+    cmdX.className = "small"; cmdX.textContent = "\u00d7";
+    cmdX.title = "Remove this zone's entry sound (the robot stays silent on entry).";
+    cmdX.onclick = () => { delete zd.command; rebuild(); };
+    cmdRow.appendChild(cmdX);
+  } else {
+    const cmdAdd = document.createElement("button");
+    cmdAdd.className = "small"; cmdAdd.textContent = "+ add sound";
+    cmdAdd.title = "Give this zone an entry sound (played when the robot enters the zone).";
+    cmdAdd.onclick = () => { zd.command = freshMsg("note"); rebuild(); };
+    cmdRow.appendChild(cmdAdd);
+  }
+  detail.appendChild(cmdRow);
+
+  // actions: the zone's table actions (any can be given a sound) plus custom sound
+  // actions (e.g. the rest-zone mode CCs). No seeding: unmapped actions show an
+  // "add sound" button; mapped ones are editable + removable.
   if (!SOUND.actions[zn]) SOUND.actions[zn] = {};
   const acts = SOUND.actions[zn];
   const tacts = (TABLE.zones[zn] && TABLE.zones[zn].actions) ? TABLE.zones[zn].actions : {};
   const ag = document.createElement("div");
   ag.className = "sndZoneGroup";
   ag.appendChild(h3("actions"));
-  Object.keys(acts).forEach((name) => {
-    const act = acts[name];
+  const names = [];
+  Object.keys(tacts).forEach((an) => { if (!names.includes(an)) names.push(an); });
+  Object.keys(acts).forEach((an) => { if (!names.includes(an)) names.push(an); });
+  names.forEach((name) => {
     const tinfo = tacts[name] || {};
+    if (!acts[name]) {
+      // Unmapped action: a compact row with an "add sound" button.
+      const urow = document.createElement("div");
+      urow.className = "sndRow";
+      const ul = document.createElement("span");
+      ul.className = "sndName"; ul.textContent = name;
+      ul.title = "This action has no sound yet. Add one to play a sound when it starts (and at each pose).";
+      urow.appendChild(ul);
+      const ua = document.createElement("button");
+      ua.className = "small"; ua.textContent = "+ add sound";
+      ua.title = "Give this action a sound (played when it starts, and at each pose).";
+      ua.onclick = () => { acts[name] = { poses: [] }; rebuild(); };
+      urow.appendChild(ua);
+      ag.appendChild(urow);
+      return;
+    }
+    const act = acts[name];
     const box = document.createElement("div");
     box.className = "action";
-    // header: name + remove
+    // header: name + remove (remove drops the whole sound entry)
     const head = document.createElement("div");
     head.className = "actionHead";
     const nm = document.createElement("input");
@@ -1674,6 +1770,7 @@ function buildMidiOutForm() {
     };
     const rm = document.createElement("button");
     rm.className = "small"; rm.textContent = "remove";
+    rm.title = "Remove this action's sound (start + poses).";
     rm.onclick = () => { delete acts[name]; rebuild(); };
     head.appendChild(nm); head.appendChild(rm);
     box.appendChild(head);
@@ -1691,15 +1788,27 @@ function buildMidiOutForm() {
     if (tinfo.enabled === false) atxt += " · disabled";
     attrs.textContent = atxt;
     box.appendChild(attrs);
-    // start message
-    if (!act.start) act.start = { note: 60, velocity: 60 };
+    // start message (add / edit / remove — no default seed)
     const s = document.createElement("div");
     s.className = "sndRow";
     const sl = document.createElement("span");
     sl.className = "sndName"; sl.textContent = "start";
     sl.title = "The sound played when this action begins.";
     s.appendChild(sl);
-    s.appendChild(msgEditor(act.start, (fresh) => { act.start = fresh; rebuild(); }));
+    if (act.start) {
+      s.appendChild(msgEditor(act.start, (fresh) => { act.start = fresh; rebuild(); }));
+      const sx = document.createElement("button");
+      sx.className = "small"; sx.textContent = "\u00d7";
+      sx.title = "Remove this action's start sound.";
+      sx.onclick = () => { delete act.start; rebuild(); };
+      s.appendChild(sx);
+    } else {
+      const sadd = document.createElement("button");
+      sadd.className = "small"; sadd.textContent = "+ add start";
+      sadd.title = "Play a sound when this action begins.";
+      sadd.onclick = () => { act.start = freshMsg("note"); rebuild(); };
+      s.appendChild(sadd);
+    }
     box.appendChild(s);
     // per-pose messages
     if (!act.poses) act.poses = [];
@@ -1721,18 +1830,18 @@ function buildMidiOutForm() {
     });
     const addP = document.createElement("button");
     addP.className = "small"; addP.textContent = "+ pose";
-    addP.onclick = () => { act.poses.push({ note: 60, velocity: 60 }); rebuild(); };
+    addP.onclick = () => { act.poses.push(freshMsg("note")); rebuild(); };
     pw.appendChild(addP);
     box.appendChild(pw);
     ag.appendChild(box);
   });
-  // add action (scoped to the selected zone)
+  // add a custom action (one not in the table, e.g. a mode CC on the rest zone)
   const addA = document.createElement("button");
   addA.className = "small"; addA.textContent = "+ action";
   addA.onclick = () => {
     const nm2 = prompt("action name:", "new");
     if (!nm2 || acts[nm2]) return;
-    acts[nm2] = { start: { note: 60, velocity: 60 }, poses: [] };
+    acts[nm2] = { poses: [] };
     rebuild();
   };
   ag.appendChild(addA);
@@ -1770,8 +1879,10 @@ function validateSound() {
     if (zd.out_port !== null && zd.out_port !== undefined) {
       if (!Number.isInteger(zd.out_port) || zd.out_port < 0) errs.push(`zones[${name}].out_port: must be a non-negative int or null`);
     }
-    const e = validMsg(zd.command);
-    if (e) errs.push(`zones[${name}].command: ${e}`);
+    if (zd.command !== null && zd.command !== undefined) {
+      const e = validMsg(zd.command);
+      if (e) errs.push(`zones[${name}].command: ${e}`);
+    }
   }
   for (const zn of Object.keys(SOUND.actions)) {
     const acts = SOUND.actions[zn];
@@ -1933,6 +2044,7 @@ function buildMidiInForm() {
   buildMidiNav();
   buildMidiCapture();
   buildMidiGroups();
+  buildMidiAllList();
   const tbl = $("midiZones");
   tbl.innerHTML = "";
   const zoneNames = Object.keys(TABLE.zones);
@@ -2227,6 +2339,106 @@ function buildMidiGroups() {
     btn.title = "Click, then press the key on your MIDI controller — the robot remembers it for this group.";
     btn.onclick = () => midiLearn(null, null, null, null, null, null, name, MIDI.groups.in_port);
     row.appendChild(btn);
+    el.appendChild(row);
+  });
+}
+
+// A flat list of every currently-mapped MIDI-in key (nav, capture, group, zone
+// command, zone action) so each can be edited, re-learned, or removed in one place.
+// New keys are still added in the per-section UI above (not here).
+function buildMidiAllList() {
+  const el = $("midiAllList");
+  if (!el) return;
+  el.innerHTML = "";
+  if (!MIDI) return;
+  const entries = [];
+  if (MIDI.nav) {
+    NAV_COMMANDS.forEach((nav) => {
+      if (MIDI.nav[nav]) {
+        entries.push({
+          label: `nav · ${nav}`,
+          key: MIDI.nav[nav],
+          set: (k) => { MIDI.nav[nav] = k; },
+          learn: () => midiLearn(null, null, nav, MIDI.nav.in_port),
+          remove: () => { MIDI.nav[nav] = null; },
+        });
+      }
+    });
+  }
+  if (MIDI.capture && MIDI.capture.key) {
+    entries.push({
+      label: "capture",
+      key: MIDI.capture.key,
+      set: (k) => { MIDI.capture.key = k; },
+      learn: () => midiLearn(null, null, null, null, true, MIDI.capture.in_port),
+      remove: () => { MIDI.capture.key = null; },
+    });
+  }
+  const groups = (BRAIN && BRAIN.zone_groups) ? BRAIN.zone_groups : {};
+  Object.keys(groups).filter((n) => n !== "hunt" && n !== "facefocus").forEach((name) => {
+    if (MIDI.groups && MIDI.groups[name]) {
+      entries.push({
+        label: `group · ${name}`,
+        key: MIDI.groups[name],
+        set: (k) => { MIDI.groups[name] = k; },
+        learn: () => midiLearn(null, null, null, null, null, null, name, MIDI.groups.in_port),
+        remove: () => { MIDI.groups[name] = null; },
+      });
+    }
+  });
+  Object.keys(TABLE.zones || {}).forEach((zone) => {
+    const z = MIDI.zones[zone];
+    if (!z) return;
+    if (z.command) {
+      entries.push({
+        label: `${zone} (command)`,
+        key: z.command,
+        set: (k) => { z.command = k; },
+        learn: () => midiLearn(zone, null),
+        remove: () => { z.command = null; },
+      });
+    }
+    Object.keys(z.actions || {}).forEach((action) => {
+      if (z.actions[action]) {
+        entries.push({
+          label: `${zone} · ${action}`,
+          key: z.actions[action],
+          set: (k) => { z.actions[action] = k; },
+          learn: () => midiLearn(zone, action),
+          remove: () => { delete z.actions[action]; },
+        });
+      }
+    });
+  });
+  if (entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.style.cssText = "font-size:12px;color:var(--dim)";
+    empty.textContent = "no MIDI keys mapped yet — add them in the sections above";
+    el.appendChild(empty);
+    return;
+  }
+  entries.forEach((e) => {
+    const row = document.createElement("div");
+    row.className = "sndRow";
+    const lbl = document.createElement("span");
+    lbl.className = "sndName"; lbl.textContent = e.label;
+    lbl.title = "A mapped MIDI key. Edit the value, re-learn it, or remove it.";
+    row.appendChild(lbl);
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.className = "midiName";
+    inp.value = e.key;
+    inp.onchange = () => { e.set(inp.value.trim() || null); };
+    row.appendChild(inp);
+    const learnBtn = document.createElement("button");
+    learnBtn.className = "small"; learnBtn.textContent = "learn";
+    learnBtn.title = "Re-learn this key: click, then press the key on your controller.";
+    learnBtn.onclick = () => e.learn();
+    row.appendChild(learnBtn);
+    const rmBtn = document.createElement("button");
+    rmBtn.className = "small"; rmBtn.textContent = "\u00d7";
+    rmBtn.title = "Remove this mapping.";
+    rmBtn.onclick = () => { e.remove(); buildMidiInForm(); };
+    row.appendChild(rmBtn);
     el.appendChild(row);
   });
 }
@@ -3505,7 +3717,11 @@ function normalizeRobotConfig(data) {
   // The patch system mode: "video" (new, action-only, per-pose video — the default)
   // or "complex" (the legacy zone + behavior + action layered system).
   const mode = (d.patch_mode === "complex" || d.patch_mode === "video") ? d.patch_mode : "video";
-  return Object.assign({}, d, { joint_offsets_deg: arr, patch_mode: mode });
+  // Soft limits: per-axis [min, max] pairs. Default = HW limits (no extra restriction).
+  const soft = (Array.isArray(d.soft_limits) && d.soft_limits.length === 6)
+    ? d.soft_limits.map((p, idx) => (Array.isArray(p) && p.length === 2) ? p.slice() : HW_LIMITS[idx].slice())
+    : HW_LIMITS.map((p) => p.slice());
+  return Object.assign({}, d, { joint_offsets_deg: arr, patch_mode: mode, soft_limits: soft });
 }
 
 async function loadRobotConfig() {
@@ -3562,6 +3778,61 @@ function buildRobotConfigForm() {
   });
   modeSel.value = ROBOT_CONFIG.patch_mode;
   modeSel.onchange = () => { ROBOT_CONFIG.patch_mode = modeSel.value; };
+  // Build the limits card (HW read-only + soft editable).
+  buildLimitsForm();
+}
+
+function buildLimitsForm() {
+  const el = $("limitsForm");
+  if (!el) return;
+  el.innerHTML = "";
+  // Header row
+  const head = document.createElement("div");
+  head.className = "limitsGrid";
+  ["axis", "hw min", "hw max", "soft min", "soft max"].forEach((txt) => {
+    const s = document.createElement("span");
+    s.className = "limitsHead";
+    s.textContent = txt;
+    head.appendChild(s);
+  });
+  el.appendChild(head);
+  AXES.forEach((name, i) => {
+    const row = document.createElement("div");
+    row.className = "limitsGrid";
+    // Axis name
+    const ax = document.createElement("span");
+    ax.textContent = name;
+    row.appendChild(ax);
+    // HW min (read-only)
+    const hwMin = document.createElement("input");
+    hwMin.type = "number";
+    hwMin.value = HW_LIMITS[i][0];
+    hwMin.readOnly = true;
+    row.appendChild(hwMin);
+    // HW max (read-only)
+    const hwMax = document.createElement("input");
+    hwMax.type = "number";
+    hwMax.value = HW_LIMITS[i][1];
+    hwMax.readOnly = true;
+    row.appendChild(hwMax);
+    // Soft min (editable)
+    const softMin = document.createElement("input");
+    softMin.type = "number";
+    softMin.step = "1";
+    softMin.value = ROBOT_CONFIG.soft_limits[i][0];
+    softMin.dataset.axis = i;
+    softMin.dataset.bound = "lo";
+    row.appendChild(softMin);
+    // Soft max (editable)
+    const softMax = document.createElement("input");
+    softMax.type = "number";
+    softMax.step = "1";
+    softMax.value = ROBOT_CONFIG.soft_limits[i][1];
+    softMax.dataset.axis = i;
+    softMax.dataset.bound = "hi";
+    row.appendChild(softMax);
+    el.appendChild(row);
+  });
 }
 
 function saveRobotConfig() {
@@ -3571,7 +3842,16 @@ function saveRobotConfig() {
     const num = v ? parseFloat(v.value) : 0;
     return isNaN(num) ? 0 : num;
   });
-  const payload = Object.assign({}, ROBOT_CONFIG, { joint_offsets_deg: offsets });
+  // Read the soft limits from the limits form.
+  const limitsEl = $("limitsForm");
+  const softLimits = ROBOT_CONFIG.soft_limits.map((pair, i) => {
+    const inputs2 = limitsEl ? limitsEl.querySelectorAll("input[type=number]:not([readonly])")
+      : [];
+    const lo = inputs2[i * 2] ? parseFloat(inputs2[i * 2].value) : pair[0];
+    const hi = inputs2[i * 2 + 1] ? parseFloat(inputs2[i * 2 + 1].value) : pair[1];
+    return [isNaN(lo) ? pair[0] : lo, isNaN(hi) ? pair[1] : hi];
+  });
+  const payload = Object.assign({}, ROBOT_CONFIG, { joint_offsets_deg: offsets, soft_limits: softLimits });
   fetch("/api/robotconfig", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -4054,16 +4334,20 @@ function aeSwapPoses(zn, an, i, j) {
 // length matches the action's pose count (pad with a default note, truncate extras).
 // Keeps the sound buffer aligned with the anchor poses edited in the modal
 // (one per `poses` entry).
+// Ensure the sound entry's pose list is trimmed to the action's pose count.
+// No seeding: an action with no sound entry (or no start / poses) sends nothing,
+// and the editor shows "add sound" / "add start" / "+ pose" buttons instead of
+// default notes. Returns the entry or null (when the action has no sound yet).
 function reconcileActionSound(zn, an) {
-  if (!SOUND.actions[zn]) SOUND.actions[zn] = {};
-  if (!SOUND.actions[zn][an]) SOUND.actions[zn][an] = { start: { note: 60, velocity: 60 }, poses: [] };
+  if (!SOUND.actions[zn]) return null;
   const s = SOUND.actions[zn][an];
-  if (!s.start) s.start = { note: 60, velocity: 60 };
+  if (!s) return null;
   if (!Array.isArray(s.poses)) s.poses = [];
-  const a = TABLE.zones[zn].actions[an];
-  const n = actionPoses(a).length;
-  while (s.poses.length < n) s.poses.push({ note: 60, velocity: 60 });
-  if (s.poses.length > n) s.poses.length = n;
+  const a = (TABLE.zones[zn] && TABLE.zones[zn].actions[an]) || null;
+  if (a) {
+    const n = actionPoses(a).length;
+    if (s.poses.length > n) s.poses.length = n;
+  }
   return s;
 }
 
@@ -5033,30 +5317,68 @@ function buildActionEditor() {
   nsec.appendChild(addRow);
   el.appendChild(nsec);
 
-  // --- sound section: start message + one per pose (reconciled to the pose count) ---
+  // --- sound section: start message + one per pose (no auto-seeding: an action
+  // with no sound entry shows an "add sound" button; start / poses are addable +
+  // removable) ---
   reconcileActionSound(zn, an);
   const sd = SOUND.actions[zn][an];
   const ssec = document.createElement("div");
   ssec.className = "aeSec";
   ssec.appendChild(h3("sound"));
-  const srow = document.createElement("div");
-  srow.className = "sndRow";
-  const sl = document.createElement("span");
-  sl.className = "sndName"; sl.textContent = "start";
-  sl.title = "The sound played when this action begins.";
-  srow.appendChild(sl);
-  srow.appendChild(msgEditor(sd.start, (fresh) => { sd.start = fresh; buildActionEditor(); }));
-  ssec.appendChild(srow);
-  sd.poses.forEach((pm, pi) => {
-    const prow = document.createElement("div");
-    prow.className = "sndRow";
-    const pl = document.createElement("span");
-    pl.className = "sndName"; pl.textContent = "pose " + (pi + 1);
-    pl.title = "The sound played when the robot reaches pose " + (pi + 1) + " of this action.";
-    prow.appendChild(pl);
-    prow.appendChild(msgEditor(pm, (fresh) => { sd.poses[pi] = fresh; buildActionEditor(); }));
-    ssec.appendChild(prow);
-  });
+  if (!sd) {
+    const addS = document.createElement("button");
+    addS.className = "small"; addS.textContent = "+ add sound";
+    addS.title = "Give this action a sound (played when it starts, and at each pose).";
+    addS.onclick = () => {
+      if (!SOUND.actions[zn]) SOUND.actions[zn] = {};
+      SOUND.actions[zn][an] = { poses: [] };
+      buildActionEditor();
+    };
+    ssec.appendChild(addS);
+  } else {
+    // start message (add / edit / remove)
+    const srow = document.createElement("div");
+    srow.className = "sndRow";
+    const sl = document.createElement("span");
+    sl.className = "sndName"; sl.textContent = "start";
+    sl.title = "The sound played when this action begins.";
+    srow.appendChild(sl);
+    if (sd.start) {
+      srow.appendChild(msgEditor(sd.start, (fresh) => { sd.start = fresh; buildActionEditor(); }));
+      const sx = document.createElement("button");
+      sx.className = "small"; sx.textContent = "\u00d7";
+      sx.title = "Remove this action's start sound.";
+      sx.onclick = () => { delete sd.start; buildActionEditor(); };
+      srow.appendChild(sx);
+    } else {
+      const sadd = document.createElement("button");
+      sadd.className = "small"; sadd.textContent = "+ add start";
+      sadd.title = "Play a sound when this action begins.";
+      sadd.onclick = () => { sd.start = freshMsg("note"); buildActionEditor(); };
+      srow.appendChild(sadd);
+    }
+    ssec.appendChild(srow);
+    sd.poses.forEach((pm, pi) => {
+      const prow = document.createElement("div");
+      prow.className = "sndRow";
+      const pl = document.createElement("span");
+      pl.className = "sndName"; pl.textContent = "pose " + (pi + 1);
+      pl.title = "The sound played when the robot reaches pose " + (pi + 1) + " of this action.";
+      prow.appendChild(pl);
+      prow.appendChild(msgEditor(pm, (fresh) => { sd.poses[pi] = fresh; buildActionEditor(); }));
+      const prx = document.createElement("button");
+      prx.className = "small"; prx.textContent = "\u00d7";
+      prx.title = "Remove this pose's sound.";
+      prx.onclick = () => { sd.poses.splice(pi, 1); buildActionEditor(); };
+      prow.appendChild(prx);
+      ssec.appendChild(prow);
+    });
+    const addP = document.createElement("button");
+    addP.className = "small"; addP.textContent = "+ pose";
+    addP.title = "Add a sound for the next pose of this action.";
+    addP.onclick = () => { sd.poses.push(freshMsg("note")); buildActionEditor(); };
+    ssec.appendChild(addP);
+  }
   el.appendChild(ssec);
   buildAePoseImgs(zn, an);
 }
@@ -5394,22 +5716,29 @@ function switchMidiSubView(v) {
   $("midiTabIn").className = v === "in" ? "small active" : "small";
 }
 
-// Master MIDI on/off: one switch that drives BOTH the MIDI-in table (MIDI.enabled,
-// the core ignores all incoming controller keys) and the MIDI-out/sound table
-// (SOUND.enabled, the core sends no outgoing MIDI/sound messages). "On" means both
-// are enabled; if either side is off the master shows off. Toggling it saves both
-// tables so the core hot-reloads each side (POST /api/midi + /api/sound).
+// MIDI in/out on/off: two independent switches. The in switch drives the MIDI-in
+// table (MIDI.enabled, the core ignores all incoming controller keys) and the out
+// switch drives the MIDI-out/sound table (SOUND.enabled, the core sends no outgoing
+// MIDI/sound messages). Toggling either saves both tables so the core hot-reloads
+// each side (POST /api/midi + /api/sound).
 function refreshMidiMaster() {
   if (!MIDI || !SOUND) return;
-  const cb = $("midiMasterCb");
-  if (cb) cb.checked = !!(MIDI.enabled && SOUND.enabled);
+  const inCb = $("midiInCb");
+  if (inCb) inCb.checked = !!MIDI.enabled;
+  const outCb = $("midiOutCb");
+  if (outCb) outCb.checked = !!SOUND.enabled;
 }
 
-function onMidiMasterToggle() {
-  if (!MIDI || !SOUND) return;
-  const on = $("midiMasterCb").checked;
-  MIDI.enabled = on;
-  SOUND.enabled = on;
+function onMidiInToggle() {
+  if (!MIDI) return;
+  MIDI.enabled = $("midiInCb").checked;
+  refreshMidiMaster();
+  saveMidiAll();
+}
+
+function onMidiOutToggle() {
+  if (!SOUND) return;
+  SOUND.enabled = $("midiOutCb").checked;
   refreshMidiMaster();
   saveMidiAll();
 }
@@ -6289,76 +6618,102 @@ function syncPoseDrag(force) {
 
 // ---------------------------------------------------------------------------
 // Poses tab: dedicated 3D pose authoring. The ghost is the authored (scratch)
-// pose, driven by pose-drag + the number inputs, never by the WS state stream.
+// pose, driven by pose-drag + the joint-pose tool, never by the WS state stream.
 // Reuses the Robot3D singleton (moved into the poses mount on entry).
 // ---------------------------------------------------------------------------
 let scratchPose = POSE_DRAG_HOME.slice();  // the authored 6-value pose
 let posesDragOn = false;
+const posesGridInputs = [];  // the 6 number inputs of the joint-pose tool
 
-// Build the 6 number inputs (A1..A6) for the scratch pose.
-function buildPosesInputs() {
-  const box = $("posesInputs");
-  box.innerHTML = "";
-  for (let i = 0; i < 6; i++) {
+// The safezone of the zone the load picker points at (drives clamp + oob coloring).
+function loadedSafezone() {
+  const v = $("posesLoadSel").value;
+  if (!v) return null;
+  const slash = v.indexOf("/");
+  const zn = v.slice(0, slash);
+  const z = (TABLE && TABLE.zones) ? TABLE.zones[zn] : null;
+  return (z && z.safezone) ? z.safezone : null;
+}
+
+// Build the joint-pose tool (the validate tab's grid: ▲/▼ bump + number input per
+// axis). The bump buttons tweak the scratch pose (shift = 10, plain = 1).
+function buildPosesGrid() {
+  const grid = $("posesGrid");
+  grid.innerHTML = "";
+  posesGridInputs.length = 0;
+  AXES.forEach((n, i) => {
+    const l = document.createElement("label");
+    l.textContent = n;
+    const up = document.createElement("button");
+    up.type = "button"; up.className = "poseArrow"; up.textContent = "▲"; up.title = "increase";
     const inp = document.createElement("input");
-    inp.id = "posesA" + (i + 1);
-    inp.type = "text"; inp.inputMode = "decimal";
+    inp.type = "number"; inp.step = "0.1";
     inp.value = scratchPose[i];
     inp.oninput = posesInputOnInput;
-    box.appendChild(inp);
-  }
+    const down = document.createElement("button");
+    down.type = "button"; down.className = "poseArrow"; down.textContent = "▼"; down.title = "decrease";
+    const bump = (dir, step) => {
+      const v = parseFloat(inp.value);
+      const base = isNaN(v) ? 0 : v;
+      inp.value = Math.round((base + dir * step) * 1000) / 1000;
+      posesInputOnInput();
+    };
+    up.onclick = (e) => bump(1, e.shiftKey ? 10 : 1);
+    down.onclick = (e) => bump(-1, e.shiftKey ? 10 : 1);
+    l.appendChild(up);
+    l.appendChild(inp);
+    l.appendChild(down);
+    grid.appendChild(l);
+    posesGridInputs.push(inp);
+  });
 }
 
 // Write scratchPose into the 6 inputs (drag / load / clamp sync the fields).
 function updatePosesInputs() {
-  for (let i = 0; i < 6; i++) {
-    const inp = $("posesA" + (i + 1));
-    if (inp) inp.value = scratchPose[i];
-  }
+  posesGridInputs.forEach((inp, i) => { inp.value = scratchPose[i]; });
 }
 
 // Read the 6 inputs into scratchPose and drive the ghost + drag handle.
 function posesInputOnInput() {
   for (let i = 0; i < 6; i++) {
-    const v = parseFloat($("posesA" + (i + 1)).value);
+    const v = parseFloat(posesGridInputs[i].value);
     scratchPose[i] = isNaN(v) ? 0 : v;
   }
+  applyScratchPose();
+}
+
+// Drive the ghost to the scratch pose and refresh the readouts (oob, FK, collision).
+function applyScratchPose() {
   Robot3D.setTarget(scratchPose);
   Robot3D.poseDragSetPose(scratchPose);
+  updatePosesOob();
   updatePosesInfo();
+  checkPosesCollision();
 }
 
 // One IK step of the drag: the scratch pose takes the solved pose (concrete 6-value).
 function posesOnPose(pose) {
   scratchPose = pose.map((v) => Math.round(v * 1000) / 1000);
   updatePosesInputs();
-  updatePosesInfo();
+  applyScratchPose();
 }
 
 // The drag is over: resync the UI.
 function posesOnEnd() {
   updatePosesInputs();
-  updatePosesInfo();
+  applyScratchPose();
 }
 
-// Populate the zone dropdown (clamp-to-safezone) and the load-from picker.
-function buildPosesSelectors() {
+// Populate the load-from picker (zone/action). Its picked zone's safezone drives
+// the clamp button and the out-of-safezone highlighting.
+function buildPosesLoadPicker() {
   const zones = (TABLE && TABLE.zones) ? TABLE.zones : {};
-  const sel = $("posesZoneSel");
-  sel.innerHTML = "";
-  const names = Object.keys(zones).filter((n) => zones[n] && zones[n].safezone);
-  for (const n of names) {
-    const o = document.createElement("option");
-    o.value = n; o.textContent = n;
-    sel.appendChild(o);
-  }
-  if (selectedZone && zones[selectedZone] && zones[selectedZone].safezone) sel.value = selectedZone;
   const loadSel = $("posesLoadSel");
   loadSel.innerHTML = "";
   const opt0 = document.createElement("option");
   opt0.value = ""; opt0.textContent = "— load from —";
   loadSel.appendChild(opt0);
-  for (const zn in zones) {
+    for (const zn in zones) {
     const acts = zones[zn].actions || {};
     for (const an in acts) {
       const a = acts[an];
@@ -6371,20 +6726,73 @@ function buildPosesSelectors() {
   }
 }
 
-// Clamp the scratch pose to the selected zone's safezone.
+// The "save to" target picker (zone/action) for adding the scratch pose to an
+// action. Unlike the load picker, it lists ALL actions (even pose-less ones),
+// because you can add the first pose to an action that has none yet.
+function buildPosesSavePicker() {
+  const zones = (TABLE && TABLE.zones) ? TABLE.zones : {};
+  const saveSel = $("posesSaveSel");
+  if (!saveSel) return;
+  saveSel.innerHTML = "";
+  const opt0 = document.createElement("option");
+  opt0.value = ""; opt0.textContent = "— save to —";
+  saveSel.appendChild(opt0);
+  for (const zn in zones) {
+    const acts = zones[zn].actions || {};
+    for (const an in acts) {
+      const o = document.createElement("option");
+      o.value = zn + "/" + an;
+      o.textContent = zn + " / " + an;
+      saveSel.appendChild(o);
+    }
+  }
+}
+
+// Set the poses-tab save status line.
+function setPosesSaveMsg(msg) {
+  const el = $("posesSaveMsg");
+  if (el) el.textContent = msg;
+}
+
+// Append the scratch pose to the target action's pose list and persist the table.
+// Mirrors pastePose: the parallel pose_imgs / pose_videos arrays are extended with a
+// null slot so the action editor's per-pose image/video UI stays in sync. The whole
+// table is then POSTed (the same path the top "save" button uses in this view).
+function posesAddPose() {
+  const v = $("posesSaveSel").value;
+  if (!v) { setPosesSaveMsg("pick a zone/action to save to"); return; }
+  const slash = v.indexOf("/");
+  const zn = v.slice(0, slash), an = v.slice(slash + 1);
+  const z = TABLE.zones[zn];
+  if (!z || !z.actions || !z.actions[an]) { setPosesSaveMsg("zone/action not found"); return; }
+  const a = z.actions[an];
+  if (!Array.isArray(a.poses)) a.poses = [];
+  if (!Array.isArray(a.pose_imgs)) a.pose_imgs = a.poses.map(() => null);
+  if (!Array.isArray(a.pose_videos)) a.pose_videos = a.poses.map(() => null);
+  const pose = scratchPose.map((x) => Math.round(x * 1000) / 1000);
+  a.poses.push(pose);
+  a.pose_imgs.push(null);
+  a.pose_videos.push(null);
+  buildPosesLoadPicker();   // the new pose is now loadable back into the scratch
+  buildPosesSavePicker();
+  setPosesSaveMsg("added pose " + a.poses.length + " to " + zn + " / " + an + " — saving…");
+  saveZones();
+}
+
+// Clamp the scratch pose to the loaded zone's safezone.
 function posesClamp() {
-  const zn = $("posesZoneSel").value;
-  const z = (TABLE && TABLE.zones) ? TABLE.zones[zn] : null;
-  if (!z || !z.safezone) return;
+  const sz = loadedSafezone();
+  if (!sz) {
+    $("posesInfo").textContent = "pick a zone/action to load from — its safezone is used for clamping";
+    return;
+  }
   for (let i = 0; i < 6; i++) {
-    const [lo, hi] = z.safezone[i];
+    const [lo, hi] = sz[i];
     if (scratchPose[i] < lo) scratchPose[i] = lo;
     else if (scratchPose[i] > hi) scratchPose[i] = hi;
   }
-  Robot3D.setTarget(scratchPose);
-  Robot3D.poseDragSetPose(scratchPose);
   updatePosesInputs();
-  updatePosesInfo();
+  applyScratchPose();
 }
 
 // Copy the scratch pose to the clipboard (POSE_CLIP) so it can be pasted into a
@@ -6403,10 +6811,38 @@ function posesLoad() {
   const a = (TABLE && TABLE.zones[zn] && TABLE.zones[zn].actions) ? TABLE.zones[zn].actions[an] : null;
   if (!a || !Array.isArray(a.poses) || !a.poses.length) return;
   scratchPose = a.poses[0].map((x) => (typeof x === "number" ? x : 0));
-  Robot3D.setTarget(scratchPose);
-  Robot3D.poseDragSetPose(scratchPose);
   updatePosesInputs();
-  updatePosesInfo();
+  applyScratchPose();
+}
+
+// Highlight the axes that have moved outside the loaded safezone: the grid inputs
+// get the `.oob` style and the matching ghost links are recolored (red) in 3D.
+function updatePosesOob() {
+  const sz = loadedSafezone();
+  const colors = [null, null, null, null, null, null];
+  posesGridInputs.forEach((inp, i) => {
+    let oob = false;
+    if (sz) {
+      const [lo, hi] = sz[i];
+      oob = scratchPose[i] < lo || scratchPose[i] > hi;
+    }
+    inp.classList.toggle("oob", oob);
+    if (oob) colors[i] = 0xe05d5d;
+  });
+  Robot3D.setGhostAxisColors(colors);
+}
+
+// Check the scratch pose for collision (self + environment) and report it.
+function checkPosesCollision() {
+  const el = $("posesCollide");
+  const res = Robot3D.checkPoseCollision(scratchPose);
+  if (!res) { el.innerHTML = `<span style="color:var(--dim)">collision engine not ready</span>`; return; }
+  if (res.bodies.length === 0) {
+    el.innerHTML = `<span class="ok">clear</span> at pose [${scratchPose.map((x) => +x.toFixed(1)).join(",")}]`;
+  } else {
+    const c = res.collisions.map((x) => x.a + "~" + x.b).join(", ");
+    el.innerHTML = `<span class="bad">COLLIDES</span> at pose [${scratchPose.map((x) => +x.toFixed(1)).join(",")}] — ${c}`;
+  }
 }
 
 // Show a short FK readout (flange xyz) for the scratch pose.
@@ -6419,14 +6855,30 @@ function updatePosesInfo() {
   } catch (e) { el.textContent = ""; }
 }
 
-// Enter the poses tab: move the 3D node, hide the real arm, enable the poses drag.
+// Size the 3D window: a square that fills the vertical space. Set the 3D section's
+// height to the space left below the header (computed from the main's viewport offset,
+// so a wrapping header is handled); the CSS aspect-ratio keeps #robot3d square (its
+// width follows the height). Recomputed on window resize while the poses tab is open.
+function sizePoses3d() {
+  const main = $("posesMain");
+  const top = main.getBoundingClientRect().top;
+  const h = Math.max(320, window.innerHeight - top - 16);  // 16 = body bottom padding
+  $("poses3dSection").style.height = h + "px";
+  _triggerResize();
+}
+window.addEventListener("resize", () => { if (posesView) sizePoses3d(); });
+
+// Enter the poses tab: move the 3D node, size it to fill the vertical space, hide the
+// real arm, enable the poses drag.
 function posesEnter() {
   mountRobot3dPoses();
-  buildPosesSelectors();
-  buildPosesInputs();
+  buildPosesLoadPicker();
+  buildPosesSavePicker();
+  buildPosesGrid();
   Robot3D.setRobotRealVisible(false);
   ghostVisible = true;
   Robot3D.setGhostVisible(true);
+  sizePoses3d();
   posesDragOn = Robot3D.enablePoseDrag({
     pose: scratchPose,
     limits: HW_LIMITS,
@@ -6434,13 +6886,16 @@ function posesEnter() {
     onEnd: posesOnEnd,
   });
   Robot3D.setTarget(scratchPose);
+  updatePosesOob();
   updatePosesInfo();
+  checkPosesCollision();
 }
 
-// Leave the poses tab: disable the poses drag, restore the real arm.
+// Leave the poses tab: disable the poses drag, restore the real arm + ghost colors.
 function posesLeave() {
   if (posesDragOn) { posesDragOn = false; Robot3D.disablePoseDrag(); }
   Robot3D.setRobotRealVisible(true);
+  Robot3D.setGhostAxisColors([null, null, null, null, null, null]);
 }
 
 // ---------------------------------------------------------------------------
@@ -7022,6 +7477,19 @@ function flowAutoLayout(names) {
   }
   const maxD = Math.max(0, ...Object.values(depth));
   all.forEach((n) => { if (depth[n] === undefined) depth[n] = maxD + 1; });
+  // Bridges sit between their two endpoints: give each a fractional depth (the
+  // average of its neighbours' BFS depths) so it lands in the column between them.
+  // Computed from the BFS depths (before any override) so bridge-to-bridge links
+  // stay stable.
+  const bfsDepth = { ...depth };
+  Object.keys(TABLE.zones).forEach((b) => {
+    if (!isBridgeZone(b)) return;
+    const ds = [];
+    new Set([...zoneForward(b), ...zoneReverse(b)]).forEach((n) => {
+      if (bfsDepth[n] !== undefined) ds.push(bfsDepth[n]);
+    });
+    if (ds.length) depth[b] = ds.reduce((s, d) => s + d, 0) / ds.length;
+  });
   if (sel.length === all.length) {
     FLOW.pos = {};
     const cols = {};
@@ -7048,22 +7516,56 @@ function flowAutoLayout(names) {
       FLOW.pos[n] = { x: 40 + d * (NODE_W + GX), y: Math.max(40, baseBottom[d] || 0) + i * (nodeH(n) + GY) };
     });
   }
+  // Bridges: centre on the midpoint of their endpoints (the fractional column depth
+  // already puts them in the right column; this recentres vertically). Only bridges
+  // in scope are repositioned, so a manually placed bridge survives a partial layout.
+  Object.keys(TABLE.zones).forEach((b) => {
+    if (!isBridgeZone(b) || !sel.includes(b)) return;
+    const ps = [];
+    new Set([...zoneForward(b), ...zoneReverse(b)]).forEach((n) => {
+      const p = FLOW.pos[n]; if (p) ps.push({ x: p.x, y: p.y, h: nodeH(n) });
+    });
+    if (!ps.length) return;
+    const cx = ps.reduce((s, p) => s + p.x + NODE_W / 2, 0) / ps.length;
+    const cy = ps.reduce((s, p) => s + p.y + p.h / 2, 0) / ps.length;
+    FLOW.pos[b] = { x: cx - NODE_W / 2, y: cy - BRIDGE_CY };
+  });
   FLOW.layoutKey = all.sort().join(",");
 }
 
-// Fit the viewBox to the content bounds and store it (entry / after auto-layout).
+// Fit the viewBox to the content: centre it, match the canvas's aspect ratio (so
+// there are no empty letterbox bands), and clamp the zoom so nodes are never
+// absurdly tiny or huge. Stored as FLOW.view (entry / after auto-layout).
 function flowFitView() {
+  const svg = $("flowSvg");
   const names = Object.keys(TABLE.zones);
-  if (!names.length) { FLOW.view = { x: 0, y: 0, w: 400, h: 300 }; }
-  else {
-    let maxX = 0, maxY = 0;
-    names.forEach((n) => {
-      const p = FLOW.pos[n] || { x: 0, y: 0 };
-      maxX = Math.max(maxX, p.x + NODE_W);
-      maxY = Math.max(maxY, p.y + nodeH(n));
-    });
-    FLOW.view = { x: 0, y: 0, w: Math.max(400, maxX + 60), h: Math.max(300, maxY + 60) };
-  }
+  if (!names.length) { FLOW.view = { x: 0, y: 0, w: 400, h: 300 }; flowApplyView(); return; }
+  // Tight content bounds (min/max over every node corner) + padding.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  names.forEach((n) => {
+    const p = FLOW.pos[n] || { x: 0, y: 0 };
+    minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x + NODE_W); maxY = Math.max(maxY, p.y + nodeH(n));
+  });
+  const PAD = 40;
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  const cw = Math.max(1, maxX - minX) + 2 * PAD;
+  const ch = Math.max(1, maxY - minY) + 2 * PAD;
+  // The canvas's aspect ratio (fall back to 4:3 before it is laid out).
+  const r = svg ? svg.getBoundingClientRect() : null;
+  const elW = r && r.width > 0 ? r.width : 800;
+  const elH = r && r.height > 0 ? r.height : 560;
+  const ar = elW / elH;
+  // Expand the smaller side so the viewBox aspect matches the canvas (content
+  // centred, no letterboxing).
+  let vw = cw, vh = ch;
+  if (cw / ch < ar) { vw = ch * ar; } else { vh = cw / ar; }
+  // Clamp the fit scale (view-units per screen pixel) so nodes stay legible.
+  const MIN = 0.35, MAX = 6.0;
+  let s = vw / elW;
+  if (s < MIN) s = MIN; else if (s > MAX) s = MAX;
+  vw = s * elW; vh = s * elH;
+  FLOW.view = { x: cx - vw / 2, y: cy - vh / 2, w: vw, h: vh };
   flowApplyView();
 }
 
@@ -7101,25 +7603,49 @@ function flowZoomAt(e) {
   flowSaveLayout();
 }
 
-function flowPanStart(e) {
+// Pan the view by pointer-dragging the canvas. The middle button pans anywhere; the
+// left button pans when pressed on empty background (a left press that does not move
+// is a background click = deselect). Uses pointer events + capture so the pan
+// survives the pointer leaving the canvas. Only mutates FLOW.view.
+function flowPanDown(e) {
   const svg = $("flowSvg");
+  if (!svg) return;
+  const isMiddle = e.button === 1;
+  const isBgLeft = e.button === 0 && e.target === svg;
+  if (!isMiddle && !isBgLeft) return;
+  e.preventDefault();
   if (!FLOW.view) flowFitView();
-  const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
   const ctm = svg.getScreenCTM();
-  FLOW.pan = { ctm, startScreen: pt.matrixTransform(ctm), startView: { ...FLOW.view } };
-  const move = (ev) => {
-    const f = FLOW.pan;
-    if (!f) return;
-    const p = svg.createSVGPoint(); p.x = ev.clientX; p.y = ev.clientY;
-    const cur = p.matrixTransform(f.ctm);  // the frozen CTM keeps the start mapping stable
-    const scale = f.startView.w / svg.getBoundingClientRect().width;
-    FLOW.view.x = f.startView.x - (cur.x - f.startScreen.x) * scale;
-    FLOW.view.y = f.startView.y - (cur.y - f.startScreen.y) * scale;
-    flowApplyView();
-  };
-  const up = () => { FLOW.pan = null; window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); flowSaveLayout(); };
-  window.addEventListener("mousemove", move);
-  window.addEventListener("mouseup", up);
+  if (!ctm) return;
+  try { svg.setPointerCapture(e.pointerId); } catch (_) {}
+  FLOW.pan = { id: e.pointerId, button: e.button, ctm, startX: e.clientX, startY: e.clientY, startView: { ...FLOW.view }, moved: false };
+}
+
+function flowPanMove(e) {
+  const f = FLOW.pan;
+  if (!f || e.pointerId !== f.id) return;
+  const dx = e.clientX - f.startX, dy = e.clientY - f.startY;
+  if (!f.moved && Math.hypot(dx, dy) < 3) return;  // click threshold
+  f.moved = true;
+  // The frozen CTM maps view units -> screen pixels; invert for the pan delta.
+  FLOW.view.x = f.startView.x - dx / f.ctm.a;
+  FLOW.view.y = f.startView.y - dy / f.ctm.d;
+  flowApplyView();
+}
+
+function flowPanUp(e) {
+  const f = FLOW.pan;
+  if (!f || e.pointerId !== f.id) return;
+  const wasClick = !f.moved && f.button === 0;
+  FLOW.pan = null;
+  const svg = $("flowSvg");
+  try { if (svg) svg.releasePointerCapture(f.id); } catch (_) {}
+  flowSaveLayout();
+  if (wasClick) {  // a background click (no move) clears the selection
+    FLOW.sel = null;
+    flowRender();
+    buildFlowDetail();
+  }
 }
 
 // Draw one undirected connection between two action blocks. The anchors sit on the
@@ -7273,7 +7799,7 @@ function flowAddNode(layer, name) {
         const act = z.actions[an];
         const ry = rowY(name, an);
         const hit = svgEl("rect", { x: 0, y: ry - FA_ROW / 2, width: NODE_W, height: FA_ROW, fill: "transparent" });
-        hit.addEventListener("mousedown", (e) => { e.stopPropagation(); flowDragStart(e, name, an); });
+        hit.addEventListener("mousedown", (e) => { if (e.button !== 0) return; e.stopPropagation(); flowDragStart(e, name, an); });
         g.appendChild(hit);
         const beh = (act.behavior && BEHAVIORS.includes(act.behavior)) ? act.behavior : "calm";
         const txt = svgEl("text", { x: 8, y: ry + 4, class: "faRow", "text-anchor": "start" });
@@ -7292,7 +7818,7 @@ function flowAddNode(layer, name) {
       });
     }
   }
-  g.addEventListener("mousedown", (e) => flowDragStart(e, name));
+  g.addEventListener("mousedown", (e) => { if (e.button !== 0) return; flowDragStart(e, name); });
   layer.appendChild(g);
   FLOW.nodeEls[name] = g;
   return g;
@@ -7522,8 +8048,14 @@ function flowBridge(from, to) {
   const pa = FLOW.pos[from.zone], pb = FLOW.pos[to.zone];
   let x, y;
   if (pa && pb) {
-    x = (pa.x + pb.x + NODE_W) / 2;
-    y = (pa.y + pb.y) / 2;
+    // Place the bridge's connection dot at the geometric midpoint between the two
+    // endpoints: the horizontal midpoint of their facing edges and the vertical
+    // midpoint of their centres. The dot renders at (x + NODE_W/2, y + BRIDGE_CY),
+    // so the box top-left is the midpoint offset by those amounts.
+    const midX = (pa.x + pb.x + NODE_W) / 2;
+    const midY = (pa.y + nodeH(from.zone) / 2 + pb.y + nodeH(to.zone) / 2) / 2;
+    x = midX - NODE_W / 2;
+    y = midY - BRIDGE_CY;
   } else {
     let maxY = 0;
     Object.keys(TABLE.zones).forEach((n2) => { const p = FLOW.pos[n2]; if (p) maxY = Math.max(maxY, p.y); });
@@ -7681,9 +8213,16 @@ function flowEnter() {
 function addZone() {
   const nm = prompt("new zone name:", "newzone");
   if (!nm || TABLE.zones[nm]) return;
+  // Default the new zone's safezone to the currently shown zone's limits so the
+  // editor's "current limits" carry over (instead of stale hardcoded values).
+  // Fall back to the hardware joint limits when no zone is selected or the shown
+  // zone has no safezone yet.
+  const curZone = flowView && FLOW.sel && FLOW.sel.type === "node" ? FLOW.sel.zone : selectedZone;
+  const curSz = curZone && TABLE.zones[curZone] && TABLE.zones[curZone].safezone ? TABLE.zones[curZone].safezone : null;
+  const baseSz = curSz && curSz.length === 6 ? curSz : HW_LIMITS;
   TABLE.zones[nm] = {
     enabled: true,
-    safezone: [[-94,122],[-134,34],[-119,157],[-349,349],[-118,118],[-357,357]],
+    safezone: baseSz.map((p) => [p[0], p[1]]),
     speed: 20, actions: {},
   };
   if (flowView) {
@@ -8027,15 +8566,17 @@ $("delZone").onclick = delZone;
    $("tabCam").onclick = () => switchView("cam");
    $("tabValidate").onclick = () => switchView("validate");
    $("tabRobotConfig").onclick = () => switchView("robotconfig");
-$("posesClamp").onclick = posesClamp;
-$("posesCopy").onclick = posesCopy;
-$("posesLoad").onclick = posesLoad;
+ $("posesClamp").onclick = posesClamp;
+ $("posesCopy").onclick = posesCopy;
+ $("posesLoad").onclick = posesLoad;
+ $("posesAddPose").onclick = posesAddPose;
   buildValPoseSetter();
   $("valPoseGo").onclick = applyValPose;
   $("valCopyCollision").onclick = copyValCollisionPose;
 $("midiTabOut").onclick = () => switchMidiSubView("out");
 $("midiTabIn").onclick = () => switchMidiSubView("in");
-$("midiMasterCb").onchange = onMidiMasterToggle;
+$("midiInCb").onchange = onMidiInToggle;
+$("midiOutCb").onchange = onMidiOutToggle;
 $("midiStopLearn").onclick = midiStopLearn;
 $("sndRefreshPorts").onclick = () => {
   fetch("/api/sound/ports", { cache: "no-store" }).then((r) => r.json()).then((b) => {
@@ -8093,16 +8634,15 @@ $("flowValidate").onclick = () => {
     panel.appendChild(item);
   }
 };
-// View controls: wheel = zoom (around the cursor), middle-drag = pan.
+// View controls: wheel = zoom (around the cursor); pan by middle-drag anywhere or
+// left-drag on empty background (a left press that does not move is a background
+// click = deselect). Pointer events + capture keep the pan alive even when the
+// pointer leaves the canvas.
 $("flowSvg").addEventListener("wheel", (e) => { e.preventDefault(); flowZoomAt(e); }, { passive: false });
-$("flowSvg").addEventListener("mousedown", (e) => { if (e.button === 1) { e.preventDefault(); flowPanStart(e); } });
-// Background click on the canvas (not on a node/arrow) clears the selection.
-$("flowSvg").addEventListener("click", (e) => {
-  if (e.button !== 0 || e.target !== $("flowSvg")) return;
-  FLOW.sel = null;
-  flowRender();
-  buildFlowDetail();
-});
+$("flowSvg").addEventListener("pointerdown", flowPanDown);
+$("flowSvg").addEventListener("pointermove", flowPanMove);
+$("flowSvg").addEventListener("pointerup", flowPanUp);
+$("flowSvg").addEventListener("pointercancel", flowPanUp);
 $("patchAdd").onclick = addPatchAction;
 $("patchRemove").onclick = removePatchSlot;
 // Broadcast toggle: ON pushes the selected slot's code to the screens; OFF clears.

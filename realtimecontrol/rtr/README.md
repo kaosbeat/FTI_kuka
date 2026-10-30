@@ -467,7 +467,7 @@ a `zones.json` without them works exactly as before.
   shared catalog; the "+ add action" button adds to the current zone), and edit each
   action (enabled, name, pose rows, per-pose speed),
 - step through an action's poses locally with the ghost (target) arm,
-- author a pose in the dedicated **poses** tab (drag the ghost flange + edit the 6 axes; clamp to a zone safezone; copy to paste into any zone/flow action),
+- author a pose in the dedicated **poses** tab (drag the ghost flange or tweak the 6 axes with the joint-pose tool; live collision check; clamp to the loaded zone's safezone; copy to paste into any zone/flow action),
 - **Save** the whole table (`POST /api/zones` → the core hot-reloads, so `client.html` and
   the live robot pick it up immediately), and **Play** an action over the WebSocket.
 
@@ -498,15 +498,22 @@ canvas that re-evals the action's patch code as you type) and saves all three ta
 parallel (`POST /api/zones` + `/api/sound` + `/api/patches`), re-running the client-side
 `validate()` (which now also checks the `kind` / `loop` / `target` rules) before posting.
 
-The **poses** tab is a dedicated 3D pose-authoring surface. Its ghost is the **authored
-(scratch) pose**, driven by pose-drag (drag the flange handle; IK solves and writes back)
-and the six **A1..A6 number inputs** — never by the 20 Hz WebSocket state stream (the
-`Robot3D.update` call is gated with `!posesView`, the same view-gating the validate tab
-uses). The real arm is hidden while authoring. A **zone** dropdown + **clamp to safezone**
-button clamps each axis to the selected zone's safezone; **copy pose** puts the scratch
-pose on the shared clipboard (`POSE_CLIP`), which the action editor's **paste pose** button
-consumes; the **load from** picker seeds the scratch from any existing zone/action's first
-pose. The scratch pose is session-only (copy it into an action to persist it).
+The **poses** tab is a dedicated 3D pose-authoring surface (landscape layout: controls /
+info on the left in the remaining width, a **square 3D window on the right that fills the
+vertical space** — its height is set at runtime to the space below the header and
+`aspect-ratio: 1` keeps it square). Its ghost is the **authored (scratch)
+pose**, driven by pose-drag (drag the flange handle; IK solves and writes back) and the
+**joint pose tool** (the validate tab's ▲/▼ bump grid + number inputs; shift = 10) —
+never by the 20 Hz WebSocket state stream (the `Robot3D.update` call is gated with
+`!posesView`, the same view-gating the validate tab uses). The real arm is hidden while
+authoring. A **collision** line checks the scratch pose (self + environment) immediately
+on every change. The **load from** picker seeds the scratch from any existing zone/action's
+first pose, and the **clamp to safezone** button clamps each axis to the picked zone's
+safezone; axes outside that safezone are highlighted in the grid (`.oob`) and recolored
+red on the ghost (`Robot3D.setGhostAxisColors`, per-link ghost materials). **copy pose**
+puts the scratch pose on the shared clipboard (`POSE_CLIP`), which the action editor's
+**paste pose** button consumes. The scratch pose is session-only (copy it into an action
+to persist it).
 
 The **flow** tab (4th tab) is a 2D SVG **flowchart** of the zone graph: **nodes** are the
 zones (label = the "mood"; small text = the default mode + action count, or the live

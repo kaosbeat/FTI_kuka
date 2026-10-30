@@ -107,21 +107,22 @@ def test_behavior_property_falls_back_to_action():
 
 def test_build_target_uses_forced_behavior():
     # The action declares "calm" (a no-op policy: it holds the anchor pose). Forcing
-    # "vigilant" (a scan policy) must drive the variable axis to the safezone center
-    # instead of holding the anchor.
+    # "vigilant" (a scan policy) must drive the variable axis somewhere within the
+    # safezone instead of holding the anchor.
     # No forced behavior: the action's own "calm" no-op holds the anchor.
     m = _machine({"look": _LOOK})
     m.current_action = "look"
     t_plain = build_target(m, [0] * 6)
     assert t_plain == [1, 2, 3, 4, 5, 6], "calm no-op must hold the anchor pose"
-    # Forced "vigilant": the scan policy drives axis 0 to the safezone center.
+    # Forced "vigilant": the scan policy drives axis 0 out of the anchor.
     m2 = _machine({"look": _LOOK})
     m2.current_action = "look"
     m2.enable_behavior("vigilant")
     t_forced = build_target(m2, [0] * 6)
     assert t_forced[0] != 1, "forced vigilant must drive the variable axis (not hold the anchor)"
-    # At tick 0 the scan sits at the safezone center (sin(0) = 0, center of (-100, 100)).
-    assert t_forced[0] == 0.0, "scan at tick 0 is the safezone center"
+    # The scan is desynced per axis (a stable per-axis phase + frequency offset), so at
+    # tick 0 the axis sits at an offset within the safezone, not the rigid shared center.
+    assert -100.0 <= t_forced[0] <= 100.0, "scan at tick 0 stays within the safezone"
     # Non-variable axes stay at the anchor.
     assert t_forced[1:] == [2, 3, 4, 5, 6], "non-variable axes stay at the anchor"
 

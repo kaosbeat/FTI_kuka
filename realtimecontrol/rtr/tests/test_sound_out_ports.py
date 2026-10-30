@@ -186,6 +186,27 @@ def test_validate_rejects_bad_per_zone_command():
     raise AssertionError("expected ValueError for an out-of-range command")
 
 
+def test_validate_accepts_zone_without_command():
+    # A zone that has an out_port but no command is accepted: it sends nothing on
+    # entry (its actions / poses still play on the zone's out device).
+    data = validate_sound_data({
+        "channel": 0,
+        "zones": {"wander": {"out_port": 2}},
+        "modes": {}, "actions": {}})
+    assert data["zones"]["wander"] == {"out_port": 2}
+    assert "command" not in data["zones"]["wander"]
+
+
+def test_validate_accepts_empty_zone_entry():
+    # An empty zone entry {} means "no command" (it is NOT a legacy bare message),
+    # so it normalizes to {out_port: None, command: None} rather than being wrapped.
+    data = validate_sound_data({
+        "channel": 0,
+        "zones": {"wander": {}},
+        "modes": {}, "actions": {}})
+    assert data["zones"]["wander"] == {"out_port": None, "command": None}
+
+
 # ---------------------------------------------------------------------------
 # validate_sound_data: the legacy modes block → actions["rest"] migration.
 # ---------------------------------------------------------------------------
@@ -328,6 +349,24 @@ def test_mode_change_sends_nothing():
         # Only the mode changes; nothing new is sent.
         s.on_event(Event.SNAPSHOT, _snap(zone="rest", mode="action", action="wander"))
         assert s._open_outs[(0, None)].sent == sent
+
+
+def test_no_command_zone_sends_nothing_on_entry():
+    # A zone with an out_port but no command sends nothing when entered, yet its
+    # action still plays on the zone's out device.
+    FakeMidiOut.instances = []
+    with _fake_rtmidi():
+        s, _ = _sound({"channel": 0,
+                       "zones": {"wander": {"out_port": 1}},
+                       "actions": {"wander": {"go": {"start": {"note": 55, "velocity": 70},
+                                                    "poses": []}}}})
+        s.on_event(Event.SNAPSHOT, _snap(zone="wander"))
+        # Entering the zone sends no entry note (no command), so no out is opened yet.
+        assert s._open_outs == {}
+        # The action's start message still plays on the zone's out device (port 1).
+        s.on_event(Event.SNAPSHOT, _snap(zone="wander", action="go"))
+        assert set(s._open_outs) == {(1, None)}
+        assert s._open_outs[(1, None)].sent == [[0x90, 55, 70]]
 
 
 def test_per_pose_midi_keys_on_action_index():

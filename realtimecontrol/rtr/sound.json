@@ -54,8 +54,8 @@
     "resting": {
       "out_port": null,
       "command": {
-        "note": 60,
-        "velocity": 60
+        "note": 0,
+        "velocity": 0
       }
     },
     "sleeping_testing_bridge": {
@@ -141,69 +141,37 @@
         "note": 60,
         "velocity": 60
       }
+    },
+    "tidal": {
+      "out_port": null,
+      "command": {
+        "note": 60,
+        "velocity": 60
+      }
     }
   },
   "actions": {
     "sleeping": {
       "breathe": {
         "start": {
-          "note": 36,
-          "velocity": 50
+          "note": 60,
+          "velocity": 60
         },
-        "poses": [
-          {
-            "note": 60,
-            "velocity": 60
-          },
-          {
-            "note": 36,
-            "velocity": 50
-          },
-          {
-            "note": 38,
-            "velocity": 48
-          },
-          {
-            "note": 36,
-            "velocity": 50
-          }
-        ]
+        "poses": []
       },
       "snore": {
         "start": {
-          "note": 30,
-          "velocity": 40
+          "note": 60,
+          "velocity": 60
         },
-        "poses": [
-          {
-            "note": 30,
-            "velocity": 40
-          },
-          {
-            "note": 29,
-            "velocity": 38
-          }
-        ]
+        "poses": []
       },
       "yawn": {
         "start": {
-          "note": 32,
-          "velocity": 45
+          "note": 60,
+          "velocity": 60
         },
-        "poses": [
-          {
-            "note": 60,
-            "velocity": 60
-          },
-          {
-            "note": 60,
-            "velocity": 60
-          },
-          {
-            "note": 60,
-            "velocity": 60
-          }
-        ]
+        "poses": []
       }
     },
     "cuddling": {
@@ -470,28 +438,7 @@
         ]
       }
     },
-    "resting": {
-      "hold": {
-        "start": {
-          "note": 60,
-          "velocity": 60
-        },
-        "poses": [
-          {
-            "note": 60,
-            "velocity": 60
-          },
-          {
-            "note": 60,
-            "velocity": 60
-          },
-          {
-            "note": 60,
-            "velocity": 60
-          }
-        ]
-      }
-    },
+    "resting": {},
     "sleeping_testing_bridge": {
       "bridge": {
         "start": {
@@ -499,6 +446,10 @@
           "velocity": 60
         },
         "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          },
           {
             "note": 60,
             "velocity": 60
@@ -627,6 +578,10 @@
           {
             "note": 60,
             "velocity": 60
+          },
+          {
+            "note": 60,
+            "velocity": 60
           }
         ]
       }
@@ -737,6 +692,27 @@
             "velocity": 60
           }
         ]
+      }
+    },
+    "tidal": {
+      "bd": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": [
+          {
+            "note": 60,
+            "velocity": 60
+          }
+        ]
+      },
+      "bdoff": {
+        "start": {
+          "note": 60,
+          "velocity": 60
+        },
+        "poses": []
       }
     }
   },

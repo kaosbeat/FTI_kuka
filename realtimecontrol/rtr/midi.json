@@ -75,6 +75,83 @@
       "in_port": null,
       "command": null,
       "actions": {}
+    },
+    "testing": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "testing_locked_band": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "scanning": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "sleeping_testing_bridge": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "task1_task2_bridge": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "task2_task3_bridge": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "task3_task1_bridge": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "task3_task2_bridge": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "scanning_task1_bridge": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "sleeping_resting_bridge": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "sleeping_scanning_bridge": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "scan": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "lock": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "inspect": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "tidal": {
+      "in_port": null,
+      "command": null,
+      "actions": {
+        "bd": "note:0:60"
+      }
     }
   },
   "nav": {
@@ -82,6 +159,16 @@
     "next_zone": null,
     "back": null,
     "retrigger": null,
-    "next_pose": null
+    "next_pose": null,
+    "in_port": null
+  },
+  "capture": {
+    "in_port": null,
+    "key": null
+  },
+  "groups": {
+    "in_port": null,
+    "active": null,
+    "sleep": null
   }
 }

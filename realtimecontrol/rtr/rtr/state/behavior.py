@@ -629,10 +629,33 @@ def _servo(machine, pose, var_axes, dx, dy, curjpos, gain, action, behavior, axi
     }
 
 
+def _axis_desync(axis):
+    """Per-axis desync for the sweep/oscillation policies (stable across ticks).
+
+    Returns ``(phase, freq_mult)`` for a single variable axis, both derived
+    deterministically from the axis number so they are stable across ticks (no
+    jitter) but differ per axis. The phase offset + small frequency multiplier
+    desynchronise the axes so they no longer all ride one shared sine in lockstep —
+    each axis sweeps at its own rate and starting point, so the motion reads as
+    organic rather than a single rigid wave.
+    """
+    a = axis + 1.0
+    h1 = (math.sin(a * 12.9898) * 43758.5453) % 1.0
+    h2 = (math.sin(a * 78.233) * 43758.5453) % 1.0
+    return h1 * 2.0 * math.pi, 0.7 + 0.6 * h2  # phase in [0, 2π), freq_mult in [0.7, 1.3)
+
+
 def _apply_scan(machine, pose, var_axes, limits) -> None:
-    """Sweep variable axes back and forth within the safezone (sine oscillation)."""
-    t = machine.tick * 0.1 * _bp(machine, "vigilant", "freq", 1.0)
+    """Sweep variable axes back and forth within the safezone (sine oscillation).
+
+    Each axis rides its own sine — a stable per-axis phase offset + frequency
+    multiplier (see :func:`_axis_desync`) keeps the axes from moving in lockstep, so
+    the sweep reads as organic rather than one rigid wave.
+    """
+    base = machine.tick * 0.1 * _bp(machine, "vigilant", "freq", 1.0)
     for axis in var_axes:
+        phase, freq_mult = _axis_desync(axis)
+        t = base * freq_mult + phase
         lo, hi = limits[axis]
         center = (lo + hi) / 2.0
         amplitude = (hi - lo) / 2.0
@@ -661,11 +684,15 @@ def _apply_oscillation(machine, pose, var_axes, limits, freq=1.0, amp_scale=0.5)
     Shared by the animal behaviours (``soothing`` / ``agitated`` / ``aggressive`` / ``exhilarated`` /
     ``impatient`` / ``drowsy``). ``freq`` scales the sine rate (relative to the vigilant base
     rate); ``amp_scale`` scales the amplitude so the motion stays a small fraction of
-    the safezone width. The axis is clamped to the effective safezone so the pose
-    always remains within the zone's safe bounds (no collision from overshoot).
+    the safezone width. Each axis rides its own sine (a stable per-axis phase + frequency
+    offset, see :func:`_axis_desync`) so the axes do not all move in lockstep. The axis is
+    clamped to the effective safezone so the pose always remains within the zone's safe
+    bounds (no collision from overshoot).
     """
-    t = machine.tick * 0.1 * freq
+    base = machine.tick * 0.1 * freq
     for axis in var_axes:
+        phase, freq_mult = _axis_desync(axis)
+        t = base * freq_mult + phase
         lo, hi = limits[axis]
         center = pose[axis]  # the current-anchor value (pose starts as the anchor)
         amplitude = (hi - lo) / 2.0 * amp_scale
