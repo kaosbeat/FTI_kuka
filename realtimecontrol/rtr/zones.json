@@ -1715,6 +1715,458 @@
         }
       }
     },
+    "scan_room": {
+      "enabled": true,
+      "class": "scan",
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -95,
+          -10
+        ],
+        [
+          15,
+          25
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          -25,
+          85
+        ],
+        [
+          -15,
+          15
+        ]
+      ],
+      "speed": 20,
+      "actions": {
+        "look": {
+          "enabled": true,
+          "poses": [
+            [
+              0,
+              -90,
+              20,
+              0,
+              80,
+              0
+            ],
+            [
+              -90,
+              -90,
+              20,
+              0,
+              75,
+              0
+            ],
+            [
+              90,
+              -85,
+              20,
+              0,
+              80,
+              0
+            ],
+            [
+              0,
+              -90,
+              20,
+              0,
+              80,
+              0
+            ]
+          ],
+          "variable_axes": [
+            0,
+            1,
+            5
+          ],
+          "behavior": "spontaneous",
+          "speed": 15,
+          "loop": true,
+          "dwell_s": 30,
+          "next": {
+            "zone": "follow_p",
+            "action": "track"
+          }
+        }
+      }
+    },
+    "follow_p": {
+      "enabled": true,
+      "class": "track",
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -95,
+          -10
+        ],
+        [
+          15,
+          25
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          -25,
+          85
+        ],
+        [
+          -15,
+          15
+        ]
+      ],
+      "speed": 40,
+      "actions": {
+        "track": {
+          "enabled": true,
+          "poses": [
+            [
+              0,
+              -90,
+              20,
+              0,
+              80,
+              0
+            ],
+            [
+              "x",
+              -45,
+              20,
+              0,
+              40,
+              0
+            ],
+            [
+              60,
+              -45,
+              20,
+              0,
+              45,
+              0
+            ],
+            [
+              -60,
+              -45,
+              20,
+              0,
+              35,
+              0
+            ],
+            [
+              "x",
+              -45,
+              20,
+              0,
+              40,
+              0
+            ]
+          ],
+          "variable_axes": [
+            0,
+            4
+          ],
+          "behavior": "locked",
+          "speed": 40,
+          "loop": true,
+          "dwell_s": 30,
+          "next": {
+            "zone": "approach_p",
+            "action": "lean"
+          }
+        }
+      }
+    },
+    "approach_p": {
+      "enabled": true,
+      "class": "approach",
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -95,
+          -10
+        ],
+        [
+          15,
+          25
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          -25,
+          85
+        ],
+        [
+          -15,
+          15
+        ]
+      ],
+      "speed": 30,
+      "actions": {
+        "lean": {
+          "enabled": true,
+          "poses": [
+            [
+              "x",
+              -45,
+              20,
+              0,
+              40,
+              0
+            ],
+            [
+              0,
+              -15,
+              25,
+              0,
+              -20,
+              0
+            ],
+            [
+              25,
+              -15,
+              25,
+              0,
+              -20,
+              -10
+            ],
+            [
+              -25,
+              -18,
+              25,
+              0,
+              -20,
+              0
+            ],
+            [
+              0,
+              -15,
+              25,
+              0,
+              -20,
+              0
+            ]
+          ],
+          "variable_axes": [
+            0,
+            2,
+            4,
+            5
+          ],
+          "behavior": "intent",
+          "speed": 30,
+          "loop": true,
+          "dwell_s": 10,
+          "next": {
+            "zone": "inspect_p",
+            "action": "face"
+          }
+        }
+      }
+    },
+    "inspect_p": {
+      "enabled": true,
+      "class": "facefocus",
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -95,
+          -10
+        ],
+        [
+          15,
+          25
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          -25,
+          85
+        ],
+        [
+          -15,
+          15
+        ]
+      ],
+      "speed": 25,
+      "actions": {
+        "face": {
+          "enabled": true,
+          "poses": [
+            [
+              0,
+              -15,
+              25,
+              0,
+              -20,
+              0
+            ],
+            [
+              0,
+              -15,
+              20,
+              0,
+              -20,
+              0
+            ],
+            [
+              20,
+              -15,
+              20,
+              0,
+              -20,
+              0
+            ],
+            [
+              -20,
+              -15,
+              20,
+              0,
+              -20,
+              0
+            ],
+            [
+              0,
+              -15,
+              20,
+              0,
+              -20,
+              0
+            ]
+          ],
+          "variable_axes": [
+            0,
+            5
+          ],
+          "behavior": "gentle",
+          "speed": 25,
+          "loop": true,
+          "dwell_s": 15,
+          "next": {
+            "zone": "retreat_p",
+            "action": "back"
+          }
+        }
+      }
+    },
+    "retreat_p": {
+      "enabled": true,
+      "class": "retreat",
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -95,
+          -10
+        ],
+        [
+          15,
+          25
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          -25,
+          85
+        ],
+        [
+          -15,
+          15
+        ]
+      ],
+      "speed": 40,
+      "actions": {
+        "back": {
+          "enabled": true,
+          "poses": [
+            [
+              0,
+              -15,
+              20,
+              0,
+              -20,
+              0
+            ],
+            [
+              15,
+              -30,
+              20,
+              0,
+              10,
+              0
+            ],
+            [
+              0,
+              -45,
+              20,
+              0,
+              40,
+              0
+            ],
+            [
+              -15,
+              -60,
+              20,
+              0,
+              60,
+              0
+            ],
+            [
+              0,
+              -75,
+              20,
+              0,
+              70,
+              0
+            ],
+            [
+              0,
+              -90,
+              20,
+              0,
+              80,
+              0
+            ]
+          ],
+          "variable_axes": [
+            0
+          ],
+          "behavior": "soothing",
+          "speed": 40,
+          "loop": true,
+          "dwell_s": 3,
+          "next": {
+            "zone": "scan_room",
+            "action": "look"
+          }
+        }
+      }
+    },
     "tidal": {
       "enabled": true,
       "safezone": [
@@ -1727,7 +2179,7 @@
           34
         ],
         [
-          -119,
+          -95,
           157
         ],
         [
@@ -1735,8 +2187,8 @@
           120
         ],
         [
-          -118,
-          118
+          -55,
+          100
         ],
         [
           -35,
@@ -1843,7 +2295,7 @@
       },
       "sleeping_resting_bridge": {
         "x": 250,
-        "y": 40
+        "y": 71
       },
       "sleeping": {
         "x": 460,
@@ -1858,60 +2310,80 @@
         "y": 276
       },
       "scanning": {
-        "x": 212.627685546875,
-        "y": 483.48089599609375
+        "x": 460,
+        "y": 394
       },
       "sleeping_testing_bridge": {
         "x": 460,
-        "y": 360
+        "y": 166
       },
       "task1_task2_bridge": {
-        "x": 460,
-        "y": 440
+        "x": 698.85302734375,
+        "y": 1124.5447998046875
       },
       "task2_task3_bridge": {
-        "x": 756.1097412109375,
-        "y": 693.3634033203125
+        "x": 718.3512573242188,
+        "y": 781.5985717773438
       },
       "task3_task1_bridge": {
-        "x": 853.547607421875,
-        "y": 453.2105407714844
+        "x": 869.46240234375,
+        "y": 709.7239379882812
       },
       "task3_task2_bridge": {
-        "x": 882.65234375,
-        "y": 526.8834228515625
+        "x": 1732.2581176757812,
+        "y": 1220.3082275390625
       },
       "scanning_task1_bridge": {
         "x": 460,
-        "y": 760
+        "y": 981
       },
       "sleeping_scanning_bridge": {
         "x": 460,
-        "y": 840
+        "y": 248
       },
       "scan": {
-        "x": 998.174072265625,
-        "y": 687.1817016601562
+        "x": 1152.1864013671875,
+        "y": 675.5770263671875
       },
       "lock": {
-        "x": 1000.5558166503906,
-        "y": 560.5021362304688
+        "x": 1287.0225219726562,
+        "y": 558.962646484375
       },
       "inspect": {
-        "x": 1011.6669616699219,
-        "y": 399.9295654296875
+        "x": 1015.698974609375,
+        "y": 1044.3370361328125
+      },
+      "scan_room": {
+        "x": 2218.76904296875,
+        "y": 1049.1541748046875
+      },
+      "follow_p": {
+        "x": 2192.2525634765625,
+        "y": 792.6796875
+      },
+      "approach_p": {
+        "x": 2535.375946044922,
+        "y": 816.3037719726562
+      },
+      "inspect_p": {
+        "x": 2998.3804931640625,
+        "y": 887.7535400390625
+      },
+      "retreat_p": {
+        "x": 2625.861328125,
+        "y": 1073.1895751953125
       },
       "tidal": {
-        "x": 1370.2993774414062,
-        "y": 660.3136596679688
+        "x": 2153.5924377441406,
+        "y": 471.43170166015625
       }
     },
     "view": {
-      "x": 1050.3991331120951,
-      "y": 205.7075714461161,
-      "w": 287.532995616173,
-      "h": 706.1078315077204
+      "x": -505.42240197966976,
+      "y": -21.155500241155778,
+      "w": 4429.104169816862,
+      "h": 1688.1421630859363
     },
-    "key": "inspect,lock,resting,scan,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band,tidal"
+    "key": "approach_p,follow_p,inspect,inspect_p,lock,resting,retreat_p,scan,scan_room,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band,tidal"
   }
 }

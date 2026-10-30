@@ -33,6 +33,18 @@
       "behaviors": [],
       "enabled": true,
       "params": {}
+    },
+    "engage": {
+      "zones": [
+        "scan_room",
+        "follow_p",
+        "approach_p",
+        "inspect_p",
+        "retreat_p"
+      ],
+      "behaviors": [],
+      "enabled": true,
+      "params": {}
     }
   },
   "hunt": {
@@ -50,18 +62,18 @@
         "gentle"
       ],
       "detect": {
-        "zone": "hunting",
+        "zone": "follow_p",
         "action": "track"
       },
       "scan": {
-        "zone": "hunting",
-        "action": "scan"
+        "zone": "scan_room",
+        "action": "look"
       }
     }
   },
   "facefocus": {
     "zones": [
-      "stretching"
+      "inspect_p"
     ],
     "behaviors": [],
     "enabled": true,

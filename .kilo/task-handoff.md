@@ -1,5 +1,66 @@
 # Task Handoff Log
 
+## 2026-10-30 — Config-only Scan→Pick→Follow 30s→Approach→Inspect→Retreat loop (5 new zones + engage group)
+
+### Status
+
+Completed
+
+### Summary
+
+Implemented the `scan → follow(30s) → approach → inspect → retreat → scan` engagement loop **config-only** (no source changes), per `.kilo/plans/1793339221763-scan-to-retreat-flow-howto.md`. Added five single-action zones to `zones.json` (`scan_room/look`, `follow_p/track`, `approach_p/lean`, `inspect_p/face`, `retreat_p/back`) that form a closed autonomy loop, and wired them into `brain.json` (new `engage` zone group, `hunt` detect/scan repointed, `facefocus.zones` repointed). Every anchor pose was validated for hardware limits and KR60 self-collision via the Node `collide_worker`, and every consecutive transition passed `SafetyGate.check_conflict` and `find_shared_pose` (anchor chaining). Editing the two JSON files directly is equivalent to the editor UI (POST `/api/zones` and `/api/brain` validate → atomic write → hot-reload).
+
+### Changes Made
+
+- `realtimecontrol/rtr/zones.json`:
+  - Added `scan_room` (class `scan`): action `look`, 4 anchors (A2≈-90/-85 far, head up A5≈80), `variable_axes [0,1,5]`, behavior `spontaneous`, speed 15, `dwell_s 30`, `loop true`, next → `follow_p/track`.
+  - Added `follow_p` (class `track`): action `track`, 5 anchors (A2=-45 mid), `variable_axes [0,4]`, behavior `locked`, speed 40, `dwell_s 30` (the 30 s pick/follow dwell), `loop true`, next → `approach_p/lean`.
+  - Added `approach_p` (class `approach`): action `lean`, 5 anchors (A2=-15/-18, A3=25, head down A5=-20 — stretching out), `variable_axes [0,2,4,5]`, behavior `intent`, speed 30, `dwell_s 10`, `loop true`, next → `inspect_p/face`.
+  - Added `inspect_p` (class `facefocus`): action `face`, 5 anchors (A2=-15, A3=20, head down), `variable_axes [0,5]`, behavior `gentle`, speed 25, `dwell_s 15`, `loop true`, next → `retreat_p/back`.
+  - Added `retreat_p` (class `retreat`): action `back`, 6 anchors sweeping A2 -15→-90 and A5 -20→80 (retreat back to the far scan pose), `variable_axes [0]`, behavior `soothing`, speed 40, `dwell_s 3`, `loop true`, next → `scan_room/look`.
+  - All five share the same safezone `COMMON_SZ = [[-185,185],[-95,-10],[15,25],[0,1],[-25,85],[-15,15]]` so every consecutive pair has full safezone overlap (the safety gate's inter-zone move requirement).
+- `realtimecontrol/rtr/brain.json`:
+  - Added `zone_groups.engage` = the 5 new zones, `enabled: true`, empty `params` (per-action `dwell_s` already set on every action).
+  - Repointed `hunt.params.detect` → `follow_p/track` and `hunt.params.scan` → `scan_room/look` (was `hunting/track` + `hunting/scan`).
+  - Repointed `facefocus.zones` → `["inspect_p"]` (was `["stretching"]`).
+
+### Documentation
+
+- None required — config-only change; the plan file (`.kilo/plans/1793339221763-scan-to-retreat-flow-howto.md`) remains the source of truth for the flow.
+
+### Architecture
+
+- No architectural impact. Data-only change to the two-layer model: Layer A (`zones.json`) gained the 5-zone loop; Layer B (`brain.json`) gained the `engage` group and repointed the hunt ladder + facefocus target. No code paths changed.
+
+### Validation
+
+- `/tmp/kilo/validate_engage.py` (loads the real `zones.json` + `brain.json` from disk and runs the actual validators) → **ALL CHECKS PASSED**:
+  1. Hardware-limit check on all 15 concrete anchors → ok.
+  2. KR60 self-collision via Node `collide_worker.js` on all concrete anchors → all `clear`.
+  3. `SafetyGate.check_conflict` on all 5 consecutive transitions → no conflict.
+  4. `find_shared_pose` on all 5 handoffs (including the retreat→scan loop closure) → shared pose found on each.
+  5. `validate_state_data` (the POST `/api/zones` validator) on the edited `zones.json` → PASS.
+  6. `validate_brain_config` (the POST `/api/brain` validator, loaded standalone to avoid the `rtr.brain` circular import) on the edited `brain.json` → PASS.
+- Loop-closure check: `scan_room/look → follow_p/track → approach_p/lean → inspect_p/face → retreat_p/back → scan_room/look` closes; all 5 actions `loop: true`; 5 distinct zones; `follow_p/track.dwell_s == 30`.
+
+### Decisions and Caveats
+
+- **Anchor chaining**: each action's last anchor equals the next action's first anchor so `find_shared_pose` resolves a concrete hand-off pose (e.g. scan→follow share `[0,-90,20,0,80,0]`; follow→approach share `["x",-45,20,0,40,0]` with A1 wildcard). The retreat→scan closure is satisfied by making retreat's final anchor the far scan pose `[0,-90,20,0,80,0]`.
+- **Shared safezone**: all 5 zones use the same `COMMON_SZ` box so the safety gate's "strict positive overlap on all 6 axes" requirement holds between every consecutive pair. This is the deliberate mechanism that lets the loop move directly between the new zones without bridge zones.
+- **No `pose_imgs`/`pose_videos`** on the new actions (optional fields; omitted so no non-existent assets are referenced). `validate_state_data` passes without them.
+- **`engage` group `params` left empty**: every action carries its own `dwell_s`, so the group-level dwell is not needed (precedence: per-action > group > global).
+- Caveat: collision checks are **self-collision only** (base + link_1..6) at the discrete anchor poses; they do not model the swept volume between waypoints or external/world collisions.
+
+### Next Task
+
+No immediate next task identified. The config loop is implemented and validated; a live run on the robot (or a headless tick of `brain.py` with the `engage` group active) would be the natural next verification if one is wanted.
+
+### Instructions for the Next Task
+
+- The five zones and the `engage` group are already in `zones.json` / `brain.json` and pass both POST validators; no further config edits are needed to make the loop exist.
+- To exercise it live: ensure `zone_groups.engage.enabled` is `true` (it is) and that autonomy is enabled (`autonomy.enabled` is `true`). The robot will dwell on each action for its `dwell_s`, then walk to the next zone's action via the safety gate.
+- If tuning motion: adjust each action's `poses` (anchor waypoints), `variable_axes` (which axes get behavior-driven motion), `speed`, and `dwell_s`. Keep anchors within `COMMON_SZ` and re-run `/tmp/kilo/validate_engage.py` (regenerate its `ZONES_NEW` to match) to re-check collision + shared-pose + validators.
+
 ## 2026-10-29 — Restored test_groups_tab.js STATIC_IDS (stale id list broke the harness load)
 
 ### Status
