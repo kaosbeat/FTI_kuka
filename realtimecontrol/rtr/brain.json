@@ -469,11 +469,14 @@
     "impatient": {
       "freq": 1,
       "amp_scale": 0.3,
-      "stay": 0,
+      "stay": 0.5,
       "triggers": [
         "dwell",
+        "new_lock",
+        "lost_lock",
         "lock_duration"
       ],
+      "dwell_s": 5,
       "lock_duration_s": 1
     },
     "drowsy": {

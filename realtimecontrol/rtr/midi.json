@@ -1,5 +1,5 @@
 {
-  "enabled": true,
+  "enabled": false,
   "zones": {
     "resting": {
       "in_port": null,
@@ -152,6 +152,36 @@
       "actions": {
         "bd": "note:0:60"
       }
+    },
+    "scan_room": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "follow_p": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "approach_p": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "inspect_p": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "retreat_p": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "scan_lock_bridge": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
     }
   },
   "nav": {
@@ -169,6 +199,7 @@
   "groups": {
     "in_port": null,
     "active": null,
-    "sleep": null
+    "sleep": null,
+    "engage": null
   }
 }

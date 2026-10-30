@@ -1,5 +1,5 @@
 {
-  "enabled": true,
+  "enabled": false,
   "channel": 0,
   "zones": {
     "sleeping": {
@@ -148,6 +148,24 @@
         "note": 60,
         "velocity": 60
       }
+    },
+    "scan_room": {
+      "out_port": null
+    },
+    "follow_p": {
+      "out_port": null
+    },
+    "approach_p": {
+      "out_port": null
+    },
+    "inspect_p": {
+      "out_port": null
+    },
+    "retreat_p": {
+      "out_port": null
+    },
+    "scan_lock_bridge": {
+      "out_port": null
     }
   },
   "actions": {
@@ -714,7 +732,13 @@
         },
         "poses": []
       }
-    }
+    },
+    "scan_room": {},
+    "follow_p": {},
+    "approach_p": {},
+    "inspect_p": {},
+    "retreat_p": {},
+    "scan_lock_bridge": {}
   },
   "out_port": 7
 }

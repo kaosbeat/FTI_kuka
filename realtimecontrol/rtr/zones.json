@@ -1422,10 +1422,16 @@
           "behavior": "impatient",
           "speed": 20,
           "loop": true,
-          "next": {
-            "zone": "scan",
-            "action": "scan"
-          },
+          "next": [
+            {
+              "zone": "scan",
+              "action": "scan"
+            },
+            {
+              "zone": "scan_lock_bridge",
+              "action": "bridge"
+            }
+          ],
           "pose_imgs": [
             null
           ],
@@ -2285,6 +2291,68 @@
         }
       },
       "pose": "move"
+    },
+    "scan_lock_bridge": {
+      "enabled": true,
+      "pose": "bridge",
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -95,
+          -40
+        ],
+        [
+          15,
+          25
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          35,
+          85
+        ],
+        [
+          -5,
+          5
+        ]
+      ],
+      "speed": 20,
+      "actions": {
+        "bridge": {
+          "enabled": true,
+          "loop": false,
+          "behavior": "bridge",
+          "poses": [
+            [
+              "x",
+              -85,
+              15,
+              0,
+              75,
+              0
+            ],
+            [
+              "x",
+              -45,
+              20,
+              0,
+              40,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "speed": 20,
+          "next": {
+            "zone": "lock",
+            "action": "locked"
+          }
+        }
+      }
     }
   },
   "layout": {
@@ -2322,12 +2390,12 @@
         "y": 1124.5447998046875
       },
       "task2_task3_bridge": {
-        "x": 718.3512573242188,
-        "y": 781.5985717773438
+        "x": 1320.8587036132812,
+        "y": 890.29833984375
       },
       "task3_task1_bridge": {
-        "x": 869.46240234375,
-        "y": 709.7239379882812
+        "x": 829.7656860351562,
+        "y": 661.8543701171875
       },
       "task3_task2_bridge": {
         "x": 1732.2581176757812,
@@ -2342,16 +2410,16 @@
         "y": 248
       },
       "scan": {
-        "x": 1152.1864013671875,
-        "y": 675.5770263671875
+        "x": 881.98974609375,
+        "y": 420.908935546875
       },
       "lock": {
-        "x": 1287.0225219726562,
-        "y": 558.962646484375
+        "x": 1375.7564086914062,
+        "y": 443.3750915527344
       },
       "inspect": {
-        "x": 1015.698974609375,
-        "y": 1044.3370361328125
+        "x": 1125.22314453125,
+        "y": 876.5553588867188
       },
       "scan_room": {
         "x": 2218.76904296875,
@@ -2376,14 +2444,18 @@
       "tidal": {
         "x": 2153.5924377441406,
         "y": 471.43170166015625
+      },
+      "scan_lock_bridge": {
+        "x": 1128.8730773925781,
+        "y": 463.1420135498047
       }
     },
     "view": {
-      "x": -571.717656894401,
-      "y": -281.708346721772,
-      "w": 2952.7650741271796,
-      "h": 1139.4658385620091
+      "x": -2062.8575308792088,
+      "y": -408.4358819491792,
+      "w": 4511.7899133825795,
+      "h": 1719.6576309204072
     },
-    "key": "approach_p,follow_p,inspect,inspect_p,lock,resting,retreat_p,scan,scan_room,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band,tidal"
+    "key": "approach_p,follow_p,inspect,inspect_p,lock,resting,retreat_p,scan,scan_lock_bridge,scan_room,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band,tidal"
   }
 }

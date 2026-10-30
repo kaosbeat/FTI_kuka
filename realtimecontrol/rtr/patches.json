@@ -20,7 +20,13 @@
     "sleeping_scanning_bridge": "osc(4, 0.1, 1.2).out()",
     "scan": "osc(4, 0.1, 1.2).out()",
     "lock": "osc(4, 0.1, 1.2).out()",
-    "inspect": "osc(4, 0.1, 1.2).out()"
+    "inspect": "osc(4, 0.1, 1.2).out()",
+    "scan_room": "osc(4, 0.1, 1.2).out()",
+    "follow_p": "osc(4, 0.1, 1.2).out()",
+    "approach_p": "osc(4, 0.1, 1.2).out()",
+    "inspect_p": "osc(4, 0.1, 1.2).out()",
+    "retreat_p": "osc(4, 0.1, 1.2).out()",
+    "tidal": "osc(4, 0.1, 1.2).out()"
   },
   "modes": {
     "calm": "osc(1, 0.08, 1.2)\n.posterize(4)\n.diff(src(o0).rotate(1.5))\n.out(o3)",
@@ -115,6 +121,25 @@
       "approach": "osc(4, 0.1, 1.2).out()",
       "facefocus": "osc(4, 0.1, 1.2).out()",
       "retreat": "osc(4, 0.1, 1.2).out()"
+    },
+    "scan_room": {
+      "look": "osc(4, 0.1, 1.2).out()"
+    },
+    "follow_p": {
+      "track": "osc(4, 0.1, 1.2).out()"
+    },
+    "approach_p": {
+      "lean": "osc(4, 0.1, 1.2).out()"
+    },
+    "inspect_p": {
+      "face": "osc(4, 0.1, 1.2).out()"
+    },
+    "retreat_p": {
+      "back": "osc(4, 0.1, 1.2).out()"
+    },
+    "tidal": {
+      "bd": "osc(4, 0.1, 1.2).out()",
+      "bdoff": "osc(4, 0.1, 1.2).out()"
     }
   }
 }
