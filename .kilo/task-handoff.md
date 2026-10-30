@@ -1,5 +1,142 @@
 # Task Handoff Log
 
+## 2026-10-30 — Fix stream-mode EKI desync: synchronous move dispatch (remove daemon thread)
+
+### Status
+
+Completed
+
+### Summary
+
+Fixed the real-robot regression where, in manual mode, the robot physically moves and the ghost arm (`s.target`) tracks correctly, but the non-ghost arm (`s.joints` = `get_curjpos`) freezes at `[0,0,0,0,0,0]` and the zone button sticks at the previous zone (so `client.html` can no longer switch zones). The symptom pinned to `get_curjpos()` returning `[0,0,0,0,0,0]` while the robot is elsewhere.
+
+Root cause (confirmed at the protocol level): the KUKAPY server (`KUKAPY_SERVER.SRC`) pre-fills every `<Res>` with `A1..A6 = 0.0` (lines 85-90); only CASE 2 (`curjpos`) overwrites A1..A6 with `$AXIS_ACT`. A move `<Res>` (CASE 4/5) or a curpos `<Res>` (CASE 3) both carry `A1..A6 = 0.0`. So if the EKI response stream desyncs and `get_curjpos()` reads a move/curpos `<Res>` instead of a curjpos `<Res>`, it returns `[0,0,0,0,0,0]`.
+
+The desync was introduced by `3933fe7`'s switch to stream mode (`move_mode = "stream"`, `machine.py:108`). In stream mode the engine's dispatch called `move(..., blocking=False)` **directly** (not via `asyncio.to_thread`), and `_move` ran the EKI round-trip on a **daemon thread** that ran concurrently with the next tick's pose reads. Although the wrapper `_lock` serializes the EKI calls, the daemon thread was not part of the asyncio control flow, so the move's `<Res>` could interleave with the next tick's pose reads and desync the single-flight stream.
+
+Fix: make `_move` **synchronous** (no daemon thread; `blocking` only selects the `cnt`: 0 vs `STREAM_CNT`), and change the engine's stream dispatch to `await asyncio.to_thread(move, target, speed, blocking=False)`. Now every EKI call (pose reads + the stream move) runs on the asyncio thread pool and is strictly serialized, so the single-flight KRL stream stays in sync.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/robot/kuka.py`:
+  - `_move()`: removed the daemon-thread dispatch. The method is now synchronous in both modes; `blocking` only selects the `cnt` (0 for block, `STREAM_CNT` for stream). The whole kukapy `move()` call runs under `self._lock`.
+- `realtimecontrol/rtr/rtr/core/engine.py`:
+  - Stream dispatch (line ~212): changed from a direct `move(target, speed, blocking=False)` call to `await asyncio.to_thread(move, target, self.machine.speed, blocking=False)`, so the stream move's EKI round-trip runs on the asyncio thread pool and is strictly serialized with the tick's `get_curjpos` / `get_curpos` reads.
+- `realtimecontrol/rtr/tests/test_kuka_eki_serialization.py`:
+  - Updated the module docstring and `test_stream_move_is_non_blocking` (now `test_stream_move_is_synchronous`) to reflect the synchronous dispatch (the stream move now runs the EKI round-trip synchronously, not on a daemon thread).
+
+### Documentation
+
+- None required — the changes are self-documenting via the updated docstrings and code comments.
+
+### Architecture
+
+- The EKI dispatch model changes from "daemon-thread move + asyncio-thread-pool pose reads" to "all EKI calls on the asyncio thread pool, strictly serialized". The wrapper `_lock` is unchanged and still serializes every kukapy call. The KRL (`KUKAPY_SERVER.SRC`) is unmodified.
+
+### Validation
+
+- `python tests/test_kuka_eki_serialization.py` → **ALL TESTS PASSED** (6/6, including the updated `test_stream_move_is_synchronous`).
+- `python tests/test_stuck_recovery.py` → **ALL TESTS PASSED** (12/12).
+- `python main.py --sim --no-midi --no-sound --no-http --no-display --verbose` → starts and ticks cleanly in stream mode; tick rate ~18 Hz (143 ticks in 8 s), so the synchronous dispatch does not measurably drop the 20 Hz loop.
+
+### Decisions and Caveats
+
+- **Mechanism is best-effort, not proven on hardware.** The lock already serialized the EKI calls, so the exact desync path under the old daemon-thread dispatch was not reproduced in a test (the sim robot has no real EKI socket). The fix is the strongest candidate: it removes the one difference between the working block mode and the broken stream mode (the daemon thread) and makes the stream dispatch run on the same thread pool as the pose reads. The real-robot test is still pending.
+- **Tick rate**: the synchronous stream move now blocks the asyncio loop for the move's EKI round-trip. In the sim the round-trip is instant (the sim robot just sets a target), so the tick rate holds (~18 Hz). On the real robot the C_PTP round-trip is short (the KRL answers immediately for `cnt > 0`), so the tick rate should hold near 20 Hz; if it does not, the fallback is to revert `move_mode` to `"block"`.
+- **No KRL changes**: the original `KUKAPY_SERVER.SRC` is unmodified, per the user's constraint.
+
+### Next Task
+
+Validate on the real robot: run `python main.py --robot --ip <robot-ip> --port 18735` in manual mode, start a move, and confirm the non-ghost arm (`s.joints` / `get_curjpos`) now tracks the robot instead of freezing at `[0,0,0,0,0,0]` and the zone button updates. If it still freezes, capture the EKI traffic with `KUKAPY_DEBUG=1` and confirm whether `get_curjpos` is reading a move `<Res>`.
+
+### Instructions for the Next Task
+
+1. Run the robot in real mode: `python main.py --robot --ip <robot-ip> --port 18735`.
+2. Switch to manual mode and trigger a move (e.g. click a position in `client.html`).
+3. Watch the non-ghost arm (`s.joints`) and the zone button: they should now track the robot's actual position instead of freezing at `[0,0,0,0,0,0]` / the previous zone.
+4. If it still freezes, set `KUKAPY_DEBUG=1` and capture the EKI traffic to confirm whether `get_curjpos` is reading a move `<Res>` (A1..A6 = 0.0) instead of a curjpos `<Res>`.
+5. Fallback: if the desync persists, revert `machine.py:108` to `self.move_mode = "block"` (the pre-`3933fe7` working mode) until the mechanism is confirmed.
+
+## 2026-10-30 — Python-side auto-recovery: stream mode default, zone-dwell watchdog, EKI recovery backstop
+
+### Status
+
+Completed
+
+### Summary
+
+Implemented the Python-side automatic recovery so the real KUKA robot recovers from stuck/stale EKI or blocking-PTP states and keeps moving without a restart, and enforced that in auto mode the robot never remains in the same zone too long (manual mode exempt). Three changes:
+
+1. **Default `move_mode` changed to `"stream"`** (`machine.py`): the 20 Hz retarget loop now uses non-blocking stream moves (`cnt=10`, `C_PTP`) by default, so the KRL answers immediately and the engine never blocks on a KRL PTP. This eliminates the root cause of the physical stall: the default `block` mode sent `cnt=0` (blocking PTP), the KRL held the `<Res>` until arrival, the engine tick blocked, and the `_recover()` ping could not interrupt a KRL parked mid-PTP.
+
+2. **Zone-dwell watchdog** (`brain.py`): in auto mode, the brain now tracks how long the robot has been in the current zone. When the zone dwell exceeds `autonomy.zone_dwell_s` (default 30 s), the brain forces the robot to advance to a different zone (preferring valid candidates from the action's `next` list or zone-level `exits`). Manual mode disables the watchdog (the operator drives the robot). When no different-zone candidate exists, a warning is logged (the zone is isolated).
+
+3. **EKI stall recovery backstop** (`kuka.py`, `engine.py`, `base.py`): when a `KukaError` is raised from a kukapy call (stalled handshake, dead socket, or framing desync), the engine's watchdog now attempts to recover the EKI connection via `KukaRobot.recover()` (disconnect + reconnect). The `RobotBase` class gained a no-op `recover()` so the sim is unaffected. If the reconnect fails, the error propagates and the engine continues (the existing watchdog keeps the loop alive).
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/state/machine.py`:
+  - Line 108: `self.move_mode = "block"` → `self.move_mode = "stream"` (the 20 Hz retarget loop now uses non-blocking stream moves by default).
+- `realtimecontrol/rtr/rtr/brain/brain.py`:
+  - `__init__`: added `_zone_entry_ts` and `_zone_entry_name` for zone-dwell tracking.
+  - `_autonomy_tick`: added zone-dwell tracking (reset `_zone_entry_ts` when the zone changes) and a zone-dwell watchdog check at the end of the normal path (forces advance when zone dwell expires in auto mode).
+  - New method `_zone_dwell_s()`: reads `autonomy.zone_dwell_s` from the brain config (default 30.0 s).
+  - New method `_force_zone_advance(zone)`: forces the robot to leave the current zone by picking a valid different-zone candidate from the action's `next` list or zone-level `exits`.
+- `realtimecontrol/rtr/rtr/robot/kuka.py`:
+  - New method `recover()`: attempts to recover a dead EKI connection by disconnecting and reconnecting the kukapy `Robot`.
+- `realtimecontrol/rtr/rtr/robot/base.py`:
+  - New method `recover()`: no-op default (the sim has no connection to recover); `KukaRobot` overrides it.
+- `realtimecontrol/rtr/rtr/core/engine.py`:
+  - Exception handler in `run()`: when a `KukaError` is raised, the engine now attempts EKI recovery via `robot.recover()` before continuing the loop.
+
+### Documentation
+
+- None required — the changes are self-documenting via the existing docstrings and the code comments.
+
+### Architecture
+
+- No architectural impact. The three changes are additive:
+  - The `move_mode` default change is a one-line configuration change that shifts the default from blocking to stream moves. The engine's dispatch logic (`engine.py:202`) already handles both modes.
+  - The zone-dwell watchdog is a new decision layer in the brain's autonomy tick, parallel to the existing stuck-state watchdog. It uses the same safety-gated path (`trigger_action`) as normal autonomy.
+  - The EKI recovery backstop is a new method on the robot interface (`RobotBase.recover`), called by the engine's existing exception watchdog. The kukapy driver's `_recover()` (ping) is unchanged; the new `KukaRobot.recover()` is a higher-level reconnect.
+
+### Validation
+
+- `python tests/test_stuck_recovery.py` → **ALL TESTS PASSED** (12/12).
+- Verified `default move_mode` is `"stream"` via a unit check.
+- Verified `_zone_dwell_s()` returns 30.0 by default and `_force_zone_advance` exists.
+- Verified `recover()` method exists and is callable on `RobotBase`, `KukaRobot`, and `SimRobot`.
+- Sim mode sanity check: `python main.py --sim --no-http --no-midi --no-sound --no-display` starts without errors.
+
+### Decisions and Caveats
+
+- **Stream mode default**: the `block` mode is still available via the `SET_ENGINE_MODE` command or per-action `engine.move_mode` override in `zones.json`. Actions that declare `engine: {move_mode: "block"}` will still use blocking moves. The default change only affects actions without an explicit override.
+- **Zone-dwell threshold**: `autonomy.zone_dwell_s` (default 30 s) is configurable in `brain.json`. A shorter threshold forces more frequent zone changes; a longer threshold allows more dwelling. The threshold is independent of the per-action `dwell_s` (which controls when the action's behavior triggers fire).
+- **EKI recovery**: the `KukaRobot.recover()` method disconnects and reconnects the kukapy `Robot`. This is a full session reset: the KRL on the pendant must re-establish the EKI connection. If the KRL is still running (which it should be, since the KRL's `WAIT FOR $FLAG[1]` loop is persistent), the reconnect succeeds. If the KRL has quit (CASE 8), the reconnect fails and the error propagates.
+- **No KRL changes**: the original `KUKAPY_SERVER.SRC` is unmodified. All changes are Python-side, per the user's constraint.
+
+### Next Task
+
+No immediate next task identified. The robot should now:
+1. Use stream moves by default (no blocking PTP stalls).
+2. Leave the current zone within 30 s in auto mode (zone-dwell watchdog).
+3. Recover from EKI stalls automatically (disconnect + reconnect).
+
+If the robot still exhibits issues, the next step would be to:
+- Check the log for `[brain] zone-dwell watchdog` messages (confirming the watchdog fires).
+- Check the log for `[engine] KukaError: attempting EKI recovery` messages (confirming the recovery backstop fires).
+- Tune `autonomy.zone_dwell_s` in `brain.json` if the zone change frequency is too fast or too slow.
+
+### Instructions for the Next Task
+
+1. Run the robot in real mode: `python main.py --robot --ip <robot-ip> --port 18735`.
+2. Monitor the log for:
+   - `[engine] tick#N start (move_mode=stream ...)` — confirms stream mode is active.
+   - `[brain] zone-dwell watchdog: forcing advance from ...` — confirms the zone-dwell watchdog fires.
+   - `[engine] tick#N KukaError: attempting EKI recovery` — confirms the recovery backstop fires.
+3. If the robot still stalls, check the kukapy log (`KUKAPY_DEBUG=1`) for the exact EKI traffic.
+4. If the zone changes are too frequent, increase `autonomy.zone_dwell_s` in `brain.json`.
+
 ## 2026-10-30 — Config-only Scan→Pick→Follow 30s→Approach→Inspect→Retreat loop (5 new zones + engage group)
 
 ### Status

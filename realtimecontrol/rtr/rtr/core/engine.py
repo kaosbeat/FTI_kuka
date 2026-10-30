@@ -210,10 +210,14 @@ class Engine:
             else:
                 move = self.robot.move_joint
             if self.machine.move_mode == "stream":
-                # Non-blocking: fire without waiting, so the 20 Hz loop keeps
-                # streaming a fresh target every tick (the robot retargets, like
-                # the sim). This is the base contract (move_* only set a target).
-                move(target, self.machine.speed, blocking=False)
+                # Non-blocking: the KRL answers immediately (C_PTP), so the move
+                # returns quickly. Run it via asyncio.to_thread so the EKI traffic
+                # (send + recv) is strictly serialized with this tick's get_curjpos
+                # / get_curpos reads — the KUKAPY server is a single-flight loop,
+                # and the old daemon-thread dispatch let the move's <Res> interleave
+                # with the next tick's pose reads, desyncing the stream (curjpos
+                # read a move <Res> -> [0,0,0,0,0,0]).
+                await asyncio.to_thread(move, target, self.machine.speed, blocking=False)
             else:
                 # Block: wait for this move to arrive before the next tick
                 # (the legacy kukapy behaviour). Publish the pre-move state

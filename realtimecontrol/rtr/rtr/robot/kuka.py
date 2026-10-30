@@ -118,35 +118,29 @@ class KukaRobot(RobotBase):
 
     def _move(self, pose: List[float], speed: float,
               blocking: bool, linear: bool) -> None:
-        """Issue a move to the controller.
+        """Issue a move to the controller (synchronous, under :attr:`_lock`).
 
-        ``blocking=True`` (the legacy behaviour): exact positioning (cnt 0), so the
-        KRL's PTP holds until the robot arrives and the caller blocks for the whole
-        move.
+        ``blocking=True``: exact positioning (cnt 0), so the KRL's PTP holds until
+        the robot arrives and the caller blocks for the whole move.
 
         ``blocking=False`` (stream): continuous positioning (``STREAM_CNT`` > 0), so
-        the KRL answers immediately (``PTP ... C_PTP``) and the move runs on a daemon
-        thread. The 20 Hz engine loop keeps streaming a fresh target each tick and
-        the robot retargets mid-move, like the sim.
+        the KRL answers immediately (``PTP ... C_PTP``) and the move runs in the
+        background. The 20 Hz engine loop keeps streaming a fresh target each tick
+        and the robot retargets mid-move, like the sim.
 
-        Every kukapy call (this move, and the tick loop's ``get_curjpos`` /
-        ``get_curpos``) runs under :attr:`_lock`: the KUKAPY server is a strict
-        single-flight request/response loop, so the EKI traffic must be serialized
-        or the socket desyncs and the KRL strands at "WAIT FOR $FLAG[1]".
+        The move is issued **synchronously** (no daemon thread): the caller is
+        responsible for running it off the asyncio loop (the engine's stream
+        dispatch uses ``asyncio.to_thread``). Every kukapy call (this move, and the
+        tick loop's ``get_curjpos`` / ``get_curpos``) runs under :attr:`_lock`: the
+        KUKAPY server is a strict single-flight request/response loop, so the EKI
+        traffic must be serialized or the socket desyncs and the KRL strands at
+        "WAIT FOR $FLAG[1]".
         """
         cnt = 0 if blocking else STREAM_CNT
-
-        def _do() -> None:
-            # Preserve the exact legacy call forms: the joint move is issued
-            # without a ``linear`` kwarg; the cartesian move with ``linear=True``.
-            with self._lock:
-                if linear:
-                    self._robot.move("pose", list(pose), speed, linear=True, cnt_val=cnt)
-                else:
-                    self._robot.move("joint", list(pose), speed, cnt_val=cnt)
-
-        if blocking:
-            _do()
-            return
-        t = threading.Thread(target=_do, daemon=True)
-        t.start()
+        # Preserve the exact legacy call forms: the joint move is issued without a
+        # ``linear`` kwarg; the cartesian move with ``linear=True``.
+        with self._lock:
+            if linear:
+                self._robot.move("pose", list(pose), speed, linear=True, cnt_val=cnt)
+            else:
+                self._robot.move("joint", list(pose), speed, cnt_val=cnt)
