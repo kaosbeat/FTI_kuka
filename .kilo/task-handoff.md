@@ -1,5 +1,71 @@
 # Task Handoff Log
 
+## 2026-10-30 — Safe EKI desync diagnostic: remove broken reconnect phase, no-quit teardown
+
+### Status
+
+Completed
+
+### Summary
+
+Rewrote `realtimecontrol/rtr/scripts/eki_desync_diag.py` so it is SAFE to run on the real robot and can actually capture the persistent desync. The bug (manual mode: `get_curjpos()` returns `[0,0,0,0,0,0]` while the robot is elsewhere) is still standing after the synchronous-dispatch fix, so the user will run this diagnostic on the hardware and paste the output.
+
+The previous draft of the script was unsafe/broken in two places, both because of how the EKI session ends:
+- `Robot.disconnect()` (`kukapy/robot.py:101`) sends `quit` (cmd 8), and the KRL (`KUKAPY_SERVER.SRC` CASE 8, lines 174-187) does `resp_msg="Bye"` then `IF cmd_code == 8 THEN EXIT` → stops KUKAPY_SERVER and runs `EKI_CLOSE`/`EKI_CLEAR`.
+- The KRL has **no reconnect loop** (`EKI_INIT`/`EKI_OPEN` run once at lines 30-31; the loop is `WAIT FOR $FLAG[1]` at line 57). So a `quit` + reconnect cannot work: after `EXIT` there is nothing to reconnect to.
+
+The draft's Phase 2 (`phase_resync`) did exactly that (disconnect then reconnect) — it would send `quit`, kill KUKAPY_SERVER, then time out waiting for a connection that never comes. Removed.
+
+Key finding that shaped the design: the engine's **normal** shutdown (Ctrl+C) is `main.py:315 robot.disconnect()` → sends `quit` → KRL `EXIT`. So `quit` is the expected, normal teardown, not an abnormal action. The diagnostic now defaults to the *least* disruptive teardown (close the socket WITHOUT `quit`, leaving KUKAPY_SERVER parked) and offers `--clean-exit` to send `quit` for a clean KRL shutdown matching the engine.
+
+### Changes Made
+
+- `realtimecontrol/rtr/scripts/eki_desync_diag.py`:
+  - **Removed** `phase_resync()` (the disconnect+reconnect probe) — it sent `quit` (KRL `EXIT`) and then had nothing to reconnect to.
+  - **Renumbered** the no-op move repro to Phase 2 (was Phase 3); logic unchanged (reads the pose once, skips if all-zero, else streams `movej cnt=10` to that pose).
+  - **New `teardown(robot, clean_exit)` helper**: default closes the socket WITHOUT sending `quit` (KRL parked, not killed); `--clean-exit` sends `quit` + closes (clean KRL `EXIT`, matching `main.py:315`).
+  - **New `--timeout`** flag (default 60s) for the KRC connect wait (`Robot(socket_timeout=...)`).
+  - Updated the module docstring (Safety / How to run / Phases) and the Phase 1 / conclusion text to reflect a single fresh-session run (no mid-run reconnect).
+  - `classify()` docstring now notes the caveat that a real curjpos read at home is indistinguishable from a move `<Res>` by values alone.
+
+### Documentation
+
+- The script's own docstring was rewritten to document the safe single-session design, the no-quit-by-default teardown, and the exact run prerequisites (stop the engine, restart KUKAPY_SERVER on the pendant). No separate docs file needed.
+
+### Architecture
+
+- No architectural change to the engine or KRL. The diagnostic now relies only on the verified facts: `Robot.connect()` is a TCP listener (bind + accept), `Robot.disconnect()` sends `quit`, KRL CASE 8 is the only `EXIT` trigger, and there is no KRL reconnect loop. The `KUKAPY_SERVER.SRC` is unmodified (per the user's constraint).
+
+### Validation
+
+- `python -m py_compile scripts/eki_desync_diag.py` → OK.
+- `python scripts/eki_desync_diag.py --help` → parses all flags (`--port --move --ticks --reads --velocity --timeout --clean-exit`); the top-level `from kukapy.robot import Robot, KukaError` succeeds (the `sys.path` shim works).
+- Confirmed `Robot(port=18735, socket_timeout=60)` constructs and exposes `_recv_buf` (the kwarg used by the script).
+- Re-verified against source: `robot.py:85-99` (`connect` = listener), `robot.py:101-109` (`disconnect` = send quit + close), `KUKAPY_SERVER.SRC:174-191` (CASE 8 → EXIT → EKI_CLOSE/CLEAR), `KUKAPY_SERVER.SRC:30-57` (EKI_INIT/OPEN once, `WAIT FOR $FLAG[1]` loop, no reconnect), `main.py:315` (engine shutdown sends `quit`).
+
+### Decisions and Caveats
+
+- **Default teardown = no `quit`.** Closing without `quit` leaves KUKAPY_SERVER parked at `WAIT FOR $FLAG[1]` (safe: no command, no motion, robot stays in manual mode). Resuming then requires STOP + restart KUKAPY_SERVER on the pendant. `--clean-exit` sends `quit` for a clean shutdown (resume = start KUKAPY_SERVER). Both are safe; the default is the least disruptive.
+- **Phase 2 (move repro) is safe only because the target is the pose read at the start.** If that read is all-zero (desynced) the phase is skipped — we would not know the real pose to target. The no-op move issues `movej cnt=10` (stream C_PTP), the same EKI traffic the engine's stream dispatch issues, to try to reproduce the desync from a clean state.
+- **The exact desync mechanism is still unconfirmed.** This diagnostic captures it: the `FrameLogger` numbers every `<Rob>` send and `<Res>` recv and classifies each `<Res>` (CURJPOS/CURPOS/MOVE/PING). A `get_curjpos()` that returns a `<MOVE>` or `<CURPOS>` frame (A1..A6 = 0) is the one-frame shift; its X..OC values say whether it was a move's or a curpos's `<Res>`.
+- **Topology note for the run:** Python is the TCP *server* (listens on the port; the KRC dials in). The engine also listens on this port, so the engine must be stopped first, and KUKAPY_SERVER must be restarted on the pendant so the KRC connects to the diagnostic, not the engine.
+
+### Next Task
+
+Run the diagnostic on the real robot and capture the output:
+1. Stop the engine (Ctrl+C on the `main.py --robot` shell).
+2. `python scripts/eki_desync_diag.py --port 18735` (add `--move` to also exercise the no-op move stream).
+3. On the teach pendant, STOP + START KUKAPY_SERVER so the KRC connects in.
+4. Paste the full output back.
+
+### Instructions for the Next Task
+
+1. From `realtimecontrol/rtr`: `python scripts/eki_desync_diag.py --port 18735`.
+2. To also try to reproduce the desync from a clean state: `python scripts/eki_desync_diag.py --port 18735 --move --ticks 20`.
+3. Read the `R:` frames around the first all-zero curjpos. A `<MOVE>` or `<CURPOS>` returned by a `get_curjpos()` call is the shift; the X..OC values identify which command's `<Res>` leaked in.
+4. If Phase 1 (read-only) already shows all-zero curjpos from a fresh KRL session while the robot is away from home, the desync is persistent (KRL-side/systemic). If Phase 1 is clean but Phase 2 (`--move`) goes all-zero, the move stream triggers it.
+5. After the run, to resume: on the pendant STOP + restart KUKAPY_SERVER, then restart the engine (or use `--clean-exit` in the script for a clean KRL shutdown, then just start KUKAPY_SERVER).
+
 ## 2026-10-30 — Fix stream-mode EKI desync: synchronous move dispatch (remove daemon thread)
 
 ### Status
