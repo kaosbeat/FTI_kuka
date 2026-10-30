@@ -1,5 +1,55 @@
 # Task Handoff Log
 
+## 2026-10-30 — Resolve stash-pop conflict markers in zones/sound/patches JSON (keep committed, drop WIP)
+
+### Status
+
+Completed
+
+### Summary
+
+Resolved the `git stash pop` conflict markers in `zones.json` (16 blocks), `sound.json` (3 blocks), and `patches.json` (2 blocks) by keeping the **"Updated upstream"** (committed) side and dropping the **"Stashed changes"** (WIP) side, per the user's choice ("Keep committed, drop WIP"). The user's WIP (`stash@{0}` "WIP on main: 4a3387b coll update") is **still intact** and was not dropped.
+
+The user concurrently committed `6913fa6 zoens updates` (on top of `93ec884 patches`) which resolved the same conflicts to the upstream side; my working-tree resolution is **identical** to that commit (`git diff HEAD` is empty for the three files). All three files are now valid JSON with zero conflict markers.
+
+### Changes Made
+
+- `realtimecontrol/rtr/zones.json`: resolved 16 conflict blocks to the upstream side (valid JSON).
+- `realtimecontrol/rtr/sound.json`: resolved 3 conflict blocks to the upstream side (valid JSON).
+- `realtimecontrol/rtr/patches.json`: resolved 2 conflict blocks to the upstream side (valid JSON).
+- `.kilo/task-handoff.md`: this entry.
+
+### Documentation
+
+- None required beyond this handoff.
+
+### Architecture
+
+- No architectural impact. Config-content resolution only; no code or protocol changed.
+
+### Validation
+
+- `grep -cE '^(<<<<<<<|=======|>>>>>>>)'` on all three files → 0 (no markers remain).
+- `json.load` on all three files → valid JSON OK.
+- `git diff HEAD -- patches.json sound.json zones.json` → empty (working tree matches the user's `6913fa6` commit).
+- `tests/test_transition.py::test_all_reachable_transitions_complete` + `tests/test_bridge_behavior.py::test_real_zones_bridge_action_is_tagged` → both now **pass** (previously `JSONDecodeError` at `zones.json` line 13).
+- Behavior-related suite (`test_stuck_recovery`, `test_transition`, `test_bridge_behavior`, `test_forced_behavior`, `test_safety_conflict`, `test_kuka_eki_serialization`) → 51 passed, 1 failed. The single failure (`test_stream_move_is_synchronous`) is **pre-existing** (baseline `kuka.py` spawns a daemon thread; I did not touch `kuka.py`).
+
+### Decisions and Caveats
+
+- Per the user's choice, the WIP side was dropped from the working files, but it is **preserved** in `stash@{0}` — no WIP work was lost.
+- The resolution was done twice (user's `6913fa6` commit + my working-tree edit) and both agree, so the state is consistent. No commit was made by me (the user's `6913fa6` already holds the resolution).
+
+### Next Task
+
+Hardware confirmation of the `behavior.py` freeze fix (see the prior entry): run an auto-mode zone action with a `"x"` axis + non-calm behavior and confirm the KRL no longer hangs at `PTP target_jpos` and the real arm no longer reads `0,0,0,0,0,0`.
+
+### Instructions for the Next Task
+
+1. Deploy the fixed `behavior.py` (HEAD, `df965ab`) + the resolved `zones.json`/`sound.json`/`patches.json` (HEAD `6913fa6`) to the robot server.
+2. Run an auto-mode zone action with a `"x"` axis + non-calm behavior (e.g. a `bridge` or `spontaneous` action). Confirm: (a) KRL does not hang at `PTP target_jpos`, (b) the real arm reads real `curjpos` values (not `0,0,0,0,0,0`).
+3. Keep `KUKAPY_SERVER.SRC` unmodified (user constraint).
+
 ## 2026-10-30 — Fix: restore `"x"`-axis freeze in behavior.py (PTP-hang regression)
 
 ### Status
