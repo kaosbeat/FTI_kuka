@@ -114,16 +114,6 @@ class Engine:
                 else:
                     self._seen_exceptions[sig] += 1
                     print(f"[engine] tick#{tick_no} EXCEPTION: {exc!r}")
-                # EKI stall recovery: when a KukaError (stalled handshake, dead
-                # socket, or framing desync) is raised, attempt to recover the
-                # connection so the engine can continue without a full restart.
-                if KukaError is not None and isinstance(exc, KukaError):
-                    print(f"[engine] tick#{tick_no} KukaError: attempting EKI recovery")
-                    try:
-                        await asyncio.to_thread(self.robot.recover)
-                        print(f"[engine] tick#{tick_no} EKI recovery succeeded")
-                    except Exception as rec_exc:
-                        print(f"[engine] tick#{tick_no} EKI recovery failed: {rec_exc}")
                 self.bus.publish(Event.SAFETY_ALERT, {
                     "type": "engine_exception",
                     "error": str(exc),
@@ -210,14 +200,10 @@ class Engine:
             else:
                 move = self.robot.move_joint
             if self.machine.move_mode == "stream":
-                # Non-blocking: the KRL answers immediately (C_PTP), so the move
-                # returns quickly. Run it via asyncio.to_thread so the EKI traffic
-                # (send + recv) is strictly serialized with this tick's get_curjpos
-                # / get_curpos reads — the KUKAPY server is a single-flight loop,
-                # and the old daemon-thread dispatch let the move's <Res> interleave
-                # with the next tick's pose reads, desyncing the stream (curjpos
-                # read a move <Res> -> [0,0,0,0,0,0]).
-                await asyncio.to_thread(move, target, self.machine.speed, blocking=False)
+                # Non-blocking: fire without waiting, so the 20 Hz loop keeps
+                # streaming a fresh target every tick (the robot retargets, like
+                # the sim). This is the base contract (move_* only set a target).
+                move(target, self.machine.speed, blocking=False)
             else:
                 # Block: wait for this move to arrive before the next tick
                 # (the legacy kukapy behaviour). Publish the pre-move state

@@ -105,7 +105,7 @@ class StateMachine:
         #     (advance when the robot reaches the current target) | "midi"
         #     (advance on the learned midi note; see :meth:`midi_pulse`).
         #   cadence_every: the fixed-rhythm interval, in ticks.
-        self.move_mode = "stream"
+        self.move_mode = "block"
         self.cadence = "fixed"
         self.cadence_every = max(1, int(tick_hz))
         self.tick = 0
