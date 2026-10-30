@@ -1,5 +1,61 @@
 # Task Handoff Log
 
+## 2026-10-30 — Diff 45593e8 vs main: what changed in the robot engine operations
+
+### Status
+
+Completed
+
+### Summary
+
+Investigated what changed in the robot engine operations between the working baseline `45593e8` (Tue 10-27 14:43 "state frames") and the current `main` (`21e7225` "revert engine"), since the user confirmed `git checkout 45593e8` on the robot server restores working behavior.
+
+Confirmed the 3-file rollback (`21e7225`) is complete: `engine.py`, `kuka.py`, `machine.py`, `main.py` all match `45593e8` (empty diff). The remaining post-baseline engine-operation changes live in `brain.py`, `behavior.py`, `zones.py`, `base.py`, `config.py` (plus `sound.py`, which is not an engine operation).
+
+**Leading cause of the PTP hang** (hypothesis, consistent with the symptom, not yet confirmed on hardware): `behavior.py` removed the `_frozen_base` freeze on `"x"` pose axes. In `45593e8`, a pose axis of `"x"` was *frozen* — resolved to `_frozen_base` (captured at transition commit, fallback `curjpos`) and **excluded** from the driven `var_axes` (static). In `main`, a `"x"` axis is *free* — it starts at `curjpos` and is **driven by the behavior every tick**. The current `zones.json` has **43 `"x"` markers** across actions with many non-calm behaviors (`bridge` x8, `spontaneous` x4, `locked`/`intent`/`gentle` x3 each, `curious` x2, `soothing` x2, plus `aggressive`/`exhilarated`/`impatient`/`restless`/`vigilant` x1). With the freeze gone, those axes produce a continuously-moving target. The engine (`engine.py`, unchanged) sends blocking moves (`kuka.py move_joint(blocking=True)` → `cnt=0` → KRL exact `PTP target_jpos`, holds the `<Res>` until arrival). A moving target + blocking PTP → the robot chases a target that never settles → KRL hangs at `PTP target_jpos` → `<Res>` never returns → the tick blocks → no `curjpos` read → KRL `A1..A6` stay at their initial `0` → the real-arm readout (`get_curjpos` → `s.joints`) shows `0,0,0,0,0,0` while the ghost arm (`s.target`) keeps updating.
+
+Secondary changes (lower likelihood, but they issue extra moves):
+- `brain.py` added a **stuck watchdog** (`_handle_stuck`/`_rearm_stuck`: re-arms a `(zone, None)` state by `play_action`) and a **zone-dwell watchdog** (`_force_zone_advance`: in auto mode, `trigger_action` after 30 s). Both issue moves and could compound the hang.
+- `zones.py` added `POSE_ZONES` (`bridge`/`move`), a `Zone.pose` property, and `_validate_no_dead_ends` (rejects multi-action zones with a non-looping action lacking a valid `next`/`exit`). The current `zones.json` loads (the robot moves in manual mode), so this is not currently rejecting the config.
+- `base.py` added a no-op `recover()`; `config.py` added `autonomy.stuck_threshold` validation. Both are inert here (the `45593e8` engine has no `recover` caller).
+
+### Changes Made
+
+- No code changed (analysis only).
+- `.kilo/task-handoff.md`: this entry.
+
+### Documentation
+
+- None required — this is an investigation; the findings are recorded here.
+
+### Architecture
+
+- No architectural change. The analysis confirms the regression is behavioral (target generation) in `behavior.py` + `brain.py`, not a protocol/KRL change. `KUKAPY_SERVER.SRC` is unmodified.
+
+### Validation
+
+- `git diff 45593e8..main -- realtimecontrol/rtr/rtr/core/engine.py .../kuka.py .../machine.py .../main.py` → empty (rollback complete).
+- `git diff 45593e8..main --stat -- realtimecontrol/rtr/` → only `brain.py`, `behavior.py`, `zones.py`, `base.py`, `config.py`, `sound.py` + configs/frontend/tests differ.
+- `grep _frozen_base` → present in `45593e8` `behavior.py:363` (freeze), **absent** in current `behavior.py` (freeze removed); still set (not read) in `machine.py:93,456,506,734`.
+- `grep '"x"' zones.json` → 43 free-axis markers; behaviors: bridge x8, spontaneous x4, locked/intent/gentle x3 each, curious/soothing x2, calm x2, +5 others.
+- `kuka.py:115` `cnt = 0 if blocking else STREAM_CNT` → blocking move = exact PTP (holds `<Res>` until arrival).
+
+### Decisions and Caveats
+
+- The freeze-removal → moving-target → PTP-hang chain is a **hypothesis**: every link is individually verified (freeze gone, 43 `"x"` axes, blocking `cnt=0` PTP), but the causal chain was not reproduced on hardware this session. Confirm by: (a) running the engine on a zone action with a `"x"` axis + non-calm behavior and watching KRL stop at `PTP target_jpos`, or (b) temporarily restoring the `_frozen_base` freeze in `behavior.py` and checking the hang disappears.
+- Do NOT roll back `behavior.py`/`brain.py`/`zones.py` wholesale — they carry wanted zone/pose/bridge features. The fix should be surgical (restore the `"x"`-axis freeze, or make the engine use non-blocking/stream moves for behavior-driven axes) so the new features keep working.
+
+### Next Task
+
+Confirm the leading cause on hardware, then apply a surgical fix to `behavior.py` (restore the `"x"`-axis freeze or switch behavior-driven axes to stream moves) without losing the new zone/pose/bridge features.
+
+### Instructions for the Next Task
+
+1. Reproduce: with the engine on `main`, run an auto-mode zone action that has a `"x"` axis + non-calm behavior (e.g. a `bridge` or `spontaneous` action). Watch whether KRL stops at `PTP target_jpos` and the real arm reads `0,0,0,0,0,0`.
+2. If reproduced, test the fix: in `behavior.py` `build_target`, restore the `45593e8` freeze for `"x"` axes (`ref = machine._frozen_base or curjpos`; `anchor = resolve_x(poses[idx], ref)`; exclude `"x"` axes from `var_axes`) — OR keep the free-axis system but make the engine send stream moves (`blocking=False`, `cnt>0`) for behavior-driven axes so the PTP never blocks.
+3. Re-run `tests/test_stuck_recovery.py`, `tests/test_kuka_eki_serialization.py`, `tests/test_transition.py` after the change.
+4. Keep `KUKAPY_SERVER.SRC` unmodified (user constraint).
+
 ## 2026-10-30 — Safe EKI desync diagnostic: remove broken reconnect phase, no-quit teardown
 
 ### Status
