@@ -2379,10 +2379,10 @@
       }
     },
     "view": {
-      "x": -505.42240197966976,
-      "y": -21.155500241155778,
-      "w": 4429.104169816862,
-      "h": 1688.1421630859363
+      "x": -571.717656894401,
+      "y": -281.708346721772,
+      "w": 2952.7650741271796,
+      "h": 1139.4658385620091
     },
     "key": "approach_p,follow_p,inspect,inspect_p,lock,resting,retreat_p,scan,scan_room,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band,tidal"
   }
