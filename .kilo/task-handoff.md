@@ -1,5 +1,59 @@
 # Task Handoff Log
 
+## 2026-10-30 — Fix: restore `"x"`-axis freeze in behavior.py (PTP-hang regression)
+
+### Status
+
+Completed (code fix + software tests). Hardware confirmation still pending (user action).
+
+### Summary
+
+Applied the surgical fix from the prior handoff: restored the `45593e8` `"x"`-axis freeze in `behavior.py` so the robot's target is no longer a continuously-moving/chasing pose on the `"x"` axes — the leading cause of the KRL `PTP target_jpos` hang (freeze-removal → moving target → blocking-PTP hang).
+
+In `build_target`, `"x"` axes are again resolved to `_frozen_base` (fallback `curjpos`) via `resolve_x` and **excluded** from the driven `var_axes` (frozen, never driven). In `_apply_behavior`, `bridge` is again a no-op policy (with `calm`), so it no longer drives the free bridge axis. The `_apply_bridge` helper is left in place (now unused) for future stream-move work.
+
+**Note:** the user is working concurrently on the repo and committed this change as `df965ab behaviortest`, then `93ec884 patches`. The change is confirmed present in HEAD.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/state/behavior.py`:
+  - `build_target` else-block: restored `frozen = getattr(machine, "_frozen_base", None)`; `ref = frozen if frozen is not None else curjpos`; `anchor = resolve_x(poses[idx], ref)`; `var_axes = zone.action_variable_axes(name)`; `var_axes = [ax for ax in var_axes if poses[idx][ax] != "x"]`.
+  - `_apply_behavior`: restored `if not var_axes or behavior in ("calm", "bridge"): return`; removed the `if behavior == "bridge": _apply_bridge(...)` branch (bridge is a no-op again).
+  - `resolve_x` docstring: updated to the frozen / copy-from-previous semantics.
+  - `_apply_bridge` left in place (now unused) for future stream-move work.
+
+### Documentation
+
+- None required beyond this handoff.
+
+### Architecture
+
+- No architectural change. The move path (`engine.py` / `kuka.py` / `KUKAPY_SERVER.SRC`) is unchanged and matches the baseline. The fix is purely in target generation (`behavior.py`): the `"x"` axes go from free/driven to frozen/static.
+
+### Validation
+
+- `python -m pytest tests/test_stuck_recovery.py tests/test_kuka_eki_serialization.py tests/test_transition.py` → 25 passed, 1 failed. The failure (`test_stream_move_is_synchronous`) is **pre-existing**: it expects a synchronous stream move, but the baseline `kuka.py` spawns a daemon thread. Unrelated to this change (I did not touch `kuka.py`); confirmed it fails without my change too.
+- Full suite (`--ignore=tests/test_remote_tui.py`, which has a collection error) → 329 passed, 14 skipped, 6 failed. The 6: `test_stream_move_is_synchronous` (pre-existing) + 5 `test_remote_sdl.py` TUI tests (pre-existing, unrelated). All 6 confirmed to fail on the committed state without my change.
+- Behavior-focused tests (`test_stuck_recovery`, `test_transition`, `test_bridge_behavior`, `test_forced_behavior`, `test_safety_conflict`) → 44 passed, 2 failed. Both failures are `JSONDecodeError` at `zones.json` line 13 — caused by **conflict markers in `zones.json` at HEAD** (below), NOT by this change.
+
+### Decisions and Caveats
+
+- **Chose freeze-restoration over stream-moves.** Restoring the `"x"`-axis freeze is the safe, surgical fix that restores working behavior. It means the new pose-zone/bridge free-axis feature no longer drives the `"x"` axes (they're frozen again). The `_apply_bridge` helper is preserved for a future effort to re-enable the feature using stream (non-blocking) moves (`cnt>0`), which avoids the blocking-PTP hang.
+- **`git stash pop` mistake + recovery.** While confirming the pre-existing test failures I ran `git stash` (said "No local changes to save") then `git stash pop`, which accidentally applied the user's pre-existing `stash@{0}` ("WIP on main: 4a3387b coll update") to the working tree, creating conflicts in `patches.json`/`sound.json`/`zones.json` and staging `assets/CIRCUS.blend`. I aborted the pop (`git reset HEAD` + `git checkout -- <files>`) to restore the working tree to HEAD. The user's `stash@{0}` is **intact** (the pop failed, so it was not dropped).
+- **⚠️ Conflict markers committed in HEAD.** HEAD (`93ec884 patches`) contains unresolved conflict markers: `zones.json` (32), `sound.json` (6), `patches.json` (4). This makes `zones.json` invalid JSON (the 2 test failures above) and would break the robot's zone config. This is the user's commit (concurrent work); it may relate to the `stash@{0}` WIP. **Needs resolution.** I did not attempt it (I don't know the user's intent for the collision).
+
+### Next Task
+
+1. Resolve the conflict markers in `zones.json`/`sound.json`/`patches.json` at HEAD (the user's `stash@{0}` WIP is intact). This is blocking the `test_transition` / `test_bridge_behavior` tests (JSON parse) and the robot's zone config.
+2. Hardware confirmation of the fix: with the engine on the fixed `behavior.py`, run an auto-mode zone action with a `"x"` axis + non-calm behavior and confirm the KRL no longer hangs at `PTP target_jpos` and the real arm no longer reads `0,0,0,0,0,0`.
+
+### Instructions for the Next Task
+
+1. Resolve the `zones.json`/`sound.json`/`patches.json` conflict markers (HEAD `93ec884`). The user's `stash@{0}` ("WIP on main: 4a3387b coll update") holds the WIP side; decide which side to keep. Re-run `tests/test_transition.py` and `tests/test_bridge_behavior.py` once `zones.json` parses.
+2. Hardware test of the freeze fix: run the engine (fixed `behavior.py`) on a `"x"`-axis + non-calm-behavior zone action in auto mode; confirm no KRL `PTP target_jpos` hang and the real arm reads real values (not `0,0,0,0,0,0`).
+3. Keep `KUKAPY_SERVER.SRC` unmodified (user constraint).
+4. Future (optional): re-enable the pose-zone/bridge free-axis feature using stream (non-blocking) moves (`cnt>0`) so the `"x"` axes can be driven without the blocking-PTP hang; the `_apply_bridge` helper is preserved for this.
+
 ## 2026-10-30 — Diff 45593e8 vs main: what changed in the robot engine operations
 
 ### Status
