@@ -15,6 +15,14 @@ message. Action / pose messages are sent on the **active zone's** out device. Th
 former per-mode CCs are now plain actions on the ``rest`` zone (the legacy ``modes``
 block is migrated into ``actions.rest`` on load).
 
+An action whose ``start`` is a **note** message gets an **auto note-off**: the core sends
+the matching note-off (same note, velocity 0) when the robot **arrives** (the ``moving``
+flag's True→False edge), and also when the action is **replaced** (so at most one action
+start note sounds at a time, mirroring the zone-entry note-off). A resting action (no move)
+never fires the arrival note-off, so its start note keeps sounding. There is no config
+field for this — it is derived from the action's ``start`` message and the snapshot's
+``moving`` flag.
+
 A **MIDI message** (a zone's ``command`` or an action/pose entry) is one of:
 
 - ``{"note": n, "velocity": v}`` — a note-on,
@@ -268,6 +276,10 @@ class Sound:
         self._last_zone: Optional[str] = None
         self._last_mode: Optional[str] = None
         self._last_action: Optional[str] = None
+        # The zone the last action played in (its start note was sent on that zone's out).
+        self._last_action_zone: Optional[str] = None
+        # The previous snapshot's ``moving`` flag (the arrival edge is True→False).
+        self._last_moving: Optional[bool] = None
         self._pose_idx = 0
         if enabled:
             self.reload()
@@ -547,6 +559,19 @@ class Sound:
             return entry
         return entry
 
+    def _action_start_note(self, zone, action) -> Optional[int]:
+        """The note number of an action's ``start`` message, or None when it is not a note.
+
+        Only an action whose ``start`` is a note message (``{"note": n, ...}``) has a start
+        note to auto note-off on arrival; CC / program starts do not.
+        """
+        act = self._data.get("actions", {}).get(zone, {}).get(action)
+        if isinstance(act, dict):
+            start = act.get("start")
+            if isinstance(start, dict) and "note" in start:
+                return start["note"]
+        return None
+
     def _on_snapshot(self, snap: Snapshot) -> None:
         data = self._data
         zones = data.get("zones", {})
@@ -566,10 +591,21 @@ class Sound:
                 if isinstance(msg, dict):
                     self._send_msg(msg, snap.zone)
 
-        # 2. action start: send the action's start message (or its first pose).
+        # 2. action change: note off the previous action's start note (on the previous
+        #    action's zone's out), then send the new action's start message (or its first
+        #    pose) on the new zone's out. Mirrors the zone-entry note-off above so that at
+        #    most one action start note sounds at a time (no leak when an action is replaced
+        #    mid-move).
         if snap.action != self._last_action:
+            prev_action = self._last_action
+            prev_action_zone = self._last_action_zone
             self._last_action = snap.action
+            self._last_action_zone = snap.zone
             self._pose_idx = 0
+            if prev_action is not None:
+                n = self._action_start_note(prev_action_zone, prev_action)
+                if n is not None:
+                    self._note_off_n(prev_action_zone, n)
             if snap.action is not None:
                 act = actions.get(snap.zone, {}).get(snap.action)
                 if isinstance(act, dict):
@@ -592,6 +628,18 @@ class Sound:
             poses = act.get("poses") if isinstance(act, dict) else None
             if isinstance(poses, list) and poses:
                 self._send_msg(poses[self._pose_idx % len(poses)], snap.zone)
+
+        # 4. arrival: auto note-off the active action's start note when the move stops
+        #    (the ``moving`` True→False edge). The start note sounds from action start until
+        #    arrival (or the next action change); a resting action (no move) never fires this,
+        #    so its start note keeps sounding.
+        if (snap.action is not None
+                and snap.moving is False
+                and self._last_moving is True):
+            n = self._action_start_note(snap.zone, snap.action)
+            if n is not None:
+                self._note_off_n(snap.zone, n)
+        self._last_moving = snap.moving
 
     # ------------------------------------------------------------------
     # MIDI sending (degrades to logging when no device is open).
@@ -629,6 +677,11 @@ class Sound:
     def _note_off(self, msg: dict, zone: str) -> None:
         ch = self._channel()
         self._send_bytes(zone, [0x80 | ch, msg["note"], 0])
+
+    def _note_off_n(self, zone: str, note: int) -> None:
+        """Send a note-off for ``note`` on ``zone``'s out device (the arrival / action-change auto note-off)."""
+        ch = self._channel()
+        self._send_bytes(zone, [0x80 | ch, note, 0])
 
     def _log_bytes(self, msg) -> None:
         """Log a MIDI message the way it would be sent (no device open)."""

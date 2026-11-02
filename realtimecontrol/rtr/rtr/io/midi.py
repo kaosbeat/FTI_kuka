@@ -84,6 +84,7 @@ NAV_COMMANDS = ("next_action", "next_zone", "back", "retrigger", "next_pose")
 #
 # - ``cc:<cc>:<value>``        — a control change (channel 0, matching legacy),
 # - ``note:<ch>:<note>``       — a note-on (channel 0-15; velocity ignored),
+# - ``noteoff:<ch>:<note>``    — a note-off (channel 0-15; 0x80-0x8F or velocity-0),
 # - ``program:<ch>:<prog>``    — a program change (channel 0-15).
 #
 # The legacy top-level ``in_port`` and ``mapping`` are **deprecated**: the validator
@@ -123,7 +124,8 @@ def _key_int(key: str, s: str, lo: int, hi: int) -> int:
 def validate_midi_key(key: Any) -> None:
     """Validate a key. Raise :class:`ValueError` on a bad key.
 
-    A key is ``cc:<cc>:<value>``, ``note:<ch>:<note>``, or ``program:<ch>:<prog>``.
+    A key is ``cc:<cc>:<value>``, ``note:<ch>:<note>``, ``noteoff:<ch>:<note>``,
+    or ``program:<ch>:<prog>``.
     """
     if not isinstance(key, str):
         raise ValueError(f"key {key!r} must be a string")
@@ -131,16 +133,17 @@ def validate_midi_key(key: Any) -> None:
     if len(parts) != 3:
         raise ValueError(
             f"key {key!r} must be cc:<cc>:<value>, note:<ch>:<note>, "
-            f"or program:<ch>:<prog>")
+            f"noteoff:<ch>:<note>, or program:<ch>:<prog>")
     kind, a, b = parts
     if kind == "cc":
         _key_int(key, a, 0, 127)
         _key_int(key, b, 0, 127)
-    elif kind in ("note", "program"):
+    elif kind in ("note", "noteoff", "program"):
         _key_int(key, a, 0, 15)
         _key_int(key, b, 0, 127)
     else:
-        raise ValueError(f"key {key!r}: unknown kind {kind!r} (expected cc/note/program)")
+        raise ValueError(f"key {key!r}: unknown kind {kind!r} "
+                         f"(expected cc/note/noteoff/program)")
 
 
 def validate_midi_target(target: Any, where: str) -> None:
@@ -553,8 +556,8 @@ class MidiInput:
     def _key_for(self, message) -> Optional[str]:
         """The canonical key for a mappable message, or None when it can't be one.
 
-        Note-offs (0x80-0x8F and velocity-0 note-ons) have no key: they are excluded
-        from both learn capture and per-zone dispatch.
+        Note-offs (0x80-0x8F and velocity-0 note-ons) map to a ``noteoff:<ch>:<note>``
+        key: they are learnable and dispatchable like any other key.
         """
         status = message[0]
         if status == 0xB0:
@@ -565,8 +568,12 @@ class MidiInput:
             if len(message) < 3:
                 return None
             if message[2] == 0:
-                return None
+                return f"noteoff:{status - 0x90}:{message[1]}"
             return f"note:{status - 0x90}:{message[1]}"
+        if 0x80 <= status <= 0x8F:
+            if len(message) < 3:
+                return None
+            return f"noteoff:{status - 0x80}:{message[1]}"
         if 0xC0 <= status <= 0xCF:
             if len(message) < 2:
                 return None

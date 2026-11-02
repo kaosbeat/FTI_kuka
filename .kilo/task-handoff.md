@@ -1,5 +1,155 @@
 # Task Handoff Log
 
+## 2026-11-02 — Re-apply EKI serialization fix (all-zeros `current jpos` / real KUKA stall)
+
+### Status
+
+Completed
+
+### Summary
+
+Re-applied the EKI single-flight serialization fix that had been reverted by commit `21e7225` ("revert engine"). That revert restored the fire-and-forget **daemon-thread** STREAM dispatch and flipped `move_mode` back to `"block"`, which re-introduced the real-KUKA symptom: on a new command the browser robot mesh / `joint_pose` / `curjpos` reads `[0,0,0,0,0,0]`, the ghost mesh / `target_pose` stays correct, and the real robot stalls at `WAIT FOR $FLAG[1]` (UI freezes).
+
+**Root cause (confirmed):** the KUKAPY server is a strict **single-flight** request/response loop. The old STREAM path dispatched each move on a fire-and-forget daemon thread, so the move's EKI send/recv was **not** serialized with the same tick's `get_curjpos` / `get_curpos` reads. The next tick's `get_curjpos` read consumed the still-in-flight move `<Res>` instead of a pose response; `get_curjpos` parses the missing `A1..A6` fields with `default="0"`, so it returns `[0,0,0,0,0,0]`. The framing desync then strands the KRL at `WAIT FOR $FLAG[1]`.
+
+**Fix re-applied (three coordinated changes):**
+1. `KukaRobot._move` is now **synchronous** — it issues the move inline under `_lock` and no longer spawns a daemon thread. The caller owns off-thread execution.
+2. The engine's STREAM dispatch now runs the move via `await asyncio.to_thread(move, target, self.machine.speed, blocking=False)`, so the move's EKI traffic is strictly serialized with the tick's pose reads while still keeping the 20 Hz loop from blocking on the event loop.
+3. Re-added `KukaRobot.recover()` (disconnect + reconnect) and the engine watchdog's **EKI recovery block**: when a `KukaError` is raised from a kukapy call (stalled handshake, dead socket, framing desync), the engine attempts to recover the connection so it can continue without a full restart.
+
+This restores the state of commit `1ee4753` (":kukaupdate/") — the commit whose message names this exact symptom — **without** disturbing the unrelated `behavior.py` `"x"`-axis freeze from `df965ab` (still in place).
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/robot/kuka.py`:
+  - `_move` no longer spawns `threading.Thread(target=_do, daemon=True)`; the move is issued synchronously under `self._lock` (the `blocking`/`STREAM_CNT` selection is unchanged).
+  - Added `recover()` method (disconnect + reconnect, raising the original error if the reconnect fails).
+  - `threading` import retained (still used for `threading.Lock`).
+- `realtimecontrol/rtr/rtr/core/engine.py`:
+  - STREAM dispatch: `move(target, self.machine.speed, blocking=False)` → `await asyncio.to_thread(move, target, self.machine.speed, blocking=False)`.
+  - Watchdog: added the `KukaError` EKI recovery block (calls `await asyncio.to_thread(self.robot.recover)` before publishing the `SAFETY_ALERT`).
+
+### Documentation
+
+- Module docstrings updated: `KukaRobot._move` now documents the synchronous contract and the single-flight serialization rationale; `recover()` documents its watchdog role. No standalone documentation file required.
+
+### Architecture
+
+- No architectural impact beyond the dispatch model: the STREAM path's threading contract moved from "robot spawns a daemon thread" to "engine serializes the move off-thread via `asyncio.to_thread`". The single-flight EKI guarantee is now enforced at the dispatch boundary rather than inside the robot. The existing `KukaError` watchdog path is extended with a recovery step rather than a new subsystem.
+
+### Validation
+
+- `python -m py_compile rtr/robot/kuka.py rtr/core/engine.py` → SYNTAX OK.
+- `pytest tests/test_kuka_eki_serialization.py tests/test_stuck_recovery.py tests/test_transition.py tests/test_bridge_behavior.py` → **35 passed**. Notably `test_stream_move_is_synchronous` (which fails in the buggy daemon-thread state) now passes.
+- `pytest tests/test_safety_conflict.py tests/test_forced_behavior.py tests/test_state_machine.py tests/test_kuka_eki_recv.py tests/test_brain_assertive.py tests/test_autoreturn.py tests/test_zone_groups.py tests/test_brain_behavior_params.py tests/test_brain_autonomy_dwell.py` → **99 passed, 9 skipped** (skips are hardware-specific).
+- Sim end-to-end: `main.py --sim --no-midi --no-sound --no-http --no-display --verbose` ticks cleanly (BLOCK-moves completing, no `EXCEPTION` / `Traceback`).
+- Note: the full suite (`pytest --ignore=tests/test_remote_tui.py`) timed out at 120 s on the slow sim/engine tick tests, so a targeted set was run instead; no collection errors.
+
+### Decisions and Caveats
+
+- **Runtime `move_mode` caveat (unresolved):** the fix is correct in code, but the exact `move_mode` active at the reproduction moment is still not file-confirmed, because engine logs are terminal-only (`[engine] EXCEPTION`, `[kukapy] STALL`) and `realtimecontrol/kukaRSI/rsi-pi/logs/echo_server.log` is a separate/older RSI-Pi subsystem, not the rtr engine log. `move_mode` defaults to `"block"` (`machine.py:108`) but is overridable per-action (`brain.py:_apply_action_engine` from `zones.json`), at runtime via the `client.html` "move" dropdown, and in `brain.json`; the hunting `track` action uses `"stream"`. **To fully confirm the fix on hardware, verify the active `move_mode` at the moment the all-zeros appear** — if it is `"stream"`, the re-applied serialization is the direct fix.
+- The all-zeros are produced by `get_curjpos`'s `default="0"` parse of a desynced `<Res>`; the validator / safety gate / `check_zone_limits.py` are **downstream** (they can block a move *because* `curjpos` is `[0,0,0,0,0,0]`) and were not the zero-source — left unchanged.
+- Unrelated uncommitted MIDI changes remain in the working tree (`.kilo/task-handoff.md`, `editor.html`, `rtr/io/midi.py`, `rtr/sound/sound.py`, `tests/test_midi_in.py`, `tests/test_sound_out_ports.py`) and were not part of this task.
+
+### Next Task
+
+Confirm the fix on hardware: reproduce the new-command scenario, observe the active `move_mode` (terminal log at the moment the all-zeros appear), and verify `curjpos` no longer reads `[0,0,0,0,0,0]` and the KRL no longer strands at `WAIT FOR $FLAG[1]`.
+
+### Instructions for the Next Task
+
+1. On the real KUKA, trigger the command that previously produced the all-zeros read.
+2. Watch the **terminal** engine output (not `echo_server.log`) for the active `move_mode` on that tick and for any `[kukapy] STALL` / `[engine] EXCEPTION`.
+3. Confirm `curjpos` / `joint_pose` no longer returns `[0,0,0,0,0,0]` and the robot reaches the target.
+4. If it still fails, capture the tick number, the `move_mode`, and the first full `EXCEPTION` traceback (logged once per unique signature) and report them.
+
+## 2026-10-31 — Add note-off / velocity-0 note-on as a mappable MIDI event (in + out)
+
+### Status
+
+Completed
+
+### Summary
+
+Added **note-off** (and the velocity-0 note-on) as first-class mappable MIDI events for both the MIDI-in and MIDI-out paths of the realtime-control system, per the user-confirmed design:
+
+- **MIDI-in:** a new `noteoff:<ch>:<note>` key kind that is learnable and dispatchable exactly like a note-on key. `ch` is 0–15, `note` is 0–127.
+- **MIDI-out:** the Sound adapter now **auto note-offs** an action's `start` note on (a) robot **arrival** and (b) **action replacement**, so at most one action start note sounds at a time. No new config fields were added.
+
+MIDI-in mapping (in `rtr/io/midi.py`):
+- `[0x80+ch, note, velocity]` (note-off status) → `noteoff:<ch>:<note>`.
+- `[0x90+ch, note, 0]` (velocity-0 note-on) → `noteoff:<ch>:<note>`.
+- The legacy `_handle_note` path is **unchanged**: a velocity-0 note-on is still ignored in the legacy protocol.
+
+MIDI-out rule (in `rtr/sound/sound.py`):
+- "Arrival" = the `snap.moving` `True → False` edge while an action is active. On that edge the current action's `start` note is note-off'd.
+- On **action replacement**, the **previous** action's `start` note is note-off'd (on the previous action's zone out) so a replaced action's note does not keep sounding.
+- A **resting** action (the robot is already at target, `moving` stays `False`) never fires the arrival note-off — its start note keeps sounding.
+- An action whose `start` is not a note (e.g. a CC) has no note to off.
+- Multi-pose actions fire the arrival note-off **per pose** (each pose arrival is a `moving` `True → False` edge); this is accepted per the design.
+
+Learn/dispatch for the new MIDI-in key works automatically once `_key_for` returns the `noteoff` key.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/io/midi.py`:
+  - `_key_for` now returns `noteoff:<ch>:<note>` for status `0x80–0x8F` and for a velocity-0 note-on `0x90–0x9F`.
+  - `validate_midi_key` accepts `noteoff` keys (rejects out-of-range `ch`/`note` and malformed forms).
+  - Module docstring updated to document the new key kind.
+- `realtimecontrol/rtr/editor.html`:
+  - `midiKeyValid` accepts `noteoff`.
+  - The zone command validation error message now lists `noteoff:<ch>:<note>` as a valid form.
+- `realtimecontrol/rtr/rtr/sound/sound.py`:
+  - `__init__` now tracks `_last_action_zone` and `_last_moving`.
+  - Added `_action_start_note(zone, action)` (returns the action's `start` note on its zone out, or `None`).
+  - Added `_note_off_n(zone, note)` (sends the 0x80 note-off for a note).
+  - `_on_snapshot` now note-offs the **previous** action's start note on action change.
+  - `_on_snapshot` now note-offs the current action's start note on the `moving` `True → False` edge.
+  - Module docstring updated.
+- `realtimecontrol/rtr/tests/test_midi_in.py`:
+  - `test_validate_midi_key_accepts_noteoff` / `test_validate_midi_key_rejects_bad_noteoff`.
+  - `test_note_on_key_does_not_match_note_off_message` (renamed/clarified from the old "note-off excluded" test).
+  - `test_noteoff_dispatches_zone_command`, `test_noteoff_velocity0_noteon_dispatches_action`, `test_noteoff_status_and_velocity0_noteon_both_map`.
+  - `test_noteoff_learn_captures_key`.
+- `realtimecontrol/rtr/tests/test_sound_out_ports.py`:
+  - `_snap` helper gained a `moving` parameter (default `False`).
+  - `test_arrival_noteoff_fires_on_moving_edge`, `test_arrival_noteoff_does_not_fire_for_cc_start`, `test_resting_action_no_noteoff`, `test_action_change_notes_off_previous_start`.
+
+### Documentation
+
+- Module docstrings for `rtr/io/midi.py` and `rtr/sound/sound.py` updated to describe the new key kind and the auto note-off behavior. No standalone documentation file required.
+
+### Architecture
+
+- No change to the engine/move path. This is a leaf-level I/O + sound change:
+  - MIDI-in: a new message→key mapping (`noteoff`) that reuses the existing learn/dispatch pipeline unchanged.
+  - MIDI-out: a self-contained note-off policy in the Sound adapter driven by the existing `Snapshot` (`moving`, `zone`, `action`). No new config schema, no new events.
+
+### Validation
+
+- `python -m pytest tests/test_midi_in.py tests/test_sound_out_ports.py -q` → **97 passed, 1 skipped**.
+- Full suite (`--ignore=tests/test_remote_tui.py`, which has a **pre-existing** collection error: `ImportError: cannot import name 'action_kind' from 'rtr.flow'`) → **339 passed, 14 skipped, 6 failed**.
+- The **6 failures are pre-existing and unrelated to this change** (confirmed by `git stash` → running the same tests on the clean tree → identical failures → `git stash pop`):
+  - `test_kuka_eki_serialization.py::test_stream_move_is_synchronous` (baseline `kuka.py` spawns a daemon thread; I did not touch `kuka.py`).
+  - 5 `test_remote_sdl.py` TUI tests (`test_settings_content_and_help_text`, `test_setup_page_activation_returns_none_cmds`, `test_setup_calibrate_activation_returns_prompt`, `test_setup_map_activation_returns_capture_status`, `test_setup_dpad_left_right_still_font_on_font_row`) — they import `rtr.remote.sdlapp/view/config`, none of which I touched.
+- `ast.parse` on the edited Python files passes (syntax OK).
+
+### Decisions and Caveats
+
+- **Legacy protocol untouched.** The `_handle_note` legacy path still ignores velocity-0 note-ons; the new `noteoff` mapping only applies to the key-based (learnable) protocol. No behavior change for existing legacy mappings.
+- **Action-change note-off uses the previous action's zone out.** When an action is replaced, the previous action's start note is off'd on the *previous* action's zone out port (the port it was sent on), so a replaced action's note cannot leak.
+- **Multi-pose arrival cadence.** A multi-pose action fires the arrival note-off per pose (each pose arrival is a `moving` `True → False` edge). Accepted per design; if a single "end of action" note-off is wanted later, that is a separate change.
+- **No new config.** The auto note-off is derived from the existing `start` field + `Snapshot.moving`; nothing to configure.
+
+### Next Task
+
+No immediate next task identified. The feature is complete and tested. Optional follow-ups (not requested): (a) a single "end-of-action" note-off instead of per-pose for multi-pose actions; (b) hardware verification that the arrival note-off sounds on a real MIDI device.
+
+### Instructions for the Next Task
+
+1. If the per-pose arrival note-off needs to become a single end-of-action note-off, change the arrival rule in `rtr/sound/sound.py` `_on_snapshot` to fire only when the action's pose sequence is exhausted (not on every `moving` `True → False` edge). Re-run `tests/test_sound_out_ports.py`.
+2. To verify on hardware, confirm that on robot arrival the MIDI out sends `[0x80, <start_note>, 0]` and that replacing an action sends the previous action's `[0x80, <prev_note>, 0]`.
+3. Keep `KUKAPY_SERVER.SRC` unmodified (standing user constraint).
+
 ## 2026-10-30 — Resolve stash-pop conflict markers in zones/sound/patches JSON (keep committed, drop WIP)
 
 ### Status

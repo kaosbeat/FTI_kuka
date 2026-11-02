@@ -1917,7 +1917,7 @@ function midiKeyValid(key) {
   const [kind, a, b] = parts;
   const num = (s) => /^\d+$/.test(s);
   if (kind === "cc") return num(a) && num(b) && +a <= 127 && +b <= 127;
-  if (kind === "note" || kind === "program") return num(a) && num(b) && +a <= 15 && +b <= 127;
+  if (kind === "note" || kind === "noteoff" || kind === "program") return num(a) && num(b) && +a <= 15 && +b <= 127;
   return false;
 }
 
@@ -1942,7 +1942,7 @@ function validateMidi() {
       if (!Number.isInteger(zd.in_port) || zd.in_port < 0) errs.push(`zones[${zone}].in_port: must be a non-negative int or null`);
     }
     if (zd.command !== null && zd.command !== undefined && !midiKeyValid(zd.command)) {
-      errs.push(`zones[${zone}].command: must be cc:<cc>:<value>, note:<ch>:<note>, or program:<ch>:<prog>`);
+      errs.push(`zones[${zone}].command: must be cc:<cc>:<value>, note:<ch>:<note>, noteoff:<ch>:<note>, or program:<ch>:<prog>`);
     }
     for (const [action, akey] of Object.entries(zd.actions || {})) {
       if (akey !== null && akey !== undefined && !midiKeyValid(akey)) {

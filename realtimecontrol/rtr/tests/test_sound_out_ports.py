@@ -129,16 +129,18 @@ def _sound(table, out_port=None, out_device=None, enabled=True, retry_interval=5
     return s, holder
 
 
-def _snap(zone="init", mode=None, action=None, action_index=None, target_pose=None):
+def _snap(zone="init", mode=None, action=None, action_index=None, target_pose=None,
+          moving=False):
     """A minimal snapshot for driving ``on_event`` (zone/mode/action only).
 
-    ``action_index`` / ``target_pose`` are optional; the per-pose MIDI test drives them
-    to verify the pose note keys on the anchor index, not the target pose.
+    ``action_index`` / ``target_pose`` / ``moving`` are optional; the per-pose MIDI test
+    drives them to verify the pose note keys on the anchor index (not the target pose),
+    and the arrival note-off test drives ``moving`` to verify the True→False edge.
     """
     return Snapshot(zone=zone, mode=mode, action=action,
                     joint_pose=[0.0] * 6, cart_pose=[0.0] * 3,
                     target_pose=target_pose if target_pose is not None else [0.0] * 6,
-                    speed=20.0, moving=False, action_index=action_index)
+                    speed=20.0, moving=moving, action_index=action_index)
 
 
 # ---------------------------------------------------------------------------
@@ -588,6 +590,88 @@ def test_list_out_ports_releases_instance():
         s.list_out_ports()
         assert len(FakeMidiOut.instances) == 1
         assert FakeMidiOut.instances[0].deleted is True
+
+
+# ---------------------------------------------------------------------------
+# Auto note-off of an action's start note (arrival edge + action-change edge).
+#
+# An action whose ``start`` is a note message gets an auto note-off: the matching
+# note-off (same note, velocity 0) is sent when the robot arrives (the ``moving``
+# True→False edge) and when the action is replaced (so at most one action start note
+# sounds at a time). A resting action (no move) never fires the arrival note-off.
+# ---------------------------------------------------------------------------
+def test_arrival_noteoff_fires_on_moving_edge():
+    # The start note-on is sent on action start; the auto note-off fires on arrival.
+    FakeMidiOut.instances = []
+    with _fake_rtmidi():
+        s, _ = _sound({"channel": 0,
+                       "zones": {"a": {"out_port": 0, "command": {"note": 5, "velocity": 40}}},
+                       "actions": {"a": {"go": {"start": {"note": 60, "velocity": 80},
+                                                "poses": []}}}})
+        # Action start while moving: the start note-on is sent (no note-off yet).
+        s.on_event(Event.SNAPSHOT, _snap(zone="a", action="go", moving=True))
+        sent = list(s._open_outs[(0, None)].sent)
+        assert [0x90, 60, 80] in sent
+        # Still moving: no note-off.
+        s.on_event(Event.SNAPSHOT, _snap(zone="a", action="go", moving=True))
+        assert s._open_outs[(0, None)].sent == sent
+        # Arrival (moving True→False): the auto note-off fires.
+        s.on_event(Event.SNAPSHOT, _snap(zone="a", action="go", moving=False))
+        assert s._open_outs[(0, None)].sent[-1] == [0x80, 60, 0]
+
+
+def test_arrival_noteoff_does_not_fire_for_cc_start():
+    # An action whose start is a CC (not a note): no auto note-off on arrival.
+    FakeMidiOut.instances = []
+    with _fake_rtmidi():
+        s, _ = _sound({"channel": 0,
+                       "zones": {"a": {"out_port": 0, "command": {"note": 5, "velocity": 40}}},
+                       "actions": {"a": {"go": {"start": {"cc": 70, "value": 32},
+                                                "poses": []}}}})
+        s.on_event(Event.SNAPSHOT, _snap(zone="a", action="go", moving=True))
+        s.on_event(Event.SNAPSHOT, _snap(zone="a", action="go", moving=False))
+        sent = list(s._open_outs[(0, None)].sent)
+        assert [0xB0, 70, 32] in sent  # the CC start
+        assert all(m[0] != 0x80 for m in sent)  # no note-off (CC start has no note)
+
+
+def test_resting_action_no_noteoff():
+    # A resting action (moving stays False): the arrival edge never fires, so the
+    # start note keeps sounding (no note-off).
+    FakeMidiOut.instances = []
+    with _fake_rtmidi():
+        s, _ = _sound({"channel": 0,
+                       "zones": {"a": {"out_port": 0, "command": {"note": 5, "velocity": 40}}},
+                       "actions": {"a": {"go": {"start": {"note": 60, "velocity": 80},
+                                                "poses": []}}}})
+        # The robot is already at the target (moving False) when the action starts.
+        s.on_event(Event.SNAPSHOT, _snap(zone="a", action="go", moving=False))
+        sent = list(s._open_outs[(0, None)].sent)
+        assert [0x90, 60, 80] in sent  # the start note-on
+        # Still resting: no note-off.
+        s.on_event(Event.SNAPSHOT, _snap(zone="a", action="go", moving=False))
+        assert s._open_outs[(0, None)].sent == sent
+
+
+def test_action_change_notes_off_previous_start():
+    # When an action is replaced, the previous action's start note is note-off'd (on the
+    # previous action's zone's out) so at most one action start note sounds at a time.
+    FakeMidiOut.instances = []
+    with _fake_rtmidi():
+        s, _ = _sound({"channel": 0,
+                       "zones": {"a": {"out_port": 0, "command": {"note": 5, "velocity": 40}}},
+                       "actions": {"a": {"one": {"start": {"note": 60, "velocity": 80},
+                                                 "poses": []},
+                                         "two": {"start": {"note": 64, "velocity": 90},
+                                                 "poses": []}}}})
+        # Action "one" starts (moving): note-on 60.
+        s.on_event(Event.SNAPSHOT, _snap(zone="a", action="one", moving=True))
+        s.on_event(Event.SNAPSHOT, _snap(zone="a", action="one", moving=True))
+        # Action "two" replaces "one": note-off 60, note-on 64.
+        s.on_event(Event.SNAPSHOT, _snap(zone="a", action="two", moving=True))
+        sent = list(s._open_outs[(0, None)].sent)
+        assert [0x80, 60, 0] in sent  # the previous action's note-off
+        assert [0x90, 64, 90] in sent  # the new action's note-on
 
 
 def main():
