@@ -1,5 +1,54 @@
 # Task Handoff Log
 
+## 2026-11-03 — Move-blocked flag ported to editor.html + status-bar z-index fix in both clients
+
+### Status
+
+Completed
+
+### Summary
+
+Two changes for parity and visibility:
+
+1. **Ported the `move blocked` flag to `editor.html`** — `editor.html`'s `updateStatusBar` (line 4167) was the old version without the flag. Added the `escAttr(s)` helper and the `blockedSeg` block, mirroring `client.html` exactly. The editor now shows the persistent red **move blocked** flag with hover tooltip when a safety-gated move is blocked in manual mode.
+
+2. **Fixed status-bar visibility under the safety popup** — The `#safetyPopup` (`position: fixed; inset: 0; z-index: 25`) covers the entire viewport including the header status bar. Since the flag and popup share the same trigger condition (`safety.phase === "confirm"`), the flag was always hidden behind the popup when visible. Added `position: relative; z-index: 30;` to `#statusBar` CSS in both `client.html` and `editor.html` so the flag remains visible above the popup overlay.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - `updateStatusBar(m)`: added `escAttr(s)` helper and `blockedSeg` logic (identical to `client.html`). The flag renders between behavior and candidates segments when `m.safety.phase === "confirm"`.
+  - `#statusBar` CSS: added `position: relative; z-index: 30;` so the status bar renders above the `#safetyPopup` overlay (z-index 25).
+- `realtimecontrol/rtr/client.html`:
+  - `#statusBar` CSS: added `position: relative; z-index: 30;` so the status bar renders above the `#safetyPopup` overlay.
+
+### Documentation
+
+None required — the flag logic is self-documenting via its hover `title` tooltip and the in-code comments (already present in `client.html`, now mirrored in `editor.html`).
+
+### Architecture
+
+No new architectural boundary. Both changes are client-side only. The data path (`display.py:_frame` → `frame["safety"]` from `machine.pending_info()`) was already verified correct in the prior task; this task only addresses the client-side rendering (editor parity) and CSS layering (z-index).
+
+### Validation
+
+- `node --check` on extracted inline JS from both `client.html` and `editor.html`: **PASS** (both files syntactically valid).
+- Live UI verification during an actual manual block requires the running robot/UI (not available in this environment).
+
+### Decisions and Caveats
+
+- The z-index fix (30) places the status bar above the safety popup (25) but below any potential future overlays. If additional fixed overlays are added with z-index between 25 and 30, the status bar will still be on top of the safety popup.
+- The `editor.html` flag is now byte-identical in logic to `client.html`; future changes to the flag logic must be applied to both files.
+- The `SAFETY_ALERT` event is still not forwarded to the client by `display.py`; the state frame remains the sole source of truth for the flag.
+
+### Next Task
+
+No immediate next task identified. The move-blocked flag is now visible in both clients.
+
+### Instructions for the Next Task
+
+If the flag behavior needs adjustment (e.g., different styling, additional info in the tooltip, or a different trigger condition), update `updateStatusBar` in **both** `client.html` (line 343) and `editor.html` (line 4167) identically. The `escAttr` helper must be kept in sync as well.
+
 ## 2026-11-03 — Move-blocked flag in client.html status bar (persistent, hover trace, log line)
 
 ### Status
