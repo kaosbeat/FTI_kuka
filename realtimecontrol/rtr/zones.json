@@ -1792,10 +1792,16 @@
           "speed": 15,
           "loop": true,
           "dwell_s": 30,
-          "next": {
-            "zone": "follow_p",
-            "action": "track"
-          },
+          "next": [
+            {
+              "zone": "follow_p",
+              "action": "track"
+            },
+            {
+              "zone": "scan_room",
+              "action": "bored"
+            }
+          ],
           "pose_imgs": [
             null,
             null,
@@ -1803,8 +1809,54 @@
             null
           ],
           "pose_videos": [
+            "C1_C2__00007_..mp4",
+            "C1_C2__00005_..mp4",
+            "C1_C2__00003_..mp4",
+            "C1_D1_001..mp4"
+          ]
+        },
+        "bored": {
+          "enabled": true,
+          "poses": [
+            [
+              -0.735,
+              -55.581,
+              20,
+              1,
+              -25,
+              -15
+            ],
+            [
+              -0.735,
+              -55.581,
+              20,
+              1,
+              75,
+              15
+            ]
+          ],
+          "variable_axes": [
+            0,
+            4,
+            5
+          ],
+          "behavior": "restless",
+          "speed": 40,
+          "loop": true,
+          "next": [
+            {
+              "zone": "scan_room",
+              "action": "look"
+            },
+            {
+              "zone": "approach_p"
+            }
+          ],
+          "pose_imgs": [
             null,
-            null,
+            null
+          ],
+          "pose_videos": [
             null,
             null
           ]
@@ -2437,10 +2489,10 @@
       }
     },
     "view": {
-      "x": -571.717656894401,
-      "y": -281.708346721772,
-      "w": 2952.7650741271796,
-      "h": 1139.4658385620091
+      "x": 1448.347427992659,
+      "y": 491.3506967477611,
+      "w": 1696.1489447919137,
+      "h": 646.4829994493768
     },
     "key": "approach_p,follow_p,inspect,inspect_p,lock,resting,retreat_p,scan,scan_room,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band,tidal"
   }
