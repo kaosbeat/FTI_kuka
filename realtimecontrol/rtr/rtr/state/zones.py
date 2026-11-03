@@ -554,6 +554,10 @@ def _validate_action(name: str, a: dict, all_zone_names: set) -> None:
     if spd is not None and not _is_num(spd):
         raise ValueError(f"action {name!r}: speed must be a number")
 
+    bb = a.get("base_beats")
+    if bb is not None and not (isinstance(bb, int) and not isinstance(bb, bool) and bb >= 0):
+        raise ValueError(f"action {name!r}: base_beats must be a non-negative int or absent")
+
     if "loop" in a and not isinstance(a["loop"], bool):
         raise ValueError(f"action {name!r}: 'loop' must be a bool")
 
@@ -914,6 +918,19 @@ class Zone:
         if _is_num(s):
             return s
         return None
+
+    def action_base_beats(self, name: str) -> int:
+        """The action's base beat count (Perform Mode), or 0 when absent.
+
+        The deadline for a perform move is ``base_beats × multiplier × (60/BPM)``
+        seconds. When the field is absent or not a positive int, returns 0
+        (no timing constraint).
+        """
+        a = self._action(name)
+        b = a.get("base_beats")
+        if isinstance(b, int) and not isinstance(b, bool) and b >= 0:
+            return b
+        return 0
 
     @property
     def mode_group(self) -> Optional[str]:

@@ -94,6 +94,7 @@ from ..patches import (
     validate_patches_data,
 )
 from ..sound import load_sound_data, validate_sound_data
+from ..perform import builtin_perform_config, load_perform_config, validate_perform_config
 from .midi import load_midi_data, validate_midi_data
 from ..state.zones import (
     HARDWARE_LIMITS,
@@ -205,7 +206,8 @@ class HttpServer:
                   patches_provider=None, patches_path: str = None,
                   midi_provider=None, midi_path: str = None, midi=None,
                   sound=None, brain_provider=None, brain_path: str = None,
-                 robotconfig_provider=None, robotconfig_path: str = None):
+                 robotconfig_provider=None, robotconfig_path: str = None,
+                 perform_provider=None, perform_path: str = None):
         self.bus = bus
         self.zones_provider = zones_provider
         self.sound_provider = sound_provider
@@ -224,6 +226,8 @@ class HttpServer:
         self.brain_path = os.path.abspath(brain_path) if brain_path else None
         self.robotconfig_provider = robotconfig_provider
         self.robotconfig_path = os.path.abspath(robotconfig_path) if robotconfig_path else None
+        self.perform_provider = perform_provider
+        self.perform_path = os.path.abspath(perform_path) if perform_path else None
         self.root = os.path.abspath(root)
         # Pose reference images live under the static assets dir (assets/imgs/).
         self.imgs_path = os.path.join(self.root, "assets", "imgs")
@@ -297,6 +301,8 @@ def _make_handler(server: HttpServer):
                 self._get_brain()
             elif path == "/api/robotconfig":
                 self._get_robotconfig()
+            elif path == "/api/perform":
+                self._get_perform()
             elif self._is_static(path):
                 self._serve_static(path)
             else:
@@ -320,6 +326,8 @@ def _make_handler(server: HttpServer):
                 self._post_brain()
             elif path == "/api/robotconfig":
                 self._post_robotconfig()
+            elif path == "/api/perform":
+                self._post_perform()
             elif path == "/api/imgs":
                 self._post_imgs()
             elif path == "/api/videos":
@@ -574,6 +582,44 @@ def _make_handler(server: HttpServer):
                 self._send_json(500, {"error": f"could not write robotconfig: {exc}"})
                 return
             server.bus.submit(Command(cmd=Cmd.RELOAD_ROBOT_CONFIG, payload={}))
+            self._send_json(200, {"ok": True})
+
+        # ------------------------------------------------------------------
+        # Perform API (live perform mode global config).
+        # ------------------------------------------------------------------
+        def _get_perform(self):
+            if server.perform_path:
+                try:
+                    return self._send_json(200, load_perform_config(server.perform_path))
+                except (OSError, ValueError):
+                    pass
+            if server.perform_provider is not None:
+                self._send_json(200, server.perform_provider())
+                return
+            self._send_json(200, builtin_perform_config())
+
+        def _post_perform(self):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                length = 0
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                data = json.loads(body)
+                validate_perform_config(data)
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._send_json(400, {"error": str(exc)})
+                return
+            tmp = server.perform_path + ".tmp"
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(tmp, server.perform_path)
+            except OSError as exc:
+                self._send_json(500, {"error": f"could not write perform: {exc}"})
+                return
+            # Ask the running core to hot-reload the new config.
+            server.bus.submit(Command(cmd=Cmd.RELOAD_PERFORM, payload={}))
             self._send_json(200, {"ok": True})
 
         # ------------------------------------------------------------------

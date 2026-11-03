@@ -47,7 +47,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from rtr.core.bus import StateBus
-from rtr.core.commands import Event
+from rtr.core.commands import Cmd, Event
 from rtr.io.midi import (
     MidiInput,
     builtin_midi_data,
@@ -70,6 +70,21 @@ def test_validate_midi_key_accepts_valid_keys():
 
 def test_validate_midi_key_rejects_bad_keys():
     for key in ("cc:7", "cc:7:42:1", "xyz:7:42", "note:16:60", "cc:999:1", ""):
+        try:
+            validate_midi_key(key)
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for key {key!r}")
+
+
+def test_validate_midi_key_accepts_noteoff():
+    for key in ("noteoff:0:60", "noteoff:7:127", "noteoff:15:99", "noteoff:0:0"):
+        validate_midi_key(key)  # must not raise
+
+
+def test_validate_midi_key_rejects_bad_noteoff():
+    for key in ("noteoff:16:60", "noteoff:7", "noteoff:7:200", "noteoff:7:-1",
+                "noteoff:7:x"):
         try:
             validate_midi_key(key)
         except ValueError:
@@ -227,11 +242,12 @@ def test_validate_midi_data_rejects_unknown_capture_field():
 
 def test_builtin_midi_data_is_empty_zones():
     assert builtin_midi_data() == {"enabled": True, "zones": {},
-                                     "nav": {"in_port": None, "next_action": None,
-                                              "next_zone": None, "back": None,
-                                              "retrigger": None, "next_pose": None},
-                                     "capture": {"in_port": None, "key": None},
-                                     "groups": {"in_port": None}}
+                                      "nav": {"in_port": None, "next_action": None,
+                                               "next_zone": None, "back": None,
+                                               "retrigger": None, "next_pose": None},
+                                      "capture": {"in_port": None, "key": None},
+                                      "groups": {"in_port": None},
+                                      "perform": {"in_port": None, "cc_a": None, "cc_b": None}}
 
 
 def test_load_midi_data_reads_and_validates():
@@ -305,10 +321,57 @@ def test_zone_null_in_port_uses_default_port():
     assert _cmds(bus) == [("trigger_action", {"zone": "wander", "action": "look"})]
 
 
-def test_note_off_not_dispatched():
+def test_note_on_key_does_not_match_note_off_message():
+    # A zone's command is a note-ON key (note:0:60); a note-off message maps to
+    # noteoff:0:60, which does not match it (no dispatch).
     m, bus = _midi({"zones": {"wander": {"in_port": 1, "command": "note:0:60"}}})
-    _feed(m, [0x80, 60, 0], port=1)  # note-off (velocity 0): excluded
+    _feed(m, [0x80, 60, 0], port=1)  # note-off → noteoff:0:60 (no match)
     assert _cmds(bus) == []
+
+
+def test_noteoff_dispatches_zone_command():
+    # A zone's command key is a noteoff; the 0x80 note-off status dispatches the zone.
+    zones = {"wander": {"actions": {"look": {}}}}
+    m, bus = _midi({"zones": {"wander": {"in_port": 1, "command": "noteoff:0:60",
+                                          "actions": {}}}}, zones=zones)
+    _feed(m, [0x80, 60, 0], port=1)
+    assert _cmds(bus) == [("trigger_action", {"zone": "wander", "action": "look"})]
+
+
+def test_noteoff_velocity0_noteon_dispatches_action():
+    # A velocity-0 note-on (0x90 with velocity 0) maps to a noteoff key and dispatches.
+    m, bus = _midi({"zones": {"wander": {"in_port": 1, "command": None,
+                                          "actions": {"look": "noteoff:0:60"}}}})
+    _feed(m, [0x90, 60, 0], port=1)  # velocity-0 note-on
+    assert _cmds(bus) == [("trigger_action", {"zone": "wander", "action": "look"})]
+
+
+def test_noteoff_status_and_velocity0_noteon_both_map():
+    # Both the 0x80 status and the velocity-0 note-on map to the same noteoff key.
+    zones = {"wander": {"actions": {"look": {}}}}
+    m, bus = _midi({"zones": {"wander": {"in_port": 1, "command": "noteoff:0:60"}}},
+                   zones=zones)
+    _feed(m, [0x90, 60, 0], port=1)  # velocity-0 note-on
+    assert _cmds(bus) == [("trigger_action", {"zone": "wander", "action": "look"})]
+    bus.drain_commands()
+    _feed(m, [0x80, 60, 0], port=1)  # 0x80 status
+    assert _cmds(bus) == [("trigger_action", {"zone": "wander", "action": "look"})]
+
+
+def test_noteoff_learn_captures_key():
+    # Learn capture captures a noteoff key (a note-off message) and disarms.
+    m, bus = _midi({"zones": {"wander": {"in_port": 1, "command": None,
+                                          "actions": {"look": None}}}})
+    m.start_learn("wander", "look")
+    assert m.is_learning is True
+    _feed(m, [0x80, 60, 0], port=1)  # note-off
+    cmds = _cmds(bus)
+    assert len(cmds) == 1
+    assert cmds[0][0] == "midi_learn"
+    assert cmds[0][1] == {"key": "noteoff:0:60", "msg": [0x80, 60, 0],
+                           "zone": "wander", "action": "look", "nav": None,
+                           "capture": None, "group": None}
+    assert m.is_learning is False
 
 
 # ---------------------------------------------------------------------------
@@ -684,6 +747,118 @@ def test_current_data_returns_loaded_table():
             "zones": {"wander": {"in_port": 1, "command": "cc:1:5", "actions": {}}}}
     m, _ = _midi(data)
     assert m.current_data() == data
+
+
+# ---------------------------------------------------------------------------
+# Perform CCs + MIDI clock (0xF8).
+# ---------------------------------------------------------------------------
+def test_clock_tick_forwards_0xf8():
+    """A 0xF8 message calls the clock_tick callback."""
+    bus = StateBus()
+    calls = []
+    midi = MidiInput(bus, in_port=0, enabled=False, clock_tick=lambda: calls.append(1))
+    # Simulate a 0xF8 message (1-byte system real-time).
+    midi._on_message(0, ([0xF8], 0.0))
+    assert len(calls) == 1
+
+
+def test_clock_tick_no_callback():
+    """A 0xF8 message with no clock_tick callback is a no-op (no crash)."""
+    bus = StateBus()
+    midi = MidiInput(bus, in_port=0, enabled=False)
+    midi._on_message(0, ([0xF8], 0.0))  # Should not raise.
+
+
+def test_perform_cc_a_velocity():
+    """CC-A (velocity): the CC value is normalized to 0.0-1.0."""
+    bus = StateBus()
+    midi = MidiInput(bus, in_port=0, enabled=False)
+    midi._data["perform"] = {"in_port": None, "cc_a": 70, "cc_b": 71}
+    # Send CC70 value 127.
+    midi._on_message(0, ([0xB0, 70, 127], 0.0))
+    cmds = bus.drain_commands()
+    assert len(cmds) == 1
+    assert cmds[0].cmd == Cmd.PERFORM_VELOCITY
+    assert abs(cmds[0].payload["value"] - 1.0) < 0.001
+
+
+def test_perform_cc_a_zero():
+    """CC-A value 0 → velocity 0.0."""
+    bus = StateBus()
+    midi = MidiInput(bus, in_port=0, enabled=False)
+    midi._data["perform"] = {"in_port": None, "cc_a": 70, "cc_b": 71}
+    midi._on_message(0, ([0xB0, 70, 0], 0.0))
+    cmds = bus.drain_commands()
+    assert len(cmds) == 1
+    assert cmds[0].cmd == Cmd.PERFORM_VELOCITY
+    assert cmds[0].payload["value"] == 0.0
+
+
+def test_perform_cc_b_multiplier():
+    """CC-B (multiplier): value 0-127 bands across the 9 steps (1/16 … 16)."""
+    bus = StateBus()
+    midi = MidiInput(bus, in_port=0, enabled=False)
+    midi._data["perform"] = {"in_port": None, "cc_a": 70, "cc_b": 71}
+    # Low end (divide) and high end (multiply) + the middle (1x).
+    for val, expected in [(0, 0.0625), (64, 1), (127, 16)]:
+        bus.drain_commands()
+        midi._on_message(0, ([0xB0, 71, val], 0.0))
+        cmds = bus.drain_commands()
+        assert len(cmds) == 1
+        assert cmds[0].cmd == Cmd.PERFORM_MULTIPLIER
+        assert cmds[0].payload["multiplier"] == expected
+
+
+def test_perform_cc_b_divide_steps():
+    """CC-B produces the divide steps (1/16, 1/8, 1/4, 1/2) for the low end."""
+    bus = StateBus()
+    midi = MidiInput(bus, in_port=0, enabled=False)
+    midi._data["perform"] = {"in_port": None, "cc_a": 70, "cc_b": 71}
+    for val, expected in [(16, 0.125), (32, 0.25), (48, 0.5)]:
+        bus.drain_commands()
+        midi._on_message(0, ([0xB0, 71, val], 0.0))
+        cmds = bus.drain_commands()
+        assert len(cmds) == 1
+        assert cmds[0].cmd == Cmd.PERFORM_MULTIPLIER
+        assert cmds[0].payload["multiplier"] == expected
+
+
+def test_perform_cc_b_clamped():
+    """CC-B value clamps to the extreme steps (0.0625 at 0, 16 at 127)."""
+    bus = StateBus()
+    midi = MidiInput(bus, in_port=0, enabled=False)
+    midi._data["perform"] = {"in_port": None, "cc_a": 70, "cc_b": 71}
+    midi._on_message(0, ([0xB0, 71, 100], 0.0))
+    cmds = bus.drain_commands()
+    assert len(cmds) == 1
+    assert cmds[0].cmd == Cmd.PERFORM_MULTIPLIER
+    assert cmds[0].payload["multiplier"] == 4  # 100/127*8 ≈ 6.3 → idx 6 → 4x
+
+
+def test_perform_cc_port_scoped():
+    """Perform CCs are only dispatched on the perform in_port."""
+    bus = StateBus()
+    midi = MidiInput(bus, in_port=0, enabled=False)
+    midi._data["perform"] = {"in_port": 1, "cc_a": 70, "cc_b": 71}
+    # Send on port 0 (not the perform port).
+    midi._on_message(0, ([0xB0, 70, 100], 0.0))
+    cmds = bus.drain_commands()
+    assert len(cmds) == 0
+    # Send on port 1 (the perform port).
+    midi._on_message(1, ([0xB0, 70, 100], 0.0))
+    cmds = bus.drain_commands()
+    assert len(cmds) == 1
+    assert cmds[0].cmd == Cmd.PERFORM_VELOCITY
+
+
+def test_perform_cc_not_set():
+    """When cc_a/cc_b are null, CC messages are not dispatched as perform."""
+    bus = StateBus()
+    midi = MidiInput(bus, in_port=0, enabled=False)
+    midi._data["perform"] = {"in_port": None, "cc_a": None, "cc_b": None}
+    midi._on_message(0, ([0xB0, 70, 100], 0.0))
+    cmds = bus.drain_commands()
+    assert len(cmds) == 0
 
 
 # ---------------------------------------------------------------------------

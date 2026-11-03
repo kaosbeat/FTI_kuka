@@ -18,6 +18,7 @@ import sys
 
 from rtr.config import Config
 from rtr.core.bus import StateBus
+from rtr.core.clock import BeatClock
 from rtr.core.engine import Engine
 from rtr.robot import (
     make_robot,
@@ -41,6 +42,7 @@ from rtr.patches import (
     builtin_patches_data,
     DEFAULT_HYDRA_CODE,
 )
+from rtr.perform import builtin_perform_config, load_perform_config
 from rtr.camera import make_camera
 from rtr.io import (
     HttpServer,
@@ -91,6 +93,8 @@ def parse_args(argv):
                         help="brain decision config file (default: brain.json next to main.py)")
     parser.add_argument("--robot-config", default="robotconfig.json",
                         help="robot calibration config file (default: robotconfig.json next to main.py)")
+    parser.add_argument("--perform", default="perform.json",
+                        help="perform mode config file (default: perform.json next to main.py)")
     parser.add_argument("--no-display", action="store_true", help="disable display (P5live)")
     parser.add_argument("--camera", action="store_true", help="enable the camera adapter")
     return parser.parse_args(argv)
@@ -111,6 +115,7 @@ def build_config(args) -> Config:
     cfg.patches_path = _resolve(args.patches)
     cfg.brain_path = _resolve(args.brain)
     cfg.robot_config_path = _resolve(args.robot_config)
+    cfg.perform_path = _resolve(args.perform)
     cfg.midi_in_port = None if args.no_midi else args.midi
     cfg.midi_path = _resolve(args.midi_json)
     cfg.enable_sound = not args.no_sound
@@ -178,6 +183,15 @@ def load_midi_data_fallback(path: str) -> dict:
         return builtin_midi_data()
 
 
+def load_perform_config_fallback(path: str) -> dict:
+    """Load the perform config, falling back to the built-in defaults with a warning."""
+    try:
+        return load_perform_config(path)
+    except (OSError, ValueError) as exc:
+        print(f"[rtr] perform file {path!r} unavailable ({exc}); using built-in perform config")
+        return builtin_perform_config()
+
+
 async def run(cfg: Config) -> None:
     bus = StateBus()
 
@@ -224,11 +238,25 @@ async def run(cfg: Config) -> None:
                       patch_mode_provider=lambda: robot_config_patch_mode(robot_cfg_holder[0]))
     # The MIDI-in learned mapping is data-driven as well; created before the engine
     # so the engine can hold its reload hook (POST /api/midi hot-reloads the table).
+    # The perform config (internal BPM, clock timeout, velocity range, multipliers)
+    # is loaded here too: the BeatClock is built from it and the MIDI adapter's
+    # 0xF8 clock callback is wired to the clock's clock_tick.
+    perform_cfg = load_perform_config_fallback(cfg.perform_path)
+    clock = BeatClock(internal_bpm=perform_cfg["internal_bpm"],
+                      clock_timeout=perform_cfg["clock_timeout"])
+
+    def _reload_perform():
+        new_cfg = load_perform_config_fallback(cfg.perform_path)
+        machine.set_perform_velocity_max_deg_s(new_cfg["velocity_max_deg_s"])
+        clock.set_internal_bpm(new_cfg["internal_bpm"])
+
     midi = MidiInput(bus, in_port=cfg.midi_in_port,
-                      enabled=cfg.midi_in_port is not None,
-                      zones_provider=lambda: machine.zones,
-                      midi_loader=lambda: load_midi_data_fallback(cfg.midi_path),
-                      brain=brain)
+                       enabled=cfg.midi_in_port is not None,
+                       zones_provider=lambda: machine.zones,
+                       midi_loader=lambda: load_midi_data_fallback(cfg.midi_path),
+                       brain=brain,
+                       clock_tick=clock.clock_tick,
+                       multipliers_provider=lambda: perform_cfg["multipliers"])
     # The robot calibration reload hook re-reads the file and applies the new
     # offsets to the physical robot (guarded: the sim has no such method).
 
@@ -252,7 +280,10 @@ async def run(cfg: Config) -> None:
                     robot_reload=_reload_robot_config,
                     screen_patch_override=patches.set_screen_override,
                     render_ui_setter=patches.set_render_ui,
-                    snapshot_grab=snapshot_grabber.grab)
+                    snapshot_grab=snapshot_grabber.grab,
+                    clock=clock,
+                    perform_config=perform_cfg,
+                    perform_reload=_reload_perform)
 
     # --- adapters -------------------------------------------------------
     ws = WebSocketServer(bus, host=cfg.ws_host, port=cfg.ws_port,
@@ -261,11 +292,13 @@ async def run(cfg: Config) -> None:
                       sound_provider=sound.current_data,
                       patches_provider=patches.current_data,
                       midi_provider=midi.current_data,
-                       brain_provider=brain.config,
-                       robotconfig_provider=lambda: robot_cfg_holder[0],
-                       zones_path=cfg.zones_path, sound_path=cfg.sound_path,
-                       patches_path=cfg.patches_path, midi_path=cfg.midi_path,
-                       brain_path=cfg.brain_path, robotconfig_path=cfg.robot_config_path,
+                        brain_provider=brain.config,
+                        robotconfig_provider=lambda: robot_cfg_holder[0],
+                        perform_provider=lambda: perform_cfg,
+                        zones_path=cfg.zones_path, sound_path=cfg.sound_path,
+                        patches_path=cfg.patches_path, midi_path=cfg.midi_path,
+                        brain_path=cfg.brain_path, robotconfig_path=cfg.robot_config_path,
+                        perform_path=cfg.perform_path,
                        midi=midi, sound=sound, root=ROOT,
                       host=cfg.http_host, port=cfg.http_port,
                       enabled=cfg.enable_http)

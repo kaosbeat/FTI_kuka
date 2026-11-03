@@ -27,6 +27,7 @@ class Cmd(str, Enum):
     RELOAD_PATCHES = "reload_patches"
     RELOAD_BRAIN = "reload_brain"
     RELOAD_ROBOT_CONFIG = "reload_robot_config"
+    RELOAD_PERFORM = "reload_perform"
     MIDI_LEARN = "midi_learn"
     SET_SCREEN_PATCH = "set_screen_patch"
     SET_RENDER_UI = "set_render_ui"
@@ -49,6 +50,8 @@ class Cmd(str, Enum):
     CLEAR_BEHAVIOR = "clear_behavior"
     CAM_TEST_START = "cam_test_start"
     CAM_TEST_STOP = "cam_test_stop"
+    PERFORM_VELOCITY = "perform_velocity"
+    PERFORM_MULTIPLIER = "perform_multiplier"
 
 
 class Event(str, Enum):
@@ -117,6 +120,7 @@ class Snapshot:
     autonomy_enabled_groups: Optional[List[str]] = None  # sorted enabled group names
     active_group: Optional[str] = None  # runtime-enabled group name (None when none)
     performance_mode: Optional[bool] = None  # perform on, hunt+facefocus off
+    perform: Optional[dict] = None  # live perform state: {velocity, multiplier, base_beats, deadline, time_to_arrive, late}
     autonomy_dwell_remaining: Optional[float] = None  # seconds left in current dwell
     control_mode: Optional[str] = None  # "manual" | "auto"
     action_index: Optional[int] = None  # current anchor index within the action's poses
@@ -152,6 +156,8 @@ class Snapshot:
             d["active_group"] = self.active_group
         if self.performance_mode is not None:
             d["performance_mode"] = self.performance_mode
+        if self.perform is not None:
+            d["perform"] = dict(self.perform)
         if self.autonomy_dwell_remaining is not None:
             d["autonomy_dwell_remaining"] = self.autonomy_dwell_remaining
         if self.control_mode is not None:
