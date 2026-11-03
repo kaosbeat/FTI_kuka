@@ -49,6 +49,7 @@
   },
   "hunt": {
     "zones": [],
+    "behaviors": [],
     "enabled": true,
     "params": {
       "lost_s": 2,
@@ -74,6 +75,7 @@
     "zones": [
       "inspect_p"
     ],
+    "behaviors": [],
     "enabled": true,
     "params": {
       "actions": [
@@ -375,7 +377,8 @@
       "triggers": [
         "lost_lock",
         "lock_duration"
-      ]
+      ],
+      "lock_duration_s": 15
     },
     "curious": {
       "gain": 0.3,
@@ -425,16 +428,21 @@
         "dwell",
         "new_lock"
       ],
-      "dwell_s": 5,
-      "lock_duration_s": 5
+      "dwell_s": 30,
+      "lock_duration_s": 15
     },
     "soothing": {
       "freq": 0.5,
       "amp_scale": 0.1,
-      "stay": 0,
+      "stay": 0.5,
       "triggers": [
-        "dwell"
-      ]
+        "dwell",
+        "new_lock",
+        "lost_lock",
+        "lock_duration"
+      ],
+      "dwell_s": 30,
+      "lock_duration_s": 5
     },
     "agitated": {
       "freq": 1,
