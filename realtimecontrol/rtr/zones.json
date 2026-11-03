@@ -1792,16 +1792,10 @@
           "speed": 15,
           "loop": true,
           "dwell_s": 30,
-          "next": [
-            {
-              "zone": "follow_p",
-              "action": "track"
-            },
-            {
-              "zone": "scan_room",
-              "action": "bored"
-            }
-          ],
+          "next": {
+            "zone": "follow_p",
+            "action": "track"
+          },
           "pose_imgs": [
             null,
             null,
@@ -1813,52 +1807,6 @@
             "C1_C2__00005_..mp4",
             "C1_C2__00003_..mp4",
             "C1_D1_001..mp4"
-          ]
-        },
-        "bored": {
-          "enabled": true,
-          "poses": [
-            [
-              -0.735,
-              -55.581,
-              20,
-              1,
-              -25,
-              -15
-            ],
-            [
-              -0.735,
-              -55.581,
-              20,
-              1,
-              75,
-              15
-            ]
-          ],
-          "variable_axes": [
-            0,
-            4,
-            5
-          ],
-          "behavior": "restless",
-          "speed": 40,
-          "loop": true,
-          "next": [
-            {
-              "zone": "scan_room",
-              "action": "look"
-            },
-            {
-              "zone": "approach_p"
-            }
-          ],
-          "pose_imgs": [
-            null,
-            null
-          ],
-          "pose_videos": [
-            null,
-            null
           ]
         }
       }
@@ -1949,7 +1897,21 @@
           "next": {
             "zone": "approach_p",
             "action": "lean"
-          }
+          },
+          "pose_imgs": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "pose_videos": [
+            "D6_E1_00004_..mp4",
+            "E1-E2_00002_..mp4",
+            "D5_D6.mp4_00006_..mp4",
+            "D4_D5.mp4_00004_..mp4",
+            "E1-E2_00002_..mp4"
+          ]
         }
       }
     },
@@ -2035,13 +1997,19 @@
             5
           ],
           "behavior": "intent",
-          "speed": 30,
+          "speed": 100,
           "loop": true,
           "dwell_s": 10,
-          "next": {
-            "zone": "inspect_p",
-            "action": "face"
-          },
+          "next": [
+            {
+              "zone": "inspect_p",
+              "action": "face"
+            },
+            {
+              "zone": "retreat_p",
+              "action": "back"
+            }
+          ],
           "pose_imgs": [
             null,
             null,
@@ -2050,11 +2018,11 @@
             null
           ],
           "pose_videos": [
-            null,
-            null,
-            null,
-            null,
-            null
+            "ComfyUI_00043_..mp4",
+            "E2-E3_001..mp4",
+            "F1-Fx_003..mp4",
+            "ComfyUI_00041_..mp4",
+            "E2-E3_001..mp4"
           ]
         }
       }
@@ -2267,12 +2235,12 @@
             null
           ],
           "pose_videos": [
-            null,
-            null,
-            null,
-            null,
-            null,
-            null
+            "G1-H1_004..mp4",
+            "L4_L5__00002_..mp4",
+            "ComfyUI_00041_..mp4",
+            "L3_L4__00004_..mp4",
+            "I1_Ix_002..mp4",
+            "G1-H1_025..mp4"
           ]
         }
       }
@@ -2489,10 +2457,10 @@
       }
     },
     "view": {
-      "x": 1448.347427992659,
-      "y": 491.3506967477611,
-      "w": 1696.1489447919137,
-      "h": 646.4829994493768
+      "x": 1124.7714377780978,
+      "y": 533.913563257333,
+      "w": 2243.1569794873053,
+      "h": 854.9737667718001
     },
     "key": "approach_p,follow_p,inspect,inspect_p,lock,resting,retreat_p,scan,scan_room,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band,tidal"
   }
