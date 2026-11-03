@@ -123,7 +123,8 @@
       "retreat": "osc(4, 0.1, 1.2).out()"
     },
     "scan_room": {
-      "look": "osc(4, 0.1, 1.2).out()"
+      "look": "osc(4, 0.1, 1.2).out()",
+      "bored": "osc(4, 0.1, 1.2).out()"
     },
     "follow_p": {
       "track": "osc(4, 0.1, 1.2).out()"
