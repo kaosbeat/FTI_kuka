@@ -1785,6 +1785,7 @@
           "variable_axes": [
             0,
             1,
+            4,
             5
           ],
           "behavior": "spontaneous",
@@ -1794,7 +1795,19 @@
           "next": {
             "zone": "follow_p",
             "action": "track"
-          }
+          },
+          "pose_imgs": [
+            null,
+            null,
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null,
+            null,
+            null
+          ]
         }
       }
     },
@@ -1812,7 +1825,7 @@
         ],
         [
           15,
-          25
+          20
         ],
         [
           0,
@@ -1902,7 +1915,7 @@
         ],
         [
           15,
-          25
+          20
         ],
         [
           0,
@@ -1933,7 +1946,7 @@
             [
               0,
               -15,
-              25,
+              20,
               0,
               -20,
               0
@@ -1941,7 +1954,7 @@
             [
               25,
               -15,
-              25,
+              20,
               0,
               -20,
               -10
@@ -1949,7 +1962,7 @@
             [
               -25,
               -18,
-              25,
+              20,
               0,
               -20,
               0
@@ -1957,7 +1970,7 @@
             [
               0,
               -15,
-              25,
+              20,
               0,
               -20,
               0
@@ -1976,7 +1989,21 @@
           "next": {
             "zone": "inspect_p",
             "action": "face"
-          }
+          },
+          "pose_imgs": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ]
         }
       }
     },
@@ -1994,7 +2021,7 @@
         ],
         [
           15,
-          25
+          20
         ],
         [
           0,
@@ -2017,7 +2044,7 @@
             [
               0,
               -15,
-              25,
+              20,
               0,
               -20,
               0
@@ -2057,6 +2084,7 @@
           ],
           "variable_axes": [
             0,
+            4,
             5
           ],
           "behavior": "gentle",
@@ -2066,7 +2094,21 @@
           "next": {
             "zone": "retreat_p",
             "action": "back"
-          }
+          },
+          "pose_imgs": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ]
         }
       }
     },
@@ -2084,7 +2126,7 @@
         ],
         [
           15,
-          25
+          20
         ],
         [
           0,
@@ -2163,7 +2205,23 @@
           "next": {
             "zone": "scan_room",
             "action": "look"
-          }
+          },
+          "pose_imgs": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ]
         }
       }
     },
