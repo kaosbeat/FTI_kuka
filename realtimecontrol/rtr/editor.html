@@ -160,8 +160,14 @@
    .posesGrid input[type=number] { -moz-appearance: textfield; }
    .posesGrid input[type=number]::-webkit-inner-spin-button,
    .posesGrid input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-   .posesGrid input.oob { border-color: #e05d5d; color: #e05d5d; }
-   .posesCollide { font-size: 12px; line-height: 1.6; }
+    .posesGrid input.oob { border-color: #e05d5d; color: #e05d5d; }
+    .posesList { margin-bottom: 6px; }
+    .posesRow { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 3px; margin-bottom: 2px; cursor: pointer; }
+    .posesRow.active { border-color: var(--accent); background: rgba(79, 192, 141, 0.14); }
+    .posesRowIdx { width: 18px; text-align: center; color: var(--dim); flex: none; }
+    .posesRowVals { flex: 1; font-variant-numeric: tabular-nums; }
+    .posesRow button { flex: none; }
+    .posesCollide { font-size: 12px; line-height: 1.6; }
     .posesCollide .ok { color: var(--accent); }
     .posesCollide .bad { color: #e05d5d; }
     /* Perform tab: config form left, live 3D window right (landscape, like poses). */
@@ -471,13 +477,20 @@
     <div class="row"><span id="posesInfo" style="font-size:12px;color:var(--dim)">drag the handle for a free move, or drag the X/Y/Z arrows for a Cartesian axis move; edit the values</span></div>
     <h3>scratch pose (A1..A6)</h3>
     <div class="posesGrid" id="posesGrid"></div>
+    <h3>poses in action</h3>
     <div class="row">
       <select id="posesLoadSel"></select>
-      <button id="posesLoad" class="small">load</button>
+      <button id="posesLoad" class="small" title="Load the selected pose of this action into the scratch">load</button>
+      <button id="posesPrev" class="small" title="Step to the previous pose">‹</button>
+      <button id="posesNext" class="small" title="Step to the next pose">›</button>
+      <button id="posesListNew" class="small" title="Add the scratch pose as a new pose to this action">+ pose</button>
     </div>
+    <div id="posesListInfo" style="font-size:12px;color:var(--dim);margin-bottom:4px"></div>
+    <div id="posesList" class="posesList"></div>
     <div class="row">
       <select id="posesSaveSel"></select>
-      <button id="posesAddPose" class="small" title="Append the scratch pose to this action's pose list and save it">add pose</button>
+      <select id="posesSlotSel"></select>
+      <button id="posesAddPose" class="small" title="Write the scratch pose into this action's chosen slot (replace) or append it, then save">save</button>
     </div>
     <div class="row">
       <button id="posesClamp" class="small">clamp to safezone</button>
@@ -6911,6 +6924,7 @@ function syncPoseDrag(force) {
 // ---------------------------------------------------------------------------
 let scratchPose = POSE_DRAG_HOME.slice();  // the authored 6-value pose
 let posesDragOn = false;
+let posesCurIndex = 0;  // the active pose index in the working action's pose list
 const posesGridInputs = [];  // the 6 number inputs of the joint-pose tool
 
 // The safezone of the zone the load picker points at (drives clamp + oob coloring).
@@ -7036,16 +7050,201 @@ function buildPosesSavePicker() {
   }
 }
 
+// The "working" action = the load-from picker's zone/action (the action whose
+// pose list we display + edit). Returns {zn, an, a} or null. The picker only lists
+// actions that already have poses (see buildPosesLoadPicker).
+function posesWorkingAction() {
+  const el = $("posesLoadSel");
+  if (!el) return null;
+  const v = el.value;
+  if (!v) return null;
+  const slash = v.indexOf("/");
+  const zn = v.slice(0, slash), an = v.slice(slash + 1);
+  const a = (TABLE && TABLE.zones[zn] && TABLE.zones[zn].actions) ? TABLE.zones[zn].actions[an] : null;
+  return (a && Array.isArray(a.poses)) ? { zn, an, a } : null;
+}
+
+// Load pose i of the working action into the scratch (the load primitive).
+function posesLoadPoseFromAction(i) {
+  const w = posesWorkingAction();
+  if (!w) return;
+  const p = w.a.poses[i];
+  if (!Array.isArray(p)) return;
+  scratchPose = p.map((x) => (typeof x === "number" ? x : 0));
+  updatePosesInputs();
+  applyScratchPose();
+}
+
+// Select + load pose i of the working action into the scratch, then re-render the
+// list so the active-row highlight moves.
+function posesSelectPose(i) {
+  const w = posesWorkingAction();
+  if (!w || i < 0 || i >= w.a.poses.length) return;
+  posesCurIndex = i;
+  posesLoadPoseFromAction(i);
+  buildPosesList();
+}
+
+// Render the working action's pose list. Each row: index, the 6 values (read-only),
+// and [copy] [▲] [▼] [×]. Clicking a row selects + loads that pose into the scratch.
+// Every pose is listed (not just poses[0]), so any of them is reachable.
+function buildPosesList() {
+  const list = $("posesList");
+  if (!list) return;
+  const info = $("posesListInfo");
+  const w = posesWorkingAction();
+  if (!w) {
+    if (info) info.textContent = "pick an action to edit its poses";
+    list.innerHTML = "";
+    return;
+  }
+  // Keep the active index in bounds (the list may have shrunk since last render).
+  if (posesCurIndex < 0) posesCurIndex = 0;
+  if (posesCurIndex >= w.a.poses.length) posesCurIndex = w.a.poses.length - 1;
+  if (info) info.textContent = w.a.poses.length
+    ? "pose " + (posesCurIndex + 1) + " of " + w.a.poses.length + " — click a row to load it"
+    : "no poses yet — use + pose to add the scratch";
+  list.innerHTML = "";
+  w.a.poses.forEach((p, i) => {
+    const row = document.createElement("div");
+    row.className = "posesRow" + (i === posesCurIndex ? " active" : "");
+    const idx = document.createElement("span");
+    idx.className = "posesRowIdx";
+    idx.textContent = String(i + 1);
+    const vals = document.createElement("span");
+    vals.className = "posesRowVals";
+    vals.textContent = p.map((x) => (typeof x === "number" ? +x.toFixed(2) : x)).join(", ");
+    const select = () => posesSelectPose(i);
+    row.onclick = select;
+    row.appendChild(idx);
+    row.appendChild(vals);
+    const mkBtn = (label, title, fn) => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "small"; b.textContent = label; b.title = title;
+      b.onclick = (e) => { if (e && e.stopPropagation) e.stopPropagation(); fn(); };
+      row.appendChild(b);
+    };
+    mkBtn("copy", "Copy this pose to the clipboard", () => posesCopyAt(i));
+    mkBtn("▲", "Move this pose up", () => posesReorder(i, -1));
+    mkBtn("▼", "Move this pose down", () => posesReorder(i, 1));
+    mkBtn("×", "Delete this pose", () => posesDelete(i));
+    list.appendChild(row);
+  });
+}
+
+// Copy pose i of the working action to the clipboard (POSE_CLIP).
+function posesCopyAt(i) {
+  const w = posesWorkingAction();
+  if (!w || !Array.isArray(w.a.poses[i])) return;
+  POSE_CLIP = w.a.poses[i].slice();
+  setPosesSaveMsg("pose " + (i + 1) + " copied");
+}
+
+// Step the active index by dir (clamped) and load that pose.
+function posesStep(dir) {
+  const w = posesWorkingAction();
+  if (!w || !w.a.poses.length) return;
+  let i = posesCurIndex + dir;
+  i = Math.max(0, Math.min(w.a.poses.length - 1, i));
+  posesSelectPose(i);
+}
+function posesPrev() { posesStep(-1); }
+function posesNext() { posesStep(1); }
+
+// Add the scratch pose as a NEW pose to the working action, then select it.
+// Extends the parallel pose_imgs / pose_videos with a null slot (mirrors posesAddPose).
+function posesListNew() {
+  const w = posesWorkingAction();
+  if (!w) return;
+  const a = w.a;
+  if (!Array.isArray(a.pose_imgs)) a.pose_imgs = a.poses.map(() => null);
+  if (!Array.isArray(a.pose_videos)) a.pose_videos = a.poses.map(() => null);
+  const pose = scratchPose.map((x) => Math.round(x * 1000) / 1000);
+  a.poses.push(pose);
+  a.pose_imgs.push(null);
+  a.pose_videos.push(null);
+  posesCurIndex = a.poses.length - 1;
+  buildPosesList();
+  setPosesSaveMsg("added pose " + a.poses.length + " to " + w.zn + " / " + w.an + " — saving…");
+  saveZones();
+}
+
+// Move pose i by dir positions (±1), keeping the parallel pose_imgs / pose_videos
+// and SOUND.actions[zn][an].poses arrays aligned (mirrors aeSwapPoses).
+function posesReorder(i, dir) {
+  const w = posesWorkingAction();
+  if (!w) return;
+  const a = w.a;
+  const j = i + dir;
+  if (j < 0 || j >= a.poses.length) return;
+  const swap = (arr) => {
+    if (Array.isArray(arr) && arr[i] !== undefined && arr[j] !== undefined) {
+      const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+    }
+  };
+  swap(a.poses);
+  if (Array.isArray(a.pose_imgs)) swap(a.pose_imgs);
+  if (Array.isArray(a.pose_videos)) swap(a.pose_videos);
+  const s = SOUND && SOUND.actions && SOUND.actions[w.zn] && SOUND.actions[w.zn][w.an];
+  if (s && Array.isArray(s.poses)) swap(s.poses);
+  posesCurIndex = j;  // keep the selection on the pose that moved
+  buildPosesList();
+  setPosesSaveMsg("reordered poses in " + w.zn + " / " + w.an + " — saving…");
+  saveZones();
+}
+
+// Delete pose i, removing its parallel pose_imgs / pose_videos / sound entries too.
+function posesDelete(i) {
+  const w = posesWorkingAction();
+  if (!w || i < 0 || i >= w.a.poses.length) return;
+  const a = w.a;
+  a.poses.splice(i, 1);
+  if (Array.isArray(a.pose_imgs)) a.pose_imgs.splice(i, 1);
+  if (Array.isArray(a.pose_videos)) a.pose_videos.splice(i, 1);
+  const s = SOUND && SOUND.actions && SOUND.actions[w.zn] && SOUND.actions[w.zn][w.an];
+  if (s && Array.isArray(s.poses) && s.poses[i] !== undefined) s.poses.splice(i, 1);
+  if (posesCurIndex >= a.poses.length) posesCurIndex = Math.max(0, a.poses.length - 1);
+  buildPosesList();
+  setPosesSaveMsg("deleted pose " + (i + 1) + " from " + w.zn + " / " + w.an + " — saving…");
+  saveZones();
+}
+
+// The save-slot picker: "append" (default) or a specific slot 1..N of the save
+// target. Replaces that slot's pose when chosen (keeping its image/video).
+function buildPosesSlotPicker() {
+  const slotSel = $("posesSlotSel");
+  if (!slotSel) return;
+  slotSel.innerHTML = "";
+  const append = document.createElement("option");
+  append.value = "append"; append.textContent = "append";
+  slotSel.appendChild(append);
+  const target = $("posesSaveSel");
+  let n = 0;
+  if (target && target.value) {
+    const v = target.value;
+    const slash = v.indexOf("/");
+    const zn = v.slice(0, slash), an = v.slice(slash + 1);
+    const a = (TABLE && TABLE.zones[zn] && TABLE.zones[zn].actions) ? TABLE.zones[zn].actions[an] : null;
+    n = a && Array.isArray(a.poses) ? a.poses.length : 0;
+  }
+  for (let i = 1; i <= n; i++) {
+    const o = document.createElement("option");
+    o.value = String(i); o.textContent = "replace " + i;
+    slotSel.appendChild(o);
+  }
+  slotSel.value = "append";
+}
+
 // Set the poses-tab save status line.
 function setPosesSaveMsg(msg) {
   const el = $("posesSaveMsg");
   if (el) el.textContent = msg;
 }
 
-// Append the scratch pose to the target action's pose list and persist the table.
-// Mirrors pastePose: the parallel pose_imgs / pose_videos arrays are extended with a
-// null slot so the action editor's per-pose image/video UI stays in sync. The whole
-// table is then POSTed (the same path the top "save" button uses in this view).
+// Write the scratch pose into the save target: replace the chosen slot (keeping its
+// image/video) or append a new pose. The parallel pose_imgs / pose_videos arrays stay
+// in sync (append extends them with a null slot; replace leaves them untouched). The
+// whole table is then POSTed (the same path the top "save" button uses in this view).
 function posesAddPose() {
   const v = $("posesSaveSel").value;
   if (!v) { setPosesSaveMsg("pick a zone/action to save to"); return; }
@@ -7058,12 +7257,23 @@ function posesAddPose() {
   if (!Array.isArray(a.pose_imgs)) a.pose_imgs = a.poses.map(() => null);
   if (!Array.isArray(a.pose_videos)) a.pose_videos = a.poses.map(() => null);
   const pose = scratchPose.map((x) => Math.round(x * 1000) / 1000);
-  a.poses.push(pose);
-  a.pose_imgs.push(null);
-  a.pose_videos.push(null);
-  buildPosesLoadPicker();   // the new pose is now loadable back into the scratch
+  const slotSel = $("posesSlotSel");
+  const slotVal = slotSel ? slotSel.value : "append";
+  const idx = parseInt(slotVal, 10);
+  if (slotVal !== "append" && !isNaN(idx) && idx >= 1 && idx <= a.poses.length) {
+    // Replace the chosen slot, keeping its image / video.
+    a.poses[idx - 1] = pose;
+    setPosesSaveMsg("replaced pose " + idx + " of " + zn + " / " + an + " — saving…");
+  } else {
+    a.poses.push(pose);
+    a.pose_imgs.push(null);
+    a.pose_videos.push(null);
+    setPosesSaveMsg("added pose " + a.poses.length + " to " + zn + " / " + an + " — saving…");
+  }
+  buildPosesLoadPicker();   // the pose is now loadable back into the scratch
   buildPosesSavePicker();
-  setPosesSaveMsg("added pose " + a.poses.length + " to " + zn + " / " + an + " — saving…");
+  buildPosesSlotPicker();
+  buildPosesList();
   saveZones();
 }
 
@@ -7090,17 +7300,13 @@ function posesCopy() {
   $("posesInfo").textContent = "pose copied — paste into a zone/flow action";
 }
 
-// Load the first pose of the selected zone/action into the scratch.
+// Load the ACTIVE pose of the selected zone/action into the scratch. The active index
+// is set by clicking a pose-list row or the prev/next buttons, so every pose of the
+// action is reachable (not just poses[0]).
 function posesLoad() {
-  const v = $("posesLoadSel").value;
-  if (!v) return;
-  const slash = v.indexOf("/");
-  const zn = v.slice(0, slash), an = v.slice(slash + 1);
-  const a = (TABLE && TABLE.zones[zn] && TABLE.zones[zn].actions) ? TABLE.zones[zn].actions[an] : null;
-  if (!a || !Array.isArray(a.poses) || !a.poses.length) return;
-  scratchPose = a.poses[0].map((x) => (typeof x === "number" ? x : 0));
-  updatePosesInputs();
-  applyScratchPose();
+  const w = posesWorkingAction();
+  if (!w) return;
+  posesLoadPoseFromAction(posesCurIndex);
 }
 
 // Highlight the axes that have moved outside the loaded safezone: the grid inputs
@@ -7162,6 +7368,8 @@ function posesEnter() {
   mountRobot3dPoses();
   buildPosesLoadPicker();
   buildPosesSavePicker();
+  buildPosesSlotPicker();
+  buildPosesList();
   buildPosesGrid();
   Robot3D.setRobotRealVisible(false);
   ghostVisible = true;
@@ -8863,10 +9071,16 @@ $("delZone").onclick = delZone;
    $("tabValidate").onclick = () => switchView("validate");
     $("tabRobotConfig").onclick = () => switchView("robotconfig");
     $("tabPerform").onclick = () => switchView("perform");
- $("posesClamp").onclick = posesClamp;
- $("posesCopy").onclick = posesCopy;
- $("posesLoad").onclick = posesLoad;
- $("posesAddPose").onclick = posesAddPose;
+  $("posesClamp").onclick = posesClamp;
+  $("posesCopy").onclick = posesCopy;
+  $("posesLoad").onclick = posesLoad;
+  $("posesAddPose").onclick = posesAddPose;
+  // New pose-list controls (wired defensively so the DOM-stub tests, which seed only
+  // the ids in STATIC_IDS, still load when a new id is not yet in their list).
+  if ($("posesPrev")) $("posesPrev").onclick = posesPrev;
+  if ($("posesNext")) $("posesNext").onclick = posesNext;
+  if ($("posesListNew")) $("posesListNew").onclick = posesListNew;
+  if ($("posesSaveSel")) $("posesSaveSel").onchange = buildPosesSlotPicker;
   buildValPoseSetter();
   $("valPoseGo").onclick = applyValPose;
   $("valCopyCollision").onclick = copyValCollisionPose;

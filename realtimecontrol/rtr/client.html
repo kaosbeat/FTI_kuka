@@ -335,6 +335,11 @@ async function loadBrain() {
 
 // Header status bar (always on): control mode › zone group › zone › action › behavior › #candidates.
 // Mirrors editor.html's updateStatusBar so both pages show the same unified header.
+// Escape a string for use in an HTML attribute (the status bar's hover tooltips).
+function escAttr(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function updateStatusBar(m) {
   const el = $("statusBar");
   if (!el) return;
@@ -354,14 +359,28 @@ function updateStatusBar(m) {
   const cmColor = cm === "manual" ? "#e05d5d" : (cm === "auto" ? "var(--accent)" : "var(--dim)");
   const seg = (txt, color) => `<span style="color:${color}">${txt}</span>`;
   const sep = `<span class="sbSep">›</span>`;
-  // The status bar is a discrete readout (control/group/zone/action/behavior/candidates);
+  // Move-blocked flag: persistent while a safety-gated move is blocked (manual mode's
+  // "confirm" phase, until confirm/cancel). Hover for the trace (reason + target + issues).
+  let blockedSeg = "";
+  if (m.safety && m.safety.phase === "confirm") {
+    const reasons = [];
+    if (m.safety.conflict) reasons.push("red-link conflict");
+    if (m.safety.collision) reasons.push("self-collision");
+    const reason = reasons.length ? reasons.join(" + ") : "safety block";
+    const issues = (m.safety.issues || []).join("; ");
+    const title = "move blocked → " + m.safety.zone + " / " + m.safety.action +
+      " | reason: " + reason + (issues ? " | " + issues : "") +
+      " | mode: " + (m.control_mode || "?");
+    blockedSeg = sep + `<span style="color:#e05d5d;font-weight:bold" title="${escAttr(title)}">move blocked</span>`;
+  }
+  // The status bar is a discrete readout (control/group/zone/action/behavior/[blocked]/candidates);
   // it does not change 20×/sec, so rebuild its DOM only when the rendered string changes.
   const html =
     seg(cm, cmColor) + sep +
     seg(group, "var(--text)") + sep +
     seg(zone, "var(--text)") + sep +
     seg(action, "var(--text)") + sep +
-    seg(behavior, "var(--text)") + sep +
+    seg(behavior, "var(--text)") + blockedSeg + sep +
     seg(candText, "var(--text)");
   if (html !== _statusBarFp) { _statusBarFp = html; el.innerHTML = html; }
 }
@@ -736,6 +755,15 @@ function renderState(s) {
   if (spFp !== _safetyFp) {
     _safetyFp = spFp;
     if (s.safety && s.safety.phase === "confirm") {
+      // Log the block. The SAFETY_ALERT event is not forwarded to the client
+      // (display.py forwards only SAFETY_DISCARD + POSE_CONFLICT), so the state
+      // frame's s.safety is the source of truth for the manual block.
+      const reasons = [];
+      if (s.safety.conflict) reasons.push("red-link conflict");
+      if (s.safety.collision) reasons.push("self-collision");
+      const reason = reasons.length ? reasons.join(" + ") : "safety block";
+      log("move BLOCKED (manual): " + s.safety.zone + " / " + s.safety.action + " — " + reason +
+        ((s.safety.issues || []).length ? " (" + s.safety.issues.join("; ") + ")" : ""), "warn");
       $("safetyPopup").classList.add("open");
       $("spTitle").textContent = "safety alert — move blocked";
       $("spTarget").textContent = s.safety.zone + " / " + s.safety.action;

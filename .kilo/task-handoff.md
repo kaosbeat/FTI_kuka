@@ -1,5 +1,104 @@
 # Task Handoff Log
 
+## 2026-11-03 — Move-blocked flag in client.html status bar (persistent, hover trace, log line)
+
+### Status
+
+Completed
+
+### Summary
+
+Made the safety-gate "move blocked" state visible in the control client's always-on status bar (`client.html`), for debugging the KUKA real-robot hold. When `_resolve_pending` (`engine.py:338-423`) blocks a pending move in **manual** mode, the pending stays in the `"confirm"` phase and the state frame carries `s.safety` (via `display.py`'s `pending_info()` fallback). The status bar now shows a persistent red **move blocked** flag while that phase is active, with a hover tooltip carrying the trace (target zone/action, reason = red-link conflict and/or self-collision, issues, control mode). A one-line warning is also logged the moment the block transitions in (reusing the existing `_safetyFp` change-detect in `renderState`). No server change was needed: `s.safety` already reaches the client, and the `SAFETY_ALERT` event (which is **not** forwarded to the client by `display.py`) is intentionally not relied on — the state frame is the source of truth.
+
+This also records a confirmed fact from the user: when the frozen `curjpos` (`[0,0,0,0,0,90]`) happens, the robot is **not** physically at `[0,0,0,0,0,0]`/`[0,0,0,0,0,90]` — so that reading is a stale/zeroed EKI `Res` desync, not a parked robot.
+
+### Changes Made
+
+- `realtimecontrol/rtr/client.html`:
+  - New `escAttr(s)` helper — escapes a string for an HTML `title` attribute (the status bar's hover tooltips).
+  - `updateStatusBar(m)`: added a persistent **move blocked** segment. When `m.safety.phase === "confirm"`, it renders a red bold flag with a `title` tooltip built from `m.safety` (zone/action, reason, issues, control mode). The flag sits between the behavior and candidates segments; when no block it is absent (the bar reads `…behavior › candidates`).
+  - `renderState`: in the existing `spFp !== _safetyFp` transition block (the one that opens the safety popup), added a `log("move BLOCKED (manual): …", "warn")` line so the block is traced in the log window. It fires once per block (on the `"clear"` → `"confirm"` transition).
+
+### Documentation
+
+None required — the flag is self-documenting via its hover `title` tooltip and the in-code comments above the `blockedSeg` block and the log line.
+
+### Architecture
+
+No new architectural boundary. The change is purely a client-side read of the existing `s.safety` state frame field (which `display.py:197-200` already populates from `machine.pending_info()` while a safety-gated move is pending). The manual-mode block is persistent (`set_pending_confirm()` holds the pending in the `"confirm"` phase until confirm/cancel), so the flag is persistent; the auto-mode discard is one-shot (`clear_pending()` + `SAFETY_DISCARD`), so it is only traced by the existing `safety_discard` log line (no persistent flag). `editor.html` has its own `updateStatusBar` (line 4167) that mirrors this one and does **not** yet carry the flag — see Decisions.
+
+### Validation
+
+- `node --check` on the extracted inline `<script>` of `client.html` → SYNTAX OK (the `escAttr` + `updateStatusBar` + `renderState` edits parse cleanly).
+- Manually traced the data path: `engine._resolve_pending` → `machine.set_pending_confirm()` (phase `"confirm"`) → `display._frame` fallback `machine.pending_info()` → `frame["safety"]` → client `s.safety` → `updateStatusBar` flag + `renderState` log. Confirmed `Event.SAFETY_ALERT` is not forwarded by `display.py` (only `SAFETY_DISCARD` + `POSE_CONFLICT` are), so the client derives the manual block from `s.safety`, not the event.
+- No Python changed, so no Python test run was required.
+
+### Decisions and Caveats
+
+- **Client-side only** — `s.safety` already reaches the client (`display.py:197-200`), and the manual block is persistent, so no server change was needed. This keeps the change minimal and avoids touching the core.
+- **The flag is manual-mode-specific** — it keys on `s.safety.phase === "confirm"`, which only persists in manual mode. In auto mode the discard is one-shot (the pending is cleared), so the status bar shows no persistent flag there; the block is still traced by the existing `safety_discard` log line. If a persistent "last block" indicator is wanted in auto mode, that would need a new server field (e.g. a `last_block` record) — not done here.
+- **`editor.html` parity** — `editor.html` has a mirrored `updateStatusBar` (line 4167) that does not yet carry the flag. The user scoped this task to `client.html`; if they want the flag in the editor header too, the same `blockedSeg` block can be copied there.
+- **The frozen `curjpos` is a desync, confirmed** — the user confirmed the robot is never physically at `[0,0,0,0,0,0]`/`[0,0,0,0,0,90]` when the freeze happens, so the `[0,0,0,0,0,90]` reading is a stale/zeroed EKI `Res` (a mis-paired move `<Res>` from the KRL single-flight loop), not a parked home pose. This is the live root cause to keep chasing (see the prior handoff's diagnostic steps: teach-pendant `$AXIS_ACT`, `KUKAPY_DEBUG=1` traffic).
+
+### Next Task
+
+No immediate next task identified. The move-blocked flag + hover trace + log line are complete and validated in `client.html`.
+
+### Instructions for the Next Task
+
+The flag is driven by `s.safety` in the state frame (`display.py` populates it from `machine.pending_info()` while a safety-gated move is pending). In `client.html`, `updateStatusBar(m)` builds the `blockedSeg` when `m.safety.phase === "confirm"` (the persistent manual-mode block), and `renderState` logs the block on the `_safetyFp` transition. To add the flag to `editor.html`, copy the `escAttr` helper + the `blockedSeg` block into its `updateStatusBar` (line 4167). To make the auto-mode discard persistent in the status bar, a new server field (e.g. a `last_block` record on the machine) would be needed. The frozen `curjpos` desync is a separate, confirmed issue (the robot is not physically at the home pose when it happens) — chase it with the teach-pendant `$AXIS_ACT` + `KUKAPY_DEBUG=1` diagnostics from the prior handoff.
+
+## 2026-11-03 — Poses tab: all-pose load + pose list (prev/next, + pose, per-row copy/reorder/delete) + save-slot picker
+
+### Status
+
+Completed
+
+### Summary
+
+Fixed the poses tab so that **every** pose of a selected zone/action is loadable into the scratch (previously `posesLoad()` only ever loaded `a.poses[0]`), and added the per-workflow controls the user asked for. The "load-from" picker (`#posesLoadSel`) is now the **working action**: its full pose list is rendered as rows (index + 6 values + `[copy] [▲] [▼] [×]`), any row can be clicked to load that pose into the scratch, and `‹`/`›` step through poses. A **save-slot picker** (`#posesSlotSel`) lets the "save" button (`#posesAddPose`, renamed from "add pose") write the scratch into a specific slot (replace, keeping that slot's image/video) or append a new one. New operations keep the parallel `pose_imgs` / `pose_videos` and `SOUND.actions[zn][an].poses` arrays aligned, mirroring `aeSwapPoses` / `reconcileActionSound`. All mutating operations auto-save via `saveZones()` (consistent with the existing `posesAddPose`).
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - `#posesMain` HTML restructured: added a "poses in action" block with `#posesPrev` / `#posesNext` / `#posesListNew` buttons, a `#posesListInfo` status line, and a `#posesList` container; added `#posesSlotSel` next to `#posesSaveSel`; the `#posesAddPose` button label changed "add pose" → "save" with an updated title.
+  - CSS: added `.posesList`, `.posesRow` (+ `.active`), `.posesRowIdx`, `.posesRowVals` styles (reusing the existing `--border` / `--accent` / `--dim` vars).
+  - JS new state: `posesCurIndex` (the active pose index in the working action's list).
+  - JS new functions: `posesWorkingAction()`, `posesLoadPoseFromAction(i)`, `posesSelectPose(i)`, `buildPosesList()`, `posesCopyAt(i)`, `posesStep(dir)` / `posesPrev()` / `posesNext()`, `posesListNew()`, `posesReorder(i,dir)`, `posesDelete(i)`, `buildPosesSlotPicker()`.
+  - JS modified: `posesLoad()` now loads `a.poses[posesCurIndex]` (the active pose) instead of `a.poses[0]`; `posesAddPose()` honours `#posesSlotSel` (replace a slot keeping its image/video, or append); `posesEnter()` now also calls `buildPosesSlotPicker()` + `buildPosesList()`.
+  - Wiring: new handlers wired **defensively** (`if ($("posesPrev")) …`) so the DOM-stub tests that seed only `STATIC_IDS` still load; `#posesSaveSel.onchange` → `buildPosesSlotPicker`.
+- `realtimecontrol/rtr/test_poses_tab.js` (NEW): Node `vm` + mini-DOM test for the poses tab. Auto-derives `STATIC_IDS` from the script (so new ids need no hand-editing). Seeds a 3-pose action with parallel arrays + a pose-less action, stubs `saveZones`, and verifies: list renders all poses, `posesLoad` loads a non-first pose, prev/next step + clamp, slot replace-vs-append, reorder (swaps `poses` + `pose_imgs` + `pose_videos`), delete (removes parallel entries), `+ pose` appends the scratch, `posesCopyAt` / `posesCopy` set `POSE_CLIP`, and that mutations triggered `saveZones`.
+
+### Documentation
+
+None required — the poses-tab controls are self-documenting via their HTML `title` attributes and the in-code comments above each function; no new user-facing docs were requested.
+
+### Architecture
+
+No new architectural boundary. The poses tab reuses the existing `#robot3d` 3D singleton and the existing whole-table `saveZones()` POST path. The new pose-list operations are pure in-memory mutations of `TABLE.zones[zn].actions[an]` (kept in lock-step with the parallel `pose_imgs` / `pose_videos` / `SOUND.actions[...].poses` arrays, mirroring the action editor's `aeSwapPoses`), then persisted via the same `saveZones()` the top "save" button uses. The "working action" is the load-from picker's target; the "save target" (`#posesSaveSel`) remains independent (any action, including pose-less ones) so the scratch can still be written to a different action.
+
+### Validation
+
+- `node test_poses_tab.js` → `ALL_TESTS_PASSED` (28 assertions: all-pose list, non-first load, prev/next + clamp, slot replace/append, reorder + parallel arrays, delete + parallel arrays, + pose, copy, save triggered).
+- No regression in the 5 `STATIC_IDS` DOM-stub tests: `node test_flow_tab.js`, `node test_groups_tab.js`, `node test_roam_badge.js` → `ALL_TESTS_PASSED`; `node test_action_cam.js` (LOAD ERROR) and `node test_patches_seed.js` (FAILURES=4) → **pre-existing**, confirmed identical on the original `editor.html` (swapped in `git show HEAD:…` and re-run; the `test_action_cam` LOAD ERROR reproduces without this change).
+- The main `<script>` loads cleanly in the `vm` sandbox (no syntax errors) — the poses test's script-load step would otherwise abort.
+- Python tests not run — no Python was changed (this is a frontend-only edit to `editor.html` + a new JS test).
+
+### Decisions and Caveats
+
+- **Defensive wiring for the new ids** (`posesPrev`, `posesNext`, `posesListNew`, `posesSlotSel`, `posesList`, `posesListInfo`) so the 5 existing DOM-stub tests (which hand-maintain `STATIC_IDS` and do not include the new ids) keep loading. The new `test_poses_tab.js` auto-derives `STATIC_IDS` from the script, so it picks up the new ids automatically. Existing ids (`posesSaveSel`, etc.) are unchanged and still wired as before.
+- **Auto-save on every pose mutation** (`+ pose`, reorder, delete, slot save) via `saveZones()`, matching the existing `posesAddPose()` behaviour in this tab (the action editor's reorder does *not* auto-save, but the poses tab's established pattern is to save on each authoring step).
+- **Slot replace keeps the slot's image/video** — replacing pose `i` overwrites only `a.poses[i-1]`; `pose_imgs` / `pose_videos` are left untouched (the reference media attached to that slot survives). Appending extends the parallel arrays with a `null` slot (mirrors `posesAddPose`).
+- **The load-from picker still lists only actions that already have poses** (`buildPosesLoadPicker` unchanged), so the working action always has ≥1 pose; the pose-less case is still handled by the save target (`#posesSaveSel`), which lists all actions.
+
+### Next Task
+
+No immediate next task identified. The poses-tab all-pose load + pose-list controls + save-slot picker are complete and validated.
+
+### Instructions for the Next Task
+
+The working action is `posesWorkingAction()` (the `#posesLoadSel` target); its pose list is rendered by `buildPosesList()` into `#posesList` (one `.posesRow` per pose, active row gets `.active`). The active index is `posesCurIndex`. Load primitive is `posesLoadPoseFromAction(i)`; row-click / prev-next / `posesLoad()` all funnel through `posesSelectPose()` / `posesStep()`. Mutations (`posesListNew`, `posesReorder`, `posesDelete`, `posesAddPose`) mutate `TABLE.zones[zn].actions[an]` and keep `pose_imgs` / `pose_videos` / `SOUND.actions[zn][an].poses` aligned, then call `saveZones()`. If you add more poses-tab element ids, wire them defensively (the `if ($("…"))` block near the `posesClamp` wiring) and the new `test_poses_tab.js` will pick them up automatically (it derives `STATIC_IDS` from the script). Run `node test_poses_tab.js` after changes.
+
 ## 2026-11-02 — Perform editor: velocity default, 9-step multipliers, 3D live move, MIDI mappings list
 
 ### Status
