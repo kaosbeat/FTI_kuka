@@ -162,8 +162,20 @@
    .posesGrid input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
    .posesGrid input.oob { border-color: #e05d5d; color: #e05d5d; }
    .posesCollide { font-size: 12px; line-height: 1.6; }
-   .posesCollide .ok { color: var(--accent); }
-   .posesCollide .bad { color: #e05d5d; }
+    .posesCollide .ok { color: var(--accent); }
+    .posesCollide .bad { color: #e05d5d; }
+    /* Perform tab: config form left, live 3D window right (landscape, like poses). */
+    #performMain .performCols { display: grid; gap: 16px; grid-template-columns: 1fr auto; align-items: start; }
+    #performMain .performCols section { position: sticky; top: 8px; }
+    #perform3dSection { display: flex; flex-direction: column; }
+    #performRobot3dMount { min-height: 0; }
+    #performRobot3dMount #robot3d { width: 100%; height: 440px; }
+    .pmRow { display: flex; gap: 10px; padding: 3px 6px; border-radius: 4px; font-size: 12px;
+             border: 1px solid transparent; }
+    .pmRow.pmLit { background: rgba(255, 214, 90, 0.18); border-color: rgba(255, 214, 90, 0.5); }
+    .pmLabel { flex: 1; }
+    .pmKey { color: var(--dim); font-family: ui-monospace, monospace; }
+    .pmRow.pmLit .pmKey { color: #ffd65a; }
    .valAxis { display: grid; grid-template-columns: 36px 1fr 1fr; gap: 4px; margin-bottom: 4px; align-items: center; }
   .valAxis span { font-size: 11px; color: var(--dim); }
   .patchList .grp { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
@@ -409,6 +421,7 @@
   <button id="tabCam">cam</button>
   <button id="tabValidate">validate</button>
   <button id="tabRobotConfig">robotconfig</button>
+  <button id="tabPerform">perform</button>
   <button id="save">save</button>
   <span id="saveMsg"></span>
   <button id="backup" title="Download the current config (zones, sound, patches, brain, midi) as one JSON file — a snapshot of the config files on disk.">backup</button>
@@ -715,6 +728,35 @@
   </section>
 </main>
 
+<main id="performMain" style="display:none">
+  <div class="performCols">
+    <section>
+      <h2>perform — live MIDI-clock performance config</h2>
+      <p class="midiHelp">Global perform settings: the <b>default base beats</b> (a per-action
+         <code>base_beats</code> in the zones overrides this), the <b>internal BPM</b> (used when no
+         MIDI clock is present), the <b>clock timeout</b> (seconds before the clock is considered
+         lost), the <b>velocity range</b> (degrees/sec at CC-A = 1), and the <b>multiplier</b> steps
+         (CC-B, divide and multiply). Saving hot-reloads the running core.</p>
+      <div id="performForm"></div>
+      <div class="row" style="margin-top:12px">
+        <button id="performReset" class="small">reset to defaults</button>
+      </div>
+    </section>
+    <section id="perform3dSection">
+      <h2>3D — live move</h2>
+      <p class="midiHelp">The shared 3D arm tracks the robot's live pose while the perform tab is open.</p>
+      <div id="performRobot3dMount"></div>
+    </section>
+  </div>
+  <section style="margin-top:16px">
+    <h2>registered MIDI mappings</h2>
+    <p class="midiHelp">Every MIDI key the robot is listening for (zone commands, zone actions,
+       navigation, capture, groups, and the perform CCs). A row lights up when its key arrives on
+       the wire; perform CCs light on any value of that controller.</p>
+    <div id="performMidiList"></div>
+  </section>
+</main>
+
 <main id="camMain" style="display:none">
   <div class="camCols">
     <section>
@@ -921,6 +963,7 @@ const grpOpen = {};  // group name -> bool (zone-list collapse; default open)
 let validateView = false;
 let posesView = false;
 let robotconfigView = false;
+let performView = false;
 let valScanTimer = null;   // active scan animation frame id
 // Flow-tab state. Node positions + the user's viewBox persist to zones.json under
 // ``layout`` (see buildFlowLayout/flowSaveLayout); the layoutKey guards flowEnter so
@@ -1366,6 +1409,7 @@ function connect() {
       }
       if (brainView) renderBrainLive(m);
       if (midiView) renderMidiMonitor(m.midi_monitor);
+      if (performView) updatePerformMidiLights(m.midi_monitor);
     } else if (m.type === "sound_changed") {
       // The running core reloaded the sound mapping; re-fetch it.
       loadSound().then(() => { if (midiView) buildMidiOutForm(); });
@@ -1374,7 +1418,10 @@ function connect() {
       loadPatches().then(() => { if (patchView) buildPatchesForm(); });
     } else if (m.type === "midi_changed") {
       // The running core reloaded the midi-in mapping; re-fetch it.
-      loadMidi().then(() => { if (midiView) buildMidiInForm(); });
+      loadMidi().then(() => {
+        if (midiView) buildMidiInForm();
+        if (performView) buildPerformMidiList();
+      });
     } else if (m.type === "midi_learn") {
       // A learned key was captured; write it into the pending learn slot.
       // The payload is {key, msg, zone, action} (action is null for a zone command).
@@ -3872,6 +3919,233 @@ function saveRobotConfig() {
     }).catch((e) => { $("saveMsg").textContent = "save failed: " + e; $("saveMsg").className = "err"; });
 }
 
+// GET /api/perform (falling back to /perform.json, then the built-in defaults),
+// POST /api/perform to save + hot-reload the running core (the RELOAD_PERFORM hook).
+const PERFORM_FALLBACK = { default_base_beats: 4, internal_bpm: 130.0, clock_timeout: 1.0, velocity_max_deg_s: 30.0, multipliers: [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8, 16] };
+let PERFORM_CONFIG = null;
+
+function normalizePerformConfig(data) {
+  const d = (data && typeof data === "object") ? data : {};
+  return Object.assign({}, d, {
+    default_base_beats: (typeof d.default_base_beats === "number") ? d.default_base_beats : PERFORM_FALLBACK.default_base_beats,
+    internal_bpm: (typeof d.internal_bpm === "number") ? d.internal_bpm : PERFORM_FALLBACK.internal_bpm,
+    clock_timeout: (typeof d.clock_timeout === "number") ? d.clock_timeout : PERFORM_FALLBACK.clock_timeout,
+    velocity_max_deg_s: (typeof d.velocity_max_deg_s === "number") ? d.velocity_max_deg_s : PERFORM_FALLBACK.velocity_max_deg_s,
+    multipliers: (Array.isArray(d.multipliers) && d.multipliers.length) ? d.multipliers.slice() : PERFORM_FALLBACK.multipliers.slice(),
+  });
+}
+
+async function loadPerformConfig() {
+  let data = null;
+  try {
+    const r = await fetch("/api/perform", { cache: "no-store" });
+    if (r.ok) data = await r.json();
+  } catch (e) {}
+  if (!data) {
+    try {
+      const r = await fetch("/perform.json", { cache: "no-store" });
+      if (r.ok) data = await r.json();
+    } catch (e) {}
+  }
+  if (!data) data = JSON.parse(JSON.stringify(PERFORM_FALLBACK));
+  PERFORM_CONFIG = normalizePerformConfig(data);
+  if (performView) buildPerformForm();
+  return PERFORM_CONFIG;
+}
+
+function buildPerformForm() {
+  const el = $("performForm");
+  el.innerHTML = "";
+  const fields = [
+    ["default_base_beats", "default base beats (per-action overrides)", "1"],
+    ["internal_bpm", "internal BPM (no MIDI clock)", "0.5"],
+    ["clock_timeout", "clock timeout (s)", "0.05"],
+    ["velocity_max_deg_s", "velocity range (deg/s at CC-A=1)", "1"],
+  ];
+  fields.forEach(([key, label, step]) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const lab = document.createElement("label");
+    lab.textContent = label;
+    lab.style.maxWidth = "220px";
+    const input = document.createElement("input");
+    input.type = "number";
+    input.step = step;
+    input.value = PERFORM_CONFIG[key];
+    input.dataset.key = key;
+    input.style.maxWidth = "160px";
+    row.appendChild(lab);
+    row.appendChild(input);
+    el.appendChild(row);
+  });
+  const mrow = document.createElement("div");
+  mrow.className = "row";
+  const mlab = document.createElement("label");
+  mlab.textContent = "multipliers (comma-separated)";
+  mlab.style.maxWidth = "220px";
+  const minput = document.createElement("input");
+  minput.type = "text";
+  minput.value = PERFORM_CONFIG.multipliers.join(", ");
+  minput.dataset.key = "multipliers";
+  minput.style.maxWidth = "240px";
+  mrow.appendChild(mlab);
+  mrow.appendChild(minput);
+  el.appendChild(mrow);
+  $("performReset").onclick = () => {
+    el.querySelectorAll("input").forEach((inp) => {
+      const k = inp.dataset.key;
+      inp.value = (k === "multipliers") ? PERFORM_FALLBACK.multipliers.join(", ") : PERFORM_FALLBACK[k];
+    });
+  };
+}
+
+function savePerformConfig() {
+  const el = $("performForm");
+  const payload = Object.assign({}, PERFORM_CONFIG);
+  el.querySelectorAll("input").forEach((inp) => {
+    const key = inp.dataset.key;
+    if (key === "multipliers") {
+      const arr = inp.value.split(",").map((s) => parseFloat(s.trim())).filter((n) => !isNaN(n) && n > 0);
+      payload.multipliers = arr.length ? arr : PERFORM_FALLBACK.multipliers.slice();
+    } else {
+      const num = parseFloat(inp.value);
+      payload[key] = isNaN(num) ? PERFORM_FALLBACK[key] : num;
+    }
+  });
+  fetch("/api/perform", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => r.json().then((body) => ({ ok: r.ok, status: r.status, body })))
+    .then(({ ok, status, body }) => {
+      if (ok) {
+        PERFORM_CONFIG = normalizePerformConfig(payload);
+        $("saveMsg").textContent = "saved";
+        $("saveMsg").className = "";
+      } else {
+        $("saveMsg").textContent = "save failed: " + (body.error || status);
+        $("saveMsg").className = "err";
+      }
+    }).catch((e) => { $("saveMsg").textContent = "save failed: " + e; $("saveMsg").className = "err"; });
+}
+
+// ---------------------------------------------------------------------------
+// Perform tab: the registered MIDI mappings list + the trigger highlight.
+// Every MIDI key the robot is listening for is listed; a row lights up when its
+// key arrives on the wire (perform CCs light on any value of that controller).
+// ---------------------------------------------------------------------------
+let _performMidiRows = [];
+let _performLitFp = null;
+// A JS port of the core's `_key_for`: the canonical key for a mappable message,
+// or null when it can't be one (note-offs, note-ons, CCs, program changes).
+function _midiKeyFor(msg) {
+  if (!Array.isArray(msg) || msg.length < 2) return null;
+  const status = msg[0];
+  if (status === 0xB0) {
+    if (msg.length < 3) return null;
+    return `cc:${msg[1]}:${msg[2]}`;
+  }
+  if (status >= 0x90 && status <= 0x9F) {
+    if (msg.length < 3) return null;
+    if (msg[2] === 0) return `noteoff:${status - 0x90}:${msg[1]}`;
+    return `note:${status - 0x90}:${msg[1]}`;
+  }
+  if (status >= 0x80 && status <= 0x8F) {
+    if (msg.length < 3) return null;
+    return `noteoff:${status - 0x80}:${msg[1]}`;
+  }
+  if (status >= 0xC0 && status <= 0xCF) {
+    if (msg.length < 2) return null;
+    return `program:${status - 0xC0}:${msg[1]}`;
+  }
+  return null;
+}
+function buildPerformMidiList() {
+  const el = $("performMidiList");
+  if (!el) return;
+  el.innerHTML = "";
+  _performMidiRows = [];
+  _performLitFp = null;
+  const items = [];
+  if (MIDI && MIDI.zones) {
+    Object.keys(MIDI.zones).forEach((zone) => {
+      const zd = MIDI.zones[zone] || {};
+      if (zd.command) items.push({ label: `zone → ${zone}`, key: zd.command, kind: "key" });
+      const acts = zd.actions || {};
+      Object.keys(acts).forEach((a) => {
+        if (acts[a]) items.push({ label: `${zone} / ${a}`, key: acts[a], kind: "key" });
+      });
+    });
+  }
+  if (MIDI && MIDI.nav) {
+    NAV_COMMANDS.forEach((n) => {
+      if (MIDI.nav[n]) items.push({ label: `nav / ${n}`, key: MIDI.nav[n], kind: "key" });
+    });
+  }
+  if (MIDI && MIDI.capture && MIDI.capture.key) {
+    items.push({ label: "capture / grab frame", key: MIDI.capture.key, kind: "key" });
+  }
+  if (MIDI && MIDI.groups) {
+    Object.keys(MIDI.groups).forEach((g) => {
+      if (g === "in_port") return;
+      if (MIDI.groups[g]) items.push({ label: `group / ${g}`, key: MIDI.groups[g], kind: "key" });
+    });
+  }
+  if (MIDI && MIDI.perform) {
+    if (MIDI.perform.cc_a !== null && MIDI.perform.cc_a !== undefined)
+      items.push({ label: "perform CC-A (velocity)", key: `cc:${MIDI.perform.cc_a}`, kind: "cc" });
+    if (MIDI.perform.cc_b !== null && MIDI.perform.cc_b !== undefined)
+      items.push({ label: "perform CC-B (multiplier)", key: `cc:${MIDI.perform.cc_b}`, kind: "cc" });
+  }
+  if (items.length === 0) {
+    const empty = document.createElement("div");
+    empty.style.cssText = "font-size:12px;color:var(--dim)";
+    empty.textContent = "no MIDI mappings registered";
+    el.appendChild(empty);
+    return;
+  }
+  items.forEach((it) => {
+    const row = document.createElement("div");
+    row.className = "pmRow";
+    const lbl = document.createElement("span");
+    lbl.className = "pmLabel";
+    lbl.textContent = it.label;
+    const keyEl = document.createElement("span");
+    keyEl.className = "pmKey";
+    keyEl.textContent = it.key;
+    row.appendChild(lbl);
+    row.appendChild(keyEl);
+    el.appendChild(row);
+    _performMidiRows.push({ el: row, match: it.key, kind: it.kind });
+  });
+}
+// Light up the mapping row(s) matching the newest incoming MIDI message. Perform
+// CCs match on the CC number alone (any value); other keys match the canonical key.
+function updatePerformMidiLights(monitor) {
+  if (!_performMidiRows.length) return;
+  const litSet = [];
+  if (Array.isArray(monitor) && monitor.length) {
+    const last = monitor[monitor.length - 1];
+    if (last.dir === "in" && Array.isArray(last.msg)) {
+      const k = _midiKeyFor(last.msg);
+      const ccNum = (last.msg[0] === 0xB0 && last.msg.length >= 3) ? last.msg[1] : null;
+      _performMidiRows.forEach((r, i) => {
+        let lit = false;
+        if (r.kind === "cc" && ccNum !== null) lit = r.match === `cc:${ccNum}`;
+        else if (r.kind === "key" && k !== null) lit = r.match === k;
+        if (lit) litSet.push(i);
+      });
+    }
+  }
+  const fp = litSet.join(",");
+  if (fp === _performLitFp) return;
+  _performLitFp = fp;
+  const lit = new Set(litSet);
+  _performMidiRows.forEach((r, i) => {
+    r.el.classList.toggle("pmLit", lit.has(i));
+  });
+}
+
 // Live brain state from the state frame (hunt state + lock + camera intent + cam telemetry).
 // "facefocus" is shown as "check out" (the robot is stretching at that human).
 // Header status bar (always on): control mode › zone group › zone › action › behavior › #candidates.
@@ -5628,14 +5902,15 @@ function switchView(v) {
    camView = v === "cam";
     validateView = v === "validate";
     posesView = v === "poses";
-    robotconfigView = v === "robotconfig";
+     robotconfigView = v === "robotconfig";
+     performView = v === "perform";
   if (wasPatch && !patchView) commitPatchEditor();  // leaving the patches view: commit
   // While in the validate tab, put the core in manual mode so the brain's
   // autonomy/hunt loop does not retarget the pose while inspecting zones.
   // Restore to auto (the core default) when leaving the tab.
   if (validateView && !wasValidate) send({ cmd: "set_control_mode", mode: "manual" });
   else if (!validateView && wasValidate) send({ cmd: "set_control_mode", mode: "auto" });
-  const other = patchView || midiView || flowView || brainView || groupsView || camView || validateView || posesView || robotconfigView;
+  const other = patchView || midiView || flowView || brainView || groupsView || camView || validateView || posesView || robotconfigView || performView;
   $("zoneMain").style.display = other ? "none" : "";
   $("patchesMain").style.display = patchView ? "" : "none";
   $("midiMain").style.display = midiView ? "" : "none";
@@ -5646,6 +5921,7 @@ function switchView(v) {
   $("validateMain").style.display = validateView ? "" : "none";
   $("posesMain").style.display = posesView ? "" : "none";
   $("robotconfigMain").style.display = robotconfigView ? "" : "none";
+  $("performMain").style.display = performView ? "" : "none";
   $("tabZones").className = other ? "" : "active";
   $("tabPatches").className = patchView ? "active" : "";
   $("tabMidi").className = midiView ? "active" : "";
@@ -5656,6 +5932,7 @@ function switchView(v) {
   $("tabValidate").className = validateView ? "active" : "";
   $("tabPoses").className = posesView ? "active" : "";
   $("tabRobotConfig").className = robotconfigView ? "active" : "";
+  $("tabPerform").className = performView ? "active" : "";
   // Move the shared 3D singleton between the zones, validate, and poses tabs.
   // Leaving the tab stops any running scan so it does not keep driving the (now
   // core-owned) arm in the background.
@@ -5671,6 +5948,11 @@ function switchView(v) {
     // The ghost is the authored pose; the zones-tab pose drag must not drive it.
     poseDragOn = false; Robot3D.disablePoseDrag();
     posesEnter();
+  }
+  else if (performView) {
+    // The live-move visualizer owns the 3D; the zones-tab pose drag must not drive it.
+    poseDragOn = false; Robot3D.disablePoseDrag();
+    mountRobot3dPerform();
   }
   else {
     stopValidateScan(); unmountRobot3dValidate();
@@ -5705,6 +5987,12 @@ function switchView(v) {
   if (robotconfigView) {
     if (ROBOT_CONFIG) buildRobotConfigForm();
     else loadRobotConfig();
+  }
+  if (performView) {
+    if (PERFORM_CONFIG) buildPerformForm();
+    else loadPerformConfig();
+    if (MIDI) buildPerformMidiList();
+    else loadMidi().then(() => { if (performView) buildPerformMidiList(); });
   }
 }
 
@@ -7184,6 +7472,7 @@ function save() {
   if (groupsView) { saveGroups(); return; }
   if (camView) { saveBrain(); return; }
   if (robotconfigView) { saveRobotConfig(); return; }
+  if (performView) { savePerformConfig(); return; }
   saveZones();
 }
 
@@ -7291,6 +7580,7 @@ const BACKUP_SECTIONS = [
   { name: "brain",   api: "/api/brain",   file: "/brain.json",   mem: () => BRAIN },
   { name: "midi",    api: "/api/midi",    file: "/midi.json",    mem: () => MIDI },
   { name: "robotconfig", api: "/api/robotconfig", file: "/robotconfig.json", mem: () => ROBOT_CONFIG || ROBOT_CONFIG_FALLBACK },
+  { name: "perform", api: "/api/perform", file: "/perform.json", mem: () => PERFORM_CONFIG || PERFORM_FALLBACK },
 ];
 // Fetch one section fresh: API (reads the file on disk) -> static file -> the
 // in-memory copy (already loaded at startup; the offline backstop).
@@ -8427,6 +8717,12 @@ function mountRobot3dPoses() {
   $("posesRobot3dMount").appendChild($("robot3d"));
   _triggerResize();
 }
+// The perform tab owns the 3D singleton too (the live-move visualizer). Move the
+// #robot3d node into the perform mount; unmountRobot3dValidate returns it home.
+function mountRobot3dPerform() {
+  $("performRobot3dMount").appendChild($("robot3d"));
+  _triggerResize();
+}
 // --- Cam tab: virtual-camera 3D preview + real-camera snapshot ---
 // The virtual camera renders the shared scene from a second renderer mounted at the
 // camera rig; the lens selector picks wide/close (drives the projection fov + offset).
@@ -8550,7 +8846,7 @@ $("patchCode").oninput = () => {
 // zone table's action names), then the sound mapping, then the patches, then the brain
 // config (the header status bar derives the current zone group from it), then open
 // the WebSocket.
-  loadTable().then(loadSound).then(loadPatches).then(loadMidi).then(refreshMidiMaster).then(loadLimits).then(loadBrain).then(loadRobotConfig).then(connect).then(() => { if (TABLE) setupCamTest(); });
+  loadTable().then(loadSound).then(loadPatches).then(loadMidi).then(refreshMidiMaster).then(loadLimits).then(loadBrain).then(loadRobotConfig).then(loadPerformConfig).then(connect).then(() => { if (TABLE) setupCamTest(); });
 $("connect").onclick = () => { $("host").value = $("host").value.trim(); connect(); };
 $("save").onclick = save;
 $("addZone").onclick = addZone;
@@ -8565,7 +8861,8 @@ $("delZone").onclick = delZone;
   $("tabBrain").onclick = () => switchView("brain");
    $("tabCam").onclick = () => switchView("cam");
    $("tabValidate").onclick = () => switchView("validate");
-   $("tabRobotConfig").onclick = () => switchView("robotconfig");
+    $("tabRobotConfig").onclick = () => switchView("robotconfig");
+    $("tabPerform").onclick = () => switchView("perform");
  $("posesClamp").onclick = posesClamp;
  $("posesCopy").onclick = posesCopy;
  $("posesLoad").onclick = posesLoad;

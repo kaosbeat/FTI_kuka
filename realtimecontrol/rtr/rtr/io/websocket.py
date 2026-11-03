@@ -32,6 +32,7 @@ _BROWSER_CMDS = {
     "enable_group", "clear_group",
     "safety_confirm", "safety_cancel",
     "cam_test_start", "cam_test_stop",
+    "perform_velocity", "perform_multiplier",
 }
 
 

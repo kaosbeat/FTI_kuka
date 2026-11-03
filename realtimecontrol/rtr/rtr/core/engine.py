@@ -47,13 +47,27 @@ class Engine:
                   brain_reload: Callable[[], None] = None,
                   robot_reload: Callable[[], None] = None,
                    screen_patch_override: "Callable[[str | None], None]" = None,
-                  render_ui_setter: "Callable[[], None]" = None,
-                  snapshot_grab: "Callable[[], None]" = None):
+                   render_ui_setter: "Callable[[], None]" = None,
+                    snapshot_grab: "Callable[[], None]" = None,
+                    clock=None,
+                    perform_config: dict = None,
+                    perform_reload: "Callable[[], None]" = None):
         self.bus = bus
         self.robot = robot
         self.brain = brain
         self.machine = machine
         self.tick_hz = tick_hz
+        # The beat clock (Perform Mode time base). None when not wired.
+        self._clock = clock
+        # The perform config (global base_beats default + velocity range). None when
+        # not wired; the engine then uses the machine's built-in defaults.
+        self._perform_config = perform_config
+        # Seed the machine's velocity range from the perform config (so the
+        # time-to-arrive estimate uses real degrees/sec). Done once at init; a
+        # hot-reload of the perform config would re-seed it (Task 9).
+        if perform_config is not None:
+            self.machine.set_perform_velocity_max_deg_s(
+                perform_config.get("velocity_max_deg_s", 1.0))
         # Verbose per-tick engine debug logging (tick start, block-move). Off by
         # default: at 20 Hz a per-tick line floods the log. Enable via --verbose.
         self.verbose = verbose
@@ -72,6 +86,9 @@ class Engine:
         # Fetches the RPi's latest camera frame into the local snapshot file
         # (a non-blocking grab; the core-side client, see rtr/camera/snapshot_grab).
         self._snapshot_grab = snapshot_grab
+        # Re-seeds the machine's velocity range from a freshly-loaded perform config
+        # (the /api/perform hot-reload hook, Task 9).
+        self._perform_reload = perform_reload
         self._running = False
         # The previous tick's (zone, mode, action), used to emit change events.
         self._prev_state = None
@@ -142,6 +159,11 @@ class Engine:
         can catch any exception (including ``KukaError`` from a dead EKI
         connection) without killing the engine task.
         """
+        # Tick the beat clock first (so the beat counter is current when the
+        # perform deadline is computed later in this tick).
+        if self._clock is not None:
+            self._clock.tick()
+
         curjpos = await asyncio.to_thread(self.robot.get_curjpos)
         curpos = await asyncio.to_thread(self.robot.get_curpos)
 
@@ -163,6 +185,9 @@ class Engine:
             elif cmd.cmd == Cmd.RELOAD_ROBOT_CONFIG:
                 if self._robot_reload is not None:
                     self._robot_reload()
+            elif cmd.cmd == Cmd.RELOAD_PERFORM:
+                if self._perform_reload is not None:
+                    self._perform_reload()
             elif cmd.cmd == Cmd.MIDI_LEARN:
                 # A learned MIDI key captured by MidiInput (rtmidi thread). Publish
                 # it here, inside the loop, so the display adapter can forward it to
@@ -183,6 +208,10 @@ class Engine:
                 # file (non-blocking: the grabber spawns its own thread).
                 if self._snapshot_grab is not None:
                     self._snapshot_grab()
+            elif cmd.cmd == Cmd.PERFORM_VELOCITY:
+                self.machine.set_perform_velocity(cmd.payload.get("value", 0.0))
+            elif cmd.cmd == Cmd.PERFORM_MULTIPLIER:
+                self.machine.set_perform_multiplier(cmd.payload.get("multiplier", 1))
             else:
                 if cmd.cmd == Cmd.SET_JOINT_POSE and self.machine.current_action is not None:
                     # A raw joint pose is about to clear the active action (the
@@ -203,6 +232,17 @@ class Engine:
         await self._resolve_pending(curjpos)
 
         target = self.machine.step(curjpos)
+
+        # Perform mode: compute the deadline and time-to-arrive each tick.
+        if self._clock is not None and self._machine_is_performing():
+            clock_state = self._clock.state()
+            bpm = clock_state["bpm"]
+            base_beats = self._current_base_beats()
+            self.machine.update_perform_deadline(base_beats, bpm)
+            # Distance = sum of |axis deltas| between current and target pose.
+            tgt = target if target is not None else curjpos
+            distance = sum(abs(a - b) for a, b in zip(curjpos, tgt))
+            self.machine.update_perform_time_to_arrive(distance)
 
         if target is not None:
             if self.machine.target_kind == "linear":
@@ -236,6 +276,31 @@ class Engine:
 
     def stop(self) -> None:
         self._running = False
+
+    def _machine_is_performing(self) -> bool:
+        """Whether the machine is currently in perform mode (performance_mode on)."""
+        info = self.brain.autonomy_info()
+        return bool(info.get("performance_mode"))
+
+    def _current_base_beats(self) -> int:
+        """The current action's base_beats, falling back to the global default.
+
+        The action's own ``base_beats`` (from zones) wins; when absent (0) the
+        perform config's ``default_base_beats`` is used. Returns 0 when neither
+        is available (no timing constraint).
+        """
+        m = self.machine
+        if m.current_action is not None and m.current_zone is not None:
+            try:
+                z = m.zones.get(m.current_zone)
+                bb = z.action_base_beats(m.current_action)
+                if bb > 0:
+                    return bb
+            except (KeyError, ValueError):
+                pass
+        if self._perform_config is not None:
+            return int(self._perform_config.get("default_base_beats", 0))
+        return 0
 
     def reload_zones(self) -> None:
         """Re-read the zone data file and swap it into the machine.
@@ -361,6 +426,24 @@ class Engine:
         moving = not comparelist(curjpos, target if target is not None else curjpos,
                                  margin=0.5, count=5)
         info = self.brain.autonomy_info()
+        # Fold the perform state into the snapshot when a clock is wired.
+        perform = None
+        if self._clock is not None:
+            clock_state = self._clock.state()
+            perform = {
+                "velocity": self.machine.perform["velocity"],
+                "multiplier": self.machine.perform["multiplier"],
+                "base_beats": self.machine.perform["base_beats"],
+                "deadline": self.machine.perform["deadline"],
+                "time_to_arrive": self.machine.perform["time_to_arrive"],
+                "late": self.machine.perform["late"],
+                "beat": clock_state["beat"],
+                "beat_index": clock_state["beat_index"],
+                "beat_phase": clock_state["beat_phase"],
+                "bpm": clock_state["bpm"],
+                "beat_duration": clock_state["beat_duration"],
+                "clock_source": clock_state["source"],
+            }
         snap = Snapshot(
             zone=self.machine.current_zone,
             mode=self.machine.behavior,
@@ -379,6 +462,7 @@ class Engine:
             autonomy_enabled_groups=info["enabled_groups"],
             active_group=info.get("active_group"),
             performance_mode=info["performance_mode"],
+            perform=perform,
             autonomy_dwell_remaining=info["dwell_remaining"],
             control_mode=self.machine.control_mode,
             action_index=self.machine.action_index,

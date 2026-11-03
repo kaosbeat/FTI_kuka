@@ -211,6 +211,10 @@ class Display:
         mm = self._midi_monitor_field()
         if mm is not None:
             frame["midi_monitor"] = mm
+        # The live perform state (beat clock + velocity/multiplier/deadline/late);
+        # the perform.html page reads it from the state frame.
+        if snap.perform is not None:
+            frame["perform"] = dict(snap.perform)
         return frame
 
 

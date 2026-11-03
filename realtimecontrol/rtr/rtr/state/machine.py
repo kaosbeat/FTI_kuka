@@ -134,6 +134,25 @@ class StateMachine:
         self.test_behavior: str = ""
         self.test_phase: str = ""  # "navigate" | "behavior"
 
+        # Perform mode state: tracks the live perform timing (velocity, multiplier,
+        # deadline, time-to-arrive, late flag). Set by PERFORM_VELOCITY /
+        # PERFORM_MULTIPLIER commands; the deadline is computed from the current
+        # action's base_beats × multiplier × (60/BPM). Late when time_to_arrive >
+        # deadline (notify-only, no auto-shortening).
+        self.perform: dict = {
+            "velocity": 0.0,      # CC-A normalized 0.0-1.0
+            "multiplier": 1,      # CC-B: 1, 2, 4, 8, 16
+            "base_beats": 0,      # current action's base_beats (from zones)
+            "deadline": 0.0,      # seconds (base_beats × multiplier × 60/BPM)
+            "time_to_arrive": 0.0,  # seconds (distance / velocity)
+            "late": False,        # time_to_arrive > deadline
+            # The max velocity (degrees/sec) at CC-A = 127. The CC-A normalized
+            # value is scaled by this to get the actual velocity. Defaults to 1.0
+            # (the raw normalized value is the velocity) until the perform config
+            # supplies a real degrees/sec range.
+            "velocity_max_deg_s": 1.0,
+        }
+
     # ------------------------------------------------------------------
     # Requested changes (called by the brain when a command arrives).
     # ------------------------------------------------------------------
@@ -304,6 +323,63 @@ class StateMachine:
             self.assertive_speed = None
         self.control_mode = mode
         print(f"[state] control mode: {mode}")
+
+    # ------------------------------------------------------------------
+    # Perform mode: live velocity/multiplier + deadline tracking.
+    # ------------------------------------------------------------------
+    def set_perform_velocity(self, value: float) -> None:
+        """Set the perform velocity (CC-A, normalized 0.0-1.0)."""
+        self.perform["velocity"] = max(0.0, min(1.0, value))
+
+    def set_perform_velocity_max_deg_s(self, max_deg_s: float) -> None:
+        """Set the max velocity (degrees/sec) at CC-A = 127.
+
+        The CC-A normalized value (0-1) is scaled by this to get the actual
+        velocity used for the time-to-arrive estimate. Clamped to non-negative.
+        """
+        self.perform["velocity_max_deg_s"] = max(0.0, float(max_deg_s))
+
+    def set_perform_multiplier(self, multiplier: float) -> None:
+        """Set the perform time multiplier (CC-B: a positive number, 1/16 … 16).
+
+        Accepts any positive number (divide and multiply steps alike); non-positive
+        or non-numeric values are ignored (the current multiplier is kept).
+        """
+        if isinstance(multiplier, (int, float)) and not isinstance(multiplier, bool) and multiplier > 0:
+            self.perform["multiplier"] = multiplier
+
+    def update_perform_deadline(self, base_beats: int, bpm: float) -> None:
+        """Recompute the perform deadline from the action's base_beats and BPM.
+
+        deadline = base_beats × multiplier × (60 / BPM) seconds.
+        """
+        self.perform["base_beats"] = base_beats
+        if bpm > 0:
+            beat_duration = 60.0 / bpm
+            self.perform["deadline"] = base_beats * self.perform["multiplier"] * beat_duration
+        else:
+            self.perform["deadline"] = 0.0
+
+    def update_perform_time_to_arrive(self, distance: float) -> None:
+        """Recompute time-to-arrive and the late flag.
+
+        The actual velocity (degrees/sec) is the CC-A normalized value scaled by
+        ``velocity_max_deg_s``. time_to_arrive = distance / velocity (seconds).
+        late = time_to_arrive > deadline (notify-only).
+        """
+        v = self.perform["velocity"] * self.perform["velocity_max_deg_s"]
+        if v > 0:
+            self.perform["time_to_arrive"] = distance / v
+        else:
+            self.perform["time_to_arrive"] = float("inf")
+        self.perform["late"] = (
+            self.perform["time_to_arrive"] > self.perform["deadline"]
+            if self.perform["deadline"] > 0 else False
+        )
+
+    def perform_state(self) -> dict:
+        """A copy of the current perform state (for the snapshot)."""
+        return dict(self.perform)
 
     def enable_behavior(self, behavior: str) -> None:
         """Enable a forced behavior (live test override).

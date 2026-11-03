@@ -73,6 +73,12 @@ class Config:
     # DEFAULT_ROBOT_CONFIG (all-zero joint offsets) is the fallback.
     robot_config_path: str = "robotconfig.json"
 
+    # --- perform data (live perform mode: clock + velocity/multiplier) ----
+    # On-disk perform config (perform.json): the internal BPM, clock timeout,
+    # default base_beats, velocity range, and CC-B multiplier values. The built-in
+    # DEFAULT_PERFORM_CONFIG is the fallback when the file is missing or corrupt.
+    perform_path: str = "perform.json"
+
     # --- display / camera / sound ---------------------------------------
     # Only enabled when the corresponding hardware is present.
     enable_display: bool = True

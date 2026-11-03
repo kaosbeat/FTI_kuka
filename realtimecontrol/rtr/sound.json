@@ -52,11 +52,7 @@
       }
     },
     "resting": {
-      "out_port": null,
-      "command": {
-        "note": 0,
-        "velocity": 0
-      }
+      "out_port": null
     },
     "sleeping_testing_bridge": {
       "out_port": null,
@@ -143,11 +139,7 @@
       }
     },
     "tidal": {
-      "out_port": null,
-      "command": {
-        "note": 60,
-        "velocity": 60
-      }
+      "out_port": null
     },
     "purring_growling_bridge": {
       "out_port": null,
@@ -155,6 +147,21 @@
         "note": 60,
         "velocity": 60
       }
+    },
+    "scan_room": {
+      "out_port": null
+    },
+    "follow_p": {
+      "out_port": null
+    },
+    "approach_p": {
+      "out_port": null
+    },
+    "inspect_p": {
+      "out_port": null
+    },
+    "retreat_p": {
+      "out_port": null
     }
   },
   "actions": {
@@ -703,22 +710,9 @@
     },
     "tidal": {
       "bd": {
-        "start": {
-          "note": 60,
-          "velocity": 60
-        },
-        "poses": [
-          {
-            "note": 60,
-            "velocity": 60
-          }
-        ]
+        "poses": []
       },
       "bdoff": {
-        "start": {
-          "note": 60,
-          "velocity": 60
-        },
         "poses": []
       }
     },
@@ -739,7 +733,12 @@
           }
         ]
       }
-    }
+    },
+    "scan_room": {},
+    "follow_p": {},
+    "approach_p": {},
+    "inspect_p": {},
+    "retreat_p": {}
   },
   "out_port": 7
 }

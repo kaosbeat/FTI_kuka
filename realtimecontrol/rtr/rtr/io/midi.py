@@ -68,6 +68,10 @@ ZONE_BY_CC1 = {1: "init", 2: "rest", 3: "wakeup", 4: "stretch", 5: "wander", 6: 
 # How many recent MIDI events the live monitor ring holds (newest last).
 MONITOR_MAX = 50
 
+# The standard perform multiplier steps (powers of 2, divide and multiply):
+# 1/16, 1/8, 1/4, 1/2, 1, 2, 4, 8, 16. The CC-B value bands across these.
+STANDARD_MULTIPLIERS = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8, 16]
+
 # The global navigation commands: a relative virtual cursor over the current
 # zone's ``build_items`` rows (mirrors the TUI flow-map navigation), plus the
 # "next_pose" cadence trigger (the operator advances the current action's pose
@@ -107,7 +111,8 @@ def builtin_midi_data() -> dict:
             "nav": {"in_port": None, "next_action": None, "next_zone": None,
                     "back": None, "retrigger": None, "next_pose": None},
             "capture": {"in_port": None, "key": None},
-            "groups": {"in_port": None}}
+            "groups": {"in_port": None},
+            "perform": {"in_port": None, "cc_a": None, "cc_b": None}}
 
 
 def _key_int(key: str, s: str, lo: int, hi: int) -> int:
@@ -252,6 +257,24 @@ def validate_midi_data(data: Any) -> dict:
                 raise ValueError("groups.in_port must be a non-negative int or null")
         elif val is not None:
             validate_midi_key(val)
+    # The perform section (optional): the two CC numbers for the live perform
+    # controllers (CC-A = velocity, CC-B = multiplier) plus the ``in_port`` they
+    # are dispatched on (null = the default port).
+    perform = data.get("perform", {})
+    if not isinstance(perform, dict):
+        raise ValueError("'perform' must be an object")
+    for name, val in perform.items():
+        if name == "in_port":
+            if val is not None and not (isinstance(val, int) and not isinstance(val, bool)
+                                         and val >= 0):
+                raise ValueError("perform.in_port must be a non-negative int or null")
+        elif name in ("cc_a", "cc_b"):
+            if val is not None and not (isinstance(val, int) and not isinstance(val, bool)
+                                         and 0 <= val <= 127):
+                raise ValueError(f"perform.{name} must be an int in [0, 127] or null")
+        else:
+            raise ValueError(f"perform[{name!r}] is not a known field "
+                              f"(expected in_port/cc_a/cc_b)")
     # Deprecated top-level fields: accepted and preserved (not used for dispatch).
     in_port = data.get("in_port")
     if in_port is not None:
@@ -290,7 +313,7 @@ class MidiInput:
 
     def __init__(self, bus: StateBus, in_port: Optional[int] = None, enabled: bool = True,
                  zones_provider=None, midi_loader=None,
-                 brain=None):
+                 brain=None, clock_tick=None, multipliers_provider=None):
         self.bus = bus
         self._brain = brain
         # The default port (legacy fallback + the port for zones with a null in_port).
@@ -302,6 +325,11 @@ class MidiInput:
         # default until the loader succeeds.
         self._midi_loader = midi_loader
         self._data = builtin_midi_data()
+        # The clock tick callback (called on every 0xF8 MIDI clock message).
+        self._clock_tick = clock_tick
+        # The perform multiplier steps (from the perform config); the CC-B value
+        # bands across this list. None = the built-in standard steps (1/16 … 16).
+        self._multipliers_provider = multipliers_provider
         # Open MidiIn handles, keyed by port index (one per distinct in_port).
         self._midi_ins: dict = {}
         # The armed learn capture: {"port", "zone", "action", "nav"} or None.
@@ -432,13 +460,14 @@ class MidiInput:
 
     def _in_ports(self) -> set:
         """The distinct ports to open: every zone's in_port, the nav in_port, the
-        capture in_port, the groups in_port, plus the default port."""
+        capture in_port, the groups in_port, the perform in_port, plus the default port."""
         ports = {self.in_port}
         for z in self._data.get("zones", {}):
             ports.add(self._zone_in_port(z))
         ports.add(self._nav_in_port())
         ports.add(self._capture_in_port())
         ports.add(self._groups_in_port())
+        ports.add(self._perform_in_port())
         return ports
 
     # ------------------------------------------------------------------
@@ -727,6 +756,12 @@ class MidiInput:
     def _on_message(self, port, event, data=None) -> None:
         """rtmidi callback body for one port. ``event`` is ``(message, deltatime)``."""
         message = event[0]
+        # MIDI clock (0xF8): a 1-byte system real-time message. Forward to the
+        # BeatClock callback. Does not participate in the key/dispatch chain.
+        if len(message) == 1 and message[0] == 0xF8:
+            if self._clock_tick is not None:
+                self._clock_tick()
+            return
         if len(message) < 2:
             return
         self._record("in", port=port, msg=message)
@@ -760,6 +795,9 @@ class MidiInput:
             return
         # Groups dispatch: a group-enable key (on the groups' in_port).
         if self._dispatch_groups(port, message):
+            return
+        # Perform dispatch: the two live perform CCs (velocity + multiplier).
+        if self._dispatch_perform(port, message):
             return
         # Legacy fallback: only on the default port.
         if port == self.in_port:
@@ -825,6 +863,58 @@ class MidiInput:
             if gkey == key:
                 self._submit(Cmd.ENABLE_GROUP, {"group": name})
                 return True
+        return False
+
+    def _perform_in_port(self) -> Optional[int]:
+        """The ``in_port`` for the perform section (else the default port)."""
+        perf = self._data.get("perform")
+        ip = perf.get("in_port") if isinstance(perf, dict) else None
+        if isinstance(ip, int) and not isinstance(ip, bool) and ip >= 0:
+            return ip
+        return self.in_port
+
+    def _perform_multipliers(self) -> list:
+        """The perform multiplier steps (from the config provider; else standard)."""
+        if self._multipliers_provider is not None:
+            try:
+                m = self._multipliers_provider()
+            except Exception:  # noqa: BLE001 - a provider error must not kill dispatch
+                m = None
+            if isinstance(m, list) and m:
+                return m
+        return STANDARD_MULTIPLIERS
+
+    def _dispatch_perform(self, port, message) -> bool:
+        """Match the perform CCs on the perform in_port; submit PERFORM_* commands.
+
+        CC-A (velocity): the raw CC value (0-127) is normalized to 0.0-1.0 and
+        submitted as ``Cmd.PERFORM_VELOCITY``.
+        CC-B (multiplier): the CC value (0-127) bands across the perform multiplier
+        steps (1/16 … 16, divide and multiply) and is submitted as
+        ``Cmd.PERFORM_MULTIPLIER``.
+        """
+        if port != self._perform_in_port():
+            return False
+        status = message[0]
+        if status != 0xB0:
+            return False
+        if len(message) < 3:
+            return False
+        cc, value = message[1], message[2]
+        perf = self._data.get("perform", {})
+        if not isinstance(perf, dict):
+            return False
+        cc_a = perf.get("cc_a")
+        cc_b = perf.get("cc_b")
+        if cc_a is not None and cc == cc_a:
+            self._submit(Cmd.PERFORM_VELOCITY, {"value": value / 127.0})
+            return True
+        if cc_b is not None and cc == cc_b:
+            multipliers = self._perform_multipliers()
+            idx = int(round((value / 127.0) * (len(multipliers) - 1)))
+            idx = max(0, min(len(multipliers) - 1, idx))
+            self._submit(Cmd.PERFORM_MULTIPLIER, {"multiplier": multipliers[idx]})
+            return True
         return False
 
     def _dispatch_zone_key(self, port, message) -> bool:

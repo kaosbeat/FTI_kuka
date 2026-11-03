@@ -1,5 +1,586 @@
 # Task Handoff Log
 
+## 2026-11-02 — Perform editor: velocity default, 9-step multipliers, 3D live move, MIDI mappings list
+
+### Status
+
+Completed
+
+### Summary
+
+Implemented the four requested perform-editor improvements on top of the completed 9-task Perform Mode feature: (1) default CC-A velocity changed from 360°/s to 30°/s; (2) the CC-B multiplier set changed from 5 steps (1/2/4/8/16) to 9 divide-and-multiply steps (1/16, 1/8, 1/4, 1/2, 1, 2, 4, 8, 16) with CC-B banded evenly across the configured list; (3) the editor perform tab now shows a live 3D robot move visualizer (the shared `#robot3d` singleton mounted into the perform tab, pose-drag disabled); (4) the editor perform tab now lists the learned MIDI mappings (zone command, zone actions, nav, capture, groups, perform CC-A/CC-B) with live trigger lights that flash the matching row when the corresponding MIDI message arrives. The live `perform.html` page was updated to the 9 multiplier buttons and the 30°/s velocity default.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/perform.py`:
+  - `builtin_perform_config()` default `velocity_max_deg_s` → `30.0` and `multipliers` → the 9-step list `[0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8, 16]`.
+  - `validate_perform_config()` now validates `multipliers` as a non-empty list of positive numbers (ints/floats, `bool` rejected) so any divide/multiply set can be persisted.
+- `realtimecontrol/rtr/perform.json`: updated to `velocity_max_deg_s: 30.0` and the 9-step `multipliers` list.
+- `realtimecontrol/rtr/rtr/state/machine.py`: `set_perform_multiplier` now accepts any positive number (ignores non-positive / non-numeric / `bool`), not just the hardcoded 1/2/4/8/16 set.
+- `realtimecontrol/rtr/rtr/io/midi.py`:
+  - Added `STANDARD_MULTIPLIERS = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8, 16]`.
+  - Added `MidiInput.multipliers_provider` (constructor kwarg) + `_perform_multipliers()` (returns the provider's list, else `STANDARD_MULTIPLIERS`).
+  - CC-B dispatch now bands the raw CC value (0–127) across the configured list: `idx = int(round((value / 127.0) * (len(multipliers) - 1)))`, clamped to `0..len-1`, then submits `Cmd.PERFORM_MULTIPLIER` with `multipliers[idx]`.
+- `realtimecontrol/rtr/main.py`: passes `multipliers_provider=lambda: perform_cfg["multipliers"]` into `MidiInput`.
+- `realtimecontrol/rtr/editor.html`:
+  - `PERFORM_FALLBACK` updated to velocity `30.0` and the 9-step multipliers.
+  - `savePerformConfig()` parses the multipliers text field with `parseFloat` (was int-only).
+  - `performMain` HTML restructured into a `performCols` layout with a `performRobot3dMount` and a `performMidiList` container.
+  - Added `mountRobot3dPerform()` and a `performView` branch in `switchView()` that disables pose drag and mounts the shared 3D node into the perform tab.
+  - Added `_midiKeyFor()` (JS port of the core `_key_for()` logic: `cc:<d>:<v>`, `note:<ch>:<note>`, `noteoff:<ch>:<note>`, `program:<ch>:<prog>`), `buildPerformMidiList()`, and `updatePerformMidiLights()` (perform CC rows match on CC number only, any value).
+  - The state handler calls `updatePerformMidiLights(m.midi_monitor)` when `performView` is active; the `midi_changed` handler rebuilds the perform MIDI list.
+  - Added CSS for the perform layout and the `.pmRow` / `.pmLit` trigger styling.
+- `realtimecontrol/rtr/perform.html`: 9 multiplier buttons (1/16 … 16) with `data-m` per value, velocity default `30.0`, and `parseFloat` in the multiplier highlight + click handlers (was `parseInt`).
+- `realtimecontrol/rtr/tests/test_perform_config.py`, `tests/test_midi_in.py`, `tests/test_perform_state.py`: updated for the new velocity default, 9-step multipliers, CC-B banding, and positive-number multiplier setter.
+- `realtimecontrol/rtr/test_perform_tab.js`: updated velocity/multiplier assertions; added coverage for `_midiKeyFor()`, `buildPerformMidiList()`, and `updatePerformMidiLights()`; fixed the mini-DOM `classList.toggle` to respect the force argument (matching the real DOM).
+- `realtimecontrol/rtr/test_perform_page.js`: updated to the 9 multiplier buttons, velocity default 30.0, and added a fractional-multiplier (0.5) command test.
+
+### Documentation
+
+None required — the field-level behavior is documented inline in `perform.html` / `editor.html` and the module docstrings in `perform.py` / `midi.py`; no new user-facing docs were requested.
+
+### Architecture
+
+No new architectural boundary. The changes refine the existing Perform Mode boundaries: the multiplier list is now a first-class, provider-sourced config value (the MIDI layer reads it via `multipliers_provider` rather than a hardcoded constant), and the editor perform tab reuses the existing shared `#robot3d` 3D singleton and the existing `midi_monitor` state frame. The CC-B banding math (`midi.py:912-916`) is configuration-agnostic: it maps 0–127 evenly across whatever multiplier list is loaded, verified to be even for the 9-step set (CC 0 → 1/16, CC 64 → 1x, CC 127 → 16x).
+
+### Validation
+
+- `python -m pytest tests/ -q -p no:cacheprovider --ignore=tests/test_remote_tui.py` → `391 passed, 14 skipped`; the only failures are the 5 pre-existing `tests/test_remote_sdl.py` failures (unrelated to this task).
+- Targeted: `tests/test_perform_config.py`, `tests/test_midi_in.py`, `tests/test_perform_state.py`, `tests/test_perform_http.py` all pass.
+- `node test_perform_tab.js` → `ALL_TESTS_PASSED`; `node test_perform_page.js` → `ALL_TESTS_PASSED`.
+- `node test_flow_tab.js`, `node test_groups_tab.js`, `node test_roam_badge.js` → `ALL_TESTS_PASSED` (no regressions).
+- `node test_action_cam.js`, `node test_patches_seed.js` → pre-existing failures (unchanged, unrelated).
+- Deterministic CC-B banding check (Python): CC 0→1/16, CC 64→1x, CC 127→16x, all 9 steps evenly distributed.
+- Live headless sim round-trip (`python3 main.py --sim --no-midi --no-sound`, HTTP :8766): boots clean; `GET /api/perform` returns `velocity_max_deg_s: 30.0` + the 9-step multipliers; `GET /perform.html` returns the page; `POST /api/perform` with a valid config returns `{"ok": true}` and persists to `perform.json`; `POST` with `velocity_max_deg_s: -5` returns `{"error": "'velocity_max_deg_s' must be positive"}` and leaves the file unchanged. Original `perform.json` restored after the round-trip.
+
+### Decisions and Caveats
+
+- **CC-B banding is list-agnostic** — `midi.py` bands 0–127 across whatever `multipliers` list is loaded (provider, else `STANDARD_MULTIPLIERS`), so a user can persist any divide/multiply set via the editor and it maps evenly. The 9-step set is the default.
+- **3D visualizer reuses the `#robot3d` singleton** — the perform tab mounts the same 3D node the pose tab uses (pose drag disabled while in the perform tab), avoiding a second WebGL context.
+- **Trigger lights match the core `_key_for()` semantics** — the JS `_midiKeyFor()` mirrors the Python core so a lit row means "that exact learned mapping fired"; perform CC-A/CC-B rows match on CC number only (any value) since the value is the payload, not part of the mapping identity.
+- **Sim velocity is degrees/sec** — the 30°/s default is the sim's physical velocity ceiling (CC-A 0–1 → 0–30°/s); the real KUKA robot interprets speed as a kukapy percentage, so the planner's estimate remains an approximation for the real robot (a pre-existing caveat from the original plan).
+- **Not committed** — all changes (original 9-task feature + these four improvements) remain in the working tree; no commit was requested.
+
+### Next Task
+
+No immediate next task identified. All four requested perform-editor improvements are complete and validated.
+
+### Instructions for the Next Task
+
+To extend the perform multiplier set: edit `perform.json` `multipliers` (or the editor perform tab multipliers field) — the CC-B banding in `rtr/io/midi.py:912-916` and the live page / editor buttons derive from the list automatically. The 3D perform visualizer is the shared `#robot3d` node (see `mountRobot3dPerform()` + the `performView` branch of `switchView()` in `editor.html`); the MIDI mappings list + trigger lights are `buildPerformMidiList()` / `updatePerformMidiLights()` / `_midiKeyFor()` in `editor.html`. If the multiplier list changes, update the 9-step defaults in `rtr/perform.py` `builtin_perform_config()`, `perform.json`, and the button rows in `perform.html` + `editor.html` (and the JS tests `test_perform_page.js` / `test_perform_tab.js`).
+
+## 2026-11-02 — Perform Mode Task 9: HTTP server (/api/perform + perform.html)
+
+### Status
+
+Completed
+
+### Summary
+
+Wired the perform-mode global config into the HTTP server so the editor perform tab (Task 8) and the live perform page (Task 7) can read and write `perform.json` at runtime. Added a `/api/perform` **GET** (returns the on-disk config, falling back to the running provider, then the built-in default) and a `/api/perform` **POST** (validates the payload, atomically persists it via a tmp file + `os.replace`, then submits `Cmd.RELOAD_PERFORM` to the core so the running `BeatClock` + machine pick up the new `internal_bpm` / `velocity_max_deg_s`), both in `rtr/io/httpserver.py`. Threaded `perform_provider` + `perform_path` through the `HttpServer` constructor and passed them from `main.py`. `perform.html` is served automatically as a static file from the root (no explicit route needed). This is the final task in the 9-task Perform Mode plan — the feature is complete.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/io/httpserver.py`:
+  - Added import: `from ..perform import builtin_perform_config, load_perform_config, validate_perform_config`.
+  - Added `perform_provider=None, perform_path: str = None` to `HttpServer.__init__` signature + body (`self.perform_provider`, `self.perform_path = os.path.abspath(...)`).
+  - Added the GET dispatch branch `elif path == "/api/perform": self._get_perform()`.
+  - Added the POST dispatch branch `elif path == "/api/perform": self._post_perform()`.
+  - Implemented `_get_perform()`: reads `perform_path` fresh via `load_perform_config()`; on `(OSError, ValueError)` falls back to `perform_provider()`; then to `builtin_perform_config()`.
+  - Implemented `_post_perform()`: reads the body, `validate_perform_config(data)` (400 on bad input), atomic write (tmp + `os.replace`), submits `Command(Cmd.RELOAD_PERFORM, {})` to the bus, returns 200 `{"ok": true}`; 500 on write failure.
+- `realtimecontrol/rtr/main.py`:
+  - Passed `perform_provider=lambda: perform_cfg` and `perform_path=cfg.perform_path` to the `HttpServer` constructor call.
+- `realtimecontrol/rtr/tests/test_perform_http.py` (NEW): headless test that starts a real `ThreadingHTTPServer` on an auto-assigned local port and exercises the endpoint — GET reads the file, GET falls back to the provider when the file is unreadable, POST persists + submits `Cmd.RELOAD_PERFORM`, POST rejects bad input (400, file untouched), and `/perform.html` is served. 5 tests.
+
+### Documentation
+
+None required — the endpoint mirrors the existing config-API handlers (`_get_robotconfig` / `_post_robotconfig`), and `perform.html`'s inline code documents the fields it reads.
+
+### Architecture
+
+The `/api/perform` endpoint is a peer of the other config APIs (zones, sound, patches, brain, robotconfig, limits): GET reads the file fresh (so an edited file is reflected without a restart), POST validates → atomically persists → hot-reloads via `Cmd.RELOAD_PERFORM`. The reload handler (added in Task 6) re-reads the file, applies `velocity_max_deg_s` to the machine and `internal_bpm` to the `BeatClock`. No new architectural boundary — it reuses the existing HTTP dispatch + atomic-write + bus-submit pattern. `perform.html` is a static asset, not a route.
+
+### Validation
+
+- `python -m pytest tests/ -q --ignore=tests/test_remote_tui.py --ignore=tests/test_remote_sdl.py` → 363 passed, 12 skipped (includes the 5 new `test_perform_http.py` tests).
+- `python tests/test_perform_http.py` → ALL TESTS PASSED (5 tests).
+- `node test_perform_page.js` → ALL_TESTS_PASSED (27 assertions).
+- `node test_perform_tab.js` → ALL_TESTS_PASSED (24 assertions).
+- `node test_flow_tab.js`, `node test_groups_tab.js`, `node test_roam_badge.js` → ALL_TESTS_PASSED.
+- `node test_action_cam.js`, `node test_patches_seed.js` → pre-existing failures (confirmed identical on the HEAD `editor.html`, unrelated to this task).
+- Live headless sim (`python main.py --sim --no-midi --no-sound`): boots clean (`[http] listening` + `[rtr] core up`); `GET /api/perform` returns the config; `POST /api/perform` with a new config returns `{"ok": true}`, persists to `perform.json`, and the file reflects the new values; `GET /perform.html` returns the page. (Original `perform.json` restored after the round-trip.)
+
+### Decisions and Caveats
+
+- **GET reads the file fresh** (not the in-memory `perform_cfg`), matching the other config GETs — so an externally-edited `perform.json` is reflected on the next GET. The provider fallback only fires when the file is unreadable.
+- **POST hot-reloads via the bus** (`Cmd.RELOAD_PERFORM`), not by mutating the in-memory `perform_cfg` directly — the reload handler in `main.py` re-reads the file and applies the new BPM / velocity range to the live clock + machine, keeping a single source of truth (the file).
+- **Atomic write** via tmp + `os.replace` (same as the other config POSTs) so a failed write never leaves a half-written `perform.json`.
+- **`perform.html` needs no explicit route** — it's served by the existing static handler from the root directory.
+
+### Next Task
+
+No immediate next task identified. The 9-task Perform Mode feature is complete: BeatClock (1), MIDI clock + perform CCs (2), machine perform state (3), engine (4), zones `base_beats` (5), perform config (6), `perform.html` (7), editor perform tab (8), HTTP server (9).
+
+### Instructions for the Next Task
+
+If extending Perform Mode: the per-action `base_beats` are edited in the zones tab and stored on each zone/action in `zones.json`; the global defaults (`default_base_beats`, `internal_bpm`, `clock_timeout`, `velocity_max_deg_s`, `multipliers`) live in `perform.json` and are edited in the editor perform tab / served by `/api/perform`. The live page is `perform.html`; the beat-clock math is in `rtr/core/clock.py` (deadline = `base_beats × multiplier × 60/BPM`, time-to-arrive = `distance / velocity`, late = `time_to_arrive > deadline`, notify-only).
+
+## 2026-11-02 — Perform Mode Task 8: editor.html perform tab
+
+### Status
+
+Completed
+
+### Summary
+
+Added a **perform** tab to `editor.html` for editing the global perform config (`perform.json`): `default_base_beats`, `internal_bpm`, `clock_timeout`, `velocity_max_deg_s`, and the `multipliers` list. The tab follows the existing robotconfig-tab pattern exactly: a tab button, a `<main>` section, a `performView` flag, a `loadPerformConfig()` that reads `/api/perform` (falling back to `/perform.json`, then to a built-in default), a `normalizePerformConfig()` that merges a partial config over the fallback, a `buildPerformForm()` that renders 4 number fields + a comma-separated multipliers text field, and a `savePerformConfig()` that POSTs to `/api/perform` (which triggers the `Cmd.RELOAD_PERFORM` hot-reload on the server). Wired the tab into `switchView()`, the `save()` dispatch, the `BACKUP_SECTIONS` list, the load chain, and the tab onclick handler. Wrote a node DOM-stub test that loads the real editor script and verifies the normalize/load/build/save logic.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - Added the `tabPerform` button after `tabRobotConfig` (header).
+  - Added the `<main id="performMain">` section (with `performForm` + `performReset`) between `robotconfigMain` and `camMain`.
+  - Added `let performView = false;` after the robotconfig view flag.
+  - Added the perform functions block after `saveRobotConfig`: `PERFORM_FALLBACK`, `PERFORM_CONFIG`, `normalizePerformConfig()`, `loadPerformConfig()`, `buildPerformForm()`, `savePerformConfig()`.
+  - Wired `performView` into `switchView()` (view flag, `other` boolean, `performMain` display, `tabPerform` active class, lazy-load block).
+  - Added `if (performView) { savePerformConfig(); return; }` to the `save()` dispatch.
+  - Added the `perform` entry to `BACKUP_SECTIONS`.
+  - Added `.then(loadPerformConfig)` to the load chain.
+  - Added `$("tabPerform").onclick = () => switchView("perform");` to the tab onclick wiring.
+- `realtimecontrol/rtr/test_flow_tab.js`, `realtimecontrol/rtr/test_groups_tab.js`, `realtimecontrol/rtr/test_action_cam.js`: added `performForm`, `performMain`, `performReset`, `tabPerform` to the strict `STATIC_IDS` lists (the editor's top-level `$("tabPerform").onclick` needs the id to exist in the vm sandbox).
+- `realtimecontrol/rtr/test_perform_tab.js` (NEW): node DOM-stub test — loads the editor's real script into a permissive vm sandbox and verifies (1) `PERFORM_FALLBACK` shape, (2) `normalizePerformConfig` merges partials over the fallback, (3) `loadPerformConfig` prefers `/api/perform`, falls back to `/perform.json`, then defaults, (4) `buildPerformForm` renders 4 number fields + the multipliers text field, (5) `savePerformConfig` POSTs the parsed payload and flags `saveMsg`, (6) invalid values fall back to defaults. 24 assertions, ALL PASS.
+
+### Documentation
+
+None required — the perform tab's inline code documents the fields it edits and the save path.
+
+### Architecture
+
+The perform tab is a peer of the other editor config tabs (robotconfig, brain, limits, ...): it edits the global perform config and saves via the same POST-then-hot-reload pattern. It does NOT edit the per-action `base_beats` (those live on the zone/action rows and are already editable in the zones tab, added in Task 5); this tab is strictly the global defaults. The `/api/perform` GET/POST endpoint (Task 9) is what the tab talks to; until it's served, the tab's `/api/perform` fetch 404s and it falls back to `/perform.json` (read by the browser) and then the built-in default.
+
+### Validation
+
+- `python -m pytest tests/ -q --ignore=tests/test_remote_tui.py --ignore=tests/test_remote_sdl.py` → 358 passed, 12 skipped.
+- `node test_perform_tab.js` → ALL_TESTS_PASSED (24 assertions).
+- `node test_flow_tab.js`, `node test_groups_tab.js`, `node test_roam_badge.js` → ALL_TESTS_PASSED.
+- `node test_action_cam.js` and `node test_patches_seed.js` → pre-existing failures (confirmed they fail identically on the HEAD `editor.html`, unrelated to this task).
+
+### Decisions and Caveats
+
+- **Global config only**: this tab edits `perform.json` (the global defaults). The per-action `base_beats` are edited in the zones tab (Task 5), not here — keeps the tab focused and avoids duplicating the zone-editing UI.
+- **Load fallback chain**: `/api/perform` (Task 9) → `/perform.json` (the browser can read the file directly) → built-in `PERFORM_FALLBACK`. This keeps the tab usable even before Task 9 serves the API (it reads `perform.json` directly and saves optimistically).
+- **Save path**: `savePerformConfig()` POSTs to `/api/perform`; the server handler (Task 9) persists the file and dispatches `Cmd.RELOAD_PERFORM` to hot-reload. The tab does not send the reload command itself — the server does it (matching how the other config tabs' saves work).
+- **Pre-existing JS test failures**: `test_action_cam.js` (load error) and `test_patches_seed.js` (4 assertions) fail on the HEAD `editor.html` too — not caused by this task.
+
+### Next Task
+
+Task 9: HTTP server — serve `perform.html` (the `/perform.html` route) and the `/api/perform` GET/POST endpoint (persist `perform.json` + dispatch `Cmd.RELOAD_PERFORM` on POST) in `rtr/io/httpserver.py`.
+
+### Instructions for the Next Task
+
+1. In `rtr/io/httpserver.py`, add a route that serves `perform.html` (mirror how `editor.html` / `client.html` are served).
+2. Add a `/api/perform` **GET** that returns the current perform config JSON (read from `perform.json`).
+3. Add a `/api/perform` **POST** that validates + persists the config to `perform.json`, then dispatches `Cmd.RELOAD_PERFORM` to the engine (hot-reload). Reuse the same validate/persist helpers the other config APIs use.
+4. Confirm `perform.html`'s `/api/perform` fetch (for `velocity_max_deg_s`) now resolves, and that the editor perform tab's save round-trips.
+5. Validate: full Python suite + `node test_perform_page.js` + `node test_perform_tab.js`.
+
+## 2026-11-02 — Perform Mode Task 7: perform.html live perform page
+
+### Status
+
+Completed
+
+### Summary
+
+Created `perform.html`, the live performance page. It connects to the core over the WebSocket, reads the `perform` field from the 20 Hz state frames, and renders the beat-clock state (source, BPM, beat counter, beat phase bar, beat duration), the CC-A velocity readout + slider, the CC-B multiplier buttons (1x/2x/4x/8x/16x), the deadline / time-to-arrive with a late alert, and the live move (zone / action / moving). The velocity slider and multiplier buttons send `PERFORM_VELOCITY` / `PERFORM_MULTIPLIER` commands. Added the `perform` field to the display's state frame so the page can read it, and added the two perform commands to the WS browser-command set. Wrote a node DOM-stub test that loads the real page script and verifies the render + command logic.
+
+### Changes Made
+
+- `realtimecontrol/rtr/perform.html` (NEW): the live perform page — beat clock, CC-A velocity slider, CC-B multiplier buttons, deadline/time-to-arrive with late alert, live move state. Reads the `perform` field from state frames; sends `perform_velocity` (normalized 0-1) and `perform_multiplier` commands.
+- `realtimecontrol/rtr/rtr/display/display.py`: `_frame` now forwards the `perform` field into the state frame when `snap.perform is not None` (so the page can read the beat clock + velocity/multiplier/deadline/late).
+- `realtimecontrol/rtr/rtr/io/websocket.py`: added `perform_velocity` and `perform_multiplier` to `_BROWSER_CMDS` (they're browser control-page commands, like the other entries).
+- `realtimecontrol/rtr/test_perform_page.js` (NEW): node DOM-stub test — loads perform.html's real script into a vm sandbox, verifies (1) renderState maps the perform snapshot to the DOM, (2) the late flag toggles the box/hint, (3) the idle state when `perform` is absent, (4) the velocity slider sends a normalized `perform_velocity`, (5) the multiplier button sends `perform_multiplier`. 27 assertions, ALL PASS.
+
+### Documentation
+
+None required — the page's inline comment block documents the fields it reads and the commands it sends.
+
+### Architecture
+
+The perform page is a peer of client.html / editor.html: a browser control page that talks to the core over the same WebSocket. It is intentionally a *viewer + two controls* (velocity, multiplier) — it does not trigger moves (that's the brain / performance mode's job). The `perform` field in the state frame is the single source of truth the page renders from; the page sends no move commands. Serving the page (the `/perform.html` route) is Task 9.
+
+### Validation
+
+- `python -m pytest tests/ -q --ignore=tests/test_remote_tui.py --ignore=tests/test_remote_sdl.py` → 358 passed, 12 skipped.
+- `node test_perform_page.js` → ALL_TESTS_PASSED (27 assertions).
+
+### Decisions and Caveats
+
+- **Reads the `perform` field, not the machine directly**: the page renders from the `perform` dict the engine publishes into the snapshot (`velocity`, `multiplier`, `base_beats`, `deadline`, `time_to_arrive`, `late`, `beat`, `beat_index`, `beat_phase`, `bpm`, `beat_duration`, `clock_source`). When the clock isn't wired (e.g. `--no-midi` with no clock), `perform` is absent and the page shows the idle state.
+- **Velocity normalization**: the slider is 0-100; the page divides by 100 before sending, so `perform_velocity` carries the 0-1 normalized fraction (matching the MIDI CC-A path). The "degrees/sec" readout multiplies by `velocity_max_deg_s` (fetched from `/api/perform`; falls back to 360.0).
+- **`/api/perform` fetch**: the page fetches the perform config to get `velocity_max_deg_s` for the deg/s readout. That endpoint is Task 9; until then the fetch 404s silently (caught) and the readout uses the 360.0 fallback.
+
+### Next Task
+
+Task 8: editor.html perform tab — add a perform tab to the editor for editing the perform config (default_base_beats, internal_bpm, clock_timeout, velocity_max_deg_s, multipliers) and the per-action base_beats, with a live monitor.
+
+### Instructions for the Next Task
+
+1. Add a **perform tab** to `editor.html` (alongside the existing tabs: brain, cam, flow, groups, midi, patches, poses, robotconfig, sound, etc.).
+2. It edits the global perform config (`perform.json`): `default_base_beats`, `internal_bpm`, `clock_timeout`, `velocity_max_deg_s`, `multipliers`.
+3. It also edits the per-action `base_beats` (from zones) — either as a field on the action rows or a dedicated section.
+4. Save via the existing editor save pattern (POST to the HTTP API, then a `reload_perform` command).
+5. A live monitor showing the current `perform` state (from the state frame) is a nice-to-have.
+6. The `Cmd.RELOAD_PERFORM` command (added in Task 6) triggers the hot-reload.
+
+## 2026-11-02 — Perform Mode Task 6: Perform config (perform.json + rtr/perform.py + wiring)
+
+### Status
+
+Completed
+
+### Summary
+
+Created the global perform config (`perform.json`) and its loader (`rtr/perform.py`), added the `velocity_max_deg_s` scale to the machine's perform state (so the time-to-arrive estimate uses real degrees/sec), wired the perform config into the engine (velocity range + `default_base_beats` fallback + hot-reload hook), and wired the whole thing into `main.py` (load the config, build the `BeatClock` from it, connect the MIDI 0xF8 clock callback to the clock, and pass the clock + config to the engine). Added a `Cmd.RELOAD_PERFORM` command for the hot-reload path.
+
+### Changes Made
+
+- `realtimecontrol/rtr/perform.json` (NEW): global perform config — `default_base_beats` (4), `internal_bpm` (130.0), `clock_timeout` (1.0), `velocity_max_deg_s` (360.0), `multipliers` ([1,2,4,8,16]).
+- `realtimecontrol/rtr/rtr/perform.py` (NEW):
+  - `DEFAULT_PERFORM_CONFIG` constant (the fallback shape).
+  - `builtin_perform_config()` — a deep copy of the fallback.
+  - `validate_perform_config(data)` — fills defaults, rejects bad types (non-int base_beats, non-positive bpm/velocity, non-int multipliers).
+  - `load_perform_config(path)` — reads + validates the file.
+- `realtimecontrol/rtr/rtr/config.py`: added `perform_path: str = "perform.json"`.
+- `realtimecontrol/rtr/rtr/state/machine.py`:
+  - `perform` dict: added `velocity_max_deg_s` field (default 1.0).
+  - `set_perform_velocity_max_deg_s(max_deg_s)` — new setter (clamps to non-negative).
+  - `update_perform_time_to_arrive(distance)` — now computes `v = velocity × velocity_max_deg_s`, then `tta = distance / v` (so tta is in seconds when velocity_max_deg_s is a real degrees/sec range). With the default 1.0 the old contract is preserved.
+- `realtimecontrol/rtr/rtr/core/engine.py`:
+  - `__init__`: added `perform_config` and `perform_reload` parameters. Seeds `machine.set_perform_velocity_max_deg_s` from the config at init.
+  - `_tick`: added a `Cmd.RELOAD_PERFORM` handler (calls `self._perform_reload()`).
+  - `_current_base_beats`: now falls back to `perform_config["default_base_beats"]` when the action has no `base_beats`.
+- `realtimecontrol/rtr/rtr/core/commands.py`: added `Cmd.RELOAD_PERFORM`.
+- `realtimecontrol/rtr/main.py`:
+  - Imports: `BeatClock`, `builtin_perform_config`, `load_perform_config`.
+  - `--perform` CLI arg + `cfg.perform_path`.
+  - `load_perform_config_fallback(path)` — the fallback wrapper.
+  - `run()`: loads the perform config, builds the `BeatClock` (internal_bpm + clock_timeout), wires `clock.clock_tick` to the `MidiInput`, and passes `clock` + `perform_config` + `perform_reload` to the `Engine`. The `_reload_perform` closure re-seeds the machine's velocity range + the clock's internal BPM on hot-reload.
+- `realtimecontrol/rtr/tests/test_perform_config.py` (NEW): 12 headless tests — ALL PASS.
+
+### Documentation
+
+None required — module + method docstrings document the config contract.
+
+### Architecture
+
+The perform config is a first-class config file (like brain.json / midi.json) with its own loader + fallback. The `BeatClock` is now built from the config (internal_bpm + clock_timeout) and wired to the MIDI adapter's 0xF8 callback. The velocity range (`velocity_max_deg_s`) is seeded into the machine so the time-to-arrive estimate is in seconds. The `default_base_beats` is the global fallback for actions without their own `base_beats`. The `Cmd.RELOAD_PERFORM` + `perform_reload` hook make the config hot-reloadable (the /api/perform endpoint in Task 9 will submit the command).
+
+### Validation
+
+- `python -m pytest tests/ -q --ignore=tests/test_remote_tui.py --ignore=tests/test_remote_sdl.py` → 358 passed, 12 skipped.
+- `python -u main.py --sim --no-midi --no-sound --no-http --no-display` → boots cleanly (perform config loaded, no fallback warning, robot connected, core up).
+
+### Decisions and Caveats
+
+- **Velocity units**: the machine's `perform["velocity"]` stores the CC-A *normalized* fraction (0.0–1.0, as in Task 3). The `velocity_max_deg_s` config scales it to real degrees/sec for the time-to-arrive estimate. The machine's `velocity_max_deg_s` defaults to 1.0 (so the Task 3 tests — which treat velocity as the raw fraction — still pass unchanged). A real deployment sets `velocity_max_deg_s` to the robot's max degrees/sec (360.0 in the shipped config).
+- **default_base_beats fallback**: an action's own `base_beats` (zones.json) wins; when absent (0) the engine uses `perform_config["default_base_beats"]`.
+- **Hot-reload**: the `perform_reload` closure re-seeds the machine's velocity range + the clock's internal BPM. The /api/perform endpoint (Task 9) will submit `Cmd.RELOAD_PERFORM` to trigger it.
+
+### Next Task
+
+Task 7: perform.html — the live perform page (MIDI settings, performance-zone selection, CC-A velocity slider, CC-B multiplier buttons, BPM/clock state, late alerts, live move state).
+
+### Instructions for the Next Task
+
+1. Create `realtimecontrol/rtr/perform.html` (a live page, like client.html / editor.html).
+2. It reads the live state from the WebSocket (the `perform` field in the snapshot: velocity, multiplier, base_beats, deadline, time_to_arrive, late, beat, beat_index, beat_phase, bpm, beat_duration, clock_source).
+3. Controls: CC-A velocity slider (0-1), CC-B multiplier buttons (1x/2x/4x/8x/16x), BPM display (internal value / external clock state), beat-clock state (beat counter, beat_phase), late alert (red when late), live move state (current zone/action + time-to-arrive).
+4. The CC-A/CC-B controls submit `Cmd.PERFORM_VELOCITY` / `Cmd.PERFORM_MULTIPLIER` via the WebSocket.
+5. The page is served by the HTTP server (Task 9 adds the route).
+
+## 2026-11-02 — Perform Mode Task 5: Zones base_beats field (rtr/state/zones.py)
+
+### Status
+
+Completed
+
+### Summary
+
+Added the `base_beats` field to the action schema in `zones.py`. The `Zone` class now has an `action_base_beats(name)` method that returns the action's base beat count (int, default 0). The validator accepts `base_beats` as an optional non-negative int. Updated the engine's `_current_base_beats` helper to use the new public method.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/state/zones.py`:
+  - `Zone.action_base_beats(name)`: new method — returns the action's `base_beats` (int, default 0 when absent or malformed).
+  - `_validate_action`: added validation for `base_beats` (must be a non-negative int or absent).
+- `realtimecontrol/rtr/rtr/core/engine.py`:
+  - `_current_base_beats`: updated to use `z.action_base_beats(m.current_action)` instead of the private `_action` method.
+
+### Documentation
+
+None required — method docstring documents the `base_beats` contract.
+
+### Architecture
+
+No architectural impact. The `base_beats` field is a per-action data field (like `dwell_s` / `speed`) that the engine reads to compute the perform deadline. The field is optional (default 0 = no timing constraint).
+
+### Validation
+
+- `python -m pytest tests/ -q --ignore=tests/test_remote_tui.py --ignore=tests/test_remote_sdl.py` → 346 passed, 12 skipped.
+
+### Decisions and Caveats
+
+- `base_beats` is per-action (not per-zone), consistent with the existing `speed` / `dwell_s` pattern.
+- The field is optional: when absent, `action_base_beats` returns 0 (the perform deadline is 0, meaning no timing constraint).
+- The validator rejects negative values and non-int types (bools are explicitly excluded).
+
+### Next Task
+
+Task 6: Perform config — create `perform.json` + a loader for the global perform settings (default multiplier, internal BPM, clock timeout).
+
+### Instructions for the Next Task
+
+1. Create `realtimecontrol/rtr/perform.json` with the global perform settings:
+   - `internal_bpm`: float (default 130.0) — the fallback BPM when no external clock.
+   - `clock_timeout`: float (default 1.0) — seconds of silence before falling back to internal.
+   - `default_multiplier`: int (default 1) — the initial CC-B multiplier.
+2. Add a loader function (similar to `load_midi_data`) that reads and validates `perform.json`.
+3. The loader should be wired into `main.py` (Task 4's engine init will use these values to configure the `BeatClock`).
+4. The `perform.json` is separate from `zones.json` (which holds per-action `base_beats`) and `midi.json` (which holds the CC numbers).
+
+## 2026-11-02 — Perform Mode Task 4: Engine (rtr/core/engine.py)
+
+### Status
+
+Completed
+
+### Summary
+
+Modified the engine to (a) accept a `BeatClock` instance, (b) tick it each engine cycle, (c) handle `PERFORM_VELOCITY` / `PERFORM_MULTIPLIER` commands by calling the machine's setters, (d) compute the perform deadline and time-to-arrive each tick when in perform mode, and (e) fold the clock state + perform state into the snapshot (a new `perform` dict field).
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/core/engine.py`:
+  - `__init__`: added `clock` parameter (the `BeatClock` instance, default None).
+  - `_tick`: added `self._clock.tick()` at the top (before reading the pose).
+  - `_tick`: added handlers for `Cmd.PERFORM_VELOCITY` and `Cmd.PERFORM_MULTIPLIER` (call `machine.set_perform_velocity` / `set_perform_multiplier`).
+  - `_tick`: after `machine.step`, when `_machine_is_performing()`, compute the deadline (from `base_beats` + BPM) and time-to-arrive (from distance / velocity).
+  - `_machine_is_performing()`: new helper — checks `brain.autonomy_info()["performance_mode"]`.
+  - `_current_base_beats()`: new helper — reads the current action's `base_beats` from the zone data (via `Zone._action`).
+  - `_publish`: when a clock is wired, builds a `perform` dict (velocity, multiplier, base_beats, deadline, time_to_arrive, late, beat, beat_index, beat_phase, bpm, beat_duration, clock_source) and passes it to the `Snapshot`.
+- `realtimecontrol/rtr/rtr/core/commands.py`:
+  - `Snapshot`: added `perform: Optional[dict]` field + `to_dict` serialization (done in Task 3, verified here).
+
+### Documentation
+
+None required — method docstrings document the perform integration.
+
+### Architecture
+
+The engine now owns the beat clock tick and the perform state computation. The clock is injected (not created) so `main.py` can wire it to both the engine and the MIDI adapter. The perform state is only computed when `performance_mode` is active (the brain's autonomy info). The snapshot's `perform` field carries the full live perform state to clients (including the beat counter and clock source).
+
+### Validation
+
+- `python -m pytest tests/ -q --ignore=tests/test_remote_tui.py --ignore=tests/test_remote_sdl.py` → 346 passed, 12 skipped.
+
+### Decisions and Caveats
+
+- The clock tick happens at the top of `_tick` (before reading the pose) so the beat counter is current when the deadline is computed.
+- The `perform` field in the snapshot is only populated when a clock is wired (`self._clock is not None`). When no clock, it's `None` (clients ignore the field).
+- The `base_beats` is read from the zone data via `Zone._action(name)` (the private method that returns the raw action dict). This will be formalized in Task 5 when `base_beats` is added to the zone schema.
+- The distance computation is `Σ|axis deltas|` between the current joint pose and the target pose (6 axes). This is a simple Euclidean-like metric in joint space.
+
+### Next Task
+
+Task 5: Zones — modify `rtr/state/zones.py` + `zones.json` to add the `base_beats` field to the action schema.
+
+### Instructions for the Next Task
+
+1. In `rtr/state/zones.py`, the `Zone` class:
+   - Add an `action_base_beats(name)` method (similar to `action_dwell_s` / `action_speed`) that returns the action's `base_beats` (int, default 0).
+   - Update the validator to accept `base_beats` as an optional int field in the action dict.
+2. In `zones.json`, add `base_beats` to the action schema documentation (the field is per-action, not per-zone).
+3. The engine's `_current_base_beats` helper can then use `z.action_base_beats(m.current_action)` instead of the private `_action` method.
+4. The `base_beats` value represents how many beats the action takes at 1x multiplier. The deadline is `base_beats × multiplier × (60/BPM)` seconds.
+
+## 2026-11-02 — Perform Mode Task 3: Machine perform state (rtr/state/machine.py)
+
+### Status
+
+Completed
+
+### Summary
+
+Added the perform mode state to the `StateMachine`. The machine now tracks a `perform` dict with velocity (CC-A), multiplier (CC-B), base_beats, deadline, time_to_arrive, and a late flag. Added methods to set velocity/multiplier, compute the deadline from base_beats × multiplier × (60/BPM), and compute time-to-arrive (distance/velocity) with the late flag. Extended the `Snapshot` class with a `perform` dict field to carry the live perform state to clients.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/state/machine.py`:
+  - `__init__`: added `self.perform` dict (velocity, multiplier, base_beats, deadline, time_to_arrive, late).
+  - `set_perform_velocity(value)`: clamps to [0.0, 1.0].
+  - `set_perform_multiplier(multiplier)`: only accepts 1/2/4/8/16.
+  - `update_perform_deadline(base_beats, bpm)`: computes deadline = base_beats × multiplier × (60/BPM).
+  - `update_perform_time_to_arrive(distance)`: computes tta = distance/velocity; sets late = tta > deadline.
+  - `perform_state()`: returns a copy of the perform dict.
+- `realtimecontrol/rtr/rtr/core/commands.py`:
+  - `Snapshot`: added `perform: Optional[dict]` field + `to_dict` serialization.
+- `realtimecontrol/rtr/tests/test_perform_state.py` (NEW): 9 headless tests covering initial state, velocity clamping, multiplier validation, deadline computation, time-to-arrive, late flag, zero-velocity edge case, and copy semantics.
+
+### Documentation
+
+None required — method docstrings document the perform state contract.
+
+### Architecture
+
+No architectural impact beyond adding a state dict to the machine. The perform state is an overlay (not a 4th control mode) — it tracks timing alongside the existing manual/auto/assertive modes. The engine (Task 4) will call `update_perform_deadline` and `update_perform_time_to_arrive` on each tick when in perform mode, and fold `perform_state()` into the snapshot.
+
+### Validation
+
+- `python tests/test_perform_state.py` → ALL TESTS PASSED (9/9).
+- `python -m pytest tests/ -q --ignore=tests/test_remote_tui.py --ignore=tests/test_remote_sdl.py` → 346 passed, 12 skipped.
+
+### Decisions and Caveats
+
+- The perform state is a plain dict (not a dataclass) for simplicity — it's a small, flat structure with no methods of its own.
+- `time_to_arrive` is `float("inf")` when velocity is 0 (the robot can't arrive).
+- The late flag is `False` when deadline is 0 (no timing constraint).
+- The `perform` field in `Snapshot` is `Optional[dict]` — it's only populated when perform mode is active (the engine sets it in Task 4).
+
+### Next Task
+
+Task 4: Engine — modify `rtr/core/engine.py` to (a) instantiate the `BeatClock`, (b) tick it each engine cycle, (c) fold the clock state + machine perform state into the snapshot, and (d) handle the `PERFORM_VELOCITY` / `PERFORM_MULTIPLIER` commands by calling the machine's setters.
+
+### Instructions for the Next Task
+
+1. In `rtr/core/engine.py`, the `Engine` class:
+   - Add a `BeatClock` instance (created in `__init__` with the internal BPM from config).
+   - In the per-tick loop, call `self._clock.tick(now)` (the engine already tracks `now` for the tick).
+   - When a `PERFORM_VELOCITY` command arrives, call `self.machine.set_perform_velocity(value)`.
+   - When a `PERFORM_MULTIPLIER` command arrives, call `self.machine.set_perform_multiplier(multiplier)`.
+   - On each tick, if the machine is in perform mode (check `self.machine.control_mode` or a new `perform_active` flag), call `self.machine.update_perform_deadline(base_beats, bpm)` and `self.machine.update_perform_time_to_arrive(distance)` where:
+     - `base_beats` comes from the current action's zone data (Task 5 will add this to zones).
+     - `bpm` comes from `self._clock.state()["bpm"]`.
+     - `distance` is the sum of absolute axis deltas between the current pose and the target pose.
+   - Fold `self._clock.state()` and `self.machine.perform_state()` into the `Snapshot` (the `perform` field and a new `clock` field or folded into `perform`).
+2. The engine's tick loop already has a 6-step structure (read pose → fold commands → next target → command robot → publish snapshot → publish change event). The clock tick should happen at the top of the loop (before reading the pose), so the beat counter is current when the deadline is computed.
+3. The `BeatClock` should be passed to the `MidiInput` adapter (via the `clock_tick` parameter added in Task 2) so the MIDI thread can forward 0xF8 ticks.
+
+## 2026-11-02 — Perform Mode Task 2: MIDI clock + perform CCs (rtr/io/midi.py)
+
+### Status
+
+Completed
+
+### Summary
+
+Extended the MIDI adapter to (a) forward 0xF8 MIDI clock messages to a `BeatClock` callback, and (b) dispatch the two perform CCs (CC-A = velocity, CC-B = multiplier) as `Cmd.PERFORM_VELOCITY` / `Cmd.PERFORM_MULTIPLIER` commands. The perform CC numbers are data-driven (learned in the editor, stored in `midi.json`'s `perform` section). Added the two new commands to `commands.py`.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/core/commands.py`:
+  - Added `PERFORM_VELOCITY = "perform_velocity"` and `PERFORM_MULTIPLIER = "perform_multiplier"` to the `Cmd` enum.
+- `realtimecontrol/rtr/rtr/io/midi.py`:
+  - `builtin_midi_data()`: added `"perform": {"in_port": None, "cc_a": None, "cc_b": None}` section.
+  - `validate_midi_data()`: added validation for the `perform` section (in_port, cc_a, cc_b fields).
+  - `MidiInput.__init__`: added `clock_tick` parameter (callable, default None).
+  - `_on_message`: added 0xF8 handling before the length check — forwards to `self._clock_tick()` when present.
+  - `_perform_in_port()`: new helper (returns the perform section's in_port or the default).
+  - `_in_ports()`: added the perform in_port to the set of ports to open.
+  - `_dispatch_perform()`: new method — matches CC-A (normalizes value to 0.0-1.0 → `PERFORM_VELOCITY`) and CC-B (maps 0-4 to 1x/2x/4x/8x/16x → `PERFORM_MULTIPLIER`), scoped to the perform in_port.
+  - `_on_message` dispatch chain: added `_dispatch_perform` after groups dispatch.
+- `realtimecontrol/rtr/tests/test_midi_in.py`:
+  - Updated `test_builtin_midi_data_is_empty_zones` to include the `perform` section.
+  - Added 8 new tests: clock_tick forwarding, no-callback safety, CC-A velocity (normal + zero), CC-B multiplier (all 5 values), CC-B clamping, port scoping, and null CC handling.
+  - Added `Cmd` to the imports.
+
+### Documentation
+
+None required — module docstrings in `midi.py` document the perform section; the class docstring already describes the per-zone model.
+
+### Architecture
+
+No architectural impact beyond extending the existing dispatch chain. The perform CCs follow the same port-scoped pattern as nav/capture/groups. The 0xF8 clock is handled as a special case (1-byte message) before the normal key/dispatch chain, since it has no CC/note semantics. The `clock_tick` callback is injected at construction time (the engine will pass `BeatClock.clock_tick` in Task 4).
+
+### Validation
+
+- `python tests/test_midi_in.py` → ALL TESTS PASSED (1 skipped).
+- `python -m pytest tests/ -q --ignore=tests/test_remote_tui.py --ignore=tests/test_remote_sdl.py` → 337 passed, 12 skipped.
+
+### Decisions and Caveats
+
+- The 0xF8 handler does NOT record to the monitor ring (it's a clock tick, not a user input event).
+- The perform CCs use the raw CC value: CC-A value 0-127 → `value/127.0`; CC-B value 0-4 → discrete multiplier (values >4 clamp to 16x).
+- The `clock_tick` callback takes no arguments — the `BeatClock` internally uses `time.monotonic()` for the timestamp. This keeps the MIDI adapter decoupled from the clock's time source.
+- The perform section's `in_port` follows the same null-defaults-to-default-port pattern as nav/capture/groups.
+
+### Next Task
+
+Task 3: Machine perform state — modify `rtr/state/machine.py` to add the perform mode state (the machine enters "perform" mode when triggered, tracks the active action's deadline, and reports late state).
+
+### Instructions for the Next Task
+
+1. In `rtr/state/machine.py`, add a perform state to the composite state machine. The machine should:
+   - Accept `Cmd.PERFORM_VELOCITY` and `Cmd.PERFORM_MULTIPLIER` commands (store the current velocity and multiplier).
+   - Track the active perform action: which action is playing, its `base_beats` (from zones), and the deadline (computed from `base_beats × multiplier × (60/BPM)`).
+   - Report late state: when `time_to_arrive > deadline`, flag the move as late (notify-only, no auto-shortening).
+2. The `Snapshot` already has a `performance_mode` field (bool) — extend it or add a new `perform` dict field to carry the live perform state (velocity, multiplier, deadline, time_to_arrive, late bool).
+3. The machine's perform state is separate from the existing control modes (manual/auto/assertive) — perform is a 4th mode or an overlay state.
+4. The BeatClock's `state()` output (beat, bpm, source) will be folded into the snapshot by the engine (Task 4), not the machine.
+
+## 2026-11-02 — Perform Mode Task 1: BeatClock (rtr/core/clock.py)
+
+### Status
+
+Completed
+
+### Summary
+
+Implemented the `BeatClock` class — the time base for Perform Mode. It maintains a continuous `beat` float that advances every engine tick. When an external MIDI clock (0xF8) is present, BPM is derived from the inter-clock interval (24 PPQN rolling average); when the clock is absent (timeout), it falls back to the internal BPM (default 130). Thread-safe (MIDI thread vs engine thread).
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/core/clock.py` (NEW): `BeatClock` class with:
+  - `clock_tick(now)` — records one 0xF8 tick (MIDI thread); computes inter-clock interval, appends to rolling deque, derives `_external_bpm = 60/(ppqn*avg_interval)`, sets source="external".
+  - `tick(now)` — engine tick (20 Hz); timeout check (falls back to internal if external clock silent > `clock_timeout`), selects active BPM, advances `beat += dt / beat_duration`.
+  - `state()` → `{"beat", "beat_index", "beat_phase", "bpm", "beat_duration", "source"}`.
+  - `set_internal_bpm(bpm)` — clamped to [1.0, 300.0].
+  - `reset(now)` — clears beat, source, external state.
+  - Defaults: `internal_bpm=130.0`, `clock_timeout=1.0`, `ppqn=24`, `window=24`.
+- `realtimecontrol/rtr/rtr/core/__init__.py`: added `BeatClock` import and `__all__` entry.
+- `realtimecontrol/rtr/tests/test_clock.py` (NEW): 14 headless tests covering internal mode, external mode, timeout fallback, state fields, BPM clamping, reset, negative dt, window averaging, concurrency smoke.
+
+### Documentation
+
+None required — module docstring in `clock.py` documents the class, parameters, and thread-safety contract.
+
+### Architecture
+
+No architectural impact beyond adding a new core primitive. `BeatClock` is a self-contained, thread-safe state object with no dependencies on other core modules. It will be instantiated by the engine (Task 4) and fed by the MIDI adapter (Task 2).
+
+### Validation
+
+- `python tests/test_clock.py` → ALL TESTS PASSED (14/14).
+- `python -m pytest tests/ -q --ignore=tests/test_remote_tui.py` → 354 passed, 5 failed (pre-existing `test_remote_sdl.py` failures), 14 skipped.
+
+### Decisions and Caveats
+
+- `now` is injectable (defaults to `time.monotonic()`) so tests can use faked time.
+- The first `tick()` call only establishes `_last_tick_time` (no beat advance) — this is intentional to avoid a spurious dt on startup.
+- `clock_tick` does NOT advance the beat — only `tick` does. This keeps the MIDI callback side-effect-free with respect to the engine's timing.
+- The timeout check in `tick` clears `_last_clock_time` so the next `clock_tick` starts a fresh interval measurement (no stale interval from before the timeout).
+
+### Next Task
+
+Task 2: MIDI clock + perform CCs — modify `rtr/io/midi.py` to (a) detect 0xF8 clock ticks and forward them to `BeatClock.clock_tick()`, and (b) handle the two perform CCs (CC-A = physical velocity, CC-B = time multiplier 1x/2x/4x/8x/16x) learned in the editor.
+
+### Instructions for the Next Task
+
+1. In `rtr/io/midi.py`, the rtmidi callback currently dispatches via `_key_for` which maps CC/note/noteoff/program. Add handling for the 0xF8 system-except reset (MIDI clock) message type. rtmidi exposes it as `Message(status=0xF8, data=[])` — call `self._beat_clock.clock_tick()` on receipt.
+2. The `BeatClock` instance must be injected into `MidiInput` (or a callback/delegate pattern) so the MIDI thread can call `clock_tick`. Add a `set_clock(callback)` or accept a `BeatClock` reference in `__init__`.
+3. For the perform CCs: CC numbers are learned in the editor (not hardcoded). The editor will store them in `midi.json` or `perform.json`. CC-A (velocity) and CC-B (multiplier) need to be dispatched as commands to the engine. The multiplier maps to discrete values: CC value 0→1x, 1→2x, 2→4x, 3→8x, 4→16x.
+4. Keep the existing per-zone MIDI dispatch intact; the perform CCs are global (not zone-scoped).
+
 ## 2026-11-02 — Re-apply EKI serialization fix (all-zeros `current jpos` / real KUKA stall)
 
 ### Status
