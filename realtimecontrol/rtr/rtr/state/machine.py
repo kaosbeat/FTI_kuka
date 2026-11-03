@@ -97,6 +97,10 @@ class StateMachine:
         # immediately. The engine resolves it (conflict + collision checks) before
         # committing or discarding.
         self._pending: Optional[dict] = None
+        # The most recent auto-mode safety discard (zone, action, conflict, collision,
+        # issues, timestamp). Set by record_discard; persisted in the state frame so
+        # the UI can show a "last discard" segment. None until the first discard.
+        self.last_discard: Optional[dict] = None
 
         # Engine move mode + cadence for the discrete behaviours.
         #   move_mode: "block" (wait for each move to arrive) | "stream" (fire
@@ -606,6 +610,23 @@ class StateMachine:
         operator decision)."""
         if self._pending is not None:
             self._pending["phase"] = "confirm"
+
+    def record_discard(self, zone: str, action: str, conflict: bool,
+                       collision: bool, issues: list) -> None:
+        """Record the most recent auto-mode safety discard (for the UI).
+
+        Stores a persistent record so the client can display a "last discard"
+        segment. The record survives across ticks and zone changes.
+        """
+        import time
+        self.last_discard = {
+            "zone": zone,
+            "action": action,
+            "conflict": conflict,
+            "collision": collision,
+            "issues": list(issues) if issues else [],
+            "ts": time.time(),
+        }
 
     def _advance_after_action(self, action: str) -> None:
         """Hand off after a single-run action completes (its last anchor is reached).

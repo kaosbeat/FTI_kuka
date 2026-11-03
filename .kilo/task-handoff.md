@@ -1,5 +1,123 @@
 # Task Handoff Log
 
+## 2026-11-03 — KUKAPY_DEBUG FRAME lines now print Res Code + A1-A6 (pairing capture)
+
+### Status
+
+Completed
+
+### Summary
+
+The user asked how to capture a live `KUKAPY_DEBUG=1` log during the `scan_room > look` freeze to confirm the exact EKI `<Res>` pairing. Analysis showed the existing debug output was insufficient for that: `SEND` lines print the full raw `<Rob>` command, but the two `FRAME tag='Res'` debug lines in `_recv_xml` only printed tag/len/leftover — the `<Res>` A1-A6 values were parsed and immediately discarded, so a capture could show send/recv ordering but never whether the curjpos response carried the move's zero-filled `A1-A6`. Added a `_res_debug(elem)` helper on `kukapy.robot.Robot` and wired it into both debug branches, so each consumed `<Res>` now logs `code=... A=[A1 A2 A3 A4 A5 A6]` next to the `SEND` that requested it. The desync (a move `<Res>` with `A1-A6 = 0.0` mis-paired as the next `curjpos` response) is now directly visible in the log.
+
+### Changes Made
+
+- `realtimecontrol/rtr/KukaPy/kukapy/robot.py`:
+  - New `_res_debug(elem)` method: returns `code=<Code> A=[<A1> ... <A6>]` from a parsed `<Res>` element (`findtext` with defaults, so ping responses without A fields print empty).
+  - Both `FRAME tag='Res'` debug prints in `_recv_xml` (the `\x00`-delimited branch and the plain-XML branch) now append `self._res_debug(elem)`.
+
+### Documentation
+
+None required — this is a debug-only logging change gated behind `KUKAPY_DEBUG=1`; the helper's docstring documents the diagnostic purpose.
+
+### Architecture
+
+No architectural impact. Logging-only change inside the existing `_recv_xml` reader; no behavior, timing, or API change.
+
+### Validation
+
+- `pytest tests/test_kuka_eki_serialization.py tests/test_kuka_eki_recv.py tests/test_stuck_recovery.py`: **31 passed**.
+- Smoke test of `_res_debug` on a curjpos `<Res>` (`A=[0.0 -90.0 20.0 0.0 80.0 0.0]`) and a movej `<Res>` (`A=[0.0 0.0 0.0 0.0 0.0 0.0]`): prints as expected, confirming the discriminator is visible.
+
+### Decisions and Caveats
+
+- The A fields are printed as raw strings from the `<Res>` (KUKAPY_SERVER.SRC formats them with 6 decimals), so a zero-filled move `<Res>` and a real curjpos `<Res>` are distinguishable at a glance.
+- Per-frame logging at 20 Hz is ~15 KB/s; a capture during a freeze run should be teed to a file (see run recipe below).
+- Live verification still pending: the pairing must be observed during an actual `scan_room > look` freeze.
+
+### Next Task
+
+Run the live capture to confirm the desync and the stale-read detector trigger (recipe below).
+
+### Instructions for the Next Task
+
+Run recipe (on the core machine):
+
+```bash
+cd realtimecontrol/rtr
+KUKAPY_DEBUG=1 python main.py --robot --ip 192.168.10.201 --port 18735 2>&1 | tee /tmp/kukapy_freeze_$(date +%Y%m%d_%H%M).log
+```
+
+1. `_DEBUG` is read from the environment at import, so the var must be in the process env (the `KUKAPY_DEBUG=1` prefix above).
+2. Start `KUKAPY_SERVER` on the teach pendant after the `Listening on :18735` line.
+3. Run the 5-zone network until it freezes at `scan_room > look`.
+4. In the log: find the last `SEND` containing `<Type>4</Type>` (movej) and the `FRAME` after it — if the following `SEND <Type>2</Type>` (curjpos) is answered by a `FRAME ... A=[0.000000 0.000000 0.000000 0.000000 0.000000 0.000000]` while the robot is not physically home, the move `<Res>` was mis-paired as the curjpos response (root cause confirmed).
+5. The engine's stale-read detector should also log the `EKI stale read` `KukaError` after 3 consecutive zero reads, followed by the watchdog's `robot.recover()` attempt — confirms detector + recovery path on live hardware.
+
+## 2026-11-03 — Last-discard display + EKI stale-read root-cause fix
+
+### Status
+
+Completed
+
+### Summary
+
+Two changes addressing the user's report that the robot halts at `scan_room > look` with a stale readback of `[0,0,0,0,0,90]` (raw `[0,0,0,0,0,0]` + J6 offset `90`):
+
+1. **Last-discard display** — Added a persistent `last_discard` record to `machine.py`, recorded by the engine on every auto-mode safety discard, forwarded in the state frame, and rendered as a `last discard: zone/action` segment in the status bar of both `client.html` and `editor.html`. The segment shows the zone/action, reason (red-link conflict / self-collision), issues, and timestamp on hover.
+
+2. **EKI stale-read root-cause fix** — The KUKAPY_SERVER.SRC KRL loop initializes ALL `Res` values to `0.0` every iteration (lines 85–97). CASE 4 (movej) executes `PTP` but never writes `Res/A1-A6`, so the move's `<Res>` response carries `A1-A6 = 0.0`. If that zero-filled response lands in `_recv_buf` and gets misread as the next tick's `curjpos` response, the engine sees `[0,0,0,0,0,0]` raw → `[0,0,0,0,0,90]` with offset. Added a stale-read detector in `kuka.py:get_curjpos` that tracks consecutive all-zero raw reads; when the streak reaches 3 (≈150 ms at 20 Hz), it raises `KukaError`, which the engine's existing watchdog catches and triggers `robot.recover()` (disconnect + reconnect clears `_recv_buf`).
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/state/machine.py`:
+  - Added `self.last_discard: Optional[dict]` attribute (initialized to `None`).
+  - Added `record_discard(zone, action, conflict, collision, issues)` method that stores `{zone, action, conflict, collision, issues, ts}`.
+- `realtimecontrol/rtr/rtr/core/engine.py`:
+  - In `_resolve_pending`, the auto-mode discard branch now calls `m.record_discard(...)` before publishing `Event.SAFETY_DISCARD`.
+- `realtimecontrol/rtr/rtr/display/display.py`:
+  - `_frame` now forwards `machine.last_discard` as `frame["last_discard"]` when present.
+- `realtimecontrol/rtr/client.html`:
+  - `updateStatusBar`: added `discardSeg` logic (zone/action, reason, issues, timestamp on hover) rendered after `blockedSeg` in the status bar.
+- `realtimecontrol/rtr/editor.html`:
+  - `updateStatusBar`: identical `discardSeg` logic added (mirrors `client.html`).
+- `realtimecontrol/rtr/rtr/robot/kuka.py`:
+  - Added `_zero_streak` counter and `_zero_streak_threshold = 3` in `__init__`.
+  - Added lazy `_get_kuka_error()` helper (imports `KukaError` from `kukapy.robot` on first use, so the sim runs without kukapy).
+  - `get_curjpos`: after reading raw values, checks if all are near-zero; increments `_zero_streak` on all-zero, resets on non-zero; raises `KukaError` when streak ≥ threshold.
+- `realtimecontrol/rtr/tests/test_kuka_eki_serialization.py`:
+  - `FakeKukapyRobot.get_curjpos` and `get_curpos` now return non-zero values (`[1,2,3,4,5,6]` and `[10,20,30,40,50,60]`) so the stale-read detector doesn't false-positive in the serialization tests.
+
+### Documentation
+
+None required — the stale-read mechanism is documented in the `kuka.py` comments (the KUKAPY_SERVER.SRC CASE 4 / Res initialization interaction), and the last-discard display is self-documenting via its hover tooltip.
+
+### Architecture
+
+No new architectural boundary. The stale-read detector is a detection layer in the robot wrapper (`kuka.py`); the recovery path uses the existing engine watchdog → `robot.recover()` chain. The last-discard record is a persistent field on `machine.py` (same pattern as `pending` / `servo_state` / `hunt_state`), forwarded through the existing `display.py:_frame` → WebSocket → client status-bar pipeline.
+
+### Validation
+
+- `/home/kaos/.pyenv/versions/kukart/bin/pytest tests/test_kuka_eki_serialization.py tests/test_kuka_eki_recv.py tests/test_stuck_recovery.py`: **31 passed**.
+- Full suite (`tests/`, excluding pre-existing `test_remote_tui.py` collection error): **373 passed, 23 failed** (all 23 failures are pre-existing in `test_patch_push.py` and `test_remote_sdl.py`, unrelated to this change).
+- Live robot verification (scan_room > look freeze) requires the running robot (not available in this environment).
+
+### Decisions and Caveats
+
+- The stale-read threshold is 3 consecutive all-zero raw reads (≈150 ms at 20 Hz). This is short enough to catch the desync quickly but long enough to avoid false positives when the robot is legitimately at the physical home position (all zeros) for a few ticks after a reset.
+- The detector only triggers on the RAW read (before offset is applied), so the J6 offset of 90° does not interfere with the detection.
+- The `KukaError` import is lazy (inside `_get_kuka_error()`) so the sim and tests run without kukapy installed.
+- The last-discard record persists until the next discard replaces it (no expiry). If the user wants it to clear after a timeout, that would be a future enhancement.
+- The KUKAPY_SERVER.SRC is NOT modified (per the constraint). The fix is purely on the Python side (detection + recovery).
+
+### Next Task
+
+No immediate next task identified. The last-discard display and EKI stale-read fix are complete and tested. If the freeze persists on the live robot, the next step would be to capture a `KUKAPY_DEBUG=1` log during the freeze to confirm the exact EKI `Res` pairing and verify the detector triggers.
+
+### Instructions for the Next Task
+
+If the stale-read detector needs tuning (threshold, detection logic), adjust `_zero_streak_threshold` in `kuka.py:__init__` or the detection logic in `get_curjpos`. If the last-discard display needs changes (styling, additional fields, expiry), update `updateStatusBar` in **both** `client.html` and `editor.html` identically, and the `record_discard` method in `machine.py` if new fields are needed.
+
 ## 2026-11-03 — Move-blocked flag ported to editor.html + status-bar z-index fix in both clients
 
 ### Status

@@ -14,6 +14,16 @@ from typing import List, Optional
 
 from .base import RobotBase
 
+# KukaError is imported lazily inside get_curjpos (same pattern as the Robot
+# class in connect) so the sim runs without kukapy installed.
+_KukaError = None
+def _get_kuka_error():
+    global _KukaError
+    if _KukaError is None:
+        from kukapy.robot import KukaError
+        _KukaError = KukaError
+    return _KukaError
+
 # Continuous-positioning percentage for stream (non-blocking) moves. The KUKAPY
 # server treats ``cmd_cnt > 0`` as a continuous move (``PTP ... C_PTP`` /
 # ``LIN ... C_DIS``): the KRL issues the move and answers immediately instead of
@@ -50,6 +60,16 @@ class KukaRobot(RobotBase):
         # socket from the stream-move thread and the tick loop desyncs it and
         # strands the KRL at "WAIT FOR $FLAG[1]" (the "waiting for flag" error).
         self._lock = threading.Lock()
+        # EKI stale-read detector: the KUKAPY server's CASE 4 (movej) responds
+        # with Res/A1-A6 = 0.0 (the loop's initialization values), because CASE 4
+        # never writes Res/A1-A6 — only CASE 2 (curjpos) does. If that zero-filled
+        # move <Res> lands in _recv_buf and gets misread as the next tick's
+        # curjpos response, the engine sees [0,0,0,0,0,0] raw (→ [0,0,0,0,0,90]
+        # with the J6 offset). The robot physically moved, but the readback is
+        # stale. Track consecutive all-zero raw reads; when the streak reaches the
+        # threshold, raise KukaError so the engine's watchdog triggers recover().
+        self._zero_streak = 0
+        self._zero_streak_threshold = 3
 
     def connect(self) -> None:
         try:
@@ -77,6 +97,23 @@ class KukaRobot(RobotBase):
     def get_curjpos(self) -> List[float]:
         with self._lock:
             raw = list(self._robot.get_curjpos())
+        # Stale-read detection: the KUKAPY server's move response (CASE 4) carries
+        # Res/A1-A6 = 0.0 (initialization values). If that zero-filled <Res> is
+        # misread as a curjpos response, raw is all zeros. Track consecutive all-zero
+        # reads; when the streak reaches the threshold, raise KukaError so the
+        # engine's watchdog triggers recover() (reconnect clears _recv_buf).
+        all_zero = all(abs(v) < 1e-6 for v in raw)
+        if all_zero:
+            self._zero_streak += 1
+            if self._zero_streak >= self._zero_streak_threshold:
+                KukaError = _get_kuka_error()
+                raise KukaError(
+                    f"EKI stale read: raw curjpos all-zero for "
+                    f"{self._zero_streak} consecutive reads (threshold "
+                    f"{self._zero_streak_threshold}); move <Res> desync suspected"
+                )
+        else:
+            self._zero_streak = 0
         return [raw[i] + self._joint_offsets[i] for i in range(len(raw))]
 
     def get_curpos(self) -> List[float]:

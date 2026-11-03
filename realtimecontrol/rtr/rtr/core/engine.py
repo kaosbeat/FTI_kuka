@@ -413,6 +413,8 @@ class Engine:
                     "collisions": p.get("collisions"),
                 }
                 m.clear_pending()
+                m.record_discard(p["zone"], p["action"], conflict,
+                                 p.get("collision", False), issues)
                 self.brain.mark_candidate_blocked(p["zone"], p["action"])
                 # Surface the discard in the control-client log window (warning).
                 self.bus.publish(Event.SAFETY_DISCARD, discard)

@@ -140,6 +140,16 @@ class Robot:
         end += len(close)
         return buf[:end], buf[end:]
 
+    def _res_debug(self, elem: ET.Element) -> str:
+        """One-line summary of a <Res> for KUKAPY_DEBUG pairing diagnostics.
+
+        Prints the response Code and the A1..A6 fields so a desync (a move
+        <Res> mis-paired as the curjpos response, carrying A1..A6 = 0.0) is
+        visible in the log next to the SEND that requested it."""
+        code = elem.findtext("Code", default="?")
+        a = [elem.findtext(f"A{i}", default="") for i in range(1, 7)]
+        return f"code={code} A=[{' '.join(a)}]"
+
     def _send_xml(self, element: ET.Element) -> None:
         xml_str = ET.tostring(element, encoding="unicode")
         data = xml_str.encode("utf-8") + b"\x00"
@@ -189,7 +199,7 @@ class Robot:
                         if elem.tag == "Res":
                             self._recv_buf = buf
                             if _DEBUG:
-                                print(f"[kukapy] FRAME tag='Res' len={len(frame)}B leftover={len(buf)}B")
+                                print(f"[kukapy] FRAME tag='Res' len={len(frame)}B leftover={len(buf)}B {self._res_debug(elem)}")
                             return elem
                         # non-Res keepalive: drop and keep scanning
                     continue
@@ -206,7 +216,7 @@ class Robot:
                 if elem.tag == "Res":
                     self._recv_buf = rest
                     if _DEBUG:
-                        print(f"[kukapy] FRAME tag='Res' len={len(doc)}B leftover={len(rest)}B")
+                        print(f"[kukapy] FRAME tag='Res' len={len(doc)}B leftover={len(rest)}B {self._res_debug(elem)}")
                     return elem
                 buf = rest  # non-Res document (AliveCounter): drop, keep scanning
 

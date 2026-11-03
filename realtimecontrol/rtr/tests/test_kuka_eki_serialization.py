@@ -70,13 +70,13 @@ class FakeKukapyRobot:
         self._enter()
         self._rt()
         self._exit()
-        return [0.0] * 6
+        return [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
 
     def get_curpos(self):
         self._enter()
         self._rt()
         self._exit()
-        return [0.0] * 6
+        return [10.0, 20.0, 30.0, 40.0, 50.0, 60.0]
 
     def move(self, move_type, vals, velocity=25, acceleration=100,
              cnt_val=0, linear=False, **kw):

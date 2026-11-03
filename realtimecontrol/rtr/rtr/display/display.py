@@ -198,6 +198,8 @@ class Display:
             frame["safety"] = dict(snap.safety)
         elif self._machine is not None and self._machine.pending:
             frame["safety"] = self._machine.pending_info()
+        if self._machine is not None and self._machine.last_discard is not None:
+            frame["last_discard"] = dict(self._machine.last_discard)
         # Engine cadence state (the CADENCE page's "current" row reads these;
         # the Snapshot carries them, so forward them like the other optional fields).
         if snap.move_mode is not None:
