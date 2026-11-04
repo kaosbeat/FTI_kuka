@@ -148,13 +148,17 @@ class StateMachine:
             "multiplier": 1,      # CC-B: 1, 2, 4, 8, 16
             "base_beats": 0,      # current action's base_beats (from zones)
             "deadline": 0.0,      # seconds (base_beats × multiplier × 60/BPM)
-            "time_to_arrive": 0.0,  # seconds (distance / velocity)
+            "time_to_arrive": 0.0,  # seconds (max over joints of the rest-to-rest time)
             "late": False,        # time_to_arrive > deadline
             # The max velocity (degrees/sec) at CC-A = 127. The CC-A normalized
             # value is scaled by this to get the actual velocity. Defaults to 1.0
             # (the raw normalized value is the velocity) until the perform config
             # supplies a real degrees/sec range.
             "velocity_max_deg_s": 1.0,
+            # The axis acceleration limit (degrees/sec^2) for the trapezoidal/
+            # triangular rest-to-rest estimate. Seeded from the perform config;
+            # the placeholder keeps the estimate defined before the seed.
+            "acceleration_max_deg_s2": 1.0,
         }
 
     # ------------------------------------------------------------------

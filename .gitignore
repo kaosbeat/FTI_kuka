@@ -8,3 +8,4 @@ realtimecontrol/rtr/rtr/camera/models/
 .venv/
 realtimecontrol/rtr/dist/
 rtr-venv/
+.kilo/kilo.jsonc

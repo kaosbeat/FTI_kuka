@@ -8,6 +8,8 @@ The perform config holds the global settings for the live perform mode:
 - ``clock_timeout``: seconds of silence before an external clock is considered lost.
 - ``velocity_max_deg_s``: the max velocity (degrees/sec) at CC-A = 127. The CC-A
   normalized value (0-1) is scaled by this to get the actual velocity.
+- ``acceleration_max_deg_s2``: the axis acceleration limit (degrees/sec^2) for the
+  trapezoidal/triangular rest-to-rest time estimate (the max-over-joints PTP duration).
 - ``multipliers``: the CC-B banded multiplier values (1/16 … 16, divide and multiply).
 
 The built-in :data:`DEFAULT_PERFORM_CONFIG` is the fallback when the file is
@@ -24,6 +26,7 @@ DEFAULT_PERFORM_CONFIG = {
     "internal_bpm": 130.0,
     "clock_timeout": 1.0,
     "velocity_max_deg_s": 30.0,
+    "acceleration_max_deg_s2": 100.0,
     "multipliers": [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8, 16],
 }
 
@@ -46,7 +49,8 @@ def validate_perform_config(data: Any) -> dict:
     """Validate a perform config dict. Fill in defaults; return ``data`` or raise.
 
     Shape: ``{"default_base_beats": int, "internal_bpm": float, "clock_timeout": float,
-             "velocity_max_deg_s": float, "multipliers": [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8, 16]}``.
+             "velocity_max_deg_s": float, "acceleration_max_deg_s2": float,
+             "multipliers": [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8, 16]}``.
     Missing keys take the built-in defaults; bad types raise :class:`ValueError`.
     """
     if not isinstance(data, dict):
@@ -77,6 +81,13 @@ def validate_perform_config(data: Any) -> dict:
                                       DEFAULT_PERFORM_CONFIG["velocity_max_deg_s"])
     if cfg["velocity_max_deg_s"] <= 0:
         raise ValueError("'velocity_max_deg_s' must be positive")
+
+    # acceleration_max_deg_s2: positive number (the axis acceleration limit, deg/s^2).
+    cfg["acceleration_max_deg_s2"] = _num(
+        data.get("acceleration_max_deg_s2"), "acceleration_max_deg_s2",
+        DEFAULT_PERFORM_CONFIG["acceleration_max_deg_s2"])
+    if cfg["acceleration_max_deg_s2"] <= 0:
+        raise ValueError("'acceleration_max_deg_s2' must be positive")
 
     # multipliers: a non-empty list of positive numbers (the CC-B banded values).
     mult = data.get("multipliers", DEFAULT_PERFORM_CONFIG["multipliers"])
