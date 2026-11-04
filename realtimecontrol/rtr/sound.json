@@ -162,6 +162,12 @@
     },
     "retreat_p": {
       "out_port": null
+    },
+    "tidal_follow_p_bridge": {
+      "out_port": null
+    },
+    "tidal_inspect_p_bridge": {
+      "out_port": null
     }
   },
   "actions": {
@@ -738,7 +744,9 @@
     "follow_p": {},
     "approach_p": {},
     "inspect_p": {},
-    "retreat_p": {}
+    "retreat_p": {},
+    "tidal_follow_p_bridge": {},
+    "tidal_inspect_p_bridge": {}
   },
   "out_port": 7
 }

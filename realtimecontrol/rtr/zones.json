@@ -1716,7 +1716,7 @@
       }
     },
     "scan_room": {
-      "enabled": true,
+      "enabled": false,
       "class": "scan",
       "safezone": [
         [
@@ -2111,10 +2111,16 @@
           "speed": 25,
           "loop": true,
           "dwell_s": 15,
-          "next": {
-            "zone": "retreat_p",
-            "action": "back"
-          },
+          "next": [
+            {
+              "zone": "retreat_p",
+              "action": "back"
+            },
+            {
+              "zone": "tidal_inspect_p_bridge",
+              "action": "bridge"
+            }
+          ],
           "pose_imgs": [
             null,
             null,
@@ -2329,10 +2335,16 @@
             null,
             null
           ],
-          "next": {
-            "zone": "tidal",
-            "action": "bdoff"
-          }
+          "next": [
+            {
+              "zone": "tidal",
+              "action": "bdoff"
+            },
+            {
+              "zone": "tidal_follow_p_bridge",
+              "action": "bridge"
+            }
+          ]
         },
         "bdoff": {
           "enabled": true,
@@ -2350,10 +2362,16 @@
           "behavior": "calm",
           "speed": 20,
           "loop": true,
-          "next": {
-            "zone": "tidal",
-            "action": "bd"
-          },
+          "next": [
+            {
+              "zone": "tidal",
+              "action": "bd"
+            },
+            {
+              "zone": "tidal_inspect_p_bridge",
+              "action": "bridge"
+            }
+          ],
           "pose_imgs": [
             null
           ],
@@ -2363,6 +2381,144 @@
         }
       },
       "pose": "move"
+    },
+    "tidal_follow_p_bridge": {
+      "enabled": true,
+      "pose": "bridge",
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -134,
+          34
+        ],
+        [
+          -95,
+          157
+        ],
+        [
+          -120,
+          120
+        ],
+        [
+          -55,
+          100
+        ],
+        [
+          -35,
+          35
+        ]
+      ],
+      "speed": 100,
+      "actions": {
+        "bridge": {
+          "enabled": true,
+          "loop": false,
+          "behavior": "bridge",
+          "poses": [
+            [
+              -5.559,
+              -11.127,
+              14.008,
+              -3.608,
+              -22.642,
+              0
+            ],
+            [
+              0,
+              -90,
+              20,
+              0,
+              80,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "speed": 100,
+          "next": {
+            "zone": "follow_p",
+            "action": "track"
+          }
+        }
+      }
+    },
+    "tidal_inspect_p_bridge": {
+      "enabled": true,
+      "pose": "bridge",
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -134,
+          34
+        ],
+        [
+          -95,
+          157
+        ],
+        [
+          -120,
+          120
+        ],
+        [
+          -55,
+          100
+        ],
+        [
+          -35,
+          35
+        ]
+      ],
+      "speed": 100,
+      "actions": {
+        "bridge": {
+          "enabled": true,
+          "loop": false,
+          "behavior": "bridge",
+          "poses": [
+            [
+              -104.749,
+              -133.617,
+              155.554,
+              10.014,
+              -54.591,
+              0
+            ],
+            [
+              0,
+              -15,
+              20,
+              0,
+              -20,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "speed": 100,
+          "next": [
+            {
+              "zone": "inspect_p",
+              "action": "face"
+            },
+            {
+              "zone": "tidal",
+              "action": "bd"
+            }
+          ],
+          "pose_imgs": [
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null
+          ]
+        }
+      }
     }
   },
   "layout": {
@@ -2432,8 +2588,8 @@
         "y": 1044.3370361328125
       },
       "scan_room": {
-        "x": 2218.76904296875,
-        "y": 1049.1541748046875
+        "x": 2279.21630859375,
+        "y": 1040.087158203125
       },
       "follow_p": {
         "x": 2192.2525634765625,
@@ -2452,16 +2608,24 @@
         "y": 1073.1895751953125
       },
       "tidal": {
-        "x": 2153.5924377441406,
-        "y": 471.43170166015625
+        "x": 2468.2152404785156,
+        "y": 579.3530883789062
+      },
+      "tidal_follow_p_bridge": {
+        "x": 2319.530288696289,
+        "y": 701.7369995117188
+      },
+      "tidal_inspect_p_bridge": {
+        "x": 2743.763687133789,
+        "y": 707.3587036132812
       }
     },
     "view": {
-      "x": 1124.7714377780978,
-      "y": 533.913563257333,
-      "w": 2243.1569794873053,
-      "h": 854.9737667718001
+      "x": -145.81216996713914,
+      "y": -50.81964187446624,
+      "w": 3923.2955768544116,
+      "h": 1495.3544616699182
     },
-    "key": "approach_p,follow_p,inspect,inspect_p,lock,resting,retreat_p,scan,scan_room,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band,tidal"
+    "key": "approach_p,follow_p,inspect,inspect_p,lock,resting,retreat_p,scan,scan_room,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band,tidal,tidal_follow_p_bridge,tidal_inspect_p_bridge"
   }
 }

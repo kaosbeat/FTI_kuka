@@ -26,7 +26,9 @@
     "approach_p": "osc(4, 0.1, 1.2).out()",
     "inspect_p": "osc(4, 0.1, 1.2).out()",
     "retreat_p": "osc(4, 0.1, 1.2).out()",
-    "tidal": "osc(4, 0.1, 1.2).out()"
+    "tidal": "osc(4, 0.1, 1.2).out()",
+    "tidal_follow_p_bridge": "osc(4, 0.1, 1.2).out()",
+    "tidal_inspect_p_bridge": "osc(4, 0.1, 1.2).out()"
   },
   "modes": {
     "calm": "osc(1, 0.08, 1.2)\n.posterize(4)\n.diff(src(o0).rotate(1.5))\n.out(o3)",
@@ -140,6 +142,12 @@
     "tidal": {
       "bd": "osc(4, 0.1, 1.2).out()",
       "bdoff": "osc(4, 0.1, 1.2).out()"
+    },
+    "tidal_follow_p_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
+    },
+    "tidal_inspect_p_bridge": {
+      "bridge": "osc(4, 0.1, 1.2).out()"
     }
   }
 }
