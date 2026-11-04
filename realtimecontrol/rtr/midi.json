@@ -149,9 +149,7 @@
     "tidal": {
       "in_port": null,
       "command": null,
-      "actions": {
-        "bd": "note:0:60"
-      }
+      "actions": {}
     },
     "scan_room": {
       "in_port": null,
@@ -194,9 +192,11 @@
       "actions": {}
     },
     "kb_slow": {
-      "in_port": null,
-      "command": null,
-      "actions": {}
+      "in_port": 0,
+      "command": "note:0:61",
+      "actions": {
+        "ignore": "note:0:62"
+      }
     }
   },
   "nav": {
@@ -205,7 +205,7 @@
     "back": null,
     "retrigger": null,
     "next_pose": null,
-    "in_port": null
+    "in_port": 0
   },
   "capture": {
     "in_port": null,
