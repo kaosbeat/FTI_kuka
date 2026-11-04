@@ -363,9 +363,14 @@ def test_recover_soft_resync_does_not_quit():
         "recover() must NOT send quit (disconnect) on a live link: "
         "the KRL EXITs on quit and will not come back"
     )
-    # The zero-streak counter must be reset.
-    assert rob._zero_streak == 0, (
-        f"expected _zero_streak to be reset to 0 after recover, got: {rob._zero_streak}"
+    # The reject-and-hold state must be re-baselined so the first read after
+    # recovery is accepted unconditionally (fresh baseline).
+    assert rob._reject_streak == 0, (
+        f"expected _reject_streak to be reset to 0 after recover, got: {rob._reject_streak}"
+    )
+    assert rob._last_good_raw is None, (
+        f"expected _last_good_raw to be re-baselined (None) after recover, "
+        f"got: {rob._last_good_raw}"
     )
     # The link must still be alive.
     assert fake.comm_sock is not None
@@ -405,10 +410,137 @@ def test_recover_hard_reconnect_when_link_dead():
     assert rob._robot.comm_sock is not None, (
         "expected the link to be re-established after hard reconnect"
     )
-    # The zero-streak counter must be reset.
-    assert rob._zero_streak == 0
+    # The reject-and-hold state must be re-baselined (fresh baseline after recovery).
+    assert rob._reject_streak == 0
+    assert rob._last_good_raw is None
     # connect() must have been called.
     assert connected, "expected connect() to be called during hard reconnect"
+
+
+# ---------------------------------------------------------------------------
+# Reject-and-hold stale-read detector (the EKI zero-curjpos bug).
+#
+# The KUKAPY server's movej (CASE 4) responds with Res/A1-A6 = 0.0 (CASE 4 never
+# writes Res/A1-A6, only CASE 2 / curjpos does). If that zero-filled move <Res> is
+# mis-paired as the next tick's curjpos response, raw reads all-zero even though the
+# robot physically moved. The detector rejects an all-zero read when the last-good
+# reading was non-zero, holds the last-measured pose, and escalates 3 consecutive
+# rejections to KukaError so the engine watchdog triggers recover().
+# ---------------------------------------------------------------------------
+
+
+class ScriptedKukapyRobot:
+    """Returns a scripted sequence of curjpos reads (no hardware)."""
+    def __init__(self, reads):
+        self._reads = list(reads)
+        self._idx = 0
+        self.comm_sock = FakeSocket(alive=True)  # alive: _eki_call will not translate
+
+    def get_curjpos(self):
+        if self._idx >= len(self._reads):
+            raise IndexError("scripted curjpos reads exhausted")
+        r = self._reads[self._idx]
+        self._idx += 1
+        return list(r)
+
+
+def _make_robot_with_reads(reads):
+    rob = KukaRobot()
+    rob._robot = ScriptedKukapyRobot(reads)
+    return rob
+
+
+def test_reject_and_hold_accepts_nonzero_reads():
+    """A non-zero read is accepted and establishes the last-good baseline."""
+    rob = _make_robot_with_reads([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]])
+    pose = rob.get_curjpos()
+    assert pose == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    assert rob._last_good_raw == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    assert rob._reject_streak == 0
+
+
+def test_reject_and_hold_rejects_stale_all_zero_and_holds():
+    """An all-zero read against a non-zero baseline is rejected; the last-good
+    pose is held (a single mis-paired frame must not corrupt the tick)."""
+    rob = _make_robot_with_reads([
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],  # accepted, baselined
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # stale all-zero -> rejected + held
+    ])
+    rob.get_curjpos()  # accept
+    pose = rob.get_curjpos()  # reject + hold
+    assert pose == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], (
+        f"expected the last-good pose to be held, got: {pose}"
+    )
+    assert rob._reject_streak == 1
+
+
+def test_reject_and_hold_accepts_zero_pose_at_home():
+    """A genuine home (all-zero) pose must NOT be rejected: no baseline yet, and
+    once the last-good is itself all-zero, further all-zero reads stay accepted.
+    This is the false-positive guard the old consecutive-zero streak lacked."""
+    rob = _make_robot_with_reads([
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    ])
+    pose1 = rob.get_curjpos()
+    pose2 = rob.get_curjpos()
+    assert pose1 == [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    assert pose2 == [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    assert rob._reject_streak == 0  # no rejections at a legitimate zero pose
+
+
+def test_reject_and_hold_escalates_to_kuka_error():
+    """3 consecutive rejected all-zero reads escalate to KukaError so the engine
+    watchdog triggers recover() on a sustained desync."""
+    from kukapy.robot import KukaError
+    rob = _make_robot_with_reads([
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],  # accepted, baselined
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # reject streak 1
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # reject streak 2
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # reject streak 3 -> KukaError
+    ])
+    rob.get_curjpos()  # accept
+    rob.get_curjpos()  # reject 1
+    rob.get_curjpos()  # reject 2
+    try:
+        rob.get_curjpos()  # reject 3 -> escalate
+        raise AssertionError("expected KukaError after 3 consecutive stale reads")
+    except KukaError as exc:
+        assert "stale" in str(exc).lower(), (
+            f"expected a stale-read KukaError, got: {exc}"
+        )
+
+
+def test_reject_and_hold_resets_streak_on_accept():
+    """A physically-plausible read resets the reject streak and re-baselines the
+    last-good raw (the desync self-heals once pairing recovers)."""
+    rob = _make_robot_with_reads([
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],  # accept
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # reject 1
+        [7.0, 8.0, 9.0, 10.0, 11.0, 12.0],  # accept -> streak reset, new baseline
+    ])
+    rob.get_curjpos()  # accept
+    rob.get_curjpos()  # reject 1
+    pose = rob.get_curjpos()  # accept
+    assert pose == [7.0, 8.0, 9.0, 10.0, 11.0, 12.0]
+    assert rob._reject_streak == 0
+    assert rob._last_good_raw == [7.0, 8.0, 9.0, 10.0, 11.0, 12.0]
+
+
+def test_reject_and_hold_holds_offset_applied_pose():
+    """The held pose is offset-applied, consistent with the accept path (so the
+    core's joint space and its comparelist arrival check stay consistent)."""
+    rob = KukaRobot(joint_offsets=[10.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    rob._robot = ScriptedKukapyRobot([
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],  # accepted -> offset-applied [11,2,3,4,5,6]
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],  # rejected -> hold last-good offset-applied
+    ])
+    pose1 = rob.get_curjpos()
+    assert pose1 == [11.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    pose2 = rob.get_curjpos()
+    assert pose2 == [11.0, 2.0, 3.0, 4.0, 5.0, 6.0], (
+        f"expected the held pose to be offset-applied, got: {pose2}"
+    )
 
 
 def test_connect_resets_robot_on_failure():
