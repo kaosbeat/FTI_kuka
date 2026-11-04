@@ -7045,11 +7045,21 @@ function posesOnEnd() {
   applyScratchPose();
 }
 
+// Restore a picker's previous selection after a rebuild (if the option still
+// exists), so saving or re-entering the tab doesn't reset it to the placeholder.
+function restorePickerValue(sel, prev) {
+  if (!prev) return;
+  for (let i = 0; i < sel.children.length; i++) {
+    if (sel.children[i].value === prev) { sel.value = prev; return; }
+  }
+}
+
 // Populate the load-from picker (zone/action). Its picked zone's safezone drives
 // the clamp button and the out-of-safezone highlighting.
 function buildPosesLoadPicker() {
   const zones = (TABLE && TABLE.zones) ? TABLE.zones : {};
   const loadSel = $("posesLoadSel");
+  const prev = loadSel.value;  // keep the working action across rebuilds (save / tab switch)
   loadSel.innerHTML = "";
   const opt0 = document.createElement("option");
   opt0.value = ""; opt0.textContent = "— load from —";
@@ -7065,6 +7075,7 @@ function buildPosesLoadPicker() {
       loadSel.appendChild(o);
     }
   }
+  restorePickerValue(loadSel, prev);
 }
 
 // The "save to" target picker (zone/action) for adding the scratch pose to an
@@ -7074,6 +7085,7 @@ function buildPosesSavePicker() {
   const zones = (TABLE && TABLE.zones) ? TABLE.zones : {};
   const saveSel = $("posesSaveSel");
   if (!saveSel) return;
+  const prev = saveSel.value;  // keep the chosen target across rebuilds (save / tab switch)
   saveSel.innerHTML = "";
   const opt0 = document.createElement("option");
   opt0.value = ""; opt0.textContent = "— save to —";
@@ -7087,6 +7099,7 @@ function buildPosesSavePicker() {
       saveSel.appendChild(o);
     }
   }
+  restorePickerValue(saveSel, prev);
 }
 
 // The "working" action = the load-from picker's zone/action (the action whose
@@ -7346,6 +7359,7 @@ function posesLoad() {
   const w = posesWorkingAction();
   if (!w) return;
   posesLoadPoseFromAction(posesCurIndex);
+  buildPosesList();  // the pose list is visible as soon as an action is loaded
 }
 
 // Highlight the axes that have moved outside the loaded safezone: the grid inputs
@@ -9120,6 +9134,8 @@ $("delZone").onclick = delZone;
   if ($("posesNext")) $("posesNext").onclick = posesNext;
   if ($("posesListNew")) $("posesListNew").onclick = posesListNew;
   if ($("posesSaveSel")) $("posesSaveSel").onchange = buildPosesSlotPicker;
+  // Picking an action in the load-from picker activates the pose list for it right away.
+  if ($("posesLoadSel")) $("posesLoadSel").onchange = () => { posesCurIndex = 0; buildPosesList(); updatePosesOob(); };
   buildValPoseSetter();
   $("valPoseGo").onclick = applyValPose;
   $("valCopyCollision").onclick = copyValCollisionPose;
