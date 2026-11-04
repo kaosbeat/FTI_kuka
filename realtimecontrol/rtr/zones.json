@@ -3,7 +3,6 @@
     "resting": {
       "enabled": true,
       "class": "scan",
-      "mode_group": "museum-closed",
       "safezone": [
         [
           -185,
@@ -101,7 +100,6 @@
     "sleeping": {
       "enabled": true,
       "class": "scan",
-      "mode_group": "museum-closed",
       "safezone": [
         [
           -185,
@@ -317,7 +315,6 @@
     "testing": {
       "enabled": true,
       "class": "track",
-      "mode_group": "event-sit-back",
       "safezone": [
         [
           -185,
@@ -540,7 +537,6 @@
     "testing_locked_band": {
       "enabled": true,
       "class": "track",
-      "mode_group": "event-sit-back",
       "safezone": [
         [
           -185,
@@ -1331,7 +1327,6 @@
     "scan": {
       "enabled": true,
       "class": "scan",
-      "mode_group": "event-sit-back",
       "safezone": [
         [
           -185,
@@ -1438,7 +1433,6 @@
     "lock": {
       "enabled": true,
       "class": "track",
-      "mode_group": "event-sit-back",
       "safezone": [
         [
           -185,
@@ -1576,7 +1570,6 @@
     "inspect": {
       "enabled": true,
       "class": "approach",
-      "mode_group": "event-sit-back",
       "safezone": [
         [
           -185,

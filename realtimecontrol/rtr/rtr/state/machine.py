@@ -29,6 +29,25 @@ from .behavior import build_target, clamp, hardware_clamp, resolve_x
 from .zones import Zones, find_shared_pose
 
 
+def motion_profile_time(distance_deg: float, vmax_deg_s: float, accel_deg_s2: float) -> float:
+    """The rest-to-rest time for one joint axis moving ``distance_deg``.
+
+    A trapezoidal velocity profile when the distance is long enough to reach the
+    max velocity (``distance_deg >= vmax^2 / accel``): ``t = D/vmax + vmax/a``.
+    Triangular otherwise (the axis never reaches vmax): ``t = 2*sqrt(D/a)``.
+    A zero distance takes no time; a non-positive velocity or acceleration means
+    the axis cannot move (infinite time).
+    """
+    if distance_deg <= 0:
+        return 0.0
+    if vmax_deg_s <= 0 or accel_deg_s2 <= 0:
+        return float("inf")
+    threshold = (vmax_deg_s * vmax_deg_s) / accel_deg_s2
+    if distance_deg >= threshold:
+        return distance_deg / vmax_deg_s + vmax_deg_s / accel_deg_s2
+    return 2.0 * (distance_deg / accel_deg_s2) ** 0.5
+
+
 class StateMachine:
     """Owns the composite state ``(zone, action)`` and drives it one tick at a time."""
 
@@ -347,6 +366,14 @@ class StateMachine:
         """
         self.perform["velocity_max_deg_s"] = max(0.0, float(max_deg_s))
 
+    def set_perform_acceleration_max_deg_s2(self, accel_deg_s2: float) -> None:
+        """Set the axis acceleration limit (degrees/sec^2) for the motion-profile estimate.
+
+        The trapezoidal/triangular rest-to-rest time uses this as the axis
+        acceleration. Clamped to non-negative.
+        """
+        self.perform["acceleration_max_deg_s2"] = max(0.0, float(accel_deg_s2))
+
     def set_perform_multiplier(self, multiplier: float) -> None:
         """Set the perform time multiplier (CC-B: a positive number, 1/16 … 16).
 
@@ -368,18 +395,23 @@ class StateMachine:
         else:
             self.perform["deadline"] = 0.0
 
-    def update_perform_time_to_arrive(self, distance: float) -> None:
-        """Recompute time-to-arrive and the late flag.
+    def update_perform_time_to_arrive(self, distances) -> None:
+        """Recompute time-to-arrive and the late flag from per-joint distances.
 
-        The actual velocity (degrees/sec) is the CC-A normalized value scaled by
-        ``velocity_max_deg_s``. time_to_arrive = distance / velocity (seconds).
-        late = time_to_arrive > deadline (notify-only).
+        ``distances`` are the per-axis deltas (degrees) between the current and
+        target pose. The move is coordinated (all axes in sync), so the total
+        time is the MAX over the per-joint rest-to-rest times — each axis follows
+        a trapezoidal/triangular profile at the CC-A velocity. late =
+        time_to_arrive > deadline (notify-only).
         """
         v = self.perform["velocity"] * self.perform["velocity_max_deg_s"]
-        if v > 0:
-            self.perform["time_to_arrive"] = distance / v
-        else:
+        a = self.perform["acceleration_max_deg_s2"]
+        if v <= 0 or a <= 0 or not distances:
             self.perform["time_to_arrive"] = float("inf")
+        else:
+            self.perform["time_to_arrive"] = max(
+                motion_profile_time(d, v, a) for d in distances
+            )
         self.perform["late"] = (
             self.perform["time_to_arrive"] > self.perform["deadline"]
             if self.perform["deadline"] > 0 else False

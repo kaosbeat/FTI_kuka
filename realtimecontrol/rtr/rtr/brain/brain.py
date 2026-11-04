@@ -886,20 +886,13 @@ class Brain:
     # Autonomy navigation (follow next links across the enabled zone union).
     # ------------------------------------------------------------------
     def _autonomy_dwell_s(self, zone: str, action: str) -> float:
-        """The dwell time for an action: per-action override, the zone's mode-group
-        ``params.dwell_s``, or the global ``autonomy.dwell_s`` default."""
+        """The dwell time for an action: per-action override, or the global
+        ``autonomy.dwell_s`` default."""
         z = self.machine.zones.get(zone)
         if z is not None:
             d = z.action_dwell_s(action)
             if d is not None:
                 return d
-            mg = z.mode_group
-            if mg:
-                g = self._config.get("zone_groups", {}).get(mg, {})
-                if isinstance(g, dict) and isinstance(g.get("params"), dict):
-                    pd = g["params"].get("dwell_s")
-                    if isinstance(pd, (int, float)) and not isinstance(pd, bool):
-                        return float(pd)
         return self._autonomy_cfg().get("dwell_s", 30.0)
 
     def _behavior_params(self, behavior: str) -> dict:

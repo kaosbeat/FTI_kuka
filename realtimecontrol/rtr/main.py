@@ -248,6 +248,7 @@ async def run(cfg: Config) -> None:
     def _reload_perform():
         new_cfg = load_perform_config_fallback(cfg.perform_path)
         machine.set_perform_velocity_max_deg_s(new_cfg["velocity_max_deg_s"])
+        machine.set_perform_acceleration_max_deg_s2(new_cfg["acceleration_max_deg_s2"])
         clock.set_internal_bpm(new_cfg["internal_bpm"])
 
     midi = MidiInput(bus, in_port=cfg.midi_in_port,

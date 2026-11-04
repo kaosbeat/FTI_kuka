@@ -68,6 +68,8 @@ class Engine:
         if perform_config is not None:
             self.machine.set_perform_velocity_max_deg_s(
                 perform_config.get("velocity_max_deg_s", 1.0))
+            self.machine.set_perform_acceleration_max_deg_s2(
+                perform_config.get("acceleration_max_deg_s2", 1.0))
         # Verbose per-tick engine debug logging (tick start, block-move). Off by
         # default: at 20 Hz a per-tick line floods the log. Enable via --verbose.
         self.verbose = verbose
@@ -239,10 +241,11 @@ class Engine:
             bpm = clock_state["bpm"]
             base_beats = self._current_base_beats()
             self.machine.update_perform_deadline(base_beats, bpm)
-            # Distance = sum of |axis deltas| between current and target pose.
+            # Per-axis deltas (degrees): the move is coordinated, so the time is the
+            # max over the per-joint rest-to-rest times (see motion_profile_time).
             tgt = target if target is not None else curjpos
-            distance = sum(abs(a - b) for a, b in zip(curjpos, tgt))
-            self.machine.update_perform_time_to_arrive(distance)
+            distances = [abs(a - b) for a, b in zip(curjpos, tgt)]
+            self.machine.update_perform_time_to_arrive(distances)
 
         if target is not None:
             if self.machine.target_kind == "linear":
