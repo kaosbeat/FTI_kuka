@@ -1,5 +1,57 @@
 # Task Handoff Log
 
+## 2026-11-04 — Fix stale `_MockMachine` mocks (missing `last_discard`)
+
+### Status
+
+Completed
+
+### Summary
+
+Fixed the pre-existing test debt flagged in the 2026-11-03 video-registry handoff: the `_MockMachine` duck-typed machine in `tests/test_patch_push.py` (and the identical sibling in `tests/test_patch_override.py`) did not define `last_discard`, so `Display._frame` raised `AttributeError: '_MockMachine' object has no attribute 'last_discard'` when it reached `display.py:201`. That error killed the state-frame emission, so `_frame_for`'s `sent[0]` raised `IndexError`. The real machine defines the attribute (`machine.py:103`: `self.last_discard: Optional[dict] = None`); the mocks were simply stale. Added the one-line attribute to both mocks.
+
+**Sibling discovery:** while validating, the full-suite run surfaced that `tests/test_patch_override.py` has the *exact same* stale-mock bug (same `_MockMachine`, same missing `last_discard`, same `IndexError`). It was fixed identically in the same change. The other two remaining failures have **different, unrelated** root causes and were left untouched (out of scope for this fix — see Decisions).
+
+### Changes Made
+
+- `realtimecontrol/rtr/tests/test_patch_push.py`: added `self.last_discard = None` to `_MockMachine.__init__` (`:65`).
+- `realtimecontrol/rtr/tests/test_patch_override.py`: added `self.last_discard = None` to `_MockMachine.__init__` (`:66`).
+
+(2 files, 1 line each; `git diff --stat` confirms the change is isolated to these two test files.)
+
+### Documentation
+
+None required — this is a test-mock correctness fix restoring the duck-type contract already documented by the mocks' own docstring ("A duck-typed machine exposing the attributes `Display._frame` accesses").
+
+### Architecture
+
+No architectural impact. No change to `Display`, `Patches`, `machine`, or any production module — only the test doubles were brought in line with the real `machine.py` attribute surface that `display.py:201` already reads.
+
+### Validation
+
+- `python3 tests/test_patch_push.py` → **ALL TESTS PASSED** (22/22; was failing with `IndexError` before the fix).
+- `python3 -m pytest tests/ -q --ignore=tests/test_remote_tui.py` → **399 passed, 14 skipped** (the two `test_patch_override.py` failures are now green).
+- `git diff --stat` → only `tests/test_patch_push.py` + `tests/test_patch_override.py` changed (1 insertion each).
+- **PRE-EXISTING, UNRELATED (left untouched):**
+  - `tests/test_remote_sdl.py` — 5 failures, UI-text drift (e.g. `test_settings_content_and_help_text` asserts `"THEME / LAYOUT"` appears in the settings view; it does not). Different root cause from the mock bug; no `Display`/`machine` involvement.
+  - `tests/test_remote_tui.py` — collection error: `ImportError: cannot import name 'action_kind' from 'rtr.flow'`. Different root cause (missing export); excluded from the suite run via `--ignore`.
+
+### Decisions and Caveats
+
+- **Scope = the `last_discard` stale-mock bug.** The requested "fix" was the documented `test_patch_push.py` failure; the identical sibling in `test_patch_override.py` was fixed in the same pass because it is the same bug and same one-line remedy. Leaving it broken while fixing its sibling would have been inconsistent.
+- **`test_remote_sdl.py` / `test_remote_tui.py` are out of scope.** They fail for unrelated reasons (SDL settings-view text drift; a missing `action_kind` export in `rtr.flow`). They do not touch `Display`/`machine`/`last_discard`, so this fix neither causes nor resolves them. Documented here so the debt is tracked, not silently dropped.
+- **No production code changed** — the fix is purely test-double correctness; runtime `Display` behavior is unchanged.
+
+### Next Task
+
+Clear the remaining unrelated test debt (separate root causes, separate tasks):
+1. `tests/test_remote_sdl.py` — reconcile the SDL settings/setup-view text the tests assert ("THEME / LAYOUT", setup-page activation, calibrate/map/dpad prompts) with the current view builder, or update the assertions to the current labels.
+2. `tests/test_remote_tui.py` — resolve the `action_kind` import (either export it from `rtr.flow` or update the test to import the correct symbol).
+
+### Instructions for the Next Task
+
+The `last_discard` fix is complete and verified; do not re-touch the two `_MockMachine` mocks. For `test_remote_sdl.py`, read `rtr/remote/tui.py`'s settings/setup `build_rows` to see the current section labels and activation behavior, then decide whether the code or the test assertions are stale (compare against the intended UI). For `test_remote_tui.py`, grep `rtr/flow.py` for what `action_kind` should be (likely a renamed/removed symbol) and align the import or the export. Run `python3 -m pytest tests/ -q` to confirm the suite is fully green afterward.
+
 ## 2026-11-03 — Video registry: FULL FEATURE handoff (tasks 1-10)
 
 ### Status

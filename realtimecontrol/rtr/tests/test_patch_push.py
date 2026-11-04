@@ -62,6 +62,7 @@ class _MockMachine:
         self.pending = None
         self.forced_behavior = None
         self.behavior_params = {}
+        self.last_discard = None
 
 
 def _frame_for(zone, mode, action, patches, behavior=None, action_index=None):
