@@ -1,0 +1,84 @@
+<patch-1.0 appVersion="1.0.12">
+   <obj type="mix/mix 2 sq" uuid="9b03da12a01f39ecd48d16285e7d10acb8e1267c" name="mix_1" x="826" y="56">
+      <params>
+         <frac32.u.map name="gain1" value="32.0"/>
+         <frac32.u.map name="gain2" value="32.0"/>
+      </params>
+      <attribs/>
+   </obj>
+   <obj type="audio/in left" uuid="d40e60b7641fe75af4d7c91b45bb038aacafc52e" name="in_1" x="294" y="98">
+      <params/>
+      <attribs/>
+   </obj>
+   <obj type="fx/clds/pitchshifter" uuid="CF2FFE3A-9363-4C78-AF25-9F3A41E5F0E4" name="pitchshifter_1" x="462" y="112">
+      <params>
+         <frac32.u.map name="ratio" value="0.0"/>
+         <frac32.u.map name="size" value="0.0"/>
+      </params>
+      <attribs/>
+   </obj>
+   <obj type="filter/bp m" uuid="f26437572c3a1f6be883bb219c773a9906ff8296" name="bp_1" x="644" y="126">
+      <params>
+         <frac32.s.map name="pitch" value="0.0"/>
+         <frac32.u.map name="reso" value="0.0"/>
+      </params>
+      <attribs/>
+   </obj>
+   <obj type="audio/out left" uuid="b11a3c09b2fdd575ea8212f2ce7743d5269253b1" name="out_1" x="1008" y="140">
+      <params/>
+      <attribs/>
+   </obj>
+   <obj type="audio/inconfig l" uuid="7007d026acb7c3586f60a7f0898718d1ca7e0607" name="inconfig_1" x="266" y="168">
+      <params/>
+      <attribs>
+         <combo attributeName="gain" selection="24dB"/>
+         <combo attributeName="boost" selection="0dB"/>
+      </attribs>
+   </obj>
+   <obj type="sss/dist/bitmangler" uuid="f223398d-3b3a-4ec8-8b1b-f3c11959d0f8" name="bitmangler_1" x="798" y="210">
+      <params>
+         <int32 name="bits" value="0"/>
+         <frac32.u.map name="rangeIn" value="0.0"/>
+         <frac32.u.map name="rangeOut" value="0.0"/>
+         <bool32.mom name="randomise" value="0"/>
+      </params>
+      <attribs/>
+   </obj>
+   <nets>
+      <net>
+         <source obj="in_1" outlet="wave"/>
+         <dest obj="pitchshifter_1" inlet="l"/>
+      </net>
+      <net>
+         <source obj="pitchshifter_1" outlet="l"/>
+         <dest obj="pitchshifter_1" inlet="r"/>
+      </net>
+      <net>
+         <source obj="pitchshifter_1" outlet="r"/>
+         <dest obj="bp_1" inlet="in"/>
+      </net>
+      <net>
+         <source obj="bp_1" outlet="out"/>
+         <dest obj="bitmangler_1" inlet="in"/>
+         <dest obj="mix_1" inlet="in1"/>
+      </net>
+      <net>
+         <source obj="bitmangler_1" outlet="out"/>
+         <dest obj="mix_1" inlet="in2"/>
+      </net>
+      <net>
+         <source obj="mix_1" outlet="out"/>
+         <dest obj="out_1" inlet="wave"/>
+      </net>
+   </nets>
+   <settings>
+      <subpatchmode>no</subpatchmode>
+   </settings>
+   <notes><![CDATA[]]></notes>
+   <windowPos>
+      <x>360</x>
+      <y>282</y>
+      <width>1123</width>
+      <height>532</height>
+   </windowPos>
+</patch-1.0>

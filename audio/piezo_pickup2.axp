@@ -1,0 +1,143 @@
+<patch-1.0 appVersion="1.1.0">
+  <obj type="audio/inconfig" uuid="9a80ef3c19f2a8f81da3a3b7c1c44d18126b97d9" name="inconfig_1" x="84" y="70">
+    <params/>
+    <attribs>
+      <combo attributeName="boost" selection="20dB"/>
+      <combo attributeName="gain" selection="33dB"/>
+      <combo attributeName="mode" selection="Mono(L)"/>
+    </attribs>
+  </obj>
+  <obj type="sss/disp/BIGscope" uuid="2f63730e-acd8-4bb4-ae0d-107a81b2c082" name="BIGscope_1" x="336" y="378">
+    <params/>
+    <attribs/>
+  </obj>
+  <obj type="audio/in left" uuid="d40e60b7641fe75af4d7c91b45bb038aacafc52e" name="in left_1" x="0" y="574">
+    <params/>
+    <attribs/>
+  </obj>
+  <obj type="mix/mix 2" uuid="30c04239c88e09d3fa5c333b784ecf54f1b0e268" name="mix 2_1" x="1540" y="602">
+    <params>
+      <frac32.u.map name="gain1" value="0.0"/>
+      <frac32.u.map name="gain2" value="64.0"/>
+    </params>
+    <attribs/>
+  </obj>
+  <obj type="tiar/disp/scope" uuid="0991142e-58fa-47e6-9f89-32da05f9fe41" name="scope_1" x="490" y="616">
+    <params/>
+    <attribs/>
+  </obj>
+  <obj type="disp/kscope 128 p" uuid="664f9317a38a6910ae9bc020e00ca2dd2ee692fa" name="kscope 128 p_1" x="924" y="630">
+    <params/>
+    <attribs/>
+  </obj>
+  <obj type="env/follower" uuid="356ce1d18ac6b51704833f94dac5dea823fb8223" name="follower_1" x="686" y="714">
+    <params/>
+    <attribs>
+      <combo attributeName="time" selection="21.2ms"/>
+    </attribs>
+  </obj>
+  <obj type="gain/vca" uuid="a9f2dcd18043e2f47364e45cb8814f63c2a37c0d" name="vca_1" x="1512" y="742">
+    <params/>
+    <attribs/>
+  </obj>
+  <obj type="audio/out stereo" uuid="a1ca7a567f535acc21055669829101d3ee7f0189" name="out stereo_1" x="1680" y="742">
+    <params/>
+    <attribs/>
+  </obj>
+  <obj type="tiar/disp/scope" uuid="0991142e-58fa-47e6-9f89-32da05f9fe41" name="scope_2" x="322" y="756">
+    <params/>
+    <attribs/>
+  </obj>
+  <obj type="filter/bp" uuid="b83f82f9efb70107bea8d668a1652b1acfbde8b0" name="bp_1" x="182" y="770">
+    <params>
+      <frac32.s.map name="pitch" value="-13.0"/>
+      <frac32.u.map name="reso" value="0.0"/>
+    </params>
+    <attribs/>
+  </obj>
+  <obj type="math/muls 8" uuid="7f2a47c7405168a6d330c0ec6091b1ec1e7c7840" name="muls 8_1" x="798" y="812">
+    <params/>
+    <attribs/>
+  </obj>
+  <obj type="sss/conv/audio2pitchfreq" uuid="332c7daa-1647-4266-8d7a-700eaf64d8de" name="audio2pitchfreq_1" x="504" y="840">
+    <params>
+      <frac32.s.map name="damp" value="-35.0"/>
+      <int32 name="avg" value="10"/>
+    </params>
+    <attribs/>
+  </obj>
+  <obj type="filter/vcf3" uuid="92455c652cd098cbb682a5497baa18abbf2ef865" name="vcf3_1" x="1260" y="854">
+    <params>
+      <frac32.s.map name="pitch" value="33.0"/>
+      <frac32.u.map name="reso" value="3.5"/>
+    </params>
+    <attribs/>
+  </obj>
+  <obj type="disp/kscope 128 p" uuid="664f9317a38a6910ae9bc020e00ca2dd2ee692fa" name="kscope 128 p_2" x="910" y="896">
+    <params/>
+    <attribs/>
+  </obj>
+  <obj type="osc/brds/blown" uuid="1185d86b-5be7-429f-8788-e26868c65a82" name="blown_1" x="1092" y="910">
+    <params>
+      <frac32.s.map name="pitch" value="-25.0"/>
+      <frac32.u.map name="timbre" value="24.5"/>
+      <frac32.u.map name="color" value="51.5"/>
+    </params>
+    <attribs/>
+  </obj>
+  <nets>
+    <net>
+      <source obj="in left_1" outlet="wave"/>
+      <dest obj="BIGscope_1" inlet="in"/>
+      <dest obj="BIGscope_1" inlet="syncIn"/>
+      <dest obj="scope_1" inlet="in"/>
+      <dest obj="bp_1" inlet="in"/>
+    </net>
+    <net>
+      <source obj="bp_1" outlet="out"/>
+      <dest obj="scope_2" inlet="in"/>
+      <dest obj="follower_1" inlet="in"/>
+      <dest obj="audio2pitchfreq_1" inlet="in"/>
+      <dest obj="mix 2_1" inlet="in1"/>
+    </net>
+    <net>
+      <source obj="follower_1" outlet="amp"/>
+      <dest obj="kscope 128 p_1" inlet="in"/>
+      <dest obj="muls 8_1" inlet="in"/>
+      <dest obj="blown_1" inlet="pitch"/>
+    </net>
+    <net>
+      <source obj="muls 8_1" outlet="out"/>
+      <dest obj="kscope 128 p_2" inlet="in"/>
+      <dest obj="vca_1" inlet="v"/>
+      <dest obj="vcf3_1" inlet="pitch"/>
+    </net>
+    <net>
+      <source obj="vca_1" outlet="o"/>
+      <dest obj="out stereo_1" inlet="right"/>
+      <dest obj="mix 2_1" inlet="in2"/>
+    </net>
+    <net>
+      <source obj="blown_1" outlet="wave"/>
+      <dest obj="vcf3_1" inlet="in"/>
+    </net>
+    <net>
+      <source obj="vcf3_1" outlet="out"/>
+      <dest obj="vca_1" inlet="a"/>
+    </net>
+    <net>
+      <source obj="mix 2_1" outlet="out"/>
+      <dest obj="out stereo_1" inlet="left"/>
+    </net>
+  </nets>
+  <settings>
+    <subpatchmode>no</subpatchmode>
+  </settings>
+  <notes><![CDATA[]]></notes>
+  <windowPos>
+    <x>0</x>
+    <y>32</y>
+    <width>1920</width>
+    <height>1048</height>
+  </windowPos>
+</patch-1.0>
