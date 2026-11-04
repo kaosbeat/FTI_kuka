@@ -2771,23 +2771,49 @@ class HydraSource {
   }
 
   initVideo(url = '', params) {
-    // const self = this
-    const vid = document.createElement('video');
-    vid.crossOrigin = 'anonymous';
-    vid.autoplay = true;
-    vid.loop = true;
-    vid.muted = true; // mute in order to load without user interaction
+    // Leak-free reuse: the shared registry (video-registry.js) hands back ONE
+    // <video> element per URL and ONE regl texture per (URL, regl context), so
+    // re-evals don't spawn new decode pipelines / GPU textures (the browser
+    // memory crash). Falls back to the original path when the registry is absent.
+    const reg = (typeof window !== 'undefined') ? window.__RTR_VIDS__ : null;
+    const ensure = (typeof window !== 'undefined') ? window.__RTR_VID__ensure : null;
 
-    const onload = vid.addEventListener('loadeddata', () => {
-      this.src = vid;
-      vid.play();
-      this.tex = this.regl.texture({
-        data: this.src,
-        ...params
+    if (!reg || !ensure) {
+      const vid = document.createElement('video');
+      vid.crossOrigin = 'anonymous';
+      vid.autoplay = true;
+      vid.loop = true;
+      vid.muted = true; // mute in order to load without user interaction
+      vid.addEventListener('loadeddata', () => {
+        this.src = vid;
+        vid.play();
+        this.tex = this.regl.texture({
+          data: this.src,
+          ...params
+        });
+        this.dynamic = true;
       });
+      vid.src = url;
+      return;
+    }
+
+    const e = ensure(url);
+    if (e.missing) return; // referenced-but-absent: leave the source empty (no crash/retry)
+    const vid = e.vid;
+    const makeTex = () => {
+      this.src = vid;
       this.dynamic = true;
-    });
-    vid.src = url;
+      const cache = (e.texByCtx = e.texByCtx || new Map());
+      let tex = cache.get(this.regl);
+      if (!tex) { tex = this.regl.texture({ data: vid, ...params }); cache.set(this.regl, tex); }
+      this.tex = tex;
+      vid.play();
+    };
+    if (e.loaded || vid.readyState >= 2) makeTex();
+    else {
+      vid.addEventListener('loadeddata', makeTex, { once: true });
+      vid.addEventListener('error', () => { e.missing = true; }, { once: true });
+    }
   }
 
   initImage(url = '', params) {

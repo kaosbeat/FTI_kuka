@@ -54,7 +54,8 @@
 <div id="codeOverlay"></div>
 <canvas id="camOverlay"></canvas>
 
-<script src="https://cdn.jsdelivr.net/npm/hydra-synth/dist/hydra-synth.js"></script>
+<script src="hydra-synth.js"></script>
+<script src="video-registry.js"></script>
 <script>
 "use strict";
 
@@ -305,7 +306,7 @@ async function loadPatches() {
 function connect() {
   const url = "ws://" + location.hostname + ":8765";
   ws = new WebSocket(url);
-  ws.onopen = () => { $("dot").className = "dot on"; $("status").textContent = "connected"; loadPatches(); };
+  ws.onopen = () => { $("dot").className = "dot on"; $("status").textContent = "connected"; loadPatches(); if (typeof preloadVideos === "function") preloadVideos(); };
   ws.onclose = () => {
     $("dot").className = "dot"; $("status").textContent = "disconnected; retrying";
     setTimeout(connect, 2000);
@@ -330,6 +331,9 @@ function connect() {
       drawCamOverlay();
     } else if (m.type === "patches_changed") {
       loadPatches();
+    } else if (m.type === "zones_changed") {
+      // Zones changed (video union may differ): re-warm the video registry.
+      if (typeof preloadVideos === "function") preloadVideos();
     }
   };
 }

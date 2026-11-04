@@ -85,7 +85,15 @@ class KukaRobot(RobotBase):
         if self._res_timeout_blocking is not None:
             kwargs["res_timeout_blocking"] = self._res_timeout_blocking
         self._robot = Robot(port=self._port, **kwargs)
-        self._robot.connect()
+        try:
+            self._robot.connect()
+        except Exception:
+            # A failed connect must not leave a half-initialized Robot object
+            # (comm_sock = None) behind: the next tick would then raise a raw
+            # AttributeError deep in kukapy, which the engine watchdog does not
+            # treat as recoverable. Reset to None so the link state is clean.
+            self._robot = None
+            raise
 
     def disconnect(self) -> None:
         if self._robot is not None:
@@ -94,9 +102,35 @@ class KukaRobot(RobotBase):
             finally:
                 self._robot = None
 
+    def _eki_call(self, method: str, *args, **kwargs):
+        """Run a kukapy ``Robot`` method, translating a dead/None link to KukaError.
+
+        A dropped connection leaves ``self._robot`` as a ``Robot`` object with
+        ``comm_sock = None``; the next call then raises
+        ``AttributeError("'NoneType' object has no attribute 'sendall'")`` deep in
+        kukapy. That is NOT a ``KukaError``, so the engine's watchdog (which only
+        recovers on ``KukaError``) never retries and the engine spins forever.
+        Translating every dead-link failure to ``KukaError`` here makes the link
+        recoverable from the watchdog's existing path.
+        """
+        if self._robot is None:
+            KukaError = _get_kuka_error()
+            raise KukaError("EKI not connected (robot is None)")
+        fn = getattr(self._robot, method)
+        try:
+            return fn(*args, **kwargs)
+        except AttributeError as exc:
+            msg = str(exc)
+            # The dead-socket signature: comm_sock is None, so kukapy tries to
+            # call sendall/recv on it. Translate to KukaError (recoverable).
+            if "NoneType" in msg and ("sendall" in msg or "recv" in msg):
+                KukaError = _get_kuka_error()
+                raise KukaError(f"EKI socket dead: {msg}") from exc
+            raise
+
     def get_curjpos(self) -> List[float]:
         with self._lock:
-            raw = list(self._robot.get_curjpos())
+            raw = list(self._eki_call("get_curjpos"))
         # Stale-read detection: the KUKAPY server's move response (CASE 4) carries
         # Res/A1-A6 = 0.0 (initialization values). If that zero-filled <Res> is
         # misread as a curjpos response, raw is all zeros. Track consecutive all-zero
@@ -118,7 +152,7 @@ class KukaRobot(RobotBase):
 
     def get_curpos(self) -> List[float]:
         with self._lock:
-            return list(self._robot.get_curpos())
+            return list(self._eki_call("get_curpos"))
 
     def move_joint(self, pose: List[float], speed: float, blocking: bool = True) -> None:
         shifted = [pose[i] - self._joint_offsets[i] for i in range(len(pose))]
@@ -128,22 +162,48 @@ class KukaRobot(RobotBase):
         self._move(pose, speed, blocking, linear=True)
 
     def recover(self) -> None:
-        """Attempt to recover a dead EKI connection: disconnect + reconnect.
+        """Recover a dead or desynced EKI link.
 
-        Called by the engine's watchdog when a ``KukaError`` is raised from a
-        kukapy call (stalled handshake, dead socket, or framing desync). The
-        reconnect re-establishes the EKI session so the engine can continue
-        without a full restart. Raises the original error if the reconnect fails.
+        Two cases:
+
+        1. **Stale read** (local desync, KRL alive): the KRL is still connected
+           and responding, but a zero-filled move ``<Res>`` was mis-paired as a
+           curjpos response. A **soft resync** (clear the receive buffer + ping)
+           drops the mis-paired frame and re-establishes the request/response
+           pairing WITHOUT quitting the KRL. This keeps the robot running.
+
+        2. **Dead link** (socket closed, KRL gone): a **hard reconnect** (close
+           the local socket + re-listen). The KUKAPY_SERVER on the teach pendant
+           must be restarted to dial back in; the re-listen blocks until it does.
+
+        Neither path sends the ``quit`` (Type 8) command: the KRL EXITs on quit
+        (KUKAPY_SERVER.SRC CASE 8) and will not come back, which is what made the
+        old disconnect+reconnect leave the engine in an unrecoverable
+        ``AttributeError`` loop. Raises the original error if the reconnect fails.
         """
-        if self._robot is None:
-            return
-        try:
-            self._robot.disconnect()
-        except Exception:
-            pass
-        self._robot = None
+        # Case 1: soft resync (the link is alive but mis-paired).
+        if self._robot is not None and self._robot.comm_sock is not None:
+            try:
+                self._robot._recv_buf = b""  # drop any mis-paired leftover frame
+                self._robot.ping()           # sets $FLAG[1]; KRL answers, pairing re-syncs
+                self._zero_streak = 0
+                print("[kuka] EKI soft-resync OK (link alive, pairing re-synced)")
+                return
+            except Exception:
+                pass  # link is dead; fall through to the hard reconnect
+        # Case 2: hard reconnect (close the local socket, re-listen). No quit —
+        # the KRL is already gone, and a quit would kill a live KRL and never
+        # return it.
+        if self._robot is not None:
+            try:
+                if self._robot.comm_sock is not None:
+                    self._robot.comm_sock.close()
+            except Exception:
+                pass
+            self._robot = None
         try:
             self.connect()
+            self._zero_streak = 0
             print("[kuka] EKI connection recovered")
         except Exception as exc:
             print(f"[kuka] EKI recovery failed: {exc}")
@@ -178,6 +238,6 @@ class KukaRobot(RobotBase):
         # ``linear`` kwarg; the cartesian move with ``linear=True``.
         with self._lock:
             if linear:
-                self._robot.move("pose", list(pose), speed, linear=True, cnt_val=cnt)
+                self._eki_call("move", "pose", list(pose), speed, linear=True, cnt_val=cnt)
             else:
-                self._robot.move("joint", list(pose), speed, cnt_val=cnt)
+                self._eki_call("move", "joint", list(pose), speed, cnt_val=cnt)

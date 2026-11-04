@@ -249,7 +249,8 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/hydra-synth/dist/hydra-synth.js"></script>
+<script src="hydra-synth.js"></script>
+<script src="video-registry.js"></script>
 <script src="collide.js"></script>
 <script src="rtr3d.js"></script>
 <script>
@@ -589,7 +590,7 @@ function connect() {
   const url = $("host").value.trim();
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   ws = new WebSocket(url);
-  ws.onopen = () => { setConn(true); log("connected to " + url); ws.send(JSON.stringify({ cmd: "hello", client: "screen" })); fetchZones(); loadBrain().then(buildGroupButtons); };
+  ws.onopen = () => { setConn(true); log("connected to " + url); ws.send(JSON.stringify({ cmd: "hello", client: "screen" })); fetchZones(); if (typeof preloadVideos === "function") preloadVideos(); loadBrain().then(buildGroupButtons); };
   ws.onclose = () => {
     setConn(false);
     log("disconnected; retrying in 2s");
@@ -604,7 +605,7 @@ function connect() {
       $("patchAuto").textContent = patchAutoLabel(m);
       if (patchSelValue === "auto") updatePatchPreview();
     }
-    else if (m.type === "zones_changed") { fetchZones(); log("zones changed; re-fetching"); }
+    else if (m.type === "zones_changed") { fetchZones(); if (typeof preloadVideos === "function") preloadVideos(); log("zones changed; re-fetching"); }
     else if (m.type === "patches_changed") { fetchPatches(); log("patches changed; re-fetching"); }
     else if (m.type === "safety_discard") {
       const reasons = [];

@@ -303,6 +303,8 @@ def _make_handler(server: HttpServer):
                 self._get_robotconfig()
             elif path == "/api/perform":
                 self._get_perform()
+            elif path == "/api/videos":
+                self._get_videos()
             elif self._is_static(path):
                 self._serve_static(path)
             else:
@@ -844,6 +846,34 @@ def _make_handler(server: HttpServer):
                 self._send_json(500, {"error": f"could not delete video: {exc}"})
                 return
             self._send_json(200, {"ok": True})
+
+        def _get_videos(self):
+            # The union of referenced video filenames across all zones/actions
+            # (video mode: each action's per-pose videos) so the client can
+            # preload them (video-registry.js). Plus the files actually on disk,
+            # so referenced-but-absent names are marked missing up front (no 404).
+            names = []
+            seen = set()
+            try:
+                zones = server.zones_provider()
+                for zn in zones.names():
+                    for an in zones.get(zn).actions():
+                        vids = zones.action_pose_videos(zn, an)
+                        if not isinstance(vids, list):
+                            continue
+                        for v in vids:
+                            if isinstance(v, str) and v and v not in seen:
+                                seen.add(v)
+                                names.append(v)
+            except Exception:
+                names = []  # zones unavailable: client degrades to on_disk only
+            on_disk = []
+            try:
+                if os.path.isdir(server.videos_path):
+                    on_disk = sorted(os.listdir(server.videos_path))
+            except OSError:
+                on_disk = []
+            self._send_json(200, {"videos": names, "on_disk": on_disk})
 
         # ------------------------------------------------------------------
         # Static files.

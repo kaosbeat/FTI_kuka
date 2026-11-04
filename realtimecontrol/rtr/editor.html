@@ -881,6 +881,7 @@
 <script src="GLTFLoader.js"></script>
 <script src="STLLoader.js"></script>
 <script src="hydra-synth.js"></script>
+<script src="video-registry.js"></script>
 <script src="collide.js"></script>
 <script src="rtr3d.js"></script>
 <script src="ik.js"></script>
@@ -1361,7 +1362,7 @@ function connect() {
   const url = $("host").value.trim();
   if (ws) { ws.onclose = null; ws.close(); ws = null; }
   ws = new WebSocket(url);
-  ws.onopen = () => { $("dot").className = "dot on"; $("status").textContent = "connected"; ws.send(JSON.stringify({ cmd: "hello", client: "editor" })); };
+  ws.onopen = () => { $("dot").className = "dot on"; $("status").textContent = "connected"; ws.send(JSON.stringify({ cmd: "hello", client: "editor" })); if (typeof preloadVideos === "function") preloadVideos(); };
   ws.onclose = () => {
     $("dot").className = "dot"; $("status").textContent = "disconnected";
     setTimeout(connect, 2000);
@@ -1430,6 +1431,9 @@ function connect() {
     } else if (m.type === "patches_changed") {
       // The running core reloaded the hydra patches; re-fetch them.
       loadPatches().then(() => { if (patchView) buildPatchesForm(); });
+    } else if (m.type === "zones_changed") {
+      // The running core reloaded the zones; re-warm the video registry.
+      if (typeof preloadVideos === "function") preloadVideos();
     } else if (m.type === "midi_changed") {
       // The running core reloaded the midi-in mapping; re-fetch it.
       loadMidi().then(() => {
