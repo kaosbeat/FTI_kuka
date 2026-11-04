@@ -182,6 +182,16 @@
       "in_port": null,
       "command": null,
       "actions": {}
+    },
+    "tidal_follow_p_bridge": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "tidal_inspect_p_bridge": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
     }
   },
   "nav": {
