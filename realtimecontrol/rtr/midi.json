@@ -1,5 +1,5 @@
 {
-  "enabled": false,
+  "enabled": true,
   "zones": {
     "resting": {
       "in_port": null,
@@ -189,6 +189,11 @@
       "actions": {}
     },
     "tidal_inspect_p_bridge": {
+      "in_port": null,
+      "command": null,
+      "actions": {}
+    },
+    "kb_slow": {
       "in_port": null,
       "command": null,
       "actions": {}

@@ -2519,6 +2519,194 @@
           ]
         }
       }
+    },
+    "kb_slow": {
+      "enabled": true,
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -135,
+          35
+        ],
+        [
+          -95,
+          158
+        ],
+        [
+          -180,
+          180
+        ],
+        [
+          -55,
+          100
+        ],
+        [
+          -150,
+          150
+        ]
+      ],
+      "speed": 10,
+      "actions": {
+        "ignore": {
+          "enabled": true,
+          "poses": [
+            [
+              0,
+              20,
+              -9,
+              0,
+              -50,
+              0
+            ],
+            [
+              0,
+              -90,
+              -40,
+              0,
+              98,
+              0
+            ],
+            [
+              -68.447,
+              -120.701,
+              -2.65,
+              46.166,
+              51.901,
+              0
+            ],
+            [
+              68.118,
+              -119.313,
+              -4.941,
+              -48.402,
+              51.538,
+              0
+            ],
+            [
+              0,
+              -90,
+              -40,
+              0,
+              98,
+              0
+            ],
+            [
+              -180,
+              -105.707,
+              -94.431,
+              -180,
+              14.593,
+              0
+            ],
+            [
+              -90,
+              -45,
+              58.464,
+              0,
+              7.099,
+              0
+            ],
+            [
+              -90,
+              -135,
+              -52.464,
+              -180,
+              7.099,
+              0
+            ],
+            [
+              0,
+              -135,
+              -52.464,
+              -180,
+              7.099,
+              0
+            ],
+            [
+              0,
+              -90,
+              0,
+              0,
+              90,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "behavior": "calm",
+          "speed": 10,
+          "loop": true,
+          "pose_imgs": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "next": {
+            "zone": "kb_slow",
+            "action": "look"
+          }
+        },
+        "look": {
+          "enabled": true,
+          "poses": [
+            [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              -90,
+              0,
+              0,
+              90,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "behavior": "calm",
+          "speed": 20,
+          "loop": true,
+          "next": {
+            "zone": "kb_slow",
+            "action": "ignore"
+          },
+          "pose_imgs": [
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null
+          ]
+        }
+      },
+      "class": "ignore",
+      "pose": "move"
     }
   },
   "layout": {
@@ -2626,6 +2814,6 @@
       "w": 3923.2955768544116,
       "h": 1495.3544616699182
     },
-    "key": "approach_p,follow_p,inspect,inspect_p,lock,resting,retreat_p,scan,scan_room,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band,tidal,tidal_follow_p_bridge,tidal_inspect_p_bridge"
+    "key": "approach_p,follow_p,inspect,inspect_p,kb_slow,lock,resting,retreat_p,scan,scan_room,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band,tidal,tidal_follow_p_bridge,tidal_inspect_p_bridge"
   }
 }

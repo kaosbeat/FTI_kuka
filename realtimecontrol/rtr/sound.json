@@ -168,6 +168,9 @@
     },
     "tidal_inspect_p_bridge": {
       "out_port": null
+    },
+    "kb_slow": {
+      "out_port": null
     }
   },
   "actions": {
@@ -746,7 +749,12 @@
     "inspect_p": {},
     "retreat_p": {},
     "tidal_follow_p_bridge": {},
-    "tidal_inspect_p_bridge": {}
+    "tidal_inspect_p_bridge": {},
+    "kb_slow": {
+      "ignore": {
+        "poses": []
+      }
+    }
   },
   "out_port": 7
 }
