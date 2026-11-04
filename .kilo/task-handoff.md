@@ -1,5 +1,71 @@
 # Task Handoff Log
 
+## 2026-11-04 — Core timing: move duration = max over joints (motion-profile estimate)
+
+### Status
+
+Completed
+
+### Summary
+
+Implemented the coordinated-axis move-duration estimate. The perform "time-to-arrive" previously used a crude `sum(|axis deltas|) / velocity` (sum of per-axis distances, constant speed). That is wrong for a coordinated move where all six joints travel in sync: the real rest-to-rest time is the **max** over the per-joint times, and each joint follows a trapezoidal/triangular velocity profile (accelerate → cruise → decelerate), not constant speed.
+
+Settled this turn's two open questions and folded them in:
+- **Triangular branch** resolved by dimensional analysis: for short moves the axis never reaches `vmax`, so `t = 2*sqrt(D/a)` (the user's literal `2D/a` is dimensionally inconsistent).
+- **Acceleration** resolved as a tunable config field `acceleration_max_deg_s2` (perform.json default `100.0`; machine state placeholder `1.0`, seeded from config). The exact physical KUKA value is still a placeholder to be tuned to hardware.
+
+Per-joint formula: `v = velocity × velocity_max_deg_s`; `D_j = |cur_j − tgt_j|`; `t_j = D_j/v + v/a` if `D_j ≥ v²/a` (trapezoidal) else `2·sqrt(D_j/a)` (triangular); total `T = max_j(t_j)`; `late = T > deadline` (notify-only, no auto-shortening).
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/state/machine.py`:
+  - Added module-level `motion_profile_time(distance_deg, vmax_deg_s, accel_deg_s2)` — the per-joint rest-to-rest time (trapezoidal/triangular; `0.0` for zero distance, `inf` for non-positive v or a).
+  - Added `set_perform_acceleration_max_deg_s2(accel_deg_s2)` setter (clamped non-negative).
+  - Rewrote `update_perform_time_to_arrive` to take a **list** of per-joint distances (was a scalar `distance`) and compute `T = max_j(motion_profile_time(d, v, a))`.
+  - (Earlier in the task) perform state dict: `time_to_arrive` comment updated to "seconds (max over joints of the rest-to-rest time)"; added `"acceleration_max_deg_s2": 1.0` placeholder.
+- `realtimecontrol/rtr/rtr/core/engine.py`:
+  - Seeds `acceleration_max_deg_s2` from the perform config at init (beside the existing `velocity_max_deg_s` seed).
+  - Distance computation (was `sum(abs(a-b) ...)`) → per-joint deltas `distances = [abs(a-b) for a,b in zip(curjpos, tgt)]`, passed as a list to `update_perform_time_to_arrive`.
+- `realtimecontrol/rtr/main.py`: `_reload_perform()` hook now also re-seeds `set_perform_acceleration_max_deg_s2` on hot-reload.
+- `realtimecontrol/rtr/perform.json`: added `"acceleration_max_deg_s2": 100.0` (earlier in the task).
+- `realtimecontrol/rtr/rtr/perform.py`: `acceleration_max_deg_s2` added to module docstring, `DEFAULT_PERFORM_CONFIG`, `validate_perform_config` (positive-number check), and the shape docstring (earlier in the task).
+- `realtimecontrol/rtr/tests/test_perform_state.py`:
+  - Added 4 `motion_profile_time` unit tests (trapezoidal, triangular, zero distance, zero v/a).
+  - Rewrote the `update_perform_time_to_arrive` tests to the per-joint list signature + max-over-joints formula.
+
+### Documentation
+
+None required — the formula and the acceleration/triangular decisions are captured in the `motion_profile_time` and `update_perform_time_to_arrive` docstrings.
+
+### Architecture
+
+No architectural impact. Same state-machine shape; the perform state gains one field (`acceleration_max_deg_s2`) and the time-to-arrive estimate is now a per-joint max. No new modules, dependencies, or data-flow boundaries.
+
+### Validation
+
+- `python tests/test_perform_state.py`: **ALL TESTS PASSED** (15 tests, incl. the 4 new motion-profile tests + rewritten per-joint tta tests).
+- `python tests/test_perform_config.py`: **ALL TESTS PASSED** (validates the new `acceleration_max_deg_s2` field).
+- `python tests/test_state_machine.py`: **ALL TESTS PASSED** (no regression from the state-dict change).
+- `python tests/test_perform_http.py`: **ALL TESTS PASSED** (config hot-reload path intact).
+- `python -c "import rtr.state.machine, rtr.core.engine, rtr.perform, main"`: **imports OK**.
+
+### Decisions and Caveats
+
+- `acceleration_max_deg_s2=100.0` is a **tunable placeholder**, not a confirmed hardware value. The KukaPy/KRL `acceleration=100` references are move parameters, not confirmed deg/s². Tune to the real KUKA when available.
+- The estimate is approximate: actual KUKA time depends on PTP/LIN, start/end speeds, acceleration limits, payload, configuration, singularities, and blending. The estimate is for the beat-deadline/late flag, not a motion command.
+- `late` remains notify-only (no auto-shortening of the move).
+
+### Next Task
+
+`perform.html` UI (TODO #4): `zone_groups` dropdown from `brain.json`, purge the `mode_group` leftover, beat/bar counter, and advance the action MIDI to the next pose.
+
+### Instructions for the Next Task
+
+- `brain.json` `zone_groups` is the single source of truth for the performance-group dropdown (current: `active`, `sleep`, `engage`); do not invent a new group (the user adds the performance group via the editor later).
+- `zones.json` `mode_group` is a hardcoded leftover to purge from data + code without breaking behavior (values: `museum-closed`, `event-sit-back`, `None`).
+- Do NOT add new per-pose MIDI input granularity; the existing per-action MIDI mapping should advance to the next pose. Per-pose MIDI output stays separate, keyed by `action_index` in `sound.json`.
+- The core timing is now per-joint (see `motion_profile_time` + `update_perform_time_to_arrive`); the UI just displays `time_to_arrive` / `late` from `perform_state()`.
+
 ## 2026-11-04 — Move `test_*.js` out of the rtr root into `tests/js/`
 
 ### Status

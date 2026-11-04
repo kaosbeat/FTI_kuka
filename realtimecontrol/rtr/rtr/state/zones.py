@@ -69,9 +69,6 @@ BEHAVIORS = (
     "bridge",
 )
 
-# Mode groups: the three thematic clusters of zones.
-MODE_GROUPS = ("museum-closed", "event-sit-back", "stage-takeover")
-
 # Engagement-ladder class vocabulary (kept in sync with ``rtr.brain.config.ZONE_CLASSES``;
 # defined here rather than imported to avoid the state↔brain import cycle).
 ZONE_CLASSES = ("ignore", "scan", "track", "farfocus", "approach", "facefocus", "retreat")
@@ -156,13 +153,12 @@ def effective_limits(zone_safezone: List[Tuple[float, float]]) -> List[Tuple[flo
 
 # ---------------------------------------------------------------------------
 # Built-in fallback zone table (used when zones.json is missing or corrupt).
-# Zones are safe-boundaries + mode_group + exits + actions. The zone graph is
+# Zones are safe-boundaries + exits + actions. The zone graph is
 # derived from both actions' ``next`` fields and zone-level ``exits``.
 # ---------------------------------------------------------------------------
 ZONES: Dict[str, dict] = {
     "resting": {
         "enabled": True,
-        "mode_group": 'museum-closed',
         "safezone": [(-94, 122), (-105, -65), (89, 115), (-15, 15), (-15, 45), (-357, 357)],
         "speed": 20,
         "exits": [('sleeping', 'breathe'), ('cuddling', 'breathe'), ('stretching', 'look'), ('hunting', 'track')],
@@ -187,7 +183,6 @@ ZONES: Dict[str, dict] = {
     },
     "sleeping": {
         "enabled": True,
-        "mode_group": 'museum-closed',
         "safezone": [(-5, 5), (-134, -130), (155, 157), (-3, 3), (-10, 10), (-357, 357)],
         "speed": 20,
         "exits": [('cuddling', 'breathe'), ('purring', 'purr'), ('resting', 'hold'), ('stretching', 'look')],
@@ -218,7 +213,6 @@ ZONES: Dict[str, dict] = {
     },
     "cuddling": {
         "enabled": True,
-        "mode_group": 'museum-closed',
         "safezone": [(-5, 5), (-134, -130), (155, 157), (-3, 3), (-10, 10), (-357, 357)],
         "speed": 20,
         "exits": [('purring', 'purr'), ('sleeping', 'breathe'), ('resting', 'wake')],
@@ -242,7 +236,6 @@ ZONES: Dict[str, dict] = {
     },
     "purring": {
         "enabled": True,
-        "mode_group": 'museum-closed',
         "safezone": [(-5, 5), (-134, -130), (155, 157), (-3, 3), (-10, 10), (-357, 357)],
         "speed": 20,
         "exits": [('sleeping', 'breathe'), ('resting', 'hold'), ('cuddling', 'breathe')],
@@ -267,7 +260,6 @@ ZONES: Dict[str, dict] = {
     },
     "stretching": {
         "enabled": True,
-        "mode_group": 'event-sit-back',
         "safezone": [(-94, 122), (-98, -96), (13, 19), (-2, 2), (-5, 5), (-357, 357)],
         "speed": 100,
         "exits": [('hunting', 'track'), ('examining', 'focus'), ('performing', 'trick'), ('resting', 'hold'), ('roaring', 'roar')],
@@ -307,7 +299,6 @@ ZONES: Dict[str, dict] = {
     },
     "hunting": {
         "enabled": True,
-        "mode_group": 'event-sit-back',
         "safezone": [(-20, 20), (-134, -130), (155, 157), (-3, 3), (0, 60), (-357, 357)],
         "speed": 20,
         "exits": [('examining', 'focus'), ('stretching', 'look'), ('performing', 'trick'), ('growling', 'growl')],
@@ -340,7 +331,6 @@ ZONES: Dict[str, dict] = {
     },
     "examining": {
         "enabled": True,
-        "mode_group": 'event-sit-back',
         "safezone": [(-20, 20), (-134, -130), (155, 157), (-3, 3), (0, 60), (-357, 357)],
         "speed": 20,
         "exits": [('hunting', 'track'), ('stretching', 'call'), ('performing', 'trick')],
@@ -365,7 +355,6 @@ ZONES: Dict[str, dict] = {
     },
     "performing": {
         "enabled": True,
-        "mode_group": 'event-sit-back',
         "safezone": [(-30, 30), (-98, -50), (13, 19), (-2, 2), (-30, 60), (-357, 357)],
         "speed": 40,
         "exits": [('hunting', 'track'), ('stretching', 'look'), ('roaring', 'roar')],
@@ -388,7 +377,6 @@ ZONES: Dict[str, dict] = {
     },
     "roaring": {
         "enabled": True,
-        "mode_group": 'stage-takeover',
         "safezone": [(-94, 122), (-134, -123), (136, 157), (-23, 23), (0, 118), (-357, 357)],
         "speed": 40,
         "exits": [('growling', 'growl'), ('clawing', 'claw'), ('leaping', 'leap'), ('performing', 'trick')],
@@ -411,7 +399,6 @@ ZONES: Dict[str, dict] = {
     },
     "growling": {
         "enabled": True,
-        "mode_group": 'stage-takeover',
         "safezone": [(-94, 122), (-134, -123), (136, 157), (-23, 23), (0, 118), (-357, 357)],
         "speed": 40,
         "exits": [('roaring', 'roar'), ('clawing', 'claw'), ('leaping', 'leap')],
@@ -435,7 +422,6 @@ ZONES: Dict[str, dict] = {
     },
     "clawing": {
         "enabled": True,
-        "mode_group": 'stage-takeover',
         "safezone": [(-94, 122), (-98, -96), (13, 19), (-2, 2), (-5, 5), (-357, 357)],
         "speed": 40,
         "exits": [('growling', 'snarl'), ('roaring', 'roar'), ('leaping', 'leap'), ('stretching', 'look')],
@@ -460,7 +446,6 @@ ZONES: Dict[str, dict] = {
     },
     "leaping": {
         "enabled": True,
-        "mode_group": 'stage-takeover',
         "safezone": [(-94, 122), (-124, -60), (-19, 157), (-2, 2), (-118, 118), (-357, 357)],
         "speed": 100,
         "exits": [('roaring', 'roar'), ('clawing', 'claw'), ('growling', 'growl'), ('resting', 'hold')],
@@ -585,8 +570,6 @@ def _validate_zone(name: str, z: dict, all_names: set) -> None:
         raise ValueError(f"zone {name!r}: must be an object")
     if "enabled" in z and not isinstance(z["enabled"], bool):
         raise ValueError(f"zone {name!r}: 'enabled' must be a bool")
-    if "mode_group" in z and not (isinstance(z["mode_group"], str) and z["mode_group"] in MODE_GROUPS):
-        raise ValueError(f"zone {name!r}: mode_group must be one of {MODE_GROUPS}")
     if "class" in z and not (isinstance(z["class"], str) and z["class"] in ZONE_CLASSES):
         raise ValueError(f"zone {name!r}: class must be one of {ZONE_CLASSES}")
     if "pose" in z and not (isinstance(z["pose"], str) and z["pose"] in POSE_ZONES):
@@ -932,14 +915,6 @@ class Zone:
             return b
         return 0
 
-    @property
-    def mode_group(self) -> Optional[str]:
-        """The zone's mode group, or None when absent."""
-        mg = self.data.get("mode_group")
-        if isinstance(mg, str) and mg in MODE_GROUPS:
-            return mg
-        return None
-
     def exits(self) -> List[Tuple[str, str]]:
         """The zone-level exits as a list of (zone, action) tuples.
 
@@ -1034,14 +1009,3 @@ class Zones:
             return None
         vids = self.get(zone_name)._action(action_name).get("pose_videos")
         return vids if isinstance(vids, list) else None
-
-    def mode_groups(self) -> Dict[str, List[str]]:
-        """Zones grouped by mode_group: ``{group_name: [zone_names]}``.
-
-        Zones without a mode_group are collected under ``"ungrouped"``.
-        """
-        groups: Dict[str, List[str]] = {}
-        for name, z in self._by_name.items():
-            mg = z.mode_group or "ungrouped"
-            groups.setdefault(mg, []).append(name)
-        return groups
