@@ -1,5 +1,310 @@
 # Task Handoff Log
 
+## 2026-11-04 — Move `test_*.js` out of the rtr root into `tests/js/`
+
+### Status
+
+Completed
+
+### Summary
+
+User wanted the 14 `test_*.js` Node test scripts out of the `realtimecontrol/rtr` root to declutter it. They are plain `node test_X.js` scripts (no package.json, no test runner, no CI references) that resolve all paths from `__dirname`: the `collide.js` module, `assets/` (STL/GLB), `editor.html`/`perform.html`, and the `*.json` data files. Nothing (README, scripts, PAK build, HTML) referenced them, so the move was safe.
+
+New home: **`tests/js/`** — the existing `tests/` directory already holds the Python tests, so all JS tests now live under one `tests/` roof and the root is clean.
+
+### Changes Made
+
+- `realtimecontrol/rtr/tests/js/`: **created**; all 14 `test_*.js` moved here (6 via `git mv` — they were tracked — 8 via `mv` — untracked).
+- Each moved file, three mechanical path fixes:
+  - `require("./collide.js")` → `require("../../collide.js")` (6 files)
+  - `const RDIR = __dirname;` → `const RDIR = path.join(__dirname, "..", "..");` (8 files)
+  - `path.join(__dirname, "assets"...` → `path.join(__dirname, "..", "..", "assets"...` (6 files)
+- `Run:` header comments updated to `node tests/js/test_X.js`.
+
+### Documentation
+
+None required — no README/script/PAK referenced the old locations; the in-file `Run:` comments now carry the correct path.
+
+### Architecture
+
+No architectural impact. Runtime app code (`collide.js`, `editor.html`, `assets/`, `*.json`) is untouched; only the test scripts moved. The PAK (`scripts/build_pak.sh` CODE_FILES) never referenced the test files.
+
+### Validation
+
+- `node tests/js/test_*.js` (all 14, from the `realtimecontrol/rtr` root): **12 PASS, 2 FAIL**.
+- The 2 failures (`test_action_cam.js`, `test_patches_seed.js`) are **pre-existing data-assertion failures**, not move-related: zero `ENOENT`/`MODULE_NOT_FOUND`/`Cannot find` errors in their output — all files load from the new location; the failures are assertions on zone/patch data (`actions[resting_testing_bridge][bridge]` is `undefined`) and a DOM `onclick` null error. Both files were untracked before the move, so no git baseline; the absence of any path error is the evidence the move is not the cause.
+- `ls test_*.js` at the root → **0 files** (root clean).
+- `git status`: the 6 tracked files show as `RM` (rename + modify); the 8 untracked ones are new under `tests/js/`.
+
+### Decisions and Caveats
+
+- `tests/js/` chosen over a top-level `js-tests/` or `tests_js/` to keep all tests (Python + JS) under the single existing `tests/` directory.
+- The 2 pre-existing JS test failures were **not** fixed (out of scope; same convention as the 5 pre-existing `test_remote_sdl.py` SETUP failures).
+- `bench_collide.js`, `bench_collision.js`, `validate_zones.js` remain in the root — same category (root-level dev scripts using `__dirname` + `./collide.js`) but the user only asked for `test_*.js`. They are the natural candidates for the next cleanup pass (move to `tests/js/` or a `tools/` dir; `validate_zones.js` is arguably a tool, not a test).
+
+### Next Task
+
+Optional cleanup continuation: decide a home for `bench_collide.js`, `bench_collision.js`, `validate_zones.js` (and possibly the other one-off root scripts: `check_zone_limits.py`, `sim_demo.py`, `parse_moods.py`, `chatbot.py`) and move them with the same two-level `__dirname` fix.
+
+### Instructions for the Next Task
+
+- Same mechanical fix if moving to a subdir: `require("./collide.js")` → `require("../../collide.js")`, `__dirname` → `path.join(__dirname, "..", "..")` (two levels up), and update `Run:` comments.
+- Verify with `node <path>` per file; treat data-assertion failures as pre-existing (grep output for `ENOENT|MODULE_NOT_FOUND|Cannot find` → expect 0).
+- 2 known pre-existing JS failures: `test_action_cam.js` (DOM `onclick` null), `test_patches_seed.js` (4 assertions on `resting_testing_bridge`/`bridge` patch data).
+
+## 2026-11-04 — Poses tab: regression tests for the save/load picker fix (test)
+
+### Status
+
+Completed
+
+### Summary
+
+Verified the poses-tab fix (previous entry) against the mini-DOM test harness and the sibling DOM-stub tests.
+
+### Changes Made
+
+- `realtimecontrol/rtr/test_poses_tab.js`: Test 9 (saving keeps `#posesSaveSel` / `#posesLoadSel` selections and the rendered list) and Test 10 (`posesLoad()` renders the pose list) — see the implement entry for the assertions.
+
+### Documentation
+
+None required — test-only.
+
+### Architecture
+
+No architectural impact.
+
+### Validation
+
+- `node test_poses_tab.js` → **ALL_TESTS_PASSED** (32/32, including the 4 new assertions).
+- `node test_flow_tab.js` / `node test_groups_tab.js` / `node test_roam_badge.js` → **ALL_TESTS_PASSED** (no regressions from the `editor.html` changes).
+- `node test_action_cam.js` → LOAD ERROR, `node test_patches_seed.js` → FAILURES=4 — **pre-existing**, identical to the recorded baseline (stale hand-maintained `STATIC_IDS` lists; they predate the poses-tab ids and fail identically on the original `editor.html`).
+
+### Decisions and Caveats
+
+- The two pre-existing failures were left untouched (out of scope; baseline parity confirmed).
+- The new assertions run against the real `editor.html` main script (the harness auto-derives element ids), so they guard the actual wiring, not a stub.
+
+### Next Task
+
+Final handoff (this entry set). No further code work outstanding.
+
+### Instructions for the Next Task
+
+`No immediate next task identified.`
+
+## 2026-11-04 — Poses tab: keep "save to" selection + pose list visible across save/load (implement)
+
+### Status
+
+Completed
+
+### Summary
+
+Fixed the poses-tab behavior the user reported: (1) the "— save to —" dropdown (`#posesSaveSel`) no longer resets to the placeholder after a save, (2) the pose list no longer collapses on save, and (3) the pose list is now visible as soon as an action is loaded (pressed **load**, or picked in the "load from" picker).
+
+Mechanics: the picker rebuilds (`buildPosesLoadPicker` / `buildPosesSavePicker`) now preserve the previous selection — the value is captured before `innerHTML = ""` and restored afterwards when the option still exists (`restorePickerValue`). Since `#posesLoadSel` is the working action, preserving it also keeps `buildPosesList()` rendering the rows instead of collapsing to "pick an action to edit its poses". `posesLoad()` now calls `buildPosesList()` after loading the pose into the scratch. `#posesLoadSel.onchange` now resets the active index to 0 and re-renders the list (plus the safezone/out-of-bounds highlighting), so the list activates the moment an action is picked.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - New `restorePickerValue(sel, prev)` helper (just above `buildPosesLoadPicker`): restores a picker's previous value after a rebuild if the option still exists.
+  - `buildPosesLoadPicker()`: captures `prev = loadSel.value` before the rebuild and calls `restorePickerValue(loadSel, prev)` after.
+  - `buildPosesSavePicker()`: same — `prev = saveSel.value` before the rebuild, `restorePickerValue(saveSel, prev)` after.
+  - `posesLoad()`: added `buildPosesList()` after `posesLoadPoseFromAction(posesCurIndex)`.
+  - Event wiring (next to `#posesSaveSel.onchange`): `if ($("posesLoadSel")) $("posesLoadSel").onchange = () => { posesCurIndex = 0; buildPosesList(); updatePosesOob(); };`
+- `realtimecontrol/rtr/test_poses_tab.js`: added Test 9 (save keeps both picker selections + the list rendered) and Test 10 (`posesLoad()` renders the list); updated the header comment.
+
+### Documentation
+
+None required — UI behavior fix, no docs describe these interactions.
+
+### Architecture
+
+No architectural impact.
+
+### Validation
+
+- `node test_poses_tab.js` → **ALL_TESTS_PASSED** (32/32, incl. the 4 new regression assertions: "save keeps the 'save to' selection", "save keeps the working action (load picker)", "save keeps the pose list rendered (no collapse)", "posesLoad renders the pose list (visible on load)").
+- `node test_flow_tab.js` → **ALL_TESTS_PASSED**; `node test_groups_tab.js` → **ALL_TESTS_PASSED**; `node test_roam_badge.js` → **ALL_TESTS_PASSED** (no regressions).
+- `node test_action_cam.js` → LOAD ERROR, `node test_patches_seed.js` → FAILURES=4 — **pre-existing**, identical to the recorded baseline (stale hand-maintained `STATIC_IDS`).
+
+### Decisions and Caveats
+
+- `#posesSlotSel` still resets to "append" after a save: deliberate (prevents accidentally replacing a slot twice in a row); not part of the complaint.
+- Picking a new action in the load-from picker resets the active pose index to 0 (the old index belonged to the previous action; `buildPosesList()` would otherwise clamp it arbitrarily).
+- The pickers are also rebuilt on tab entry (`posesEnter()`), so the selection now survives tab switches too (same preservation path).
+
+### Next Task
+
+Run the test suite and finalize the handoff (covered by the next entry).
+
+### Instructions for the Next Task
+
+- All changes are in `realtimecontrol/rtr/editor.html` (poses-tab JS, ~L7050–7360 + wiring at ~L9125) and `realtimecontrol/rtr/test_poses_tab.js` (Tests 9–10).
+- Verify with `node test_poses_tab.js` (must print ALL_TESTS_PASSED).
+
+## 2026-11-04 — Poses tab: save resets "save to" dropdown + collapses pose list (analysis)
+
+### Status
+
+Completed
+
+### Summary
+
+User report: in the poses tab, every time the "save" button is pressed, the "— save to —" dropdown (`#posesSaveSel`) resets to its placeholder, forcing the user to reselect the action they are working on; the pose list (`#posesList`) also collapses on save; and the list should be visible as soon as an action is loaded.
+
+Root cause (all in `realtimecontrol/rtr/editor.html`, poses-tab section ~L7050–7350):
+
+1. **`#posesSaveSel` resets on save**: `posesAddPose()` (L7287) ends by calling `buildPosesSavePicker()` (L7313), which does `saveSel.innerHTML = ""` and rebuilds all options — the selection falls back to the first option ("— save to —", value `""`).
+2. **Pose list collapses on save**: `posesAddPose()` also calls `buildPosesLoadPicker()` (L7312), which resets the *working action* picker (`#posesLoadSel`) the same way. `buildPosesList()` (L7315, called right after) then finds no working action (`posesWorkingAction()` returns null) and clears `#posesList` with "pick an action to edit its poses".
+3. **List not visible on load**: `posesLoad()` (L7345) only loads the pose into the scratch and never calls `buildPosesList()`; `#posesLoadSel` has no `onchange` handler, so picking an action in the "load from" picker also doesn't render the list until some other operation triggers a rebuild.
+
+The pickers are also rebuilt on every tab entry (`posesEnter()`, L7406), so the same reset happens there.
+
+### Changes Made
+
+- None (analysis only).
+
+### Documentation
+
+None required — pure analysis; the fix entry below documents the behavior change.
+
+### Architecture
+
+No architectural impact.
+
+### Validation
+
+- Code read: `editor.html` L6940–7434 (poses-tab JS), L9095–9139 (event wiring); `test_poses_tab.js` (mini-DOM harness + assertions). No commands run.
+
+### Decisions and Caveats
+
+- Fix approach: preserve each picker's previous value across rebuilds (capture before `innerHTML = ""`, restore after if the option still exists); `posesLoad()` re-renders the list; `#posesLoadSel.onchange` re-renders the list (resetting the active index to 0) so the list activates as soon as an action is picked.
+- `#posesSlotSel` intentionally keeps resetting to "append" after a save (deliberate default to avoid accidental slot replace on the next save) — not part of the complaint.
+
+### Next Task
+
+Implement the fix in `editor.html` (pickers preserve selection; `posesLoad()` renders the list; `#posesLoadSel.onchange` renders the list).
+
+### Instructions for the Next Task
+
+- Add a `restorePickerValue(sel, prev)` helper; call it at the end of `buildPosesLoadPicker()` and `buildPosesSavePicker()` after capturing `prev = sel.value` before the `innerHTML = ""` rebuild.
+- Add `buildPosesList()` to `posesLoad()` after `posesLoadPoseFromAction(posesCurIndex)`.
+- Wire `if ($("posesLoadSel")) $("posesLoadSel").onchange = () => { posesCurIndex = 0; buildPosesList(); updatePosesOob(); };` next to the existing `#posesSaveSel.onchange` wiring (L9122).
+- Then add regression assertions to `test_poses_tab.js` and run `node test_poses_tab.js`.
+
+## 2026-11-04 — Unclutter `remote/` vs `rtr/remote/` (entry points, dead code, docs)
+
+### Status
+
+Completed
+
+### Summary
+
+User hit `ImportError: attempted relative import with no known parent package` running `python rtr/remote/tui.py` and asked what the top-level `remote/` dir is vs `rtr/remote/` (one for the Trimui brick, one for the terminal?). Findings:
+
+- **`rtr/remote/`** is the canonical remote package: desktop urwid TUI (`tui.py`) **and** the Trimui SDL2 app (`mainmenu.py` → `sdlapp.py`), plus shared `view.py`/`connection.py`/`config.py`/`events.py`/`led.py`. The PAK ships this tree to the device (`scripts/build_pak.sh` CODE_FILES → `dist/repo/rtr` → `/storage/rtr-remote`); the device runs the **SDL** app, never `tui.py`.
+- **Top-level `remote/`** was a historical scaffold: a thin launcher (`tui.py`), a **dead legacy `config.py`** (`localhost:5000`/`js0` defaults, imported by nothing), its `__init__.py`, a stale `config.json.example`, the Trimui deploy runbook (`deploy.md`), and R36S hardware assets (`yellowbrick/`: device-tree blobs + MIPI overlay).
+- The `__main__` bootstrap block in `rtr/remote/tui.py` was **dead code**: module-level relative imports (line 40) fail before it can run, so `python rtr/remote/tui.py` could never work — the user's exact error.
+- `tests/test_remote_tui.py` was **stale**: it imported `action_kind`/`action_target`/`reverse_exits` from `rtr.flow` and `item_label` from `rtr.remote.tui` — all gone after the flow model moved to the `next`-field model (`flow.py`: `reachable_targets`/`reverse_targets`/`build_items`/`activation_commands`; `view.py`: `item_label`). It failed at import.
+
+Working entry points (from the `realtimecontrol/rtr` root): `python remote/tui.py [flags]` (launcher) and `python -m rtr.remote.tui [flags]` (canonical module). Direct execution of `rtr/remote/tui.py` is impossible and is now documented as such.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/remote/tui.py`: removed the dead `__main__` bootstrap block; added a "Run it" note to the module docstring (launcher + `-m` forms, and why direct execution fails).
+- `realtimecontrol/rtr/rtr/remote/config.py`: fixed the stale `--core-host` help text ("default: 127.0.0.1" → actual default `192.168.1.185`).
+- `realtimecontrol/rtr/remote/`: **deleted** legacy `config.py`, `__init__.py`, `config.json.example`, `__pycache__/`. Kept `tui.py` (launcher), `deploy.md`, `yellowbrick/`.
+- `realtimecontrol/rtr/tests/test_remote_tui.py`: **rewritten** against the current API (30 tests: `action_loops`/`action_enabled`/`action_next_list`, `reachable_targets`/`reverse_targets`, `build_items`, `item_label`, `activation_commands`).
+- `realtimecontrol/rtr/remote/README.md`: **new** — what the top-level dir holds, how to run the desktop TUI from it, where config lives, what the Trimui actually runs.
+- `realtimecontrol/rtr/rtr/remote/README.md`: added a "What's where" table (this dir / top-level `remote/` / PAK / `dist/repo`), a "Running tests (dev machine)" section, and a pointer to `remote/deploy.md` for the socat cross-network forwarding.
+- `realtimecontrol/rtr/README.md`: fixed the remote-TUI section (broken `python rtr/remote/tui.py` command → `python -m rtr.remote.tui`; added config note + README links); added a top-level `remote/` row to the Modules table.
+
+### Documentation
+
+- New `remote/README.md` (top-level) + expanded `rtr/remote/README.md` + main README fixes (see Changes Made).
+
+### Architecture
+
+No architectural impact. The package layout is unchanged; only dead scaffolding was removed and the two working entry points were made explicit. The PAK (`build_pak.sh` CODE_FILES) only references `rtr/remote/*`, so device deploy is unaffected.
+
+### Validation
+
+- `python tests/test_remote_tui.py` → **ALL TESTS PASSED** (30/30; was failing at import before the rewrite).
+- `python remote/tui.py --help` → OK (launcher still works after deleting `remote/__init__.py`).
+- `python -m rtr.remote.tui --help` → OK (harmless `RuntimeWarning: 'rtr.remote.tui' found in sys.modules...` — inherent to `rtr/remote/__init__.py` importing `.tui`; the app runs fine).
+- `RemoteTUI(Config(core_host='orangebot'))._build_top()` → builds a 12-row Pile (render path OK without a TTY).
+- `python tests/test_remote_sdl.py` → **5 failed, 25 passed, 2 skipped — identical to the pre-change baseline** (pre-existing SETUP-page test failures, untouched by this task).
+- Grep: no remaining references to the deleted top-level `remote/config.py` / `remote/__init__.py` / `remote/config.json.example` (all hits are the canonical `rtr/remote/*` paths or the new README text).
+
+### Decisions and Caveats
+
+- Kept `remote/tui.py` as the launcher rather than deleting it: it's the documented `python remote/tui.py` entry point and the only way to run the TUI without the `-m` RuntimeWarning.
+- Did **not** make `python rtr/remote/tui.py` work: the module-level relative imports make direct execution impossible without a restructure; documented instead (docstring + both READMEs).
+- The 5 pre-existing `test_remote_sdl.py` SETUP-page failures were left alone (out of scope; they fail identically before and after).
+- `python -m rtr.remote.tui` prints a RuntimeWarning because `rtr/remote/__init__.py` eagerly imports `.tui`. Left as-is: `__init__` is intentional (PAK + `test_remote_sdl.py` rely on it) and the warning is harmless.
+
+### Next Task
+
+Per-module README sweep ("this goes for all modules"): only `rtr/remote/` and `rtr/camera/` have module READMEs. Extend the same convention (what's in the dir, dev test runs, real-robot config) to `brain/`, `core/`, `display/`, `io/`, `patches/`, `robot/`, `safety/`, `sound/`, `state/`, and fix the 5 stale SETUP-page tests in `tests/test_remote_sdl.py`.
+
+### Instructions for the Next Task
+
+- Convention to copy: `rtr/remote/README.md` "What's where" + "Running tests (dev machine)" sections; main README Modules table row per top-level dir.
+- SETUP test failures to fix: `test_settings_content_and_help_text`, `test_setup_page_activation_returns_none_cmds`, `test_setup_calibrate_activation_returns_prompt`, `test_setup_map_activation_returns_capture_status`, `test_setup_dpad_left_right_still_font_on_font_row` — all in `tests/test_remote_sdl.py`; the SETUP page logic lives in `rtr/remote/view.py` (`_settings_content`, `build_settings_items`, `activate_commands`).
+- Config reference for the real robot: `rtr/remote/config.json` fields + `remote/deploy.md` (socat forwarding, on-device PAK path `/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/config.json`).
+
+## 2026-11-04 — Diagnose `clear_action` "error" output (not an error)
+
+### Status
+
+Completed
+
+### Summary
+
+User reported repeated `[debug-clear_action] clearing action=bridge zone=sleeping_resting_bridge` output with a 3-frame stack, calling it "these errors". Confirmed this is **not** an exception. It is the intentional debug print in `clear_action` (`realtimecontrol/rtr/rtr/state/machine.py:540-546`), added to capture "who is clearing the action (the hold-revert bug)". It prints `traceback.format_stack()[-4:-1]` (the last 3 call frames) on every action clear.
+
+Decoded the pasted stack and confirmed it is the **normal single-run completion path**, not a fault:
+- `bridge` (`zones.json`) is `loop: false` with 3 poses and `next: {zone: resting, action: hold}`.
+- `step` (`machine.py:755`) → `_advance_anchor` (`machine.py:478`, `action_index >= n`, loop false) → `_advance_after_action` (`machine.py:650`) → `clear_action()`.
+- `_advance_after_action` clears the action first (print fires) then hands off to `resting/hold`. `resting`/`hold` are both enabled, so the handoff is valid.
+
+Key diagnostic for the ongoing hold-revert bug: because the print dumps the call stack, each firing identifies *which* path cleared the action. The `_advance_after_action` stack is the legitimate completion path (expected). The spurious clears to investigate are the ones from other stacks: safety-gate discard (`_try_go` → `clear_action`, `machine.py:701`), entering manual mode (`set_control_mode`), or `random_wrist` (`machine.py:278`).
+
+### Changes Made
+
+- None. Investigation/diagnosis only; no code changed.
+
+### Documentation
+
+None required — this is a diagnostic clarification, no behavior changed.
+
+### Architecture
+
+No architectural impact.
+
+### Validation
+
+- Read `machine.py` `clear_action` (`:540-549`), `_advance_after_action` (`:631-667`), `_advance_anchor` (`:455-478`), `step` (`:709-758`), `_try_go` (`:681-704`).
+- Verified `zones.json`: `sleeping_resting_bridge.bridge` = `loop:false`, 3 poses, `next: resting/hold`; `resting.hold` enabled + `loop:true`.
+- Cross-checked pasted line numbers (755 / 478 / 650) against current file — all match.
+
+### Decisions and Caveats
+
+- Did **not** remove the debug print: it was added deliberately to track the hold-revert bug and is still doing useful work (identifying the clearing call path). Remove it only once that bug is diagnosed/fixed.
+- The "errors" are log noise from the debug instrumentation, not a crash.
+
+### Next Task
+
+If the hold-revert bug persists, watch which call stack the `clear_action` print fires from. A firing from `_advance_after_action` is normal; a firing from the safety-discard / manual-mode / `random_wrist` paths is the spurious clear to chase.
+
+### Instructions for the Next Task
+
+- Reproduce, then read the *stack* in the `[debug-clear_action]` print, not just the message.
+- Legit completion stack: `step → _advance_anchor → _advance_after_action → clear_action`.
+- Spurious stacks to investigate: `_try_go → clear_action` (`machine.py:701`), `set_control_mode → clear_action`, `random_wrist → clear_action` (`machine.py:278`).
+
 ## 2026-11-04 — Fix stale `_MockMachine` mocks (missing `last_discard`)
 
 ### Status

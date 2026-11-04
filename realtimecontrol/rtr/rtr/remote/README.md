@@ -16,6 +16,19 @@ no `pygame.joystick`.
 > **Commands below are run from the `realtimecontrol/rtr` root** (the directory
 > that contains `scripts/`, `rtr/`, `pak/`, `dist/`).
 
+## What's where
+
+| Path | What |
+|---|---|
+| `rtr/remote/` (this dir) | The canonical remote package: both renderers (`tui.py` desktop urwid, `sdlapp.py` Trimui SDL2) + the shared `view.py` / `connection.py` / `config.py` / `events.py` / `led.py`. |
+| `remote/` (top-level) | **Not** the app: the desktop-TUI launcher (`remote/tui.py`), the Trimui deploy runbook (`remote/deploy.md`), and the R36S hardware assets (`remote/yellowbrick/`). See its [README](../../remote/README.md). |
+| `pak/RTRREMOTE.pak/` | The on-device PAK (bundled python + venv + fonts + `config.json`); `launch.sh` runs `rtr/remote/mainmenu.py` from the on-device repo. |
+| `dist/repo/rtr/` | The lean app-code tree that `scripts/build_pak.sh` stages and ships to the device's `/storage/rtr-remote`. |
+
+The Trimui runs the **SDL** app (`mainmenu.py` → `sdlapp.py`); the desktop TUI
+runs on a dev terminal. Neither `tui.py` is a Trimui component, and the
+top-level `remote/` directory is only a launcher + docs + hardware assets.
+
 ## Desktop TUI (yellowbrick)
 
 The canonical TUI lives in `rtr/remote/tui.py`; the top-level `remote/tui.py`
@@ -69,6 +82,24 @@ ssh root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selfte
 # verify the WS link before shipping
 python rtr/remote/sdlapp.py --ws-test --core-host 192.168.1.185
 ```
+
+## Running tests (dev machine)
+
+From the `realtimecontrol/rtr` root (headless, no terminal / no core needed):
+
+```bash
+# pure navigation logic (flow.py + view.item_label) — urwid only
+python tests/test_remote_tui.py
+
+# SDL app state machine — pygame optional (guarded import)
+python tests/test_remote_sdl.py
+
+# under pytest, the same way
+pytest tests/test_remote_tui.py tests/test_remote_sdl.py
+```
+
+`launch.sh --selftest` (on-device) is the Trimui smoke test; it runs
+`mainmenu.py --selftest` with the SDL dummy driver.
 
 ## Deploying the Trimui PAK
 
@@ -152,6 +183,11 @@ the PAK's `config.json` (`"core_host"`) or at launch:
 ```bash
 /mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --core-host 192.168.1.185
 ```
+
+When the core and the Trimui are on different networks (e.g. the core on the
+robot's LAN, the Trimui on wifi), forward the port on the robot — see
+[`remote/deploy.md`](../../remote/deploy.md#deploy-runbook--rtr-remote-trimui--r36s)
+for the socat command.
 
 ## OS setup
 

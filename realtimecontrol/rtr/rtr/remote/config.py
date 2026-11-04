@@ -149,7 +149,7 @@ def _add_flags(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     g.add_argument("--height", dest="height", type=int,
                    help="UI height in lines (desktop default: 4)")
     g.add_argument("--core-host", dest="core_host",
-                   help="core WebSocket host (default: 127.0.0.1)")
+                   help="core WebSocket host (default: 192.168.1.185)")
     g.add_argument("--core-port", dest="core_port", type=int,
                    help="core WebSocket port (default: 8765)")
     g.add_argument("--http-host", dest="http_host",

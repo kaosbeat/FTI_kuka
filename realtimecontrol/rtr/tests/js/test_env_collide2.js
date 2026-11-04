@@ -1,11 +1,11 @@
 // Test env collision with the NEW low-res model (environment_collision.glb).
 // Reports each env mesh's WORLD AABB (after +90deg X) and probes poses that should
 // overlap the cubes, to confirm the env-collision path fires with the low-res model.
-const Collide = require("./collide.js");
+const Collide = require("../../collide.js");
 const fs = require("fs");
 const path = require("path");
 
-const ASSETS = path.join(__dirname, "assets", "kr60ha", "collision");
+const ASSETS = path.join(__dirname, "..", "..", "assets", "kr60ha", "collision");
 
 function parseSTL(file) {
   const buf = fs.readFileSync(file);
@@ -75,7 +75,7 @@ function parseEnvGLB(file) {
   return out;
 }
 
-const envMeshes = parseEnvGLB(path.join(__dirname, "assets", "environment_collision.glb"));
+const envMeshes = parseEnvGLB(path.join(__dirname, "..", "..", "assets", "environment_collision.glb"));
 console.log("env meshes:", envMeshes.length);
 for (const m of envMeshes) {
   const n = m.tris.length / 9;

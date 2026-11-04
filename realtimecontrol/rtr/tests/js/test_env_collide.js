@@ -1,11 +1,11 @@
 // Reproduce the browser collision pipeline in Node: base + 6 links + env GLB.
 // Verifies whether the robot (at HOME / test poses) actually intersects the env,
 // and whether the env collision path (grid + SAT) fires.
-const Collide = require("./collide.js");
+const Collide = require("../../collide.js");
 const fs = require("fs");
 const path = require("path");
 
-const ASSETS = path.join(__dirname, "assets", "kr60ha", "collision");
+const ASSETS = path.join(__dirname, "..", "..", "assets", "kr60ha", "collision");
 
 // ------------------------------------------------------------------
 // STL parse (binary, non-indexed) — same as the main test.
@@ -136,7 +136,7 @@ const SKIP_PAIRS = [
 
 const stl = {};
 LINKS.forEach((n) => { stl[n] = parseSTL(path.join(ASSETS, n + ".stl")); });
-const envTris = parseEnvGLB(path.join(__dirname, "assets", "environment.glb"));
+const envTris = parseEnvGLB(path.join(__dirname, "..", "..", "assets", "environment.glb"));
 console.log("env meshes:", envTris.length, "total env tris:", envTris.reduce((a, t) => a + t.length / 9, 0));
 
 const w = Collide.createWorld();

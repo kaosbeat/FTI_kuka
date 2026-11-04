@@ -1,6 +1,6 @@
 // Direct test: does base_link (identity) intersect the floor (Cube, +90deg X)?
 // Prints the base's triangles that dip below Z=0 and runs the exact tri test base-vs-floor.
-const Collide = require("./collide.js");
+const Collide = require("../../collide.js");
 const fs = require("fs");
 const path = require("path");
 
@@ -54,8 +54,8 @@ function parseFloor(file) {
   return tris;
 }
 
-const baseTris = parseSTL(path.join(__dirname, "assets", "kr60ha", "collision", "base_link.stl"));
-const floorTris = parseFloor(path.join(__dirname, "assets", "environment_collision.glb"));
+const baseTris = parseSTL(path.join(__dirname, "..", "..", "assets", "kr60ha", "collision", "base_link.stl"));
+const floorTris = parseFloor(path.join(__dirname, "..", "..", "assets", "environment_collision.glb"));
 
 // Base AABB
 let ba = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];

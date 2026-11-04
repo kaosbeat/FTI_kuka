@@ -1,12 +1,12 @@
 // Node test for collide.js: SAT unit checks + an end-to-end check against the real
 // KR60 collision STLs (FK-driven, so HOME should be clear and a cranked pose should
-// self-collide). Run: node test_collide.js  (add --explore to scan for colliding poses)
+// self-collide). Run: node tests/js/test_collide.js  (add --explore to scan for colliding poses)
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const Collide = require("./collide.js");
+const Collide = require("../../collide.js");
 
-const ASSETS = path.join(__dirname, "assets", "kr60ha", "collision");
+const ASSETS = path.join(__dirname, "..", "..", "assets", "kr60ha", "collision");
 const LINKS = ["base_link", "link_1", "link_2", "link_3", "link_4", "link_5", "link_6"];
 
 // ---- binary STL parser (Blender format: 80-byte header + uint32 count + 50 bytes/tri) ----

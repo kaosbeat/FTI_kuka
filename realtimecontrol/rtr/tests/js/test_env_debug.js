@@ -1,6 +1,6 @@
 // Debug: replicate the world env path for the base at HOME, step by step, to find why
 // the world check misses the base-floor collision that the direct test finds.
-const Collide = require("./collide.js");
+const Collide = require("../../collide.js");
 const fs = require("fs");
 const path = require("path");
 
@@ -81,9 +81,9 @@ function aabbs(tris) {
   return a;
 }
 
-const envMeshes = parseEnvGLB(path.join(__dirname, "assets", "environment_collision.glb"));
+const envMeshes = parseEnvGLB(path.join(__dirname, "..", "..", "assets", "environment_collision.glb"));
 const floorTris = envMeshes[0].tris;
-const baseTris = parseSTL(path.join(__dirname, "assets", "kr60ha", "collision", "base_link.stl"));
+const baseTris = parseSTL(path.join(__dirname, "..", "..", "assets", "kr60ha", "collision", "base_link.stl"));
 
 // Exact values.
 let baseMinZ = Infinity, floorMaxZ = -Infinity;

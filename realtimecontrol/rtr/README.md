@@ -127,6 +127,7 @@ starts folding commands into ticks.
 | `render.html`     | Fullscreen hydra render page (WebSocket-driven; the matched patch, re-eval on state change).|
 | `chatbot.py`      | Optional LLM brain: senses free-form input and answers the core with a JSON command. |
 | `rtr/remote/tui.py` | Remote TUI (urwid): a terminal/handheld client that groups the current zone's actions by kind, marks loops (`↻`) and targets, and plays an action or `goto_zone`s to an exit. |
+| `remote/` (top-level) | Desktop-TUI launcher (`tui.py`), Trimui deploy runbook (`deploy.md`), R36S hardware assets (`yellowbrick/`). Not the app — that lives in `rtr/remote/`. |
 | `rtr3d.js`        | Shared Robot3D builder: the real KR60 (kr60ha xacro chain + visual STL meshes) + helpers (used by client + editor). |
 | `zones.json`      | On-disk zone/pose data — the editable source of truth.                |
 | `sound.json`      | On-disk MIDI-out mapping (channel + zone/mode/action messages).       |
@@ -397,13 +398,19 @@ Navigation is manual: `↑`/`↓` move the cursor, `enter` activates the selecte
 `q`/`escape` quits.
 
 ```bash
-# from the rtr/ directory — the top-level launcher, or the canonical module directly
+# from the realtimecontrol/rtr root — the top-level launcher, or the canonical module
 python remote/tui.py --core-host 127.0.0.1 --core-port 8765
-python rtr/remote/tui.py --core-host 127.0.0.1 --core-port 8765
+python -m rtr.remote.tui --core-host 127.0.0.1 --core-port 8765
 ```
 
-The pure navigation logic (`build_items`, `item_label`, `activation_commands`, and the
-`action_kind` / `action_loops` / `action_target` / `action_enabled` helpers) is exercised
+Running `python rtr/remote/tui.py` directly does **not** work (its relative
+imports fail before any bootstrap runs); use one of the two commands above.
+Config lives in `rtr/remote/config.json` (pass with `--config`); explicit
+`--core-host` / `--core-port` flags override it. See
+[`rtr/remote/README.md`](rtr/remote/README.md) for the full client docs and
+[`remote/README.md`](remote/README.md) for what the top-level `remote/` dir holds.
+
+The pure navigation logic (`build_items`, `item_label`, `activation_commands`, and the `action_loops` / `action_enabled` helpers) is exercised
 headlessly in `tests/test_remote_tui.py`.
 
 ### The HTTP server, editor, and zones.json

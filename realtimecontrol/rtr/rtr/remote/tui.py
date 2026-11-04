@@ -24,6 +24,15 @@ the main thread (no cross-thread widget access).
 This module is a thin urwid renderer: all row content and the state machine
 live in the shared pure view layer (:mod:`rtr.remote.view`); each row dict is
 mapped here to a urwid widget through the :class:`Theme` palette.
+
+Run it (from the ``realtimecontrol/rtr`` root):
+
+- ``python remote/tui.py --core-host <host>`` — the top-level launcher, or
+- ``python -m rtr.remote.tui --core-host <host>`` — this module as a package.
+
+Running this file directly (``python rtr/remote/tui.py``) does not work: the
+module-level relative imports below fail before any bootstrap could run, so the
+module must be loaded as part of the ``rtr`` package.
 """
 
 import asyncio
@@ -509,16 +518,3 @@ def run(config=None) -> None:
         ns = parser.parse_args()
         config = from_args(ns)
     RemoteTUI(config).run()
-
-
-if __name__ == "__main__":
-    # Allow running directly with `python tui.py`: bootstrap the rtr package
-    # root onto sys.path, then run through the packaged module so relative
-    # imports (e.g. `.connection`) resolve correctly.
-    import os
-    import sys
-    _pkg_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    if _pkg_root not in sys.path:
-        sys.path.insert(0, _pkg_root)
-    from rtr.remote import tui as _pkg_tui
-    _pkg_tui.run()
