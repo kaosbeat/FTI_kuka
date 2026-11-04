@@ -155,6 +155,10 @@ class Display:
             "speed": snap.speed,
             "moving": snap.moving,
         }
+        # The current anchor index within the action's poses (the perform.html page
+        # shows it so the operator sees the MIDI-driven pose advancement).
+        if snap.action_index is not None:
+            frame["action_index"] = snap.action_index
         rui = self._render_ui_field()
         if rui is not None:
             frame["render_ui"] = rui

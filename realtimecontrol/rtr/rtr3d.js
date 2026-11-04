@@ -81,6 +81,15 @@ const Robot3D = (() => {
   // The real arm's last concrete joint angles (deg). A frozen ("x") axis in a driven
   // pose holds its current value, so this is the concrete value an "x" resolves to.
   const curJoints = HOME.slice();
+  // The solid arm's RENDERED joint angles (deg). Eases toward curJoints each render
+  // frame so the 3D arm moves smoothly between the 20 Hz state frames instead of
+  // snapping (the solid arm trails the ghost/target during a move). The ghost is still
+  // snapped in update(); only the solid arm is eased.
+  const displayJoints = HOME.slice();
+  // The solid arm's easing rate (Hz): how quickly displayJoints chases curJoints.
+  // Higher = snappier (less lag); lower = more trailing. Frame-rate independent.
+  const SOLID_SMOOTH_RATE = 12;
+  let lastFrameTs = null;
   // The tool-screen texture (fed by hydra); re-uploaded from the hydra canvas each frame.
   let screenTex = null;
   let screenW = SCREEN_RESOLUTION[0], screenH = SCREEN_RESOLUTION[1];
@@ -895,8 +904,20 @@ const Robot3D = (() => {
       camera.updateProjectionMatrix();
       renderer.setSize(cw, ch);
     });
-    (function loop() {
+    (function loop(ts) {
       requestAnimationFrame(loop);
+      // Ease the solid arm's rendered joints toward the authoritative current position
+      // (curJoints) so the 3D arm moves smoothly between the 20 Hz state frames. The
+      // ghost (target) snaps in update(); the solid arm trails it during a move.
+      if (rotors) {
+        const dt = (ts != null && lastFrameTs != null) ? Math.min(0.1, (ts - lastFrameTs) / 1000) : 0;
+        if (ts != null) lastFrameTs = ts;
+        const k = dt > 0 ? 1 - Math.exp(-dt * SOLID_SMOOTH_RATE) : 0;
+        for (let j = 0; j < 6; j++) {
+          displayJoints[j] += (curJoints[j] - displayJoints[j]) * k;
+        }
+        setJoints(rotors, displayJoints);
+      }
       controls.update();
       if (screenTex) screenTex.needsUpdate = true;  // re-upload the hydra canvas
       runCollisionCheck();
@@ -996,7 +1017,9 @@ const Robot3D = (() => {
       for (let j = 0; j < 6; j++) {
         if (typeof s.joints[j] === "number") curJoints[j] = s.joints[j];
       }
-      setJoints(rotors, s.joints);
+      // The solid arm's rendered position is eased toward curJoints in the render loop
+      // (displayJoints); it is no longer snapped here, so the arm moves smoothly between
+      // the 20 Hz state frames instead of jumping.
     }
     if (s.target) {
       // During a pose drag the drag loop owns the ghost (setTarget per IK step); the

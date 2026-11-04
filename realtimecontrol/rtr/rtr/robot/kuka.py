@@ -60,16 +60,20 @@ class KukaRobot(RobotBase):
         # socket from the stream-move thread and the tick loop desyncs it and
         # strands the KRL at "WAIT FOR $FLAG[1]" (the "waiting for flag" error).
         self._lock = threading.Lock()
-        # EKI stale-read detector: the KUKAPY server's CASE 4 (movej) responds
-        # with Res/A1-A6 = 0.0 (the loop's initialization values), because CASE 4
-        # never writes Res/A1-A6 — only CASE 2 (curjpos) does. If that zero-filled
-        # move <Res> lands in _recv_buf and gets misread as the next tick's
-        # curjpos response, the engine sees [0,0,0,0,0,0] raw (→ [0,0,0,0,0,90]
-        # with the J6 offset). The robot physically moved, but the readback is
-        # stale. Track consecutive all-zero raw reads; when the streak reaches the
-        # threshold, raise KukaError so the engine's watchdog triggers recover().
-        self._zero_streak = 0
-        self._zero_streak_threshold = 3
+        # Reject-and-hold stale-read detector (replaces the old consecutive-zero
+        # streak). The KUKAPY server's movej (CASE 4) responds with Res/A1-A6 = 0.0
+        # (the loop's initialization values — CASE 4 never writes Res/A1-A6, only
+        # CASE 2 / curjpos does). If that zero-filled move <Res> is mis-paired as the
+        # next tick's curjpos response, raw reads all-zero even though the robot
+        # physically moved. A single mis-paired frame self-heals on the next tick, so
+        # the OLD consecutive-zero streak (threshold 3) never fired ("no KukaError").
+        # Reject-and-hold acts on ONE bad tick: reject an all-zero read when the last
+        # physically-plausible reading was non-zero, hold the last-good pose, and
+        # escalate consecutive rejections to KukaError so the engine watchdog triggers
+        # recover() on a sustained desync.
+        self._last_good_raw = None
+        self._reject_streak = 0
+        self._reject_streak_threshold = 3
 
     def connect(self) -> None:
         try:
@@ -131,23 +135,43 @@ class KukaRobot(RobotBase):
     def get_curjpos(self) -> List[float]:
         with self._lock:
             raw = list(self._eki_call("get_curjpos"))
-        # Stale-read detection: the KUKAPY server's move response (CASE 4) carries
-        # Res/A1-A6 = 0.0 (initialization values). If that zero-filled <Res> is
-        # misread as a curjpos response, raw is all zeros. Track consecutive all-zero
-        # reads; when the streak reaches the threshold, raise KukaError so the
-        # engine's watchdog triggers recover() (reconnect clears _recv_buf).
+        # Reject-and-hold with escalation.
+        #
+        # all-zero raw is the stale move-<Res> signature. It is only a false reading
+        # when the robot was physically elsewhere: the discriminator is "raw all-zero
+        # AND last-good non-zero". If the robot is genuinely at home (last-good is
+        # itself all-zero, or we have no baseline yet), the all-zero read is real and
+        # is accepted. This avoids the false positive at a legitimate zero pose.
         all_zero = all(abs(v) < 1e-6 for v in raw)
-        if all_zero:
-            self._zero_streak += 1
-            if self._zero_streak >= self._zero_streak_threshold:
+        last_good_zero = (self._last_good_raw is not None
+                          and all(abs(v) < 1e-6 for v in self._last_good_raw))
+        if all_zero and self._last_good_raw is not None and not last_good_zero:
+            self._reject_streak += 1
+            # Log every rejection loudly — a silent hold would mask a sustained
+            # desync (the whole point is no silent data corruption).
+            print(f"[kuka] REJECTED stale all-zero curjpos read "
+                  f"(reject streak {self._reject_streak}); "
+                  f"holding last-good raw={self._last_good_raw}")
+            if self._reject_streak >= self._reject_streak_threshold:
                 KukaError = _get_kuka_error()
                 raise KukaError(
-                    f"EKI stale read: raw curjpos all-zero for "
-                    f"{self._zero_streak} consecutive reads (threshold "
-                    f"{self._zero_streak_threshold}); move <Res> desync suspected"
+                    f"EKI stale read: rejected all-zero curjpos for "
+                    f"{self._reject_streak} consecutive reads (threshold "
+                    f"{self._reject_streak_threshold}); sustained desync, "
+                    f"escalating to recover()"
                 )
-        else:
-            self._zero_streak = 0
+            # Hold the last physically-plausible raw reading, offset-applied (the
+            # accept path below also returns offset-applied, so this stays
+            # consistent). Holding the last-MEASURED pose lags reality while the
+            # robot moves (arrival detection delays, never fires early) — the safe
+            # direction. Never substitute the target/ghost here.
+            return [self._last_good_raw[i] + self._joint_offsets[i]
+                    for i in range(len(self._last_good_raw))]
+        # Accept: physically-plausible reading. Reset the reject streak and
+        # re-baseline the last-good raw (stored pre-offset, so it is independent
+        # of any joint-offset hot-reload).
+        self._reject_streak = 0
+        self._last_good_raw = list(raw)
         return [raw[i] + self._joint_offsets[i] for i in range(len(raw))]
 
     def get_curpos(self) -> List[float]:
@@ -181,12 +205,18 @@ class KukaRobot(RobotBase):
         old disconnect+reconnect leave the engine in an unrecoverable
         ``AttributeError`` loop. Raises the original error if the reconnect fails.
         """
+        # Re-baseline reject-and-hold so the first read after recovery is accepted
+        # unconditionally (establishes a fresh baseline). Without this, a lingering
+        # stale all-zero frame right after the buffer clear could be rejected, or a
+        # genuine home pose could be wrongly rejected against a stale non-zero
+        # baseline.
+        self._last_good_raw = None
+        self._reject_streak = 0
         # Case 1: soft resync (the link is alive but mis-paired).
         if self._robot is not None and self._robot.comm_sock is not None:
             try:
                 self._robot._recv_buf = b""  # drop any mis-paired leftover frame
                 self._robot.ping()           # sets $FLAG[1]; KRL answers, pairing re-syncs
-                self._zero_streak = 0
                 print("[kuka] EKI soft-resync OK (link alive, pairing re-synced)")
                 return
             except Exception:
@@ -203,7 +233,6 @@ class KukaRobot(RobotBase):
             self._robot = None
         try:
             self.connect()
-            self._zero_streak = 0
             print("[kuka] EKI connection recovered")
         except Exception as exc:
             print(f"[kuka] EKI recovery failed: {exc}")
@@ -212,6 +241,11 @@ class KukaRobot(RobotBase):
     def set_joint_offsets(self, offsets: List[float]) -> None:
         """Update the joint home offset (hot-reload from the robot config)."""
         self._joint_offsets = list(offsets)
+        # Re-baseline reject-and-hold: the offset shifts the virtual space, so the
+        # next physical read re-establishes the last-good baseline. (The raw reading
+        # itself is offset-independent, so this only guards the acceptance edge case.)
+        self._last_good_raw = None
+        self._reject_streak = 0
 
     def _move(self, pose: List[float], speed: float,
               blocking: bool, linear: bool) -> None:

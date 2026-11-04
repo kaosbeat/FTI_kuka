@@ -115,7 +115,9 @@
     <h2>Live move</h2>
     <div class="kv"><span>zone</span><span id="zone">—</span></div>
     <div class="kv"><span>action</span><span id="action">—</span></div>
+    <div class="kv"><span>pose</span><span id="pose">—</span></div>
     <div class="kv"><span>moving</span><span id="moving">—</span></div>
+    <div class="hint">pose advances on the MIDI "next_pose" cadence note.</div>
   </section>
 
   <section>
@@ -201,6 +203,7 @@ function renderState(m) {
   // Live move state (always present in the state frame).
   $("zone").textContent = m.zone || "—";
   $("action").textContent = m.action || "—";
+  $("pose").textContent = (m.action_index != null) ? (m.action_index + 1) : "—";
   $("moving").textContent = m.moving ? "yes" : "no";
 
   // Performance group (display-only): highlight the active group from the frame.

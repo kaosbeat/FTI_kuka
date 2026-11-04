@@ -1,5 +1,129 @@
 # Task Handoff Log
 
+## 2026-11-04 — Coordinated-axis 3D viewer: solid-arm tween in `rtr3d.js` (TODO #5)
+
+### Status
+
+Completed
+
+### Summary
+
+Added local per-frame animation to the 3D viewer so the solid (current) arm moves smoothly between the ~20 Hz state frames instead of snapping on every `update()`. Previously `update()` snapped the solid arm's rotors to `s.joints` (the live `curjpos`) and the ghost to `s.target`; the solid arm jumped frame-to-frame.
+
+The fix eases the solid arm's **rendered** joints toward the authoritative current position in the `requestAnimationFrame` render loop (60 Hz), while the ghost still snaps to `s.target` in `update()`. The solid arm therefore **trails** the ghost during a move (and converges once the move settles). `curJoints` remains the authoritative source for `getJoints()`, frozen `"x"` resolution, and `checkPoseCollision`; only the rendered solid rotors are eased.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr3d.js`:
+  - Added three locals next to `curJoints` (~L84-92):
+    - `const displayJoints = HOME.slice();` — the solid arm's **rendered** joint angles (deg); seeded at rest pose.
+    - `const SOLID_SMOOTH_RATE = 12;` — frame-rate-independent easing rate (Hz); higher = snappier/less lag.
+    - `let lastFrameTs = null;` — timestamp of the previous render frame (for the dt).
+  - `update()` (~L1014-1036): removed the `setJoints(rotors, s.joints)` snap. It now only updates `curJoints` from `s.joints` (the ghost `setJoints(rotorsT, s.target)` is unchanged). The solid arm's rendered position is now owned by the render loop.
+  - Render loop `loop(ts)` (~L907-930): added a guarded `if (rotors)` block that computes `dt` from `ts` (clamped to 0.1 s), eases each `displayJoints[j]` toward `curJoints[j]` with `k = 1 - exp(-dt * SOLID_SMOOTH_RATE)`, then calls `setJoints(rotors, displayJoints)`.
+
+### Documentation
+
+None required — the easing contract is documented inline in the `displayJoints`/`SOLID_SMOOTH_RATE` comments and the render-loop block comment.
+
+### Architecture
+
+No architectural impact. Same module, same data flow; the change only splits the solid arm's rendered position (`displayJoints`, eased) from its authoritative position (`curJoints`). The ghost/target arm is untouched. Live collision checking runs on the rendered (eased) solid rotors, so it now carries the same small display lag as the visuals; scratch target collision checks remain exact.
+
+### Validation
+
+- `node --check realtimecontrol/rtr/rtr3d.js` → **SYNTAX_OK**.
+- `node tests/js/test_*.js` (all 14, from the `realtimecontrol/rtr` root): **11 PASS, 3 FAIL**. All 3 failures are **pre-existing and unrelated to `rtr3d.js`** (none of them load the real `rtr3d.js` for position assertions; the FK/collide tests only mirror the `JOINTS` geometry):
+  - `test_action_cam.js` → LOAD ERROR (DOM `onclick` null) — pre-existing per the 2026-11-04 poses-tab handoff.
+  - `test_patches_seed.js` → FAILURES=4 (patch-data assertions) — pre-existing per the same handoff.
+  - `test_perform_page.js` → `TypeError: Cannot set properties of null` at `perform.js:77` (`$("pose")`) — a mini-DOM gap from the perform.html task (the `#pose` element isn't in the test harness); **confirmed pre-existing** by `git stash` (fails identically with the `rtr3d.js` change reverted).
+- Confirmed no JS test loads the real `rtr3d.js` for position assertions (grep: tests stub `Robot3D` via a `Proxy` no-op; only `test_collide.js`/`test_env_collide*.js` mirror the joint geometry).
+- Verified the ghost still snaps to `s.target` (`update()` L1028) and the solid arm now trails it (render loop L907-930). `HOME=[0,-90,90,0,90,0]` is unchanged and remains the `displayJoints` seed.
+
+### Decisions and Caveats
+
+- **Eased in the render loop, not in `update()`** — the state stream is ~20 Hz but the render loop is ~60 Hz; easing in `update()` would only run as fast as the frames arrive. Easing per render frame gives smooth interpolation between frames.
+- **`displayJoints` is display-only** — `curJoints` stays authoritative for `getJoints()` / `"x"` resolution / `checkPoseCollision`. The rendered solid arm lags the true position by at most the easing tail; this is a visual-only offset.
+- **Collision check uses the rendered rotors** — `runCollisionCheck()` runs on the solid arm's rendered (eased) position, so live collision feedback now matches what the operator sees (a small display lag); the scratch target collision check (editor drag) is unaffected and exact.
+- **`SOLID_SMOOTH_RATE = 12`** is a tunable; lower it for more trailing, higher for less. Frame-rate independent (exponential decay on dt).
+- **editor.html** already has its own local manual lerp for pose-stepping / the validate scan; the shared render-loop tween adds a slight visual lag there too, but the end state converges to the commanded pose.
+
+### Next Task
+
+No immediate next task identified. The coordinated-axis 3D viewer animation is complete and validated. Optional follow-ups (out of scope): (1) tune `SOLID_SMOOTH_RATE` against the live robot for the desired trail amount; (2) add a `#pose` element to the `test_perform_page.js` mini-DOM to clear that pre-existing harness failure.
+
+### Instructions for the Next Task
+
+- The tween lives in `realtimecontrol/rtr/rtr3d.js`: `displayJoints`/`SOLID_SMOOTH_RATE`/`lastFrameTs` (~L84-92), the `update()` no-snap change (~L1014-1023), and the render-loop easing block (~L907-930).
+- `curJoints` is authoritative (do not read rendered position from `displayJoints` for collision/IK); `displayJoints` is the solid arm's rendered position only.
+- The ghost (`rotorsT`) still snaps to `s.target` in `update()`; the solid arm (`rotors`) is eased in the render loop.
+- To tune the trail: change `SOLID_SMOOTH_RATE` (higher = less lag). Verify with `node --check rtr3d.js` and the live `client.html`/`editor.html`.
+
+## 2026-11-04 — perform.html UI: zone_groups dropdown, beat/bar counter, pose display (+ mode_group purge)
+
+### Status
+
+Completed
+
+### Summary
+
+Finished the `perform.html` performance-control page (TODO #4) and folded in the already-verified `mode_group` purge handoff. Three UI additions, all display/monitor-oriented (no new command surface beyond the existing velocity/multiplier controls):
+
+1. **Display-only `zone_groups` dropdown** — lists the enabled performance groups from `brain.json` (`/api/brain`) and highlights the active one (from the state frame's `active_group`). Selecting a group sends no command (the group is driven by the brain, not the operator).
+2. **Beat/bar counter** — shows the bar position in 4/4 time derived from the continuous beat (`bar = floor(beat/4)+1`, `beat-in-bar = beat%4+1`).
+3. **Pose index display** — shows the current anchor index within the action's poses, so the operator can see the MIDI-driven pose advancement (the `next_pose` cadence note). This required forwarding `action_index` from the snapshot into the state frame.
+
+The `mode_group` purge (removing the legacy `mode_group` field from zones/config/brain and the dead dwell lookup) was completed and verified earlier; its handoff is folded in here.
+
+### Changes Made
+
+- `realtimecontrol/rtr/perform.html`:
+  - Added `.groupSel` CSS for the group dropdown.
+  - Added a "bar" row to the Beat clock section (`id="bar"`).
+  - Added a "Performance group" section with a display-only `<select id="groupSelect">`.
+  - Added a "pose" row + hint to the Live move section (`id="pose"`).
+  - Added `fetchBrainGroups()` — fetches `/api/brain`, lists enabled `zone_groups` in the dropdown.
+  - Wired `fetchBrainGroups()` into the WS `onopen` handler.
+  - `renderState()`: highlights the active group (`m.active_group`) in the dropdown; computes the bar counter from `p.beat` (4/4); displays the pose index (`m.action_index + 1`, 1-indexed).
+- `realtimecontrol/rtr/rtr/display/display.py`:
+  - `_frame()` now forwards `snap.action_index` as `frame["action_index"]` (optional field) so the perform page can show the current pose.
+- `mode_group` purge (earlier, verified): removed the legacy `mode_group` field from `zones.json` (7 lines), `zones.py` builtin table (12 lines), `zones.py` (`MODE_GROUPS` constant, `mode_group` validation, `Zone.mode_group` property, `Zones.mode_groups` method), and the dead `mode_group` dwell block in `brain.py` `_autonomy_dwell_s`. Kept `brain/config.py` `_validate_mode_group` (it validates the new `zone_groups` system).
+
+### Documentation
+
+None required — the dropdown is display-only (documented inline in the HTML hint), the bar counter's 4/4 assumption is noted in the JS comment, and the pose display references the existing `next_pose` MIDI cadence.
+
+### Architecture
+
+No new modules or dependencies. The state frame gains one optional field (`action_index`), forwarded from the existing snapshot (engine.py already populates it). The perform page is a consumer of the existing `/api/brain` and state-frame fields; no new command path. The `mode_group` purge removed a legacy config field with no runtime behavior change (the dwell lookup was dead because old `mode_group` names never overlapped `zone_groups` keys).
+
+### Validation
+
+- `python -m pytest tests/test_perform_state.py tests/test_perform_config.py tests/test_perform_http.py tests/test_zone_groups.py tests/test_state_machine.py tests/test_transition.py tests/test_sound_out_ports.py tests/test_sound_enabled.py -q`: **120 passed, 9 skipped**.
+- `python -m pytest tests/test_brain_autonomy_dwell.py tests/test_brain_behavior_params.py tests/test_brain_assertive.py tests/test_snapshot_grab.py tests/test_midi_brain_trigger.py tests/test_bridge_behavior.py -q`: **49 passed**.
+- `python -c "from rtr.core.commands import Snapshot; from rtr.display.display import Display; ..."`: **Snapshot.action_index present; _frame forwards action_index**.
+- `node --check` on the extracted perform.html JS: **JS syntax OK**.
+- Cross-checked every `$("id")` referenced in the perform.html JS against the defined element IDs: **no missing IDs**.
+
+### Decisions and Caveats
+
+- The `zone_groups` dropdown is **display-only** by design (the user's decision): it reflects the brain-driven active group and sends no command on selection.
+- The bar counter assumes **4/4 time** (`bar = beat // 4`). If the performance uses a different meter, this needs adjusting. The continuous `beat` value is 0-indexed; the display is 1-indexed.
+- The pose index is shown **1-indexed** (`action_index + 1`) to match operator counting; the underlying `action_index` is 0-indexed.
+- The `next_pose` MIDI cadence note is the only pose-advancement path (no WS command for it). Pose advancement is MIDI-only by design; the page only displays it.
+- `action_index` is forwarded as an optional frame field; existing frame consumers (client.html, editor.html, TUI) are unaffected by the additive field.
+
+### Next Task
+
+Coordinated-axis 3D viewer animation (TODO #5): animate the move in `rtr3d.js` (currently `update()` snaps `curJoints` to `s.joints` and the ghost to `s.target` with no local tween; `HOME=[0,-90,90,0,90,0]`). Wire it into `client.html` / `editor.html`.
+
+### Instructions for the Next Task
+
+- `rtr3d.js` currently has no local tween: `update()` snaps `curJoints` to `s.joints` and the ghost to `s.target`. Add a per-frame interpolation (lerp toward the target with a smoothing factor, or a time-based tween) so the 3D arm moves smoothly between frames instead of jumping.
+- Keep the ghost (target) and the solid arm (current) distinct; the solid arm should trail the target during a move.
+- `HOME=[0,-90,90,0,90,0]` is the rest pose; confirm it matches the machine's home before using it as a tween start point.
+- Verify against the live state frame (`joints` = current, `target` = target pose) in `client.html` / `editor.html`.
+
 ## 2026-11-04 — Core timing: move duration = max over joints (motion-profile estimate)
 
 ### Status
