@@ -843,13 +843,18 @@ class StateMachine:
         - ``"midi"``: fire when the learned ``next_pose`` midi note arms the pulse
           (:meth:`midi_pulse`), i.e. the operator advances the pose by hand.
 
-        In perform mode an armed midi pulse also fires the cadence, regardless of
-        the base cadence (the performer advances the pose by hand on top of the
-        arrival auto-advance).
+        In perform mode an armed midi pulse also fires the cadence, but only once
+        the robot has arrived at the current target (the performer advances the
+        pose by hand on top of the arrival auto-advance). A trigger that lands
+        mid-move is held (the pulse stays armed) and fires on the arrival tick, so
+        the pose is never jumped before the robot reaches the current pose.
         """
         if self.control_mode == "perform" and self._midi_pulse:
-            self._midi_pulse = False
-            return True
+            if self.target is not None \
+                    and comparelist(curjpos, self.target, margin=0.1, count=5):
+                self._midi_pulse = False
+                return True
+            return False
         if self.cadence == "arrival":
             return self.target is not None \
                 and comparelist(curjpos, self.target, margin=0.1, count=5)

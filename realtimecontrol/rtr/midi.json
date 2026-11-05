@@ -217,5 +217,8 @@
     "sleep": null,
     "engage": null,
     "circus": null
+  },
+  "clock": {
+    "in_port": null
   }
 }

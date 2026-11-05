@@ -1,5 +1,235 @@
 # Task Handoff Log
 
+## 2026-11-05 — Full TrimUI keymap capture plan (two-device: TrimUI + R36S)
+
+### Status
+
+In progress — awaiting on-device probe output
+
+### Summary
+
+User wants a complete, correct `joy_map` for the TrimUI (and, separately, the R36S — two distinct hardware/OS devices, which is likely why the shipped map was wrong). Reuse the existing `--joy-diag` probe (it logs every KEY/ABS event live and lists distinct KEY codes on Ctrl-C). The TrimUI probe reads only `/dev/input/event3` (the configured `device`), which already yields A=305 and the d-pad ABS — so it is the primary controller node. Capture every face/shoulder/start/select/menu/home/vol button's real EV_KEY code in one run, then rewrite `joy_map`.
+
+### Changes Made
+
+None — capture command + protocol provided; no code/config changed yet (the `305`→`enter` fix from the prior entry is already in place).
+
+### Documentation
+
+None required — the probe + protocol are documented here and in the prior `--joy-diag` entry.
+
+### Architecture
+
+No architectural impact.
+
+### Validation
+
+None run this turn (no code changed). The `305`→`enter` config edit from the prior entry was validated by a JSON parse.
+
+### Decisions and Caveats
+
+- TrimUI capture command (system `python3` absent on-device; use the PAK's bundled interpreter; only the repo is needed on `PYTHONPATH` for `--joy-diag`):
+  `ssh -o PreferredAuthentications=password root@192.168.1.33 "PYTHONPATH=/storage/rtr-remote /mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/python/bin/python3 /storage/rtr-remote/rtr/remote/sdlapp.py --joy-diag --config /mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/config.json"`
+- Press order (clean press+release, ~3x each, ~1 s pause between buttons): A, B, X, Y, L1, R1, L2, R2, L3, R3, L4, R4, START, SELECT, MENU, HOME, VOL UP, VOL DOWN. D-pad is EV_ABS (axis 16/17, already in `dpad_map`) — skip this round.
+- The probe reads ONLY `/dev/input/event3`. If a button (e.g. VOL, HOME) prints nothing, it is dead or on another node (event0/1/2, js0) — probe those specifically next.
+- The R36S is a separate device/OS; it will need its own probe run (different IP/host) and its own `joy_map`. Do NOT conflate the two.
+
+### Next Task
+
+1. User runs the TrimUI capture command, presses the buttons in order, Ctrl-C, pastes the full `JOY-DIAG` output back.
+2. Map each button → its real EV_KEY code from the ordered output + the distinct-codes summary.
+3. Rewrite `realtimecontrol/rtr/pak/RTRREMOTE.pak/config.json` `joy_map` with the confirmed codes (keep `dpad_map` ABS as-is). Keep `305`→`enter`.
+4. Push the config on-device (`scp` of `config.json`, or re-run `--ship-code`) and confirm A launches + other buttons dispatch in the menu per-press log.
+5. Repeat the capture for the R36S (separate host) to build its `joy_map`.
+
+### Instructions for the Next Task
+
+- Interpret the pasted output by press order: button N's code is the `KEY code=` value that appears during its 3 presses. The trailing `distinct KEY presses (code -> count)` summary lists every captured code; cross-check it.
+- Treat any button with NO output as "not on event3" — do not guess its code; probe the other event nodes for it.
+- After building the TrimUI `joy_map`, validate with a JSON parse before pushing.
+
+## 2026-11-05 — A-launch bug root cause: A emits EV_KEY 305, config mapped A to 29
+
+### Status
+
+Completed
+
+### Summary
+
+Root cause of "A selects but does not launch" found. On-device `--joy-diag` probe (via the PAK's bundled interpreter) showed the A button emits **EV_KEY code 305**, but `pak/RTRREMOTE.pak/config.json` `joy_map` mapped A to `29` (a desktop QWERTY `KEY_A`). So A produced `MENU: KEY code=305 -> NO dispatch` — no launch. Home (172) and the d-pad (EV_ABS 16/17) were already correct, which is why navigation worked and only A-launch failed. Fix: added `"305": "enter"` to the PAK `joy_map` (kept `29` — harmless if unreferenced). This makes the menu's `_launch` reachable for A.
+
+### Changes Made
+
+- `realtimecontrol/rtr/pak/RTRREMOTE.pak/config.json`: added `"305": "enter"` to `joy_map` (A button's real EV_KEY code).
+
+### Documentation
+
+None required — the `joy_map` is data, not behavior; the flag/probe docs are unchanged.
+
+### Architecture
+
+No architectural impact.
+
+### Validation
+
+- `python3 -c "import json; ...['joy_map']"` → `{'15':'up','16':'down','17':'left','18':'right','29':'enter','305':'enter','30':'q','8':'h','310':'left','311':'right'}` (JSON valid, 305→enter present).
+
+### Decisions and Caveats
+
+- Fix lives in the **canonical** PAK config; it must be pushed on-device (see Next Task) — `--ship-code` overwrites the device `config.json` from this file, so a re-ship also works, but a targeted `scp` of just `config.json` is faster.
+- `30` (mapped to `q`) and the `15/16/17/18` KEY arrow codes are UNVERIFIED on this hardware — they may also be dead (the face buttons appear to use the 3xx range, e.g. A=305). Only A (305) and home (172) + d-pad (ABS) are confirmed working. If B/`q` or arrow-key navigation is also dead, capture those codes with `--joy-diag` and add them the same way.
+- Kept `"29": "enter"` as harmless fallback; it is dead config on this device.
+
+### Next Task
+
+Push the updated `config.json` on-device and confirm A launches:
+1. `scp -o PreferredAuthentications=password realtimecontrol/rtr/pak/RTRREMOTE.pak/config.json root@192.168.1.33:/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/config.json`
+   (or re-run `--ship-code`.)
+2. Run the menu, press A → the app should launch now. Confirm via `MENU: KEY code=305 -> enter` + `MENU: child exited rc=` in `$LOGS_PATH/RTRREMOTE.txt`.
+3. If B/`q` (code 30) or arrow keys (15-18) are also dead, re-run `--joy-diag`, capture their real codes, and add them to `joy_map`.
+
+### Instructions for the Next Task
+
+- The menu's `_launch` is now expected to fire on A (code 305). If A still does not launch after the config push, the bug moves to menu-context `_launch` (inspect `MENU: child exited rc=` for a non-zero child rc or a missing `MENU: KEY code=305 -> enter` line).
+- Do not remove other `joy_map` entries; add new code→key pairs as their hardware codes are confirmed.
+
+## 2026-11-05 — on-device `python3: not found`: PAK uses a bundled interpreter
+
+### Status
+
+Completed
+
+### Summary
+
+The direct on-device `--joy-diag` probe failed with `ash: python3: not found`. Root cause: the TrimUI device's `ash` shell has **no system `python3`** in its PATH. The PAK is self-contained and runs its own bundled interpreter — `launch.sh:56` sets `PY="$PakDir/python/bin/python3"` (falling back to `python3` only if that binary is absent, which it is present on-device). So any on-device probe that needs Python must invoke the PAK's bundled interpreter explicitly, with `PYTHONPATH` set to the repo (`/storage/rtr-remote`) so `sdlapp.py`'s `from rtr.remote...` fallback imports resolve. `--joy-diag` needs no pygame/display/venv packages (only `events` + `select`), but pointing `PYTHONPATH` at repo + venv site-packages mirrors `launch.sh` exactly and is harmless.
+
+### Changes Made
+
+None — diagnosis + corrected command; no code changed.
+
+### Documentation
+
+None required — the interpreter location is already documented in launch.sh:55-57.
+
+### Architecture
+
+No architectural impact.
+
+### Validation
+
+- Re-read `launch.sh:55-65`: `PY="$PakDir/python/bin/python3"`; `PYTHONPATH="$REPO:$VENV_SP"`; final line runs `mainmenu.py` (so `--joy-diag` must be run by targeting `sdlapp.py` directly, not via `launch.sh`).
+- Re-read `sdlapp.py`: `--joy-diag` → `from_args(args)` → `SdlRemote(config).joy_diag()` (sdlapp.py:1395-1397); `joy_diag()` (sdlapp.py:1058) imports only `events` + `select` (no pygame, no display, no venv pkg).
+
+### Decisions and Caveats
+
+- Corrected on-device command (run as root; press every button then Ctrl-C):
+  `ssh -o PreferredAuthentications=password root@192.168.1.33 "PYTHONPATH=/storage/rtr-remote:/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/venv/lib/python3.*/site-packages /mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/python/bin/python3 /storage/rtr-remote/rtr/remote/sdlapp.py --joy-diag --config /mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/config.json"`
+- The `python3.*` glob in `PYTHONPATH` is expanded by the remote `ash`; if it matches nothing the entry is inert (harmless).
+- The A-launch bug does NOT strictly require this probe: `launch.sh --menu-diag` + the menu per-press log (`MENU: KEY code=X -> ...`) already disambiguate whether A's code is mapped to `enter`. Use this probe only if those are inconclusive.
+
+### Next Task
+
+Collect the on-device probe outputs and pick the fix:
+1. `launch.sh --menu-diag` → confirm loaded `joy_map`/`quit_codes`/`dpad_map`/`device`.
+2. Run the menu, press A, read `$LOGS_PATH/RTRREMOTE.txt` for `MENU: KEY code=X -> ...`.
+3. Only if inconclusive, run the corrected `--joy-diag` command above and note the distinct KEY codes.
+
+### Instructions for the Next Task
+
+Apply the fix based on evidence:
+- `code=29 -> enter` dispatched but no launch → inspect `MENU: child exited rc=` (menu-context `_launch`/`pygame.quit`/`_stop_joy`).
+- `code=X -> NO dispatch` (X != 29) → add `X`→`enter` to `joy_map` in `pak/RTRREMOTE.pak/config.json`.
+- No KEY line for A → A emits a non-EV_KEY event; use `--joy-diag` output to identify it.
+
+## 2026-11-05 — `launch.sh --joy-diag` error: flag lives in sdlapp.py, not mainmenu.py
+
+### Status
+
+Completed
+
+### Summary
+
+Diagnosed `mainmenu.py: error: unrecognized arguments: --joy-diag` (hit on-device after a `--ship-code` deploy). `launch.sh:65` always invokes `mainmenu.py` (`"$PY" "$REPO/rtr/remote/mainmenu.py" --config "$PakDir/config.json" "$@"`), so any flag after `launch.sh` goes to `mainmenu.py`. `--joy-diag` is only defined in `sdlapp.py` (sdlapp.py:1364), not `mainmenu.py` — hence the error. `--menu-diag` IS a `mainmenu.py` flag (mainmenu.py:529), so `launch.sh --menu-diag` works. `sdlapp.py --joy-diag` parses cleanly and runs a raw `/dev/input` probe (`SdlRemote.joy_diag()`, sdlapp.py:1058) that needs no display and no pygame (`events.py` has no pygame import; `sdlapp.py`'s `import pygame` is guarded at line 49-52). The A-launch bug does NOT require `--joy-diag` first: the two already-deployed probes (`--menu-diag` + the menu per-press log) disambiguate it.
+
+### Changes Made
+
+None — diagnosis only; no code changed.
+
+### Documentation
+
+None required — the flag routing is already implied by launch.sh + the two entry points; no doc change needed.
+
+### Architecture
+
+No architectural impact.
+
+### Validation
+
+- `PYTHONPATH=. python3 rtr/remote/mainmenu.py --joy-diag --config pak/RTRREMOTE.pak/config.json` → `usage: mainmenu.py ... [--menu-diag] ...` + `unrecognized arguments: --joy-diag`, exit 120 (reproduces the on-device error).
+- `PYTHONPATH=. python3 rtr/remote/sdlapp.py --joy-diag --config pak/RTRREMOTE.pak/config.json` → `JOY-DIAG: reading /dev/input/event3 ...` then `failed to open ... Permission denied` locally (arg parsing + probe path confirmed; opens fine on-device as root).
+
+### Decisions and Caveats
+
+- On-device disambiguation of the A-launch bug does NOT need `--joy-diag` first. The two already-deployed probes suffice: (1) `launch.sh --menu-diag` (prints the loaded joy_map/quit_codes/dpad_map/device) and (2) run the menu + press A + read `$LOGS_PATH/RTRREMOTE.txt` for the `MENU: KEY code=X -> ...` line. `--joy-diag` is the fallback for A's raw code if the per-press log shows `-> NO dispatch` or no KEY line.
+- `--joy-diag` runs on-device directly (no re-ship): `PYTHONPATH=/storage/rtr-remote python3 /storage/rtr-remote/rtr/remote/sdlapp.py --joy-diag --config /mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/config.json` (repo/device confirmed from `pak/RTRREMOTE.pak/config.json`: repo=/storage/rtr-remote, device=/dev/input/event3).
+- Optional QoL (not done; needs a re-ship): add a `--joy-diag` passthrough to `mainmenu.py` (re-exec `sdlapp.py --joy-diag --config <cfg>`) so `launch.sh --joy-diag` works like the other diag flags.
+
+### Next Task
+
+On-device: run `launch.sh --menu-diag` and the menu+press-A per-press log; interpret per the table below; fix the `joy_map` in `pak/RTRREMOTE.pak/config.json` if A's code is unmapped.
+
+### Instructions for the Next Task
+
+Run (as root over ssh), PAK at `/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak`:
+1. `launch.sh --menu-diag` → confirm the loaded joy_map still maps A's code to enter (post-ship-code it should be canonical 29→enter).
+2. Run the menu (`launch.sh`), press A, read `$LOGS_PATH/RTRREMOTE.txt` for the `MENU: KEY code=X -> ...` line:
+   - `code=29 -> enter` → enter IS dispatched → bug is in `_launch` menu context (`pygame.quit`/`_stop_joy`); check `MENU: child exited rc=`.
+   - `code=X -> NO dispatch` (X≠29) → A's real code is X, unmapped → add X→enter to `joy_map` in `pak/RTRREMOTE.pak/config.json`.
+   - No KEY line → A emits a non-EV_KEY event → run `--joy-diag` (step 3).
+3. `--joy-diag` fallback (direct, no re-ship): `PYTHONPATH=/storage/rtr-remote python3 /storage/rtr-remote/rtr/remote/sdlapp.py --joy-diag --config /mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/config.json` → press A (and every button), Ctrl-C when done; it lists the distinct codes.
+
+## 2026-11-05 — Red light overlay invisible: enable the config (root cause = disabled)
+
+### Status
+
+Completed
+
+### Summary
+
+Diagnosed "the #redLight canvas is in the DOM but nothing is visible." The render-page overlay only draws when `RED_LIGHT.enabled` is true (render.html `rlFrame()`), and it was disabled: `robotconfig.json` had no `red_light` key, so it normalized to `enabled: false` on both the Python side (`robot_config_red_light`) and the JS side (`normalizeRedLightClient` / `RED_LIGHT_FALLBACK`). With the core not running (nothing on 8765/8766), no state frame pushed `red_light` and the render page's fallback fetches (`/api/robotconfig`, `/robotconfig.json`) failed, so `RED_LIGHT` stayed at its disabled default and the canvas was cleared to transparent every frame. The WebGL rendering code itself is correct (traced the SDF: `env=1` → 80px circle, morphing to a 1px×160px bar at `env=0`). Fix: enabled the red light in `robotconfig.json` so the config (via the state frame or the `/robotconfig.json` fallback) now carries `enabled: true`.
+
+### Changes Made
+
+- `realtimecontrol/rtr/robotconfig.json`: added the `red_light` key `{ enabled: true, x: 0.5, y: 0.5, bar_w: 1, bar_h: 160, radius: 80, morph: true, per_beat: 1 }` (center of the screen; move it over the dead pixel via the editor's robotconfig red-light card).
+
+### Documentation
+
+None required — config/behavior change only; the existing render.html + editor docs already cover the overlay.
+
+### Architecture
+
+No architectural impact.
+
+### Validation
+
+- `python3 -c "robot_config_red_light(json.load(open('robotconfig.json')))"` → `{'enabled': True, 'x': 0.5, 'y': 0.5, 'bar_w': 1.0, 'bar_h': 160.0, 'radius': 80.0, 'morph': True, 'per_beat': 1.0}` (normalizes cleanly, `enabled: True`).
+- `validate_robot_config(robotconfig.json)` passes (the `red_light` key is preserved as an unknown top-level key).
+- Rendering not verified in a live browser (no GPU/browser available here); the overlay requires the core running (state frame) or the page served from the `rtr/` dir (the `/robotconfig.json` fallback) for the config to reach the page.
+
+### Decisions and Caveats
+
+- Enabled at screen center (`x=0.5, y=0.5`) as a visible default; position it over the actual dead pixel in the editor.
+- Did NOT start the core: it drives the physical KUKA robot, so it must not be launched without explicit sign-off. To see the overlay, start the core (state frame pushes `red_light`) or serve the page from the `rtr/` dir (the fallback reads `robotconfig.json`).
+- If still invisible after the config reaches the page, check the browser console for `red-light shader error` / `red-light link error` (WebGL unavailable / shader failure degrades the overlay to a no-op).
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+Start the core (or serve the page from `realtimecontrol/rtr/`), reload the render page, and confirm the red bar/circle is visible and pulsing. Move it over the dead pixel via the editor's robotconfig red-light card (`rl_x`/`rl_y`). If it is still invisible, open the browser console and look for the `red-light shader error` / `red-light link error` logs.
+
 ## 2026-11-05 — Red light (LED-wall dead-pixel mask): render-page overlay + tests
 
 ### Status

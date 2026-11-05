@@ -7,5 +7,15 @@
     0,
     90
   ],
-  "patch_mode": "video"
+  "patch_mode": "video",
+  "red_light": {
+    "enabled": true,
+    "x": 0.5,
+    "y": 0.5,
+    "bar_w": 1,
+    "bar_h": 160,
+    "radius": 80,
+    "morph": true,
+    "per_beat": 1
+  }
 }
