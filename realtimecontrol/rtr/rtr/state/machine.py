@@ -133,11 +133,20 @@ class StateMachine:
         self.cadence_every = max(1, int(tick_hz))
         self.tick = 0
         # Midi cadence pulse: armed by :meth:`midi_pulse` (the learned midi note)
-        # and consumed by :meth:`_cadence_due` on the next tick (midi cadence only).
+        # and consumed by :meth:`_cadence_due` on the next tick (midi cadence only;
+        # also honored while control_mode is "perform", where the performer advances
+        # the pose by hand).
         self._midi_pulse = False
-        # Control mode: "auto" (the brain drives autonomous decisions) or
-        # "manual" (only explicit client commands move the robot).
+        # Control mode: "auto" (the brain drives autonomous decisions), "manual"
+        # (only explicit client commands move the robot), or "perform" (the
+        # performer drives the robot via MIDI notes and client clicks; the brain's
+        # autonomy triggers are silenced).
         self.control_mode = "auto"
+        # Perform mode: the previous engine move_mode/cadence, saved on entry and
+        # restored on exit (perform forces "block" + "arrival" so the robot
+        # completes a move before the next trigger is processed).
+        self._perform_prev_move_mode: Optional[str] = None
+        self._perform_prev_cadence: Optional[str] = None
         # Assertive per-move speed: the brain rolls one speed per destination and
         # stores it here. Honored by :meth:`_current_speed` while control_mode is
         # "assertive" (stays constant for the duration of a move, not re-rolled
@@ -308,15 +317,20 @@ class StateMachine:
         - ``"assertive"``: the brain drives the robot to random safe destinations
           (see the ``assertive`` config section). Behaves like ``auto`` for driving
           (no manual freeze); the brain's assertive driver picks the destinations.
+        - ``"perform"``: the performer drives the robot via MIDI notes and client
+          clicks; the brain's autonomy triggers are silenced (like manual). On entry
+          the robot freezes (like manual) and the engine is set to ``"block"`` move
+          mode + ``"arrival"`` cadence (the robot completes a move before the next
+          trigger is processed); the previous settings are restored on exit.
 
-        In manual mode the brain skips autonomous decisions (hunt, facefocus,
-        autonomy advance) and the machine does not auto-advance after a
+        In manual and perform modes the brain skips autonomous decisions (hunt,
+        facefocus, autonomy advance) and the machine does not auto-advance after a
         single-run action completes. Explicit client commands
         (``trigger_action``, ``play_action``, ``set_joint_pose``,
         ``random_wrist``, ``stop``) still work.
 
-        Entering manual mode also freezes the robot: an already-running action
-        would otherwise keep retargeting the pose every tick (see :meth:`step`),
+        Entering manual or perform mode also freezes the robot: an already-running
+        action would otherwise keep retargeting the pose every tick (see :meth:`step`),
         which is what "resets" an inspected pose. Clearing the action and any
         in-progress transition and holding the current pose makes the robot stop
         where it is until an explicit command moves it. ``curjpos`` (the robot's
@@ -325,12 +339,13 @@ class StateMachine:
         Leaving assertive mode clears the per-move speed (the brain rolls a new one
         when it next picks a destination in assertive mode).
         """
-        if mode not in ("manual", "auto", "assertive"):
+        if mode not in ("manual", "auto", "assertive", "perform"):
             print(f"[state] invalid control mode: {mode}")
             return
-        if mode == "manual" and self.control_mode != "manual":
-            # [debug] capture entering-manual clearing the action (the hold-revert bug).
-            if self.current_action is not None:
+        if mode in ("manual", "perform") and self.control_mode != mode:
+            # Entering manual or perform freezes the robot (see the docstring).
+            if mode == "manual" and self.current_action is not None:
+                # [debug] capture entering-manual clearing the action (the hold-revert bug).
                 import traceback
                 print(f"[debug-set_control_mode] entering manual, clearing "
                       f"action={self.current_action} zone={self.current_zone}\n"
@@ -344,10 +359,26 @@ class StateMachine:
             if hold is not None and any(v != 0 for v in hold):
                 self.target = list(hold)
                 self.target_kind = "joint"
+            if mode == "perform":
+                # Save the previous engine settings and force block/arrival so the
+                # robot completes a move before the next trigger is processed.
+                self._perform_prev_move_mode = self.move_mode
+                self._perform_prev_cadence = self.cadence
+                self.move_mode = "block"
+                self.cadence = "arrival"
+                self._midi_pulse = False  # drop any stale midi pulse
         if self.control_mode == "assertive" and mode != "assertive":
             # Leaving assertive mode: drop the per-move speed (assertive_speed is
             # only meaningful while control_mode == "assertive").
             self.assertive_speed = None
+        if self.control_mode == "perform" and mode != "perform":
+            # Leaving perform: restore the previous engine settings.
+            if self._perform_prev_move_mode is not None:
+                self.move_mode = self._perform_prev_move_mode
+            if self._perform_prev_cadence is not None:
+                self.cadence = self._perform_prev_cadence
+            self._perform_prev_move_mode = None
+            self._perform_prev_cadence = None
         self.control_mode = mode
         print(f"[state] control mode: {mode}")
 
@@ -677,14 +708,14 @@ class StateMachine:
         enabled action), so the flow never dead-ends. Multi-action zones keep the
         legacy hold: they are the operator's choice points.
 
-        In manual mode the action is simply cleared (no auto-advance): the
-        operator explicitly triggers the next action.
+        In manual and perform modes the action is simply cleared (no auto-advance):
+        the operator/performer explicitly triggers the next action.
         """
         # Clear the action first so that if the pending move is later discarded
         # (blocked by the safety gate), the robot holds instead of trying to
         # re-advance an out-of-bounds anchor index.
         self.clear_action()
-        if self.control_mode == "manual":
+        if self.control_mode in ("manual", "perform"):
             return
         zone = self.zones.get(self.current_zone)
         for entry in zone.action_next_list(action):
@@ -799,9 +830,16 @@ class StateMachine:
         - ``"fixed"``: fire every ``cadence_every`` ticks (the legacy fixed-rhythm).
         - ``"arrival"``: fire when the robot reaches the current target
           (comparelist), i.e. advance-when-ends.
-        - ``"midi"``: fire on the learned midi note (the :meth:`midi_pulse` pulse),
-          i.e. the operator advances the pose by hand.
+        - ``"midi"``: fire when the learned ``next_pose`` midi note arms the pulse
+          (:meth:`midi_pulse`), i.e. the operator advances the pose by hand.
+
+        In perform mode an armed midi pulse also fires the cadence, regardless of
+        the base cadence (the performer advances the pose by hand on top of the
+        arrival auto-advance).
         """
+        if self.control_mode == "perform" and self._midi_pulse:
+            self._midi_pulse = False
+            return True
         if self.cadence == "arrival":
             return self.target is not None \
                 and comparelist(curjpos, self.target, margin=0.1, count=5)
@@ -815,11 +853,12 @@ class StateMachine:
     def midi_pulse(self) -> None:
         """Arm one midi-cadence advance (the learned ``next_pose`` midi note fired).
 
-        Only meaningful in ``"midi"`` cadence mode: the next :meth:`step` tick
-        consumes the pulse and advances the current action's anchor. In any other
-        cadence mode the call is a no-op (the pulse is never set).
+        Meaningful in ``"midi"`` cadence mode and in perform mode: the next
+        :meth:`step` tick consumes the pulse and advances the current action's
+        anchor. In any other cadence/mode the call is a no-op (the pulse is never
+        set), so it cannot be consumed by :meth:`_cadence_due`.
         """
-        if self.cadence == "midi":
+        if self.cadence == "midi" or self.control_mode == "perform":
             self._midi_pulse = True
 
     def update(self, curjpos: List[float]) -> Optional[List[float]]:

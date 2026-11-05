@@ -328,6 +328,105 @@ def test_manual_mode_allows_explicit_commands():
 
 
 # ---------------------------------------------------------------------------
+# Perform mode (live MIDI-clock performance): the performer drives the robot
+# (MIDI notes + client clicks); the brain's autonomy triggers are silenced.
+# ---------------------------------------------------------------------------
+def test_set_control_mode_perform():
+    """perform is a valid control mode; on entry the engine is forced to
+    block/arrival (the previous values saved) and restored on exit."""
+    m = StateMachine(_zones(), initial_zone="sleeping", tick_hz=20.0)
+    m.set_control_mode("perform")
+    assert m.control_mode == "perform"
+    assert m.move_mode == "block"
+    assert m.cadence == "arrival"
+    # Exit restores the previous engine settings (the defaults here).
+    m.set_control_mode("auto")
+    assert m.move_mode == "block"
+    assert m.cadence == "fixed"
+    assert m._perform_prev_move_mode is None
+    assert m._perform_prev_cadence is None
+    # Re-enter from a user-chosen configuration: the previous values are saved
+    # and restored.
+    m.move_mode = "stream"
+    m.cadence = "midi"
+    m.set_control_mode("perform")
+    assert m.move_mode == "block" and m.cadence == "arrival"
+    assert m._perform_prev_move_mode == "stream"
+    assert m._perform_prev_cadence == "midi"
+    m.set_control_mode("auto")
+    assert m.move_mode == "stream"
+    assert m.cadence == "midi"
+    assert m._perform_prev_move_mode is None
+    assert m._perform_prev_cadence is None
+
+
+def test_perform_mode_freezes_like_manual():
+    """Entering perform freezes the robot (clears the running action), like
+    manual."""
+    data = validate_state_data({"zones": {
+        "a": {"safezone": [[0, 10]] * 6, "speed": 1,
+              "actions": {"x": {"poses": [[1] * 6]}}},
+    }})
+    z = Zones(data["zones"])
+    m = StateMachine(z, initial_zone="a", tick_hz=20.0)
+    m.play_action("x")
+    assert m.current_action == "x"
+    m.set_control_mode("perform")
+    assert m.current_action is None, "set_control_mode('perform') freezes (clears the action)"
+    assert m.control_mode == "perform"
+
+
+def test_perform_mode_blocks_auto_advance():
+    """In perform mode, a single-run action does not advance to the next action
+    (like manual: the performer explicitly triggers the next action)."""
+    data = validate_state_data({"zones": {
+        "a": {"startpos": [0] * 6, "exitpos": [0] * 6,
+              "safezone": [[0, 10]] * 6, "exits": [], "speed": 1,
+              "actions": {
+                  "go": {"poses": [[1] * 6, [2] * 6],
+                         "loop": False, "next": [{"zone": "a", "action": "done"}]},
+                  "done": {"poses": [[5] * 6]},
+              }},
+        "b": {"startpos": [2] * 6, "exitpos": [0] * 6,
+              "safezone": [[0, 10]] * 6, "exits": [], "speed": 1},
+    }})
+    z = Zones(data["zones"])
+    m = StateMachine(z, initial_zone="a", tick_hz=20.0)
+    m.set_control_mode("perform")
+    m.play_action("go")
+    m.cadence = "fixed"
+    m.cadence_every = 1
+    m.step([0] * 6)          # index 0 -> 1
+    m.step([0] * 6)          # index 1 -> 2 >= len(2); loop False -> advance
+    # In perform mode the action is cleared (no advance to "done").
+    assert m.current_action is None
+    assert m.action_index == 0
+
+
+def test_perform_midi_pulse_advances_anchor():
+    """In perform mode the midi pulse arms and advances the current action's
+    anchor (manual advance on top of the arrival auto-advance), regardless of
+    the base cadence (forced to arrival on entry)."""
+    data = validate_state_data({"zones": {
+        "a": {"safezone": [[0, 10]] * 6, "speed": 1,
+              "actions": {"spin": {"poses": [[1] * 6, [2] * 6, [3] * 6]}}}}})
+    z = Zones(data["zones"])
+    m = StateMachine(z, initial_zone="a", tick_hz=20.0)
+    m.set_control_mode("perform")
+    assert m.cadence == "arrival"  # forced on entry
+    m.play_action("spin")
+    m.step([0] * 6)
+    assert m.action_index == 0  # no pulse, no arrival -> no advance
+    m.midi_pulse()
+    assert m._midi_pulse is True  # armed despite the arrival cadence
+    m.step([0] * 6)
+    assert m.action_index == 1  # pulse consumed, advanced once
+    assert m._midi_pulse is False
+    m.step([0] * 6)
+    assert m.action_index == 1  # no new pulse -> holds
+
+
+# ---------------------------------------------------------------------------
 # Multi-pose wiggle: the anchor advances on cadence while the variable axis
 # wiggles on top of the current anchor.
 # ---------------------------------------------------------------------------
@@ -452,6 +551,10 @@ def main():
         test_manual_mode_blocks_auto_advance,
         test_auto_mode_still_advances,
         test_manual_mode_allows_explicit_commands,
+        test_set_control_mode_perform,
+        test_perform_mode_freezes_like_manual,
+        test_perform_mode_blocks_auto_advance,
+        test_perform_midi_pulse_advances_anchor,
         test_multi_pose_wiggle_advances_anchor_and_wiggles_var_axis,
         test_midi_cadence_advances_on_pulse_only,
         test_midi_cadence_spontaneous_advances_on_pulse,

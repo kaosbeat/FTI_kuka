@@ -281,9 +281,12 @@ class Engine:
         self._running = False
 
     def _machine_is_performing(self) -> bool:
-        """Whether the machine is currently in perform mode (performance_mode on)."""
-        info = self.brain.autonomy_info()
-        return bool(info.get("performance_mode"))
+        """Whether the machine is currently in perform mode (control_mode is "perform").
+
+        Perform mode is the single mechanism for the beat-clock/deadline logic;
+        the legacy zone-group-derived ``performance_mode`` boolean is retired.
+        """
+        return self.machine.control_mode == "perform"
 
     def _current_base_beats(self) -> int:
         """The current action's base_beats, falling back to the global default.
@@ -394,8 +397,8 @@ class Engine:
             print("[engine] WARNING: no collision checker wired; degrading to conflict-only")
 
         if blocked:
-            if m.control_mode == "manual":
-                # Show the popup; the operator decides (confirm or cancel).
+            if m.control_mode in ("manual", "perform"):
+                # Show the popup; the operator/performer decides (confirm or cancel).
                 m.set_pending_confirm()
                 self.bus.publish(Event.SAFETY_ALERT, {
                     "zone": p["zone"],

@@ -50,6 +50,7 @@
   .seg.manual.active { background: #e05d5d; color: #fff; }
   .seg.auto.active { background: var(--accent); }
   .seg.assertive.active { background: #d8a13a; color: #0b0d10; }
+  .seg.perform.active { background: #b05fd0; color: #0b0d10; }
   main { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
   section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
   h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
@@ -136,6 +137,7 @@
     <button id="cmManual" class="seg manual">manual</button>
     <button id="cmAuto" class="seg auto">auto</button>
     <button id="cmAssertive" class="seg assertive">assertive</button>
+    <button id="cmPerform" class="seg perform">perform</button>
   </div>
 </header>
 
@@ -358,7 +360,10 @@ function updateStatusBar(m) {
   }
   const cand = (m.cam_telem && m.cam_telem.candidates) ? m.cam_telem.candidates.candidates : null;
   const candText = (Array.isArray(cand)) ? String(cand.length) : "—";
-  const cmColor = cm === "manual" ? "#e05d5d" : (cm === "auto" ? "var(--accent)" : "var(--dim)");
+  const cmColor = cm === "manual" ? "#e05d5d"
+    : (cm === "auto" ? "var(--accent)"
+    : (cm === "assertive" ? "#d8a13a"
+    : (cm === "perform" ? "#b05fd0" : "var(--dim)")));
   const seg = (txt, color) => `<span style="color:${color}">${txt}</span>`;
   const sep = `<span class="sbSep">›</span>`;
   // Move-blocked flag: persistent while a safety-gated move is blocked (manual mode's
@@ -721,6 +726,7 @@ function renderState(s) {
     $("cmManual").className = "seg manual" + (mode === "manual" ? " active" : "");
     $("cmAuto").className = "seg auto" + (mode === "auto" ? " active" : "");
     $("cmAssertive").className = "seg assertive" + (mode === "assertive" ? " active" : "");
+    $("cmPerform").className = "seg perform" + (mode === "perform" ? " active" : "");
   }
 
   // Active group: highlight the active group button, dim the rest.
@@ -952,11 +958,13 @@ function buildUI() {
   $("connect").onclick = () => { const u = $("host").value.trim(); $("host").value = u; connect(); };
 
   // Control mode: clicking a side switches to that mode (manual = operator drives,
-  // auto = brain drives, assertive = brain drives to random safe destinations).
+  // auto = brain drives, assertive = brain drives to random safe destinations,
+  // perform = performer drives via MIDI/clicks, brain autonomy silenced).
   // The snapshot render highlights the active side.
   $("cmManual").onclick = () => send({ cmd: "set_control_mode", mode: "manual" });
   $("cmAuto").onclick = () => send({ cmd: "set_control_mode", mode: "auto" });
   $("cmAssertive").onclick = () => send({ cmd: "set_control_mode", mode: "assertive" });
+  $("cmPerform").onclick = () => send({ cmd: "set_control_mode", mode: "perform" });
 
   // Clear the active zone group (returns to normal multi-group autonomy).
   $("clearGroupBtn").onclick = () => send({ cmd: "clear_group" });

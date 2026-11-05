@@ -763,6 +763,19 @@
     </section>
   </div>
   <section style="margin-top:16px">
+    <h2>perform control mode</h2>
+    <p class="midiHelp">The <b>perform</b> control mode (select it from the client.html toggle) is the
+       single mechanism for live performance: the performer drives the robot via MIDI notes and
+       client clicks while the brain's autonomy triggers are silenced. On entry the robot freezes
+       (like manual) and the engine is set to <b>block</b> move mode + <b>arrival</b> cadence (the
+       robot completes a move before the next trigger is processed); the previous settings are
+       restored on exit. In this mode the <b>next_pose</b> MIDI note advances the current action's
+       pose, zone/action triggers still work, and blocked moves surface the confirm/cancel popup.
+       The beat-clock deadline (base beats, time-to-arrive, late flag) runs only while this mode
+       is active. The legacy zone-group-derived <code>performance_mode</code> is retired; the
+       <code>perform</code> control mode replaces it.</p>
+  </section>
+  <section style="margin-top:16px">
     <h2>registered MIDI mappings</h2>
     <p class="midiHelp">Every MIDI key the robot is listening for (zone commands, zone actions,
        navigation, capture, groups, and the perform CCs). A row lights up when its key arrives on

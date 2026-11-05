@@ -122,7 +122,7 @@ class Snapshot:
     performance_mode: Optional[bool] = None  # perform on, hunt+facefocus off
     perform: Optional[dict] = None  # live perform state: {velocity, multiplier, base_beats, deadline, time_to_arrive, late}
     autonomy_dwell_remaining: Optional[float] = None  # seconds left in current dwell
-    control_mode: Optional[str] = None  # "manual" | "auto"
+    control_mode: Optional[str] = None  # "manual" | "auto" | "assertive" | "perform"
     action_index: Optional[int] = None  # current anchor index within the action's poses
     safety: Optional[dict] = None  # pending safety-gated move info (None when no pending)
     forced_behavior: Optional[str] = None  # live test override behavior (None when not forced)

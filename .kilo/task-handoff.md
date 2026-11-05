@@ -1,5 +1,88 @@
 # Task Handoff Log
 
+## 2026-11-05 — Perform control mode: 4th `control_mode` silencing brain autonomy + MIDI `next_pose`
+
+### Status
+
+Completed
+
+### Summary
+
+Added a 4th `"perform"` control mode to the RTR state machine. It is the single mechanism for live MIDI-clock performance: the performer drives the robot via MIDI notes and `client.html` clicks while the brain's autonomy triggers are silenced. On entry the robot freezes (like `manual`) and the engine is forced to `block` move mode + `arrival` cadence (the robot completes a move before the next trigger is processed); the previous engine settings are saved and restored on exit. The legacy zone-group-derived `performance_mode` boolean (stage-takeover enabled ∧ event-sit-back disabled) is retired — `control_mode == "perform"` is now the single source of truth.
+
+**Locked design decisions** (user-confirmed):
+- Freeze on entry: clear the running action + hold the pose (same as `manual`).
+- Replace `performance_mode`: the group-derived bool is retired; `control_mode == "perform"` is the single mechanism.
+- MIDI: only `handle_next_pose()` works (arms the cadence pulse); `_handle_midi_trigger()` stays a no-op (like `manual`).
+- `enable_group`: stays in perform (does not force `auto`; the group activates but brain-driven navigation does not run while the brain is silenced).
+- Engine: auto-set `move_mode="block"` + `cadence="arrival"` on entry; restore previous values on exit.
+- `midi_pulse()` arms the pulse in perform mode regardless of base cadence; `_cadence_due()` consumes the armed pulse in perform mode (manual advance on top of the arrival auto-advance).
+- Entering perform clears the active group (consistent with `manual`).
+- Safety popup (`set_pending_confirm`) shows for perform (like `manual`), not auto-discard.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/state/machine.py`:
+  - `__init__`: added `_perform_prev_move_mode` / `_perform_prev_cadence` fields; documented `control_mode` (incl. `"perform"`) and the midi-pulse behavior.
+  - `set_control_mode()`: accepts `"perform"`; freeze-on-entry logic shared with `manual`; on entry saves prev `move_mode`/`cadence`, forces `block`/`arrival`, drops a stale `_midi_pulse`; on exit restores the prev values.
+  - `_advance_after_action()`: gate changed to `("manual", "perform")` (no auto-advance).
+  - `_cadence_due()`: perform-mode armed pulse fires the cadence before the base-cadence check; docstring updated.
+  - `midi_pulse()`: arms the pulse when `cadence == "midi"` **or** `control_mode == "perform"`.
+- `realtimecontrol/rtr/rtr/brain/brain.py`:
+  - `autonomy_info()`: `performance_mode` now derived as `control_mode == "perform"` (group-based derivation removed).
+  - `tick()`: early-return gate changed to `("manual", "perform")` (brain takes no autonomous action).
+  - `_handle_midi_trigger()`: no-op gate changed to `("manual", "perform")`.
+  - `_handle_proceed()`: no-op gate changed to `("manual", "perform")`.
+  - `_handle_cam_face()`: face-action cycling (an autonomy trigger) gated to `("manual", "perform")`.
+  - `_hunt_active()`: returns False for `perform` (like `manual`), so the hunt ladder + attention-grab `trigger_action` in `_apply_lock` do not run.
+  - `_handle_enable_group()`: skips `set_control_mode("auto")` when `control_mode == "perform"`.
+  - `SET_CONTROL_MODE` handler: clears the active group on entering `("manual", "perform")`.
+- `realtimecontrol/rtr/rtr/core/engine.py`:
+  - `_machine_is_performing()`: returns `control_mode == "perform"` (no longer reads `autonomy_info`).
+  - `_resolve_pending()` safety gate: blocked-move popup condition changed to `("manual", "perform")`.
+- `realtimecontrol/rtr/rtr/core/commands.py`: `control_mode` comment updated to `"manual" | "auto" | "assertive" | "perform"`.
+- `realtimecontrol/rtr/client.html`:
+  - Added `<button id="cmPerform" class="seg perform">perform</button>` in the `#controlMode` seg-toggle.
+  - Added render-sync line for `cmPerform`; added the `onclick` handler (`set_control_mode` / `perform`).
+  - Added `.seg.perform.active` CSS rule (`#b05fd0`) and the status-bar color for `perform`.
+- `realtimecontrol/rtr/editor.html`: documented the new `perform` control mode in the perform tab (freezes on entry, block/arrival engine settings restored on exit, `next_pose` advances the pose, triggers still work, blocked moves surface the popup, beat-clock runs only while active, legacy `performance_mode` retired).
+- `realtimecontrol/rtr/tests/test_state_machine.py`: added 4 perform-mode tests (`test_set_control_mode_perform`, `test_perform_mode_freezes_like_manual`, `test_perform_mode_blocks_auto_advance`, `test_perform_midi_pulse_advances_anchor`) and registered them in the `main()` runner.
+
+### Documentation
+
+- `editor.html` perform tab: new "perform control mode" section describing the mode's behavior.
+- Inline docstrings updated in `machine.py` (`set_control_mode`, `_cadence_due`, `midi_pulse`) and `brain.py` (`autonomy_info`, `tick`, `_hunt_active`, `_handle_midi_trigger`, `_handle_proceed`, `_handle_cam_face`, `_handle_enable_group`).
+- `commands.py` `control_mode` field comment updated.
+
+### Architecture
+
+No new modules or data-flow changes. The perform mode reuses the existing `SET_CONTROL_MODE` command path, the existing midi `next_pose` → `brain.handle_next_pose()` → `machine.midi_pulse()` chain, and the existing safety-gate popup. The only structural change is that `performance_mode` (previously a derived bool on the autonomy info) is now a thin alias for `control_mode == "perform"`, and the engine's perform detection reads the machine directly instead of the brain.
+
+### Validation
+
+- `python -m py_compile` on `machine.py`, `brain.py`, `engine.py`, `commands.py`: **SYNTAX OK**.
+- `python -m pytest tests/test_state_machine.py -q`: **20 passed, 9 skipped** (incl. the 4 new perform tests).
+- `python -m pytest tests/ -q`: **444 passed, 14 skipped, 5 failed** — the 5 failures are all in `tests/test_remote_sdl.py` and are **pre-existing** (verified by stashing my changes and re-running: the same 5 fail on the base commit).
+- JS tests: `node tests/js/test_perform_tab.js`: **ALL_TESTS_PASSED**. The other JS test failures (`test_action_cam.js`, `test_base_floor.js`, `test_patches_seed.js`, `test_perform_page.js`) are **pre-existing** (verified by stash + re-run on the base commit).
+
+### Decisions and Caveats
+
+- **`_hunt_active()` returns False for perform** (like manual): without this, the hunt ladder's attention-grab `trigger_action` in `_apply_lock` would fire in perform mode (the fall-through `return True` applied). This was the one autonomy leak found during the scan.
+- **`_handle_cam_face` face-action cycling gated to perform**: it is a brain autonomy trigger (cycles face actions on a timer), silenced like the other autonomy paths.
+- **`_autonomy_triggered` flag can still be set by `_apply_lock` in perform mode** (the camera-event flag is set unconditionally on a new lock). This is consistent with `manual` mode's existing behavior (the flag is only consumed by `_autonomy_tick`, which `tick()` skips in manual/perform), so a stale flag can cause one advance on exit. Left as-is to match manual semantics; flagged as a possible follow-up if the spurious-on-exit advance is undesirable.
+- **Engine settings are user-overridable in perform mode**: `SET_ENGINE_MODE` / `SET_CADENCE` still work while in perform (they just set `machine.move_mode` / `machine.cadence`); the forced `block`/`arrival` is only applied on entry. The previous values are restored on exit regardless.
+- **`perform.html` (the live perform page) is unchanged**: it already documents the `next_pose` cadence note and drives the same MIDI CCs; the new control mode is orthogonal to it.
+
+### Next Task
+
+No immediate next task identified. Possible follow-ups (not started):
+- Decide whether the `_autonomy_triggered` flag should be gated in `_apply_lock` for manual/perform (to avoid a spurious advance on exit).
+- Add a dedicated JS test for the `cmPerform` client toggle (the existing JS DOM-stub tests do not cover the client.html control-mode buttons).
+
+### Instructions for the Next Task
+
+The feature is complete and tested. To verify end-to-end: start the RTR core, open `client.html`, click the `perform` segment, and confirm (a) the robot freezes, (b) the engine status shows `block`/`arrival`, (c) a `next_pose` MIDI note advances the current action's pose, (d) zone/action trigger clicks still work, (e) a blocked move shows the confirm/cancel popup, and (f) switching back to `auto`/`manual` restores the previous engine settings. The `test_state_machine.py` perform tests cover the state-machine side; the brain-side silencing is covered by the existing `test_cam_test.py` / `test_midi_brain_trigger.py` suites (which pass).
+
 ## 2026-11-04 — KUKA EKI stale-read zero-curjpos: reject-and-hold with escalation (implement + test + handoff)
 
 ### Status

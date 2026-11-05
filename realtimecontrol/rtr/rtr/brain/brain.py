@@ -278,20 +278,19 @@ class Brain:
         Returns a dict with:
         - ``enabled``: bool, whether autonomy is on.
         - ``enabled_groups``: sorted list of enabled group names.
-        - ``performance_mode``: bool, derived — the ``stage-takeover`` group is
-          enabled while the ``event-sit-back`` group is disabled.
+        - ``performance_mode``: bool — whether the machine is in perform mode
+          (``control_mode == "perform"``). The legacy zone-group-derived value
+          (stage-takeover enabled while event-sit-back disabled) is retired; the
+          ``"perform"`` control mode is now the single mechanism.
         - ``dwell_remaining``: float seconds remaining for the current action's
           dwell, or None when autonomy is off / no active action.
         """
         cfg = self._autonomy_cfg()
         enabled = bool(cfg.get("enabled", False))
         groups = sorted(self._enabled_groups)
-        # Performance mode: the stage-takeover group is enabled while the
-        # event-sit-back group is disabled (the robot "takes over the stage").
-        zgs = self._config.get("zone_groups", {})
-        stage = zgs.get("stage-takeover", {})
-        event = zgs.get("event-sit-back", {})
-        perf = bool(stage.get("enabled", False)) and not bool(event.get("enabled", False))
+        # Performance mode: the "perform" control mode (the single mechanism; the
+        # legacy stage-takeover/event-sit-back zone-group derivation is retired).
+        perf = self.machine.control_mode == "perform"
         # Dwell remaining: only meaningful when autonomy is on and there is an active action.
         dwell_remaining = None
         if enabled:
@@ -489,9 +488,10 @@ class Brain:
         elif c == Cmd.SET_CADENCE:
             self._handle_set_cadence(p)
         elif c == Cmd.SET_CONTROL_MODE:
-            # Manual mode disables all groups (the operator drives the robot);
-            # clear the active group before the machine freezes the pose.
-            if p.get("mode") == "manual" and self.active_group is not None:
+            # Manual and perform modes disable all groups (the operator/performer
+            # drives the robot); clear the active group before the machine freezes
+            # the pose.
+            if p.get("mode") in ("manual", "perform") and self.active_group is not None:
                 self.clear_group()
             # Assertive mode is independent of groups: entering it clears the active
             # group; leaving it clears the assertive navigation state (the machine
@@ -733,7 +733,9 @@ class Brain:
         }
         self._facefocus_last_face_ts = time.time()
         self._cam_log("face", f"face: id={p.get('id')} bbox={bbox}")
-        if self.machine.control_mode == "manual":
+        # Face-action cycling is a brain autonomy trigger: silenced in manual and
+        # perform modes (the operator/performer drives the robot).
+        if self.machine.control_mode in ("manual", "perform"):
             return
         # Cycle the face actions on the timer (only in the facefocus class).
         if self.current_class == "facefocus":
@@ -787,7 +789,10 @@ class Brain:
             self._test_tick(curjpos)
             self._update_hunt_state()
             return
-        if self.machine.control_mode == "manual":
+        if self.machine.control_mode in ("manual", "perform"):
+            # Manual and perform: the brain makes no autonomous decisions (the
+            # operator/performer drives the robot via explicit commands). Keep the
+            # hunt/feral state fresh for the display, but take no action.
             self._clear_feral_if_stale()
             self._update_hunt_state()
             return
@@ -1245,10 +1250,11 @@ class Brain:
         """Whether the person-tracking (hunt) loop runs this tick.
 
         - manual: False (the operator drives the robot).
+        - perform: False (the performer drives the robot; autonomy is silenced).
         - assertive: True only when ``assertive.track`` is enabled.
         - auto: True (the hunt ladder is part of auto mode).
         """
-        if self.machine.control_mode == "manual":
+        if self.machine.control_mode in ("manual", "perform"):
             return False
         if self.machine.control_mode == "assertive":
             return bool(self._assertive_cfg().get("track", False))
@@ -1425,11 +1431,12 @@ class Brain:
 
         Called by the MIDI adapter on note-on. Sets ``_autonomy_triggered`` so the
         next :meth:`_autonomy_tick` follows the current action's next link.
-        No-op in manual mode (the operator drives the robot).
+        No-op in manual and perform modes (the operator/performer drives the robot
+        via explicit commands; only the ``next_pose`` midi note works in perform).
         """
         if self.machine.test_mode:
             return
-        if self.machine.control_mode == "manual":
+        if self.machine.control_mode in ("manual", "perform"):
             return
         if self._autonomy_cfg().get("events", {}).get("midi", False):
             self._autonomy_triggered = True
@@ -1450,9 +1457,10 @@ class Brain:
     def _handle_proceed(self) -> None:
         """WebSocket PROCEED event: trigger an immediate next-link advance.
 
-        No-op in manual mode (the operator drives the robot).
+        No-op in manual and perform modes (the operator/performer drives the robot
+        via explicit commands).
         """
-        if self.machine.control_mode == "manual":
+        if self.machine.control_mode in ("manual", "perform"):
             return
         if self._autonomy_cfg().get("events", {}).get("websocket", False):
             self._autonomy_triggered = True
@@ -1620,7 +1628,9 @@ class Brain:
         """Enable a zone group at runtime: navigate to it, then stay in it.
 
         1. Validate the group exists in ``zone_groups``.
-        2. Switch to auto mode (enabling a group disables manual mode).
+        2. Switch to auto mode (enabling a group disables manual mode). In perform
+           mode the control mode is left as-is (the group activates, but the
+           brain-driven navigation does not run while the brain is silenced).
         3. Find a safe path from the current position to any enabled node in
            the group, log it, and walk the waypoints hop-by-hop.
         """
@@ -1632,7 +1642,10 @@ class Brain:
             print(f"[brain] enable_group: unknown group {group_name!r}")
             return
         # Enabling a group disables manual mode (the brain drives the navigation).
-        self.machine.set_control_mode("auto", curjpos)
+        # In perform mode the control mode is left as-is (the group activates, but
+        # the brain-driven navigation does not run while the brain is silenced).
+        if self.machine.control_mode != "perform":
+            self.machine.set_control_mode("auto", curjpos)
         # Collect the group's enabled nodes as path targets.
         targets = self._group_targets(group_name)
         if not targets:
