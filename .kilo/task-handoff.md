@@ -1,5 +1,104 @@
 # Task Handoff Log
 
+## 2026-11-05 — MIDI tab: mapped-keys card below the live monitor, monitor 50vh cap + wider column, one-line entries
+
+### Status
+
+Completed
+
+### Summary
+
+Reworked the MIDI tab's right column so the "all mapped keys" card sits directly below the live monitor (same width), the live monitor is capped at half the viewport height with a scrollbar, the right column is widened so events fit on one line, and the mapped-keys entries render on a single line each. The mapped-keys card moved out of the in-view (col 1) into the right column (col 2) as a standalone section; it is now always visible (like the monitor) and is still populated by `buildMidiInForm()` → `buildMidiAllList()`.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - CSS `#midiMain`: right column widened `320px` → `420px` so monitor events fit on one line.
+  - CSS `#midiMonitor, #performMidiMonitor`: `max-height` `260px` → `50vh` (never more than half the vertical screen space); kept `overflow: auto` (scrollbar).
+  - CSS added `#midiAllSection { grid-column: 2; align-self: start; }` (mapped-keys card in the right column, below the monitor) and `#midiAllList .sndRow { flex-wrap: nowrap; }` (one-line entries).
+  - CSS `#performMain`: right column widened `320px` → `420px` for consistency (the perform tab monitor is the same component).
+  - HTML: moved the "all mapped keys" section out of `#midiInView` (col 1) into a new `#midiAllSection` placed after `#midiMonitorSection` (col 2), so it renders below the live monitor with the same width.
+  - The `#midiAllList` element id is unchanged, so `buildMidiAllList()` still populates it; `buildMidiInForm()` is called on MIDI-tab entry, so the card is filled in both in/out sub-views.
+
+### Documentation
+
+None required — UI layout change only; no user-facing docs describe this layout.
+
+### Architecture
+
+No architectural impact. Pure frontend layout/CSS change in `editor.html`; no data flow, API, or backend change.
+
+### Validation
+
+- Manual review of the edited HTML/CSS: `#midiInView` now ends with the stop-learn row; `#midiAllSection` is a well-formed `<section>` after `#midiMonitorSection` and before `</main>`; grid auto-placement puts the monitor in r1c2 and the mapped-keys card in r2c2 (same column → same width, below the monitor).
+- No JS change; the existing `buildMidiAllList()` / `buildMidiInForm()` still target `#midiAllList` (unchanged id).
+- No frontend linter/build in the repo; browser verification is the remaining step (open the MIDI tab, confirm the mapped-keys card is below the monitor, the monitor scrolls and is capped at ~50vh, and entries are on one line).
+
+### Decisions and Caveats
+
+- The mapped-keys card is now always visible in the right column (both in/out sub-views), matching the always-visible monitor. Previously it was inside `#midiInView` and hidden in the out sub-view. If the out sub-view should not show it, gate `#midiAllSection` visibility on `midiSubView` in `switchMidiSubView`.
+- Right column width is a fixed `420px` (was `320px`); on very narrow viewports the left column shrinks accordingly. Adjust the `420px` value if events still wrap or the left column gets too tight.
+- The monitor's existing `position: sticky` is retained; with the card now in the row below it, the sticky is constrained to the monitor's own row (no overlap with the card).
+
+### Next Task
+
+Optional browser verification of the MIDI tab layout (mapped-keys card below the monitor, same width; monitor scrollbar + ≤50vh; one-line entries). If the out sub-view should hide the mapped-keys card, add a visibility toggle.
+
+### Instructions for the Next Task
+
+Open `editor.html` in a browser, connect, go to the MIDI tab. Confirm: (1) the "all mapped keys" card is in the right column directly below the "live monitor", same width; (2) the monitor has a scrollbar and never exceeds ~half the viewport height; (3) monitor events and mapped-keys entries each render on one line. Toggle the in/out sub-views to confirm the card behavior is acceptable.
+
+## 2026-11-05 — Ship config.json with `--ship-code` (Trimui deploy)
+
+### Status
+
+Completed
+
+### Summary
+
+Changed the Trimui deploy so `scripts/build_pak.sh --ship-code` also ships `config.json` to the on-device PAK, not just the python app code. Previously `config.json` only went to the device as part of the full PAK install (`--full` + `scp -r`), so a code-only update could not refresh the PAK config (core_host, joy_map, screen size, theme, ...). Now `--ship-code` re-stages the code AND `scp`s the repo's canonical `config.json` to `$PAK_DEVICE_PATH/config.json` (the dir `launch.sh` reads it from), so a config change no longer requires re-sending the ~200MB PAK.
+
+### Changes Made
+
+- `realtimecontrol/rtr/scripts/build_pak.sh`:
+  - In the `--ship-code` block (section 6), after the code tar-over-ssh succeeds, added a step that ships `config.json`: it checks the on-device PAK dir exists (`ssh ... "test -d '$PAK_DEVICE_PATH'"`), then `scp "$PAK_DIR/config.json" "$DEVICE:$PAK_DEVICE_PATH/config.json"`. If the PAK path is absent it warns and skips (does not hard-fail, code still ships); if the local `pak/RTRREMOTE.pak/config.json` is absent it also warns and skips.
+  - Updated the usage comment (`--ship-code` now "scp ONLY the app code + config.json to the device") and the final "Ship ONLY ..." summary echo to mention `config.json`.
+- `realtimecontrol/rtr/rtr/remote/README.md`:
+  - "Deploying the Trimui PAK" intro: noted `--ship-code` also ships `config.json` to the on-device PAK.
+  - "Code-only update" comment: "re-stage + ship the python app code + config.json".
+  - The `--ship-code` paragraph: documented the extra `scp` of `config.json` and the skip-with-warning behavior when the PAK isn't on the device yet.
+
+### Documentation
+
+- `realtimecontrol/rtr/rtr/remote/README.md` updated (deploy section) — see above.
+- `realtimecontrol/rtr/remote/deploy.md` left unchanged: it is a historical paramiko runbook (`/tmp/kilo/ship_code.py`) whose `--ship-code` mention is incidental; the canonical procedure is in `rtr/remote/README.md`.
+
+### Architecture
+
+No architectural impact. Behavior change confined to the deploy script (`build_pak.sh`) and docs. The on-device layout is unchanged: `config.json` still lives in the PAK dir (`/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/config.json`) and is read by `launch.sh` via `$PakDir/config.json`; only how/when it gets there changed.
+
+### Validation
+
+- `bash -n scripts/build_pak.sh` → syntax OK.
+- Dry-run with mock `ssh`/`scp` (no real device) from the `realtimecontrol/rtr` root:
+  - PAK present: confirmed the script issues `ssh <dev> "test -d '<PAK_DEVICE_PATH>'"` then `scp <repo>/pak/RTRREMOTE.pak/config.json <dev>:<PAK_DEVICE_PATH>/config.json`.
+  - PAK absent (mock `test -d` returns 1): confirmed it prints "skipped config.json" and continues (code still shipped, exit 0, no scp issued).
+- No on-device run performed (device not reachable from this session). On-device verification left to the operator: `ssh root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selftest"`.
+
+### Decisions and Caveats
+
+- Source of the shipped config is the repo's canonical `pak/RTRREMOTE.pak/config.json` (not `dist/RTRREMOTE.pak/config.json`), so it is always current regardless of whether a prior full build exists.
+- The repo config currently carries the real `core_host: 192.168.1.185`, so shipping it is safe. If the repo config is ever reset to `127.0.0.1` (loopback), `--ship-code` will overwrite the on-device config back to loopback and break the WS link — keep the repo `config.json`'s `core_host` correct before shipping.
+- `--ship-code` overwrites the on-device `config.json` from the repo; any device-local config tweaks not committed to the repo will be lost.
+
+### Next Task
+
+No immediate next task identified. If the operator wants, next is an on-device smoke test of `--ship-code` against the real Trimui (ship code + config, then `launch.sh --selftest`).
+
+### Instructions for the Next Task
+
+Run `scripts/build_pak.sh --ship-code` from the `realtimecontrol/rtr` root against the real device (default `root@192.168.1.33`); confirm the output shows "shipping config.json -> .../RTRREMOTE.pak/config.json", then run the on-device selftest. Override `DEVICE`/`REPO_PATH`/`PAK_DEVICE_PATH` as needed.
+
 ## 2026-11-05 — MIDI monitor sticky right-side card + perform tab layout fix
 
 ### Status

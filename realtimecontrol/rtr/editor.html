@@ -172,7 +172,7 @@
     .posesCollide .ok { color: var(--accent); }
     .posesCollide .bad { color: #e05d5d; }
     /* Perform tab: main content left, sticky MIDI monitor right. */
-    #performMain { display: grid; gap: 16px; grid-template-columns: 1fr 320px; align-items: start; }
+    #performMain { display: grid; gap: 16px; grid-template-columns: 1fr 420px; align-items: start; }
     #performMain .performCols { display: grid; gap: 16px; grid-template-columns: 1fr auto; align-items: start; grid-column: 1; }
     #performMain .performCols section { position: sticky; top: 8px; }
     #perform3dSection { position: static; display: flex; flex-direction: column; }
@@ -379,7 +379,7 @@
   .fedgeWarnBg { fill: #e05d5d; stroke: #0d0f13; stroke-width: 1; }
   .fedgeWarnTxt { fill: #ffffff; font-size: 10px; font-weight: bold; pointer-events: none; }
   /* Midi-in editor tab. */
-  #midiMain { display: grid; gap: 16px; grid-template-columns: 1fr 320px; align-items: start; }
+  #midiMain { display: grid; gap: 16px; grid-template-columns: 1fr 420px; align-items: start; }
   #midiToggleRow { grid-column: 1; }
   #midiOutView, #midiInView { grid-column: 1; }
   #midiPort { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
@@ -405,9 +405,11 @@
   .midiFieldHelp { font-size: 11px; color: var(--dim); margin-top: 2px; }
   /* Live MIDI monitor: the last raw in / commands out. */
   #midiMonitorSection { grid-column: 2; position: sticky; top: 8px; align-self: start; }
+  #midiAllSection { grid-column: 2; align-self: start; }
+  #midiAllList .sndRow { flex-wrap: nowrap; }
   #midiMonitor, #performMidiMonitor { background: #0d0f13; border: 1px solid var(--border); border-radius: 6px;
-                 padding: 8px 10px; font-size: 12px; line-height: 1.6;
-                 max-height: 260px; overflow: auto; }
+                  padding: 8px 10px; font-size: 12px; line-height: 1.6;
+                  max-height: 50vh; overflow: auto; }
   .mmRow { display: flex; gap: 8px; white-space: nowrap; }
   .mmTs { color: var(--dim); min-width: 62px; }
   .mmDir { min-width: 22px; font-weight: bold; }
@@ -680,12 +682,6 @@
         robot to that zone; each action's key triggers just that action.</p>
       <div id="midiZones"></div>
     </section>
-    <section>
-      <h2>all mapped keys</h2>
-      <p class="midiHelp">Every MIDI key currently mapped, in one list. Edit a value, re-learn it,
-        or remove it. Add new keys in the sections above.</p>
-      <div id="midiAllList"></div>
-    </section>
     <div class="row" style="margin-top:8px">
       <button id="midiStopLearn" class="small" style="display:none" title="Cancel the current learn.">stop learn</button>
       <span id="midiStatus" style="font-size:12px;color:var(--dim)"></span>
@@ -696,6 +692,12 @@
     <p class="midiHelp">The last raw MIDI traffic: <b>in</b> = messages received on the MIDI port,
       <b>out</b> = commands the core sent. Newest at the bottom.</p>
     <div id="midiMonitor"></div>
+  </section>
+  <section id="midiAllSection">
+    <h2>all mapped keys</h2>
+    <p class="midiHelp">Every MIDI key currently mapped, in one list. Edit a value, re-learn it,
+      or remove it. Add new keys in the sections above.</p>
+    <div id="midiAllList"></div>
   </section>
 </main>
 

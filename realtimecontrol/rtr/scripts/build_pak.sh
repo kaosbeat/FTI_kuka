@@ -17,7 +17,7 @@
 # Usage:
 #   scripts/build_pak.sh            # assemble static parts (fonts + config + code)
 #   scripts/build_pak.sh --full     # also download python/ + venv/ (network)
-#   scripts/build_pak.sh --ship-code# scp ONLY the app code to the device
+#   scripts/build_pak.sh --ship-code# scp ONLY the app code + config.json to the device
 #
 # Env overrides (for pinning / offline builds / device target):
 #   PBS_URL        exact python-build-standalone aarch64 tarball URL
@@ -259,6 +259,23 @@ if [ "$SHIP_CODE" -eq 1 ]; then
         echo "    scp -r $REPO_STAGE/rtr $DEVICE:$REPO_PATH/"
         exit 1
     fi
+
+    # Also ship config.json to the on-device PAK so a code update refreshes the
+    # PAK config (core_host, joy_map, screen size, ...) WITHOUT re-sending the
+    # ~200MB PAK. launch.sh reads $PakDir/config.json, so it must live in the
+    # PAK dir, not REPO_PATH. Sourced from the repo's canonical config.
+    if [ -f "$PAK_DIR/config.json" ]; then
+        if ssh "$DEVICE" "test -d '$PAK_DEVICE_PATH'"; then
+            echo "==> shipping config.json -> $DEVICE:$PAK_DEVICE_PATH/config.json"
+            scp "$PAK_DIR/config.json" "$DEVICE:$PAK_DEVICE_PATH/config.json"
+        else
+            echo "!! on-device PAK path $PAK_DEVICE_PATH not found; skipped config.json."
+            echo "   Ship the full PAK first (build_pak.sh --full + scp), then re-run --ship-code."
+        fi
+    else
+        echo "!! local $PAK_DIR/config.json not found; skipped config.json"
+    fi
+
     echo "==> done. On-device self-test (uses the PAK's bundled python):"
     echo "    ssh $DEVICE \"$PAK_DEVICE_PATH/launch.sh --selftest\""
 fi
@@ -273,9 +290,10 @@ echo
 echo "Copy the PAK once (slow over wifi):"
 echo "    scp -r $DIST_DIR $DEVICE:/mnt/SDCARD/Tools/tg5040/"
 echo
-echo "Ship ONLY the python app code (fast, code updates):"
+echo "Ship ONLY the python app code + config.json (fast, code updates):"
 echo "    $0 --ship-code"
 echo "    #  =  ssh $DEVICE \"mkdir -p '$REPO_PATH'\" && scp -r $REPO_STAGE/rtr $DEVICE:$REPO_PATH/"
+echo "    #     + scp $PAK_DIR/config.json $DEVICE:$PAK_DEVICE_PATH/config.json"
 echo
 echo "Then on-device:"
 echo "    /mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selftest"

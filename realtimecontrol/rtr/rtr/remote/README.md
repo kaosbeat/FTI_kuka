@@ -106,7 +106,8 @@ pytest tests/test_remote_tui.py tests/test_remote_sdl.py
 The PAK (`python/` + `venv/` + `fonts/` + `config.json`, ~200 MB) is sent **once**;
 the app code (a few hundred KB) is staged in `dist/repo/` and shipped **separately**
 for code updates. There is no git/rsync on the device — code ships over
-scp / tar-over-ssh.
+scp / tar-over-ssh. `--ship-code` also ships `config.json` to the on-device PAK,
+so a code update can refresh the PAK config without re-sending the PAK.
 
 Built by `scripts/build_pak.sh` (cross-builds aarch64 on the x86_64 dev machine).
 
@@ -130,7 +131,7 @@ ssh root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selfte
 ### Code-only update (PAK already on the device)
 
 ```bash
-# re-stage + ship ONLY the python app code; the ~200MB PAK is NOT re-sent
+# re-stage + ship the python app code + config.json; the ~200MB PAK is NOT re-sent
 scripts/build_pak.sh --ship-code
 
 # then smoke test
@@ -138,10 +139,12 @@ ssh root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selfte
 ```
 
 `--ship-code` streams `dist/repo/rtr` over ssh via `tar` (no rsync, atomic
-destination, avoids the OpenSSH 9.x scp `path canonicalization failed` error).
-The on-device repo path defaults to `/storage/rtr-remote` (override with
-`REPO_PATH=...`), and must match the `"repo"` field in the PAK's `config.json`
-so `launch.sh` finds the code.
+destination, avoids the OpenSSH 9.x scp `path canonicalization failed` error),
+and also `scp`s the repo's `config.json` to the on-device PAK (`launch.sh` reads
+it from the PAK dir). The on-device repo path defaults to `/storage/rtr-remote`
+(override with `REPO_PATH=...`), and must match the `"repo"` field in the PAK's
+`config.json` so `launch.sh` finds the code. If the PAK isn't on the device yet,
+`--ship-code` skips `config.json` with a warning (ship the full PAK first).
 
 ## Configuration
 
