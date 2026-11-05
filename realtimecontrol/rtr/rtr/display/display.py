@@ -27,7 +27,8 @@ class Display:
                  camera: Optional[CameraController] = None,
                  machine=None,
                  render_ui_provider: Callable[[], dict] = None,
-                 midi_monitor_provider: Callable[[], list] = None):
+                 midi_monitor_provider: Callable[[], list] = None,
+                 red_light_provider: Callable[[], dict] = None):
         self.bus = bus
         self._send = send
         self.enabled = enabled
@@ -49,6 +50,10 @@ class Display:
         # every state frame so the editor's live monitor and the client's activity
         # lights can show the actual MIDI traffic.
         self._midi_monitor_provider = midi_monitor_provider
+        # Returns the LED-wall red-light overlay config (the robotconfig's
+        # ``red_light`` field); pushed in every state frame so the render page
+        # shows/hides the pulsating dead-pixel calibration light without a refetch.
+        self._red_light_provider = red_light_provider
         bus.subscribe(self.on_event)
 
     def on_event(self, event: Event, data) -> None:
@@ -118,6 +123,18 @@ class Display:
         except Exception:  # noqa: BLE001 - a bad provider must not kill the frame
             return None
         return list(ring) if isinstance(ring, (list, tuple)) else None
+
+    def _red_light_field(self) -> Optional[dict]:
+        """The red-light overlay config for the state frame, or None when no provider is wired.
+
+        A failure in the provider degrades to None (the frame is still sent)."""
+        if self._red_light_provider is None:
+            return None
+        try:
+            rl = self._red_light_provider()
+        except Exception:  # noqa: BLE001 - a bad provider must not kill the frame
+            return None
+        return rl if isinstance(rl, dict) else None
 
     def _camera_field(self) -> Optional[dict]:
         """The camera intent for the state frame, or None when no camera is wired."""
@@ -217,6 +234,11 @@ class Display:
         mm = self._midi_monitor_field()
         if mm is not None:
             frame["midi_monitor"] = mm
+        # The LED-wall red-light overlay config (the robotconfig's red_light field);
+        # the render page draws the pulsating dead-pixel calibration light from it.
+        rl = self._red_light_field()
+        if rl is not None:
+            frame["red_light"] = rl
         # The live perform state (beat clock + velocity/multiplier/deadline/late);
         # the perform.html page reads it from the state frame.
         if snap.perform is not None:
@@ -229,8 +251,10 @@ def make_display(bus: StateBus, send: Callable[[dict], None], enabled: bool,
                  camera: Optional[CameraController] = None,
                  machine=None,
                  render_ui_provider: Callable[[], dict] = None,
-                 midi_monitor_provider: Callable[[], list] = None) -> Display:
+                 midi_monitor_provider: Callable[[], list] = None,
+                 red_light_provider: Callable[[], dict] = None) -> Display:
     return Display(bus, send, enabled=enabled, patch_code=patch_code,
                    camera=camera, machine=machine,
                    render_ui_provider=render_ui_provider,
-                   midi_monitor_provider=midi_monitor_provider)
+                   midi_monitor_provider=midi_monitor_provider,
+                   red_light_provider=red_light_provider)

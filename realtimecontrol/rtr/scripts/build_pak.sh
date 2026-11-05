@@ -41,6 +41,8 @@ REPO_STAGE="$PKG_DIR/dist/repo"                        # lean app-code artifact 
 DEVICE=${DEVICE:-root@192.168.1.33}
 REPO_PATH=${REPO_PATH:-/storage/rtr-remote}            # matches config.json "repo"
 PAK_DEVICE_PATH=${PAK_DEVICE_PATH:-/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak}  # where the PAK lives on the device
+# TrimUI sshd: force password auth on every ssh/scp call (no public-key/agent).
+SSH_AUTH_OPTS="-o PreferredAuthentications=password"
 
 FULL=0
 SHIP_CODE=0
@@ -242,7 +244,7 @@ echo "==> app code: $(find "$REPO_STAGE" -type f | wc -l) files staged in $REPO_
 if [ "$SHIP_CODE" -eq 1 ]; then
     echo "==> shipping app code -> $DEVICE:$REPO_PATH (PAK not re-sent)"
     # Fail fast if the destination isn't a real, writable path on the device.
-    if ! ssh "$DEVICE" "mkdir -p '$REPO_PATH' && test -d '$REPO_PATH'"; then
+    if ! ssh $SSH_AUTH_OPTS "$DEVICE" "mkdir -p '$REPO_PATH' && test -d '$REPO_PATH'"; then
         echo "!! could not create/verify $REPO_PATH on $DEVICE."
         echo "   The on-device SD card is mounted at /mnt/SDCARD/; the default"
         echo "   /storage path may not exist. Try:"
@@ -252,11 +254,11 @@ if [ "$SHIP_CODE" -eq 1 ]; then
         exit 1
     fi
     # Stream the rtr/ tree over ssh; extract into REPO_PATH on the device.
-    if tar -C "$REPO_STAGE" -cf - rtr | ssh "$DEVICE" "tar -C '$REPO_PATH' -xf -"; then
+    if tar -C "$REPO_STAGE" -cf - rtr | ssh $SSH_AUTH_OPTS "$DEVICE" "tar -C '$REPO_PATH' -xf -"; then
         echo "==> shipped via tar-over-ssh"
     else
         echo "!! tar-over-ssh failed. Retry by hand (dir already created):"
-        echo "    scp -r $REPO_STAGE/rtr $DEVICE:$REPO_PATH/"
+        echo "    scp $SSH_AUTH_OPTS -r $REPO_STAGE/rtr $DEVICE:$REPO_PATH/"
         exit 1
     fi
 
@@ -265,9 +267,9 @@ if [ "$SHIP_CODE" -eq 1 ]; then
     # ~200MB PAK. launch.sh reads $PakDir/config.json, so it must live in the
     # PAK dir, not REPO_PATH. Sourced from the repo's canonical config.
     if [ -f "$PAK_DIR/config.json" ]; then
-        if ssh "$DEVICE" "test -d '$PAK_DEVICE_PATH'"; then
+        if ssh $SSH_AUTH_OPTS "$DEVICE" "test -d '$PAK_DEVICE_PATH'"; then
             echo "==> shipping config.json -> $DEVICE:$PAK_DEVICE_PATH/config.json"
-            scp "$PAK_DIR/config.json" "$DEVICE:$PAK_DEVICE_PATH/config.json"
+            scp $SSH_AUTH_OPTS "$PAK_DIR/config.json" "$DEVICE:$PAK_DEVICE_PATH/config.json"
         else
             echo "!! on-device PAK path $PAK_DEVICE_PATH not found; skipped config.json."
             echo "   Ship the full PAK first (build_pak.sh --full + scp), then re-run --ship-code."
@@ -277,7 +279,7 @@ if [ "$SHIP_CODE" -eq 1 ]; then
     fi
 
     echo "==> done. On-device self-test (uses the PAK's bundled python):"
-    echo "    ssh $DEVICE \"$PAK_DEVICE_PATH/launch.sh --selftest\""
+    echo "    ssh $SSH_AUTH_OPTS $DEVICE \"$PAK_DEVICE_PATH/launch.sh --selftest\""
 fi
 
 # ---------------------------------------------------------------------------
@@ -288,12 +290,12 @@ echo "==> PAK assembled at:  $DIST_DIR   (~200MB, send once)"
 echo "==> app code staged at: $REPO_STAGE   (tiny, send for updates)"
 echo
 echo "Copy the PAK once (slow over wifi):"
-echo "    scp -r $DIST_DIR $DEVICE:/mnt/SDCARD/Tools/tg5040/"
+echo "    scp $SSH_AUTH_OPTS -r $DIST_DIR $DEVICE:/mnt/SDCARD/Tools/tg5040/"
 echo
 echo "Ship ONLY the python app code + config.json (fast, code updates):"
 echo "    $0 --ship-code"
-echo "    #  =  ssh $DEVICE \"mkdir -p '$REPO_PATH'\" && scp -r $REPO_STAGE/rtr $DEVICE:$REPO_PATH/"
-echo "    #     + scp $PAK_DIR/config.json $DEVICE:$PAK_DEVICE_PATH/config.json"
+echo "    #  =  ssh $SSH_AUTH_OPTS $DEVICE \"mkdir -p '$REPO_PATH'\" && scp $SSH_AUTH_OPTS -r $REPO_STAGE/rtr $DEVICE:$REPO_PATH/"
+echo "    #     + scp $SSH_AUTH_OPTS $PAK_DIR/config.json $DEVICE:$PAK_DEVICE_PATH/config.json"
 echo
 echo "Then on-device:"
 echo "    /mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selftest"

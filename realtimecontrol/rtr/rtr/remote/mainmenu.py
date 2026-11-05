@@ -262,10 +262,14 @@ class MainMenu:
         pygame.quit()
         cmd = self._launch_cmd(app)
         print(f"MENU: launching: {' '.join(cmd)}", flush=True)
+        rc = None
         try:
-            subprocess.run(cmd)
+            proc = subprocess.run(cmd)
+            rc = proc.returncode
         except Exception as exc:
             print(f"MENU: launch failed: {exc}", flush=True)
+        if rc is not None:
+            print(f"MENU: child exited rc={rc}", flush=True)
         self._restore_display()
 
     def _restore_display(self) -> None:
@@ -311,6 +315,20 @@ class MainMenu:
                 kind, payload = self._q.get_nowait()
                 if kind == "joy":
                     res = self._input.on_joystick_event(payload, now_ms)
+                    # Diagnostic: log every EV_KEY press edge (the face buttons)
+                    # with its code + resulting dispatch. The reader logs only the
+                    # first 5 raw events; this covers EVERY press, so "A does
+                    # nothing" is visible in the log (a NO-dispatch line means the
+                    # code is not in joy_map/quit_codes).
+                    if payload[0] == 1 and payload[2] == 1:
+                        if res is None:
+                            print(f"MENU: KEY code={payload[1]} -> NO dispatch "
+                                  f"(not in joy_map/quit_codes)", flush=True)
+                        elif res[0] == "quit":
+                            print(f"MENU: KEY code={payload[1]} -> quit", flush=True)
+                        else:
+                            print(f"MENU: KEY code={payload[1]} -> {res[1]}",
+                                  flush=True)
                     if res is not None:
                         self._dispatch(res)
         except queue.Empty:
@@ -359,6 +377,24 @@ class MainMenu:
               f"cols={renderer.cols} char_h={renderer.char_h} "
               f"rows={len(rows)}", flush=True)
         pygame.quit()
+        return 0
+
+    def input_diag(self) -> int:
+        """Print the effective input maps and exit (no display, no loop).
+
+        A fast, isolated probe of the loaded input config: shows exactly what the
+        menu thinks each button is (joy_map, quit_codes, dpad_map + device), so a
+        wrong or stale config.json (e.g. after a calibration run or a
+        ``--ship-code`` overwrite) is obvious. No pygame needed, so it runs over
+        ssh like ``--launch-test``.
+        """
+        dev = getattr(self.config, "device", None)
+        print(f"MENU-INPUT-DIAG device={dev}", flush=True)
+        print(f"MENU-INPUT-DIAG quit_codes={sorted(self._input.quit_codes)}",
+              flush=True)
+        print(f"MENU-INPUT-DIAG joy_map={dict(sorted(self._input.joy_map.items()))}",
+              flush=True)
+        print(f"MENU-INPUT-DIAG dpad_map={dict(self._input.dpad_map)}", flush=True)
         return 0
 
 
@@ -436,6 +472,40 @@ def selftest() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Launch test (exercises the child launch path once, no menu).
+# ---------------------------------------------------------------------------
+def launch_test(config, app_index: int = 0) -> int:
+    """Exercise the child launch path once, without the menu, and report the rc.
+
+    Disambiguates the "A does not open the app" failure without needing to
+    press A in the menu: prints the exact child command, verifies the child
+    script exists on disk, runs the child, and reports its exit code.
+
+    Returns the child's rc (127 if the child script is missing, 2 for an
+    out-of-range app index).
+    """
+    if not 0 <= app_index < len(APPS):
+        print(f"LAUNCH-TEST FAIL: app index {app_index} out of range "
+              f"(0..{len(APPS) - 1})")
+        return 2
+    app = APPS[app_index]
+    cmd = MainMenu(config)._launch_cmd(app)
+    print(f"LAUNCH-TEST: app={app['title']} cmd={' '.join(cmd)}", flush=True)
+    script = cmd[1]
+    if not os.path.exists(script):
+        print(f"LAUNCH-TEST FAIL: child script not found: {script}", flush=True)
+        return 127
+    try:
+        proc = subprocess.run(cmd)
+        rc = proc.returncode
+    except Exception as exc:
+        print(f"LAUNCH-TEST FAIL: launch failed: {exc}", flush=True)
+        return 1
+    print(f"LAUNCH-TEST: child exited rc={rc}", flush=True)
+    return rc
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point.
 # ---------------------------------------------------------------------------
 def main(argv: Optional[List[str]] = None) -> int:
@@ -451,12 +521,26 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="run the headless self-test (dummy driver, no core)")
     parser.add_argument("--diag", action="store_true",
                         help="print the display diagnostic and exit")
+    parser.add_argument("--launch-test", action="store_true",
+                        help="run the child launch path once (no menu) and "
+                             "report the child's exit code")
+    parser.add_argument("--app", type=int, default=0,
+                        help="app index for --launch-test (0=kukapp, 1=ledtest)")
+    parser.add_argument("--menu-diag", action="store_true",
+                        help="print the effective input maps (joy_map/quit_codes/"
+                             "dpad_map + device) and exit")
     args = parser.parse_args(argv)
 
     if args.selftest:
         return 0 if selftest() else 1
 
     config = from_args(args)
+
+    if args.launch_test:
+        return launch_test(config, args.app)
+
+    if args.menu_diag:
+        return MainMenu(config).input_diag()
 
     if args.diag:
         return MainMenu(config).diag()

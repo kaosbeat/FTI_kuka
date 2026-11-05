@@ -74,10 +74,12 @@ python rtr/remote/sdlapp.py --config config.json
 | `--ws-test` | Test the WebSocket link to the core and exit (no UI). |
 | `--diag` | Print the display / framebuffer diagnostic and exit. |
 | `--joy-diag` | Read joystick events and print their codes, then exit. |
+| `--launch-test` | Run the child launch path once (no menu) and report the child's exit code. `--app N` picks the app (0=kukapp, 1=ledtest). |
+| `--menu-diag` | Print the effective input maps (`joy_map`/`quit_codes`/`dpad_map` + `device`) and exit. No pygame needed; runs on-device over ssh. |
 
 ```bash
 # on-device smoke test (uses the PAK's bundled python)
-ssh root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selftest"
+ssh -o PreferredAuthentications=password root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selftest"
 
 # verify the WS link before shipping
 python rtr/remote/sdlapp.py --ws-test --core-host 192.168.1.185
@@ -118,14 +120,14 @@ Built by `scripts/build_pak.sh` (cross-builds aarch64 on the x86_64 dev machine)
 scripts/build_pak.sh --full
 
 # 2. copy the PAK to the SD card (slow over wifi — once)
-scp -r dist/RTRREMOTE.pak root@192.168.1.33:/mnt/SDCARD/Tools/tg5040/
+scp -o PreferredAuthentications=password -r dist/RTRREMOTE.pak root@192.168.1.33:/mnt/SDCARD/Tools/tg5040/
 
 # 3. ship the app code to the on-device repo path (fast)
 scripts/build_pak.sh --ship-code
 #    =  tar-over-ssh of dist/repo/rtr -> /storage/rtr-remote
 
 # 4. smoke test on-device
-ssh root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selftest"
+ssh -o PreferredAuthentications=password root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selftest"
 ```
 
 ### Code-only update (PAK already on the device)
@@ -135,7 +137,7 @@ ssh root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selfte
 scripts/build_pak.sh --ship-code
 
 # then smoke test
-ssh root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selftest"
+ssh -o PreferredAuthentications=password root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selftest"
 ```
 
 `--ship-code` streams `dist/repo/rtr` over ssh via `tar` (no rsync, atomic

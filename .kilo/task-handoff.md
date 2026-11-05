@@ -1,5 +1,387 @@
 # Task Handoff Log
 
+## 2026-11-05 — Red light (LED-wall dead-pixel mask): render-page overlay + tests
+
+### Status
+
+Completed
+
+### Summary
+
+Implemented the render-side overlay in `render.html` that draws the LED-wall dead-pixel mask: a pulsating CRT red light that rests as a thin vertical bar (`bar_w` x `bar_h`) and blooms into a circle of `radius` px on every pulse, phase-locked to the MIDI clock. It is a WebGL fragment shader on a dedicated `<canvas id="redLight">` overlay (below the camOverlay/HUD in z-order). The config comes from the state frame's `red_light` field (the core pushes it every 20 Hz tick); the beat clock is tracked from `perform.beat`/`bpm` and extrapolated between frames in rAF, free-running at 120 BPM when no `perform` field is present. Also added the two remaining tests (Python for the config helper + Display frame; JS for the render-page overlay logic). This completes the feature end-to-end (core → display → editor → render).
+
+### Changes Made
+
+- `realtimecontrol/rtr/render.html`:
+  - CSS: `#redLight { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none; }` (below camOverlay/HUD).
+  - HTML: `<canvas id="redLight">` between `#codeOverlay` and `#camOverlay`.
+  - State: `RED_LIGHT` (normalized config, disabled default), `rlClock` (`{ beat, bpm, lastT }`, `lastT: null` sentinel), `rlGL` (WebGL handle).
+  - `normalizeRedLightClient(data)`: JS mirror of `robot_config_red_light` (type-gated merge + clamps).
+  - `loadRedLightConfig()`: seeds `RED_LIGHT` from `/api/robotconfig` → `/robotconfig.json` (used until the first state frame carries `red_light`; state frames override).
+  - `setupRedLight()`: builds the WebGL program (fullscreen triangle-strip quad + fragment shader: rounded-box SDF morphed bar→circle by the pulse envelope `e = pow(1-phase, 3)`, red phosphor color, glow/core, scanlines, flicker, vignette, alpha output so hydra shows through); degrades to `null` (no-op) when WebGL is unavailable or the shader fails to compile/link.
+  - `sizeRedLight()`: keeps the canvas backing store matched to the window.
+  - `rlFrame()`: rAF loop — advances `rlClock.beat` from `bpm` between frames (guarded by `lastT != null`), computes `phase = (beat * per_beat) % 1`, `env = pow(1-phase, 3)`, sets the uniforms and draws (skips the draw when `enabled` is false).
+  - State handler: reads `m.red_light` → `RED_LIGHT = normalizeRedLightClient(...)` when present; reads `m.perform.beat`/`bpm` → resyncs `rlClock` on each 20 Hz frame.
+  - Resize handler: added `sizeRedLight()`.
+  - Init: `sizeRedLight()`, `rlGL = setupRedLight()`, `loadRedLightConfig()`, `rlClock.lastT = performance.now()`, `requestAnimationFrame(rlFrame)`.
+- `realtimecontrol/rtr/tests/js/test_red_light_page.js`: new Node DOM-stub test for the render-page overlay (normalize merge/clamp, state-frame `red_light` update, `perform` beat resync, `rlFrame` beat extrapolation, absent-field keeps previous config).
+- `realtimecontrol/rtr/tests/test_red_light.py`: new headless Python test for `robot_config_red_light()` (defaults, partial fill, clamps, malformed/bool rejection, numeric coercion) and the Display state frame (carries `red_light` when wired, omits it without a provider, degrades on provider throw / non-dict).
+
+### Documentation
+
+None required — the overlay's behavior and config fields are documented in the `render.html` comments and the `robot_config_red_light` docstring; the editor card (prior task) documents the user-facing fields.
+
+### Architecture
+
+No architectural impact. The render page consumes the existing 20 Hz state frame (single source of truth) — no new channel. The red-light config is the `red_light` field the core already forwards; the beat clock is the `perform.beat`/`bpm` already in the frame. The overlay degrades gracefully (no WebGL → no light; no `perform` → free-running clock; no `red_light` field → fetched fallback → disabled).
+
+### Validation
+
+- `node -e` syntax check of the `render.html` main script → SYNTAX OK.
+- `node tests/js/test_red_light_page.js` → ALL_TESTS_PASSED (15 assertions).
+- `node tests/js/test_red_light_tab.js` (editor card, prior task) → ALL_TESTS_PASSED (regression check).
+- `python tests/test_red_light.py` → ALL TESTS PASSED (11 tests).
+- `python -m pytest tests/ -q` → 457 passed, 12 skipped, 6 failed. The 6 failures (`test_remote_sdl.py` ×5, `test_zone_groups.py` ×1) are **pre-existing and unrelated** — confirmed by `git stash` + running them on the base commit (they fail identically without my changes).
+
+### Decisions and Caveats
+
+- `rlClock.lastT` uses a `null` sentinel (not `0`) so the first frame after a real timestamp is not skipped by a truthiness guard; `performance.now()` is non-zero in a browser, so production behavior is unchanged.
+- The beat clock free-runs at the last-known BPM between the 20 Hz state frames (rAF extrapolation) and is resynced to the core's `perform.beat` on every frame — this keeps the pulse smooth and phase-locked without a dedicated high-rate channel.
+- The shader outputs alpha = light coverage, so the hydra canvas shows through everywhere the light is absent (the overlay never blackens the wall).
+- Browser verification of the actual glow/morph look is the remaining manual step (open the render page, enable the red light in the robotconfig tab, position it over a dead pixel; confirm it pulses to the MIDI clock).
+
+### Next Task
+
+No immediate next task identified. Optional: browser verification of the overlay's visual result (enable in robotconfig tab, position over a dead pixel, confirm the bar→circle pulse is phase-locked to the MIDI clock and the hydra content shows through).
+
+### Instructions for the Next Task
+
+Open the render page in a browser with the core running. In the editor's robotconfig tab, enable the red light and set `x`/`y` over a dead pixel; adjust `bar_w`/`bar_h`/`radius`/`per_beat` to taste. Confirm: (1) the light renders (a thin red bar that blooms into a circle on each pulse), (2) it pulses in time with the MIDI clock (check `perform` page shows the same beat), (3) the hydra content is visible through the overlay (alpha output), (4) disabling the light in the robotconfig tab hides it (state frame `red_light.enabled` false). If WebGL is unavailable the overlay silently no-ops (check the console for the shader error lines).
+
+## 2026-11-05 — Red light (LED-wall dead-pixel mask): editor robotconfig card
+
+### Status
+
+Completed
+
+### Summary
+
+Added the red-light card to the editor's robotconfig tab so the LED-wall dead-pixel mask can be configured (enabled, x/y position, bar width/height, circle radius, morph on/off, pulses-per-beat). The inputs live in a dedicated `#redLightForm` (separate from `#robotConfigForm`, which must keep exactly the 6 joint-offset number inputs for the index-based `saveRobotConfig` mapping). A JS-side `normalizeRedLight()` mirrors the Python `robot_config_red_light` (type-gated merge + clamps) so a hand-edited robotconfig.json can never kill the overlay; `saveRobotConfig()` reads the red-light form and includes the `red_light` field in the POST payload.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - New `<section>` in `#robotconfigMain` with a `#redLightForm` container + `#redLightReset` button.
+  - New `RED_LIGHT_FALLBACK` const (mirrors `DEFAULT_RED_LIGHT` in rtr/robot/config.py).
+  - New `normalizeRedLight(data)` (type-gated merge + clamps: x/y ∈ [0,1], bar_w/bar_h/radius ≥ 1, per_beat ≥ 0.05).
+  - `normalizeRobotConfig()` now normalizes `red_light` via `normalizeRedLight()` and includes it in the returned config.
+  - New `buildRedLightForm()` (2 checkboxes `rl_enabled`/`rl_morph` + 6 number inputs `rl_x`/`rl_y`/`rl_bar_w`/`rl_bar_h`/`rl_radius`/`rl_per_beat`, each with a `data-rl` semantic key); called from `buildRobotConfigForm()`.
+  - `saveRobotConfig()` reads the red-light form (scoped `#rl_<key>` selectors) and adds `red_light` to the POST payload.
+- `realtimecontrol/rtr/tests/js/test_red_light_tab.js`: new Node DOM-stub test for the red-light card (fallback, normalize merge/clamp, form build, save payload).
+
+### Documentation
+
+The card's `<p class="midiHelp">` describes the overlay's behavior and config fields.
+
+### Architecture
+
+No architectural impact. The editor follows the existing robotconfig pattern (normalize → build form → save POST → hot-reload). The `red_light` field is a new top-level key the core already preserves; the editor is the only writer.
+
+### Validation
+
+- `node -e` syntax check of the editor main script → SYNTAX OK.
+- `node tests/js/test_red_light_tab.js` → ALL_TESTS_PASSED (23 assertions).
+
+### Decisions and Caveats
+
+- Inputs use prefixed IDs (`rl_<key>`) so `saveRobotConfig` can read them via `querySelector("#rl_<key>")` (the mini-DOM test harness only supports `#id`/`.class`/tag selectors, not `[attr=]`). A `data-rl` semantic key is also set on each input.
+- The red-light form is rebuilt by `buildRedLightForm()` whenever `buildRobotConfigForm()` runs, so it stays in sync with `ROBOT_CONFIG.red_light` after a load or reset.
+
+### Next Task
+
+Implement the render-side overlay in `render.html`: a WebGL fragment-shader canvas (`#redLight`) that draws the pulsating CRT red light (SDF bar↔circle blend, glow, scanlines, vignette, flicker, phosphor decay) driven by the state-frame `red_light` field + the `perform` beat clock.
+
+### Instructions for the Next Task
+
+- Add a `<canvas id="redLight">` overlay (z-index below camOverlay/HUD) to render.html.
+- Read `red_light` from the state frame (the core pushes it in every 20 Hz frame); fall back to fetching `/api/robotconfig` → `/robotconfig.json` → disabled when the field is absent (older core / provider not wired).
+- Phase-lock to the MIDI clock: track `perform.beat`/`bpm` from the state frames and extrapolate between frames in rAF; fall back to a free-running 120 BPM clock when no `perform` field is present. `phase = (beat * per_beat) % 1`, envelope `e = pow(1-phase, 3)` drives the bar→circle morph + brightness.
+
+## 2026-11-05 — Red light (LED-wall dead-pixel mask): display state-frame wiring
+
+### Status
+
+Completed
+
+### Summary
+
+Wired the LED-wall red-light overlay config into the state frame so the render page can show/hide the pulsating dead-pixel calibration light without a refetch. `Display` gained a `red_light_provider` (same provider pattern as `render_ui_provider` / `midi_monitor_provider`); `main.py` passes `lambda: robot_config_red_light(robot_cfg_holder[0])`, so the field is always the freshly-loaded robot config (hot-reload safe via the existing `_reload_robot_config` holder swap). The normalized dict is included as `frame["red_light"]` in every state frame; without a provider (or on provider failure) the field is omitted, so clients degrade to their fallback.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/display/display.py`: added `red_light_provider` param to `Display.__init__` and `make_display`; new `_red_light_field()` (provider → dict or None, exception degrades to None); `frame["red_light"]` emitted in `_frame()` when the field is present.
+- `realtimecontrol/rtr/main.py`: imported `robot_config_red_light` from `rtr.robot`; passed `red_light_provider=lambda: robot_config_red_light(robot_cfg_holder[0])` to `make_display`.
+
+### Documentation
+
+None required — internal wiring following the existing provider pattern; the render-page usage is documented in the `Display` docstrings.
+
+### Architecture
+
+No architectural impact. Follows the established provider pattern: the core never consumes the red-light config; it only forwards the normalized field in the state frame (the single source of truth, same as `patch` / `render_ui` / `midi_monitor`).
+
+### Validation
+
+- `python -m py_compile main.py rtr/display/display.py` → OK.
+- Smoke test: `Display` with a `red_light_provider` → state frame carries `red_light` dict (True); `Display` without provider → frame has no `red_light` key (False).
+
+### Decisions and Caveats
+
+- The provider is called lazily on every frame (20 Hz); `robot_config_red_light` is a pure normalize (cheap dict copy + clamps), so per-frame cost is negligible.
+- Clients reading `red_light` from the state frame must handle its absence (provider not wired / older core) by falling back to fetching `/api/robotconfig` or `/robotconfig.json`.
+
+### Next Task
+
+Implement the editor-side card in `editor.html` (robotconfig tab): a `#redLightForm` section with enabled/x/y/bar_w/bar_h/radius/morph/per_beat inputs, plus `normalizeRedLight()` / `buildRedLightForm()` / `RED_LIGHT_FALLBACK` and wiring into `saveRobotConfig()`.
+
+### Instructions for the Next Task
+
+- The robotconfig tab's `#robotConfigForm` currently holds exactly the 6 joint-offset number inputs (indices 0–5) — do NOT add red-light inputs there (it would break `saveRobotConfig()`'s index mapping). Add a separate `#redLightForm` inside the same `#robotconfigMain` section.
+- Follow the existing patterns in editor.html: `ROBOT_CONFIG_FALLBACK` → add a `RED_LIGHT_FALLBACK` mirroring `DEFAULT_RED_LIGHT` in `rtr/robot/config.py`; `normalizeRobotConfig()` → extend to normalize `red_light` via a new `normalizeRedLight()` (JS-side clamp mirroring the Python helper); `buildRobotConfigForm()` → call `buildRedLightForm()`; `saveRobotConfig()` → read `#redLightForm` fields into `ROBOT_CONFIG.red_light` before POST.
+- The Python side already preserves unknown keys in `validate_robot_config`, so `red_light` persists on save without schema changes.
+
+## 2026-11-05 — Red light (LED-wall dead-pixel mask): core config helper
+
+### Status
+
+Completed
+
+### Summary
+
+Added the core-side normalization for the LED-wall red-light overlay: `robot_config_red_light(config)` in `rtr/robot/config.py` returns the `red_light` field of the robot config with defaults filled and ranges clamped. The field describes a pulsating red light drawn on the render page (a 1px-wide vertical bar that blooms into a circle on the MIDI clock) positioned by a normalized (x, y) offset. The core never consumes it — it is only forwarded to the render page via the Display state frame (next task) and edited in the robotconfig tab (later task).
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/robot/config.py`: added `RED_LIGHT_KEY = "red_light"`, `DEFAULT_RED_LIGHT` (enabled=False, x=0.5, y=0.5, bar_w=1.0, bar_h=160.0, radius=80.0, morph=True, per_beat=1.0), and `robot_config_red_light(config)` (type-gated field merge + clamps: x/y ∈ [0,1], bar_w/bar_h/radius ≥ 1, per_beat ≥ 0.05; garbage `red_light` values → defaults).
+- `realtimecontrol/rtr/rtr/robot/__init__.py`: exported `robot_config_red_light`.
+
+### Documentation
+
+None required — docstring in `config.py` documents the field's semantics and degradation behavior.
+
+### Architecture
+
+No architectural impact. `validate_robot_config` already preserves unknown top-level keys verbatim, so `red_light` persists in `robotconfig.json` on save without a schema change; this helper is the single normalization point.
+
+### Validation
+
+- `python -m py_compile rtr/robot/config.py rtr/robot/__init__.py` → OK.
+- Smoke test: `robot_config_red_light({})` → defaults; `robot_config_red_light({'red_light': {'enabled': True, 'x': 5, 'y': -2, 'bar_w': -3, 'bar_h': 40, 'radius': 12, 'morph': False, 'per_beat': 0.5}})` → clamped (`x=1.0, y=0.0, bar_w=1.0`); `robot_config_red_light({'red_light': 'garbage'})` → defaults.
+
+### Decisions and Caveats
+
+- Clamps (not rejection) so a hand-edited robotconfig.json can never kill the overlay — worst case the light renders at the edge of the valid range.
+- `per_beat` floor of 0.05 keeps the pulse rate finite (max 5 pulses/beat) even if the value is mangled.
+
+### Next Task
+
+Wire the field into the Display state frame (the `red_light_provider` pattern).
+
+### Instructions for the Next Task
+
+- Add a `red_light_provider` param to `Display.__init__` / `make_display` in `rtr/display/display.py` (mirror `midi_monitor_provider`), a `_red_light_field()` helper, and emit `frame["red_light"]` in `_frame()` when present.
+- In `main.py`, pass `red_light_provider=lambda: robot_config_red_light(robot_cfg_holder[0])` so the field tracks hot-reloads.
+
+## 2026-11-05 — Red light (LED-wall dead-pixel mask): analyse + research
+
+### Status
+
+Completed
+
+### Summary
+
+Mapped the "pulsating red light on the LED wall to mask dead pixels" feature onto the existing architecture: (1) config lives in `robotconfig.json` (edited in the editor's robotconfig tab, hot-reloaded via `robot_cfg_holder`); `validate_robot_config` preserves unknown top-level keys, so a new `red_light` key persists without a schema change. (2) The BeatClock (external MIDI 0xF8 / internal BPM) is already pushed in every 20 Hz state frame as `perform.beat/bpm/clock_source`, so the render page can phase-lock locally without a new channel. (3) The state frame is the single source of truth for the render page (same pattern as `render_ui` / `patch`) → the red-light config is forwarded as a `red_light` field via a Display provider. (4) The editor's `#robotConfigForm` holds exactly the 6 joint-offset number inputs (indices 0–5) read by `saveRobotConfig()`, so the red-light inputs must live in a separate form element. (5) "CSS shaders" is implemented as a real WebGL fragment shader (SDF bar↔circle blend, glow, scanlines, vignette, flicker, phosphor decay) on a dedicated overlay canvas.
+
+### Changes Made
+
+- None (research only).
+
+### Documentation
+
+None required — research output captured in this entry and the TODO plan.
+
+### Architecture
+
+No architectural impact. Confirmed the feature fits the existing provider/state-frame pattern without new channels or schema changes.
+
+### Validation
+
+- `python -m py_compile` not applicable (no code changed).
+- Read: `render.html`, `editor.html` (robotconfig section), `rtr/display/display.py`, `rtr/core/clock.py`, `rtr/robot/config.py`, `main.py`, `rtr/core/engine.py`, `rtr/robot/__init__.py`, `robotconfig.json`, `tests/test_patch_push.py`, `tests/js/test_perform_page.js`, `tests/js/test_perform_tab.js`.
+
+### Decisions and Caveats
+
+- Beat sync: the render page tracks `perform.beat`/`bpm` from the state frames (20 Hz) and extrapolates between frames in rAF for smooth pulsing; falls back to a free-running 120 BPM clock when no `perform` field is present.
+- The overlay canvas sits below the camOverlay/HUD in z-order so the calibration reference (camera) stays visible on top.
+
+### Next Task
+
+Implement the core config helper (`robot_config_red_light` in `rtr/robot/config.py`).
+
+### Instructions for the Next Task
+
+- Add `RED_LIGHT_KEY`, `DEFAULT_RED_LIGHT`, and `robot_config_red_light(config)` to `rtr/robot/config.py` with type-gated merging and clamping; export from `rtr/robot/__init__.py`.
+- Do not change `validate_robot_config` (it already preserves unknown keys).
+
+## 2026-11-05 — RTR menu: input-side diagnostics (--menu-diag + per-press dispatch log)
+
+### Status
+
+Completed
+
+### Summary
+
+The prior task's on-device probe resolved the disambiguation: `launch.sh --launch-test` **opens kukapp**, so the child launch path is healthy. That localises the menu bug to the **input side** — pressing A does not dispatch `"enter"`. (D-pad up/down work = EV_ABS dispatched; home works = EV_KEY 172 dispatched; A does nothing = EV_KEY 29 not producing `"enter"`.) This task makes that dispatch visible on-device without guessing: the menu now logs **every** EV_KEY press edge with its code + resulting dispatch, and a new `--menu-diag` flag prints the effective input maps the menu actually loaded. The local canonical PAK config maps `29 → enter` correctly, so if the on-device `config.json` matches, A should dispatch — `--menu-diag` reveals whether the on-device config differs (a calibration run or a `--ship-code` overwrite can change `joy_map`), and the per-press log reveals the actual A code.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/remote/mainmenu.py`:
+  - `_poll()`: after computing the dispatch for a joystick event, logs every **EV_KEY press edge** (type 1, value 1) with its code + result: `MENU: KEY code=X -> enter` / `-> quit` / `-> NO dispatch (not in joy_map/quit_codes)`. The reader thread only logs the first 5 raw events; this covers every press, so "A does nothing" is visible in the log regardless of how many d-pad moves preceded it.
+  - New `MainMenu.input_diag()`: prints the effective `device`, `quit_codes`, `joy_map` (sorted), and `dpad_map` the menu actually loaded, then returns 0. No pygame / display / loop, so it runs on-device over ssh like `--launch-test`.
+  - New CLI flag `--menu-diag` → `MainMenu(config).input_diag()`.
+
+### Documentation
+
+- `realtimecontrol/rtr/rtr/remote/README.md`: added a `--menu-diag` row to the on-device diagnostics flag table.
+- `realtimecontrol/rtr/rtr/remote/tui_skeleton.md`: added the `--menu-diag` ssh line to the on-device test block, a bullet explaining the flag, added it to the `$@`-forwarding bullet, and added `--launch-test` + `--menu-diag` to the "Diagnostics" checklist item.
+
+### Architecture
+
+No architectural impact. Observability only: the dispatch path (`_poll` → `on_joystick_event` → `_dispatch` → `_handle_key`) is unchanged in behavior; it now just prints the EV_KEY press edges it already processes. `--menu-diag` is a read-only probe of the loaded `Config`.
+
+### Validation
+
+- `python -m py_compile rtr/remote/mainmenu.py` → OK.
+- `SDL_VIDEODRIVER=dummy python rtr/remote/mainmenu.py --selftest` → `MENU SELFTEST PASS` (rc=0).
+- `python rtr/remote/mainmenu.py --menu-diag --config pak/RTRREMOTE.pak/config.json` → prints `device=/dev/input/event3`, `quit_codes=[172]`, `joy_map={8:'h',15:'up',16:'down',17:'left',18:'right',29:'enter',30:'q',310:'left',311:'right'}`, `dpad_map={'up':[17,-1],'down':[17,1],'left':[16,-1],'right':[16,1]}`. Confirms the canonical config maps 29 → enter.
+
+### Decisions and Caveats
+
+- The per-press log is **always on** (not flag-gated): EV_KEY press edges are low-volume (face buttons only), and this is the decisive signal for the bug. The d-pad (EV_ABS) is still logged only for the first 5 events by the reader thread.
+- Two remaining on-device candidates, now both probeable: (1) the on-device `config.json` `joy_map` does not map the A code to `enter` (calibration/ship overwrite) — `--menu-diag` shows it; (2) the A button's actual EV_KEY code is not 29, or A emits a different event type — the per-press log + `--joy-diag` show it.
+- If the A code differs from the config's mapping, the fix is to update `joy_map` in `pak/RTRREMOTE.pak/config.json` (then resync the on-device config via `--ship-code`, or edit the on-device `config.json` directly).
+
+### Next Task
+
+On-device disambiguation (all over ssh with `-o PreferredAuthentications=password root@192.168.1.33`, PAK path `/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh`):
+1. `launch.sh --menu-diag` → confirm the loaded `joy_map` still maps the A code to `enter` (a calibration/ship overwrite may have changed it).
+2. Run the menu normally, press A, and read the log (`$LOGS_PATH/RTRREMOTE.txt`): a line `MENU: KEY code=X -> enter` means enter **was** dispatched (then the failure is in `_launch`'s menu context — check `MENU: child exited rc=`); `MENU: KEY code=X -> NO dispatch` means the code is not mapped; `code=X` where X≠29 means the A code differs from the config.
+3. `launch.sh --joy-diag` → press A and note the actual EV_KEY code (and whether it is EV_KEY or EV_ABS).
+
+### Instructions for the Next Task
+
+The flag is already wired: `launch.sh --menu-diag` runs `mainmenu.py --menu-diag` (the PAK's `launch.sh` passes extra args through). The per-press dispatch log needs no flag — it prints whenever the menu runs. Compare the `--menu-diag` `joy_map` against the actual A code from the per-press log / `--joy-diag`; whichever mismatches is the root cause, and the `joy_map` in `pak/RTRREMOTE.pak/config.json` is the thing to correct. The menu's `--selftest` still passes locally.
+
+## 2026-11-05 — RTR menu: log child exit code + add --launch-test diagnostic
+
+### Status
+
+Completed
+
+### Summary
+
+Investigating the bug where the RTR PAK menu (kukapp/ledtest) can be selected with the arrows but A no longer opens the app, while home still quits. Code review of the whole launch path (`mainmenu.py`, `sdlapp.py`, `view.py`, `config.py`, `events.py`, `ledtest.py`, `pak/RTRREMOTE.pak/config.json`, `launch.sh`, `build_pak.sh`) found no regression: the mapping (A=29 → "enter" via `joy_map`), the dispatch (`_handle_key("enter")` → `_launch`), and the child command construction all check out, and git shows no recent changes to the launch code. The failure narrows to two candidates: (1) A is not being dispatched as "enter" (input/config issue), or (2) the child process is failing to start/exiting immediately (launch issue), which makes it look like "nothing happened" because `_restore_display()` returns to the menu. This task makes the failure visible and adds a way to disambiguate on-device: `_launch` now logs the child's exit code, and a new `--launch-test` CLI flag exercises the exact child launch path once without the menu (no need to press A).
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/remote/mainmenu.py`:
+  - `_launch()`: now captures `subprocess.run(cmd)` into `proc` and logs `MENU: child exited rc=<int>` after every launch (previously the rc was discarded, so a child that failed immediately was invisible — the menu just returned).
+  - New module-level `launch_test(config, app_index=0)`: builds the child command via `MainMenu._launch_cmd`, prints it, verifies the child script exists on disk (returns 127 if missing), runs the child, and returns the child's exit code. This exercises the full launch path (interpreter + child script + `--config` path) without the menu.
+  - New CLI flags: `--launch-test` (run the child launch path once, no menu) and `--app` (app index for `--launch-test`, 0=kukapp, 1=ledtest).
+
+### Documentation
+
+- `realtimecontrol/rtr/rtr/remote/README.md`: added a `--launch-test` row to the on-device flag table.
+- `realtimecontrol/rtr/rtr/remote/tui_skeleton.md`: added the `--launch-test` ssh line to the on-device test block, a bullet explaining the flag (incl. that it needs no pygame, so it runs on-device over ssh), and added it to the `$@`-forwarding bullet.
+
+### Architecture
+
+No architectural impact. Diagnostic/observability change only; the launch mechanism (`_launch_cmd`/`_launch`) is unchanged in behavior — it now just reports the child rc it already produced.
+
+### Validation
+
+- `python rtr/remote/mainmenu.py --selftest` → `MENU SELFTEST PASS` (rc=0).
+- `python rtr/remote/mainmenu.py --launch-test` (default repo `/storage/rtr-remote`, absent on desktop) → `LAUNCH-TEST FAIL: child script not found` (rc=127).
+- `python rtr/remote/mainmenu.py --launch-test --app 99` → `LAUNCH-TEST FAIL: app index 99 out of range` (rc=2).
+- `python rtr/remote/mainmenu.py --launch-test --repo /tmp/kilo/launch-test/repo` with a stub child → child ran, `LAUNCH-TEST: child exited rc=0`, process rc=0.
+- `python -m py_compile rtr/remote/mainmenu.py` → OK.
+- Note: pygame 2.6.1 was installed into the desktop `kukart` pyenv to run these (it is not a repo dependency; device bundles it).
+
+### Decisions and Caveats
+
+- Root cause is still undetermined on-device. The disambiguation is now: (a) check `$LOGS_PATH/RTRREMOTE.txt` — if `MENU: launching` appears on an A press, launch was triggered → child failing (its rc is now logged too); if absent, "enter" never reached `_launch` → input/config issue. (b) Or run `launch.sh --launch-test` directly — if kukapp opens, the launch path is healthy and the bug is the A→enter mapping; if it fails, the log shows the child rc / missing script.
+- `--launch-test` runs the real child (it takes over the display and runs until the user quits it with home), so it is an interactive on-device probe, not a headless unit test.
+- `subprocess.run` returns a `CompletedProcess`; the code must use `.returncode` (a bug caught in local testing: returning the object made `sys.exit` print its repr and exit 1).
+
+### Next Task
+
+1. On the device, disambiguate: `ssh -o PreferredAuthentications=password root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --launch-test"` — if kukapp opens, the launch path is healthy → the bug is A→"enter" mapping; if it fails, the `MENU: launching` / `LAUNCH-TEST` log lines show the child rc / missing script.
+2. If the launch path is healthy, confirm the A-button code: `ssh -o PreferredAuthentications=password root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --joy-diag"`, press A, and confirm the EV_KEY code is 29 (else update `joy_map` in `pak/RTRREMOTE.pak/config.json`).
+3. Alternatively, check `$LOGS_PATH/RTRREMOTE.txt`: if `MENU: launching` appears on an A press, the child is failing (its rc is now logged too); if absent, "enter" never reached `_launch` (input/config issue).
+
+### Instructions for the Next Task
+
+The new flag is already wired: `launch.sh --launch-test` runs `mainmenu.py --launch-test` (the PAK's `launch.sh` passes extra args through to the menu). On the device, run it via ssh with the password-auth flag (see the deploy docs). The menu's own `--selftest` still passes. If the child is missing/stale from a `--ship-code` deploy, re-run `scripts/build_pak.sh --ship-code` to resync `/storage/rtr-remote`.
+
+## 2026-11-05 — Force password auth on all Trimui deploy ssh/scp commands
+
+### Status
+
+Completed
+
+### Summary
+
+Added `-o PreferredAuthentications=password` to every ssh and scp command used for Trimui deployment, so the dev machine never offers public-key/agent auth and always falls back to the TrimUI password. In `build_pak.sh` the option is centralized in a new `SSH_AUTH_OPTS` variable (single source of truth); in the deploy docs it is written inline in each copy-pasteable command.
+
+### Changes Made
+
+- `realtimecontrol/rtr/scripts/build_pak.sh`:
+  - New variable `SSH_AUTH_OPTS="-o PreferredAuthentications=password"` next to the `DEVICE`/`REPO_PATH`/`PAK_DEVICE_PATH` definitions (with a comment explaining why).
+  - All 4 executed ssh/scp calls now use it: `ssh $SSH_AUTH_OPTS` for the `mkdir -p`/`test -d` pre-check, the tar-over-ssh stream, and the PAK-dir `test -d`; `scp $SSH_AUTH_OPTS` for shipping `config.json`.
+  - All echo'd manual-retry / summary commands now print the flag too (manual `scp -r` retry, `scp -r` of the full PAK, the `--ship-code` expansion, and the on-device self-test hint), so a user copying them gets the flag as well.
+- `realtimecontrol/rtr/rtr/remote/README.md`: added the flag to the 3 on-device self-test `ssh` lines and the full-PAK `scp -r` line in the deploy section.
+- `realtimecontrol/rtr/rtr/remote/tui_skeleton.md`: added the flag to the manual tar-over-ssh command, the first-deploy `scp -r` line, and the 4 on-device `ssh` test commands (`--selftest`/`--diag`/`--ws-test`/`--joy-diag`).
+- `realtimecontrol/rtr/remote/deploy.md`: added the flag to the on-device self-test `ssh` line.
+- `launch.sh` (on-device) and all Python files checked: no ssh/scp commands there (paramiko `ship_code.py` lived only in `/tmp`, not in the repo).
+
+### Documentation
+
+- Updated the deploy docs (README.md, tui_skeleton.md, deploy.md) so every documented ssh/scp command includes the flag — docs and script now agree.
+
+### Architecture
+
+No architectural impact. Transport/auth change only; no change to what is shipped, where, or how the PAK/code lifecycle works.
+
+### Validation
+
+- `bash -n scripts/build_pak.sh` → OK.
+- Mock `ssh`/`scp` dry-run (mocks on PATH logging their args): `bash scripts/build_pak.sh --ship-code` exited 0 and all 4 executed calls were captured with `-o PreferredAuthentications=password` (ssh mkdir/test, ssh tar-over-ssh, ssh test PAK dir, scp config.json). The failure-branch echo also prints the flagged manual `scp` retry.
+- Grep sweep of `*.{sh,md}` under `realtimecontrol/rtr`: every executable ssh/scp command line now carries the flag; remaining matches are prose/comments only.
+
+### Decisions and Caveats
+
+- The option is a variable in the script (`SSH_AUTH_OPTS`), not inlined, so the auth policy lives in one place; change it there if the TrimUI ever accepts keys again.
+- `PreferredAuthentications=password` only restricts the auth *method*, not the host-key check; first-connection host-key prompts still apply as before.
+- The flag is echoed (expanded) in the script's summary output, so the printed manual commands stay in sync automatically.
+
+### Next Task
+
+Optional: run `scripts/build_pak.sh --ship-code` against the real Trimui to confirm password auth works end-to-end (expect a password prompt, no key-offer hang).
+
+### Instructions for the Next Task
+
+From the `realtimecontrol/rtr` root: `scripts/build_pak.sh --ship-code`. Enter the TrimUI password when prompted. Confirm output shows "shipped via tar-over-ssh" and "shipping config.json -> ...". Then verify on-device: `ssh -o PreferredAuthentications=password root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selftest"`.
+
 ## 2026-11-05 — MIDI tab: mapped-keys card below the live monitor, monitor 50vh cap + wider column, one-line entries
 
 ### Status

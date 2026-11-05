@@ -81,7 +81,7 @@ channel, (d) `ls rtr/remote/`, (e) runs the selftest. The earlier
 
 ```bash
 # Headless selftest via the PAK's bundled python (no core, dummy driver):
-ssh root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selftest"
+ssh -o PreferredAuthentications=password root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selftest"
 #   (paramiko equivalent: run that command via an exec_command in ship_code.py)
 ```
 

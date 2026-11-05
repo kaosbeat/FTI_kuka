@@ -719,13 +719,26 @@
        back to the read pose, so the core's arrival check keeps firing.
        <b>A6</b> is the axis you tune; the others default to 0 (no change) and are kept so
        more axes can be calibrated later.</p>
-     <div id="robotConfigForm"></div>
-    <div class="row" style="margin-top:12px">
-      <button id="robotConfigReset" class="small">reset to zero</button>
-    </div>
-  </section>
-  <section>
-    <h2>limits</h2>
+      <div id="robotConfigForm"></div>
+     <div class="row" style="margin-top:12px">
+       <button id="robotConfigReset" class="small">reset to zero</button>
+     </div>
+   </section>
+   <section>
+     <h2>red light — LED-wall dead-pixel mask</h2>
+     <p class="midiHelp">A pulsating CRT red light drawn on the render page to mask
+        dead pixels on the LED wall (e.g. a stuck red stripe). It starts as a thin vertical
+        bar (<b>bar width</b> x <b>bar height</b> px) that blooms into a circle of
+        <b>radius</b> px on every pulse, timed to the MIDI clock (<b>pulses per beat</b>).
+        <b>x / y</b> position the light on a normalized 0–1 grid (0,0 = top-left, 1,1 =
+        bottom-right). Turn it off when the calibration is done.</p>
+     <div id="redLightForm"></div>
+     <div class="row" style="margin-top:12px">
+       <button id="redLightReset" class="small">reset to defaults</button>
+     </div>
+   </section>
+   <section>
+     <h2>limits</h2>
     <p class="midiHelp">Per-axis joint limits.
        <b>hardware</b> = the physical joint limits from the xacro (uneditable — the hard safety floor).
        <b>soft</b> = an additional configurable limit (editable — tighten to restrict movement further).
@@ -3800,7 +3813,26 @@ function saveBrain() {
 // all-zero offsets), POST /api/robotconfig to save + hot-reload the running core.
 const ROBOT_JOINTS = ["A1", "A2", "A3", "A4", "A5", "A6"];
 const ROBOT_CONFIG_FALLBACK = { joint_offsets_deg: [0, 0, 0, 0, 0, 0] };
+// The LED-wall red-light overlay defaults (mirrors DEFAULT_RED_LIGHT in rtr/robot/config.py).
+const RED_LIGHT_FALLBACK = { enabled: false, x: 0.5, y: 0.5, bar_w: 1, bar_h: 160, radius: 80, morph: true, per_beat: 1 };
 let ROBOT_CONFIG = null;
+
+function normalizeRedLight(data) {
+  // Type-gated merge + clamps mirroring robot_config_red_light on the Python side,
+  // so a hand-edited robotconfig.json can never kill the overlay.
+  const d = (data && typeof data === "object") ? data : {};
+  const num = (v, def) => (typeof v === "number" && isFinite(v)) ? v : def;
+  const out = Object.assign({}, RED_LIGHT_FALLBACK);
+  if (typeof d.enabled === "boolean") out.enabled = d.enabled;
+  if (typeof d.morph === "boolean") out.morph = d.morph;
+  out.x = Math.max(0, Math.min(1, num(d.x, RED_LIGHT_FALLBACK.x)));
+  out.y = Math.max(0, Math.min(1, num(d.y, RED_LIGHT_FALLBACK.y)));
+  out.bar_w = Math.max(1, num(d.bar_w, RED_LIGHT_FALLBACK.bar_w));
+  out.bar_h = Math.max(1, num(d.bar_h, RED_LIGHT_FALLBACK.bar_h));
+  out.radius = Math.max(1, num(d.radius, RED_LIGHT_FALLBACK.radius));
+  out.per_beat = Math.max(0.05, num(d.per_beat, RED_LIGHT_FALLBACK.per_beat));
+  return out;
+}
 
 function normalizeRobotConfig(data) {
   const d = (data && typeof data === "object") ? data : {};
@@ -3814,7 +3846,9 @@ function normalizeRobotConfig(data) {
   const soft = (Array.isArray(d.soft_limits) && d.soft_limits.length === 6)
     ? d.soft_limits.map((p, idx) => (Array.isArray(p) && p.length === 2) ? p.slice() : HW_LIMITS[idx].slice())
     : HW_LIMITS.map((p) => p.slice());
-  return Object.assign({}, d, { joint_offsets_deg: arr, patch_mode: mode, soft_limits: soft });
+  // The LED-wall red-light overlay (dead-pixel mask); normalized + clamped.
+  const redLight = normalizeRedLight(d.red_light);
+  return Object.assign({}, d, { joint_offsets_deg: arr, patch_mode: mode, soft_limits: soft, red_light: redLight });
 }
 
 async function loadRobotConfig() {
@@ -3859,6 +3893,8 @@ function buildRobotConfigForm() {
   $("robotConfigReset").onclick = () => {
     el.querySelectorAll("input[type=number]").forEach((inp) => { inp.value = 0; });
   };
+  // The red-light overlay card (LED-wall dead-pixel mask).
+  buildRedLightForm();
   // The patch mode selector (video = new action-only system, complex = legacy layered system).
   const modeSel = $("patchModeSel");
   modeSel.innerHTML = "";
@@ -3873,6 +3909,67 @@ function buildRobotConfigForm() {
   modeSel.onchange = () => { ROBOT_CONFIG.patch_mode = modeSel.value; };
   // Build the limits card (HW read-only + soft editable).
   buildLimitsForm();
+}
+
+function buildRedLightForm() {
+  const el = $("redLightForm");
+  if (!el) return;
+  el.innerHTML = "";
+  const rl = ROBOT_CONFIG ? ROBOT_CONFIG.red_light : RED_LIGHT_FALLBACK;
+  // Checkbox rows (enabled, morph). Each input gets a prefixed id (rl_<key>) so
+  // saveRobotConfig can read it via querySelector, and a data-rl semantic key.
+  [["enabled", "show the red light"],
+   ["morph", "morph bar → circle on each pulse"]].forEach(([key, label]) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.id = "rl_" + key;
+    cb.dataset.rl = key;
+    cb.checked = !!rl[key];
+    cb.onchange = () => { ROBOT_CONFIG.red_light[key] = cb.checked; };
+    const lab = document.createElement("label");
+    lab.textContent = label;
+    row.appendChild(cb);
+    row.appendChild(lab);
+    el.appendChild(row);
+  });
+  // Number rows: [key, label, value, step, min, max]
+  const nums = [
+    ["x", "x (0–1)", rl.x, 0.01, 0, 1],
+    ["y", "y (0–1)", rl.y, 0.01, 0, 1],
+    ["bar_w", "bar width (px)", rl.bar_w, 1, 1, 10000],
+    ["bar_h", "bar height (px)", rl.bar_h, 1, 1, 10000],
+    ["radius", "circle radius (px)", rl.radius, 1, 1, 10000],
+    ["per_beat", "pulses per beat", rl.per_beat, 0.05, 0.05, 64],
+  ];
+  nums.forEach(([key, label, val, step, min, max]) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    const lab = document.createElement("label");
+    lab.textContent = label;
+    lab.style.maxWidth = "150px";
+    const input = document.createElement("input");
+    input.type = "number";
+    input.id = "rl_" + key;
+    input.dataset.rl = key;
+    input.step = step;
+    input.min = min;
+    input.max = max;
+    input.value = val;
+    input.style.maxWidth = "160px";
+    input.onchange = () => {
+      const v = parseFloat(input.value);
+      ROBOT_CONFIG.red_light[key] = isNaN(v) ? RED_LIGHT_FALLBACK[key] : v;
+    };
+    row.appendChild(lab);
+    row.appendChild(input);
+    el.appendChild(row);
+  });
+  $("redLightReset").onclick = () => {
+    ROBOT_CONFIG.red_light = Object.assign({}, RED_LIGHT_FALLBACK);
+    buildRedLightForm();
+  };
 }
 
 function buildLimitsForm() {
@@ -3944,7 +4041,26 @@ function saveRobotConfig() {
     const hi = inputs2[i * 2 + 1] ? parseFloat(inputs2[i * 2 + 1].value) : pair[1];
     return [isNaN(lo) ? pair[0] : lo, isNaN(hi) ? pair[1] : hi];
   });
-  const payload = Object.assign({}, ROBOT_CONFIG, { joint_offsets_deg: offsets, soft_limits: softLimits });
+  // Read the red-light overlay fields from the red-light form (they live in a
+  // separate form element so the joint-offset index mapping above stays intact).
+  const rl = ROBOT_CONFIG.red_light;
+  const rlEl = $("redLightForm");
+  const rlInput = (key) => rlEl ? rlEl.querySelector("#rl_" + key) : null;
+  const rlNum = (key) => {
+    const inp = rlInput(key);
+    const v = inp ? parseFloat(inp.value) : NaN;
+    return isNaN(v) ? RED_LIGHT_FALLBACK[key] : v;
+  };
+  const rlEnabled = rlInput("enabled");
+  const rlMorph = rlInput("morph");
+  const redLight = {
+    enabled: rlEnabled ? rlEnabled.checked : rl.enabled,
+    x: rlNum("x"), y: rlNum("y"),
+    bar_w: rlNum("bar_w"), bar_h: rlNum("bar_h"),
+    radius: rlNum("radius"), per_beat: rlNum("per_beat"),
+    morph: rlMorph ? rlMorph.checked : rl.morph,
+  };
+  const payload = Object.assign({}, ROBOT_CONFIG, { joint_offsets_deg: offsets, soft_limits: softLimits, red_light: redLight });
   fetch("/api/robotconfig", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

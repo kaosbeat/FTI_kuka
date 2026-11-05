@@ -28,6 +28,22 @@ from typing import Any, Dict, List
 JOINT_COUNT = 6
 JOINT_OFFSETS_KEY = "joint_offsets_deg"
 PATCH_MODE_KEY = "patch_mode"
+RED_LIGHT_KEY = "red_light"
+# The LED-wall calibration overlay: a pulsating red light drawn on the render
+# page (a 1px-wide vertical bar that blooms into a circle on the MIDI clock),
+# positioned by a normalized (x, y) offset. The core only normalizes it — it is
+# pushed to the render page in the state frame (Display) and edited in the
+# robotconfig tab; the robot itself never sees it.
+DEFAULT_RED_LIGHT: Dict[str, Any] = {
+    "enabled": False,
+    "x": 0.5,
+    "y": 0.5,
+    "bar_w": 1.0,
+    "bar_h": 160.0,
+    "radius": 80.0,
+    "morph": True,
+    "per_beat": 1.0,
+}
 # The two patch systems. "video" = the new action-only, video-per-pose system
 # (only actions have a patch; a per-pose video, if present, replaces the patch
 # with a 3-line video template). "complex" = the legacy layered system (zone +
@@ -105,3 +121,35 @@ def robot_config_patch_mode(config: Dict[str, Any]) -> str:
     """The patch mode from a robot config (``video`` default / ``complex``), or the default."""
     mode = config.get(PATCH_MODE_KEY, DEFAULT_PATCH_MODE)
     return mode if mode in VALID_PATCH_MODES else DEFAULT_PATCH_MODE
+
+
+def robot_config_red_light(config: Dict[str, Any]) -> Dict[str, Any]:
+    """The red-light overlay config, normalized (defaults filled, ranges clamped).
+
+    The render page draws a pulsating CRT red light at the normalized ``(x, y)``
+    offset: a vertical bar (``bar_w`` x ``bar_h`` px, 1px wide by default) that
+    blooms into a circle of ``radius`` px on every pulse, timed to the MIDI clock
+    (``per_beat`` pulses per beat; ``morph`` off keeps the bar static). The core
+    only normalizes the field (it is pushed to the render page in the state
+    frame); it never consumes it. Malformed fields fall back to the defaults;
+    out-of-range values are clamped so a hand-edited file can never kill the
+    overlay.
+    """
+    out = dict(DEFAULT_RED_LIGHT)
+    rl = config.get(RED_LIGHT_KEY)
+    if isinstance(rl, dict):
+        if isinstance(rl.get("enabled"), bool):
+            out["enabled"] = rl["enabled"]
+        for key in ("x", "y", "bar_w", "bar_h", "radius", "per_beat"):
+            v = rl.get(key)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                out[key] = float(v)
+        if isinstance(rl.get("morph"), bool):
+            out["morph"] = rl["morph"]
+    out["x"] = max(0.0, min(1.0, out["x"]))
+    out["y"] = max(0.0, min(1.0, out["y"]))
+    out["bar_w"] = max(1.0, out["bar_w"])
+    out["bar_h"] = max(1.0, out["bar_h"])
+    out["radius"] = max(1.0, out["radius"])
+    out["per_beat"] = max(0.05, out["per_beat"])
+    return out

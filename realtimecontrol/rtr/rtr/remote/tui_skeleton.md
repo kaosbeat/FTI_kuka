@@ -119,7 +119,7 @@ Runs on the dev machine (x86_64), cross-builds for the device:
    OpenSSH 9.x `scp -r` "path canonicalization failed" error):
 
    ```bash
-   tar -C dist/repo -cf - rtr | ssh root@192.168.1.33 "tar -C /storage/rtr-remote -xf -"
+    tar -C dist/repo -cf - rtr | ssh -o PreferredAuthentications=password root@192.168.1.33 "tar -C /storage/rtr-remote -xf -"
    ```
 
    The destination is `REPO_PATH` (default `/storage/rtr-remote`), which must
@@ -128,7 +128,7 @@ Runs on the dev machine (x86_64), cross-builds for the device:
 ### 2.2 The two-artifact lifecycle
 
 - **First deploy** (once, slow): `build_pak.sh --full`, then
-  `scp -r dist/RTRREMOTE.pak root@192.168.1.33:/mnt/SDCARD/Tools/tg5040/`.
+  `scp -o PreferredAuthentications=password -r dist/RTRREMOTE.pak root@192.168.1.33:/mnt/SDCARD/Tools/tg5040/`.
 - **Every code update** (fast): edit the repo, run `build_pak.sh --ship-code`.
   `launch.sh` picks up the new code immediately because it runs from `$REPO`.
 
@@ -138,10 +138,12 @@ The PAK ships its own test entry points so a code update can be verified on the
 device before trusting it:
 
 ```bash
-ssh root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selftest"
-ssh root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --diag"
-ssh root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --ws-test"
-ssh root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --joy-diag"
+ssh -o PreferredAuthentications=password root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --selftest"
+ssh -o PreferredAuthentications=password root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --diag"
+ssh -o PreferredAuthentications=password root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --ws-test"
+ssh -o PreferredAuthentications=password root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --joy-diag"
+ssh -o PreferredAuthentications=password root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --launch-test"
+ssh -o PreferredAuthentications=password root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --menu-diag"
 ```
 
 - `--selftest`: headless render of all pages with mock state (dummy SDL
@@ -155,6 +157,15 @@ ssh root@192.168.1.33 "/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/launch.sh --joy-di
 - `--joy-diag`: read the joystick device and print every EV_KEY/EV_ABS event
   until Ctrl-C; lists distinct button codes so `joy_map`/`dpad_map` can be
   corrected.
+- `--launch-test`: (menu) run the child launch path once, no menu: prints the
+  child command, verifies the child script exists, runs it, and reports its
+  exit code. `--app N` picks the app (0=kukapp, 1=ledtest). Use it to tell
+  "A does not open the app" apart from "the app fails to start". No pygame
+  needed, so it runs on-device over ssh.
+- `--menu-diag`: (menu) print the effective input maps the menu actually loaded
+  (`joy_map`, `quit_codes`, `dpad_map` + `device`) and exit. No pygame needed.
+  Use it to see whether the on-device `config.json` still maps the A button's
+  code to `enter` (a calibration run or a `--ship-code` overwrite can change it).
 
 ### 2.4 Skeleton checklist for a new app
 
@@ -304,7 +315,7 @@ Key points:
 - **`stay_awake`** keeps the panel on (TrimUI convention); the `trap` removes it
   on exit. The app runs in the foreground (not `exec`) so the trap fires.
 - **`$@`** forwards CLI flags (`--selftest`, `--diag`, `--ws-test`,
-  `--joy-diag`) through to the app.
+  `--joy-diag`, `--launch-test`, `--menu-diag`) through to the app.
 
 ### 4.5 The video-driver probe (inside the app)
 
@@ -424,7 +435,8 @@ link is down.
 6. **Deploy** — a `build_pak.sh` that cross-builds the PAK (`--full`) and ships
    only the code (`--ship-code`, tar-over-ssh) to a fixed `REPO_PATH`.
 7. **Diagnostics** — `--selftest` (headless), `--diag` (framebuffer),
-   `--ws-test` (link), `--joy-diag` (input codes) as isolated entry points.
+   `--ws-test` (link), `--joy-diag` (input codes), `--launch-test` (child
+   launch), `--menu-diag` (loaded input maps) as isolated entry points.
 
 That is the complete skeleton: a pure view layer, two thin renderers, a
 tolerant config, a raw-input mapping with a calibration wizard, a PAK launcher

@@ -27,6 +27,7 @@ from rtr.robot import (
     load_robot_config,
     robot_config_offsets,
     robot_config_patch_mode,
+    robot_config_red_light,
 )
 from rtr.camera.geometry import load_camera_geometry
 from rtr.camera.snapshot_grab import SnapshotGrabber
@@ -310,7 +311,8 @@ async def run(cfg: Config) -> None:
                             patch_code=patches.code_for, camera=camera,
                             machine=machine,
                             render_ui_provider=patches.render_ui,
-                            midi_monitor_provider=midi.monitor)
+                            midi_monitor_provider=midi.monitor,
+                            red_light_provider=lambda: robot_config_red_light(robot_cfg_holder[0]))
 
     # The WebSocket + HTTP bridges come up first, so the control interface is
     # always reachable (and keeps running) while we wait for the robot.
