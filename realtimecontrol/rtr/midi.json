@@ -204,7 +204,7 @@
     "next_zone": null,
     "back": null,
     "retrigger": null,
-    "next_pose": null,
+    "next_pose": "note:0:63",
     "in_port": 0
   },
   "capture": {
@@ -215,6 +215,7 @@
     "in_port": null,
     "active": null,
     "sleep": null,
-    "engage": null
+    "engage": null,
+    "circus": null
   }
 }
