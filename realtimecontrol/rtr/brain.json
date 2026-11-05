@@ -51,6 +51,7 @@
         "tidal",
         "kb_slow"
       ],
+      "behaviors": [],
       "enabled": true,
       "params": {}
     }
