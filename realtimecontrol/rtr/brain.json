@@ -45,6 +45,14 @@
       "behaviors": [],
       "enabled": true,
       "params": {}
+    },
+    "circus": {
+      "zones": [
+        "tidal",
+        "kb_slow"
+      ],
+      "enabled": true,
+      "params": {}
     }
   },
   "hunt": {
