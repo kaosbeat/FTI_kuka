@@ -5,7 +5,7 @@ Covers:
 - set_perform_multiplier (only accepts 1/2/4/8/16).
 - update_perform_deadline (base_beats × multiplier × 60/BPM).
 - update_perform_time_to_arrive (max over per-joint motion-profile times, late flag).
-- perform_state() returns a copy.
+- perform_state() returns a JSON-safe copy (infinite time_to_arrive -> None).
 
 All tests are headless: no robot, no hardware.
 
@@ -196,6 +196,30 @@ def test_update_perform_zero_velocity():
     m.update_perform_time_to_arrive([10.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     assert m.perform["time_to_arrive"] == float("inf")
     assert m.perform["late"] is True
+
+
+def test_perform_state_sanitizes_infinite_time_to_arrive():
+    """perform_state() maps an infinite time_to_arrive to None (JSON-safe).
+
+    The internal state keeps float("inf") (velocity 0 -> cannot arrive), but the
+    broadcast copy must be JSON-serializable: JSON has no Infinity, and
+    json.dumps would emit the non-JSON token ``Infinity`` that the client's
+    JSON.parse rejects ("Unexpected token 'I'").
+    """
+    m = _make_machine()
+    m.set_perform_velocity_max_deg_s(30.0)
+    m.set_perform_acceleration_max_deg_s2(100.0)
+    m.set_perform_velocity(0.0)
+    m.update_perform_time_to_arrive([10.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    assert m.perform["time_to_arrive"] == float("inf")  # internal state unchanged
+    s = m.perform_state()
+    assert s["time_to_arrive"] is None
+
+    # Finite values pass through untouched.
+    m.set_perform_velocity(1.0)  # v = 30.0 deg/s
+    m.update_perform_time_to_arrive([30.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    s2 = m.perform_state()
+    assert abs(s2["time_to_arrive"] - 1.3) < 1e-9
 
 
 def test_perform_state_returns_copy():

@@ -21,6 +21,7 @@ when the robot arrives (:func:`comparelist`) the transition commits and the acti
 begins. Nothing blocks.
 """
 
+import math
 import random
 from typing import List, Optional
 
@@ -449,8 +450,17 @@ class StateMachine:
         )
 
     def perform_state(self) -> dict:
-        """A copy of the current perform state (for the snapshot)."""
-        return dict(self.perform)
+        """A copy of the current perform state (for the snapshot).
+
+        ``time_to_arrive`` is ``None`` when infinite (zero velocity/acceleration
+        or no move to time), keeping the broadcast JSON-safe: JSON has no
+        Infinity, and ``json.dumps`` would otherwise emit the non-JSON token
+        ``Infinity`` that client ``JSON.parse`` rejects.
+        """
+        s = dict(self.perform)
+        if math.isinf(s["time_to_arrive"]):
+            s["time_to_arrive"] = None
+        return s
 
     def enable_behavior(self, behavior: str) -> None:
         """Enable a forced behavior (live test override).

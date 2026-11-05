@@ -435,16 +435,19 @@ class Engine:
                                  margin=0.5, count=5)
         info = self.brain.autonomy_info()
         # Fold the perform state into the snapshot when a clock is wired.
+        # perform_state() sanitizes the infinite time_to_arrive to None so the
+        # broadcast stays valid JSON (JSON has no Infinity).
         perform = None
         if self._clock is not None:
             clock_state = self._clock.state()
+            ps = self.machine.perform_state()
             perform = {
-                "velocity": self.machine.perform["velocity"],
-                "multiplier": self.machine.perform["multiplier"],
-                "base_beats": self.machine.perform["base_beats"],
-                "deadline": self.machine.perform["deadline"],
-                "time_to_arrive": self.machine.perform["time_to_arrive"],
-                "late": self.machine.perform["late"],
+                "velocity": ps["velocity"],
+                "multiplier": ps["multiplier"],
+                "base_beats": ps["base_beats"],
+                "deadline": ps["deadline"],
+                "time_to_arrive": ps["time_to_arrive"],
+                "late": ps["late"],
                 "beat": clock_state["beat"],
                 "beat_index": clock_state["beat_index"],
                 "beat_phase": clock_state["beat_phase"],

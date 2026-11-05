@@ -1,5 +1,56 @@
 # Task Handoff Log
 
+## 2026-11-05 — Fix: perform-mode snapshot emitted invalid JSON (`Infinity` in `time_to_arrive`)
+
+### Status
+
+Completed
+
+### Summary
+
+Entering the new `"perform"` control mode broke the WebSocket broadcast: the client log showed `bad message: SyntaxError: Unexpected token 'I', ..."_arrive": Infinity, "... is not valid JSON`. Root cause: `update_perform_time_to_arrive()` sets `perform["time_to_arrive"] = float("inf")` whenever the effective velocity or acceleration is 0 (velocity starts at 0.0 until the first CC-A message, so the first ticks of a perform session always hit this), or there is no move to time. The snapshot's `perform` dict carried that `float("inf")` into `json.dumps()` (websocket.py broadcast), which emits the non-JSON token `Infinity`; the client's `JSON.parse` (client.html:606) rejects it. The internal state keeps `inf` (tests depend on it, and the `late` flag is computed from it); only the broadcast copy is sanitized.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/state/machine.py`:
+  - Added `import math`.
+  - `perform_state()`: now returns a copy in which an infinite `time_to_arrive` is mapped to `None` (JSON-safe). Finite values pass through untouched. The internal `self.perform["time_to_arrive"]` still keeps `float("inf")`.
+- `realtimecontrol/rtr/rtr/core/engine.py`:
+  - `_publish()`: builds the snapshot's `perform` dict from `machine.perform_state()` (the sanitized copy) instead of reading `machine.perform[...]` fields directly; the clock fields are folded in as before. The broadcast field set is unchanged.
+- `realtimecontrol/rtr/tests/test_perform_state.py`:
+  - Added `test_perform_state_sanitizes_infinite_time_to_arrive()` (internal state keeps `inf`, `perform_state()` returns `None`; finite values pass through).
+  - Header coverage list updated.
+
+### Documentation
+
+- Inline docstring on `perform_state()` documents the `inf → None` sanitization and why (JSON has no Infinity).
+- No editor/client documentation change needed: `perform.html` already renders `time_to_arrive == null` as `∞` (line 256: `(tta != null && isFinite(tta)) ? tta.toFixed(3) + " s" : "∞"`), so the live perform page displays correctly while velocity is 0.
+
+### Architecture
+
+No structural change. The sanitization lives at the single serialization boundary (`perform_state()`, consumed by the engine snapshot), so every consumer of the perform state (WS broadcast, any future snapshot consumer) is JSON-safe. The `late` flag remains `true` in the broadcast while `time_to_arrive` is infinite (notify-only, as designed).
+
+### Validation
+
+- `python -m py_compile rtr/state/machine.py rtr/core/engine.py` → SYNTAX OK.
+- `pytest tests/test_perform_state.py tests/test_state_machine.py` → 36 passed, 9 skipped.
+- `pytest tests/` → 445 passed, 14 skipped, 5 failed — the 5 failures are the pre-existing `tests/test_remote_sdl.py` failures (verified pre-existing on base commit `37ca150` in the prior session; unrelated to this change).
+- End-to-end sanity (scripted): machine with velocity 0.0 in perform state → broadcast `perform` dict serializes as `{"time_to_arrive": null, "late": true, ...}` and round-trips through `json.dumps`/`json.loads`; with velocity 0.5 the same path yields `time_to_arrive: 2.15`.
+
+### Decisions and Caveats
+
+- `None` (JSON `null`) was chosen over a large finite sentinel because `perform.html` already treats null/non-finite as `∞`, and `null` is unambiguous ("cannot arrive at current velocity/acceleration").
+- The `time_to_arrive` field in the broadcast is now `null` whenever velocity or acceleration is 0 — clients must treat null as "infinite/late" (perform.html does).
+- No change to the internal `inf` representation: `test_update_perform_zero_velocity` still asserts `m.perform["time_to_arrive"] == float("inf")`.
+
+### Next Task
+
+No immediate next task identified. Optional follow-ups (not started): verify on hardware that entering perform mode with velocity 0 no longer logs `bad message` in `client.html`/`perform.html`, and that the perform page shows `∞` + LATE until a CC-A velocity arrives.
+
+### Instructions for the Next Task
+
+The fix is self-contained in `perform_state()` (machine.py) + `_publish()` (engine.py). If a similar `Infinity` shows up elsewhere in a broadcast, search for other `float("inf")` assignments that reach `json.dumps` — the perform clock's `beat_duration` is already guarded (0.0 when bpm ≤ 0, see clock.py `state()`).
+
 ## 2026-11-05 — Perform control mode: 4th `control_mode` silencing brain autonomy + MIDI `next_pose`
 
 ### Status
