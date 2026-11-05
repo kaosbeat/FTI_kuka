@@ -1,5 +1,53 @@
 # Task Handoff Log
 
+## 2026-11-05 — MIDI monitor sticky right-side card + perform tab layout fix
+
+### Status
+
+Completed
+
+### Summary
+
+Moved the MIDI live monitor from the bottom of the MIDI tab (full-width) to a sticky right-side card (320px column). Added the same monitor card to the perform tab. Both instances now show the newest message at the top (previously newest was at the bottom). Fixed the perform tab layout issue where the 3D "live move" section (sticky) overlapped with the sections below it by making the 3D section `position: static`.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`:
+  - CSS `#midiMain`: changed grid from `300px 1fr` to `1fr 320px`; added explicit `grid-column: 1` for `#midiToggleRow`, `#midiOutView`, `#midiInView`.
+  - CSS `#midiMonitorSection`: changed from `grid-column: 1 / -1` to `grid-column: 2; position: sticky; top: 8px; align-self: start`.
+  - CSS `#midiMonitor, #performMidiMonitor`: shared styling for both monitor containers.
+  - CSS `#performMain`: new 2-column grid (`1fr 320px`); `performCols` and non-monitor sections in column 1; `#performMidiMonitorSection` in column 2 (sticky); `#perform3dSection` set to `position: static` to fix overlap.
+  - HTML `#performMain`: added `<section id="performMidiMonitorSection">` with `#performMidiMonitor` div.
+  - JS `renderMidiMonitor`: reversed the row order (`ring.slice(-30).reverse()`) so newest is at the top; now updates both `#midiMonitor` and `#performMidiMonitor`.
+  - JS WS handler: changed `if (midiView)` to `if (midiView || performView)` so the perform tab monitor is also updated.
+
+### Documentation
+
+None required — the changes are UI layout adjustments with self-documenting CSS/HTML.
+
+### Architecture
+
+No architectural impact. Pure frontend layout change in `editor.html`.
+
+### Validation
+
+- Visual inspection of the grid layout changes (CSS grid columns, sticky positioning).
+- No test framework applies to HTML/CSS layout; verified by code review.
+
+### Decisions and Caveats
+
+- The MIDI tab grid changed from `300px 1fr` to `1fr 320px`. The toggle row and main content are in the wider left column; the monitor is in the 320px right column.
+- The perform tab 3D section is no longer sticky (was causing overlap with sections below). The config section remains sticky.
+- Both monitor instances share the same rendering function and fingerprint, so they update in sync.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+If the layout needs further tuning (e.g., different column widths, the 3D section should be sticky again with a z-index fix instead), adjust the CSS in `editor.html` around lines 174-182 (perform tab) and 382-408 (MIDI tab).
+
 ## 2026-11-05 — Fix: entering perform (or manual) control mode cleared the active zone group
 
 ### Status

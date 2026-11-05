@@ -171,10 +171,13 @@
     .posesCollide { font-size: 12px; line-height: 1.6; }
     .posesCollide .ok { color: var(--accent); }
     .posesCollide .bad { color: #e05d5d; }
-    /* Perform tab: config form left, live 3D window right (landscape, like poses). */
-    #performMain .performCols { display: grid; gap: 16px; grid-template-columns: 1fr auto; align-items: start; }
+    /* Perform tab: main content left, sticky MIDI monitor right. */
+    #performMain { display: grid; gap: 16px; grid-template-columns: 1fr 320px; align-items: start; }
+    #performMain .performCols { display: grid; gap: 16px; grid-template-columns: 1fr auto; align-items: start; grid-column: 1; }
     #performMain .performCols section { position: sticky; top: 8px; }
-    #perform3dSection { display: flex; flex-direction: column; }
+    #perform3dSection { position: static; display: flex; flex-direction: column; }
+    #performMain > section:not(#performMidiMonitorSection) { grid-column: 1; }
+    #performMidiMonitorSection { grid-column: 2; position: sticky; top: 8px; align-self: start; }
     #performRobot3dMount { min-height: 0; }
     #performRobot3dMount #robot3d { width: 100%; height: 440px; }
     .pmRow { display: flex; gap: 10px; padding: 3px 6px; border-radius: 4px; font-size: 12px;
@@ -376,7 +379,9 @@
   .fedgeWarnBg { fill: #e05d5d; stroke: #0d0f13; stroke-width: 1; }
   .fedgeWarnTxt { fill: #ffffff; font-size: 10px; font-weight: bold; pointer-events: none; }
   /* Midi-in editor tab. */
-  #midiMain { display: grid; gap: 16px; grid-template-columns: 300px 1fr; align-items: start; }
+  #midiMain { display: grid; gap: 16px; grid-template-columns: 1fr 320px; align-items: start; }
+  #midiToggleRow { grid-column: 1; }
+  #midiOutView, #midiInView { grid-column: 1; }
   #midiPort { background: #0d0f13; color: var(--text); border: 1px solid var(--border);
               border-radius: 4px; padding: 3px 5px; font: inherit; width: 190px; }
   .midiRow { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
@@ -399,10 +404,10 @@
   .midiExample .exLbl { color: var(--accent); font-weight: bold; }
   .midiFieldHelp { font-size: 11px; color: var(--dim); margin-top: 2px; }
   /* Live MIDI monitor: the last raw in / commands out. */
-  #midiMonitorSection { grid-column: 1 / -1; }
-  #midiMonitor { background: #0d0f13; border: 1px solid var(--border); border-radius: 6px;
-                padding: 8px 10px; font-size: 12px; line-height: 1.6;
-                max-height: 260px; overflow: auto; }
+  #midiMonitorSection { grid-column: 2; position: sticky; top: 8px; align-self: start; }
+  #midiMonitor, #performMidiMonitor { background: #0d0f13; border: 1px solid var(--border); border-radius: 6px;
+                 padding: 8px 10px; font-size: 12px; line-height: 1.6;
+                 max-height: 260px; overflow: auto; }
   .mmRow { display: flex; gap: 8px; white-space: nowrap; }
   .mmTs { color: var(--dim); min-width: 62px; }
   .mmDir { min-width: 22px; font-weight: bold; }
@@ -781,6 +786,11 @@
        navigation, capture, groups, and the perform CCs). A row lights up when its key arrives on
        the wire; perform CCs light on any value of that controller.</p>
     <div id="performMidiList"></div>
+  </section>
+  <section id="performMidiMonitorSection">
+    <h2>live monitor</h2>
+    <p class="midiHelp">The last raw MIDI traffic. Newest at the top.</p>
+    <div id="performMidiMonitor"></div>
   </section>
 </main>
 
@@ -1436,7 +1446,7 @@ function connect() {
         if (fhFp !== _flowFp) { _flowFp = fhFp; applyFlowHighlight(); }
       }
       if (brainView) renderBrainLive(m);
-      if (midiView) renderMidiMonitor(m.midi_monitor);
+      if (midiView || performView) renderMidiMonitor(m.midi_monitor);
       if (performView) updatePerformMidiLights(m.midi_monitor);
     } else if (m.type === "sound_changed") {
       // The running core reloaded the sound mapping; re-fetch it.
@@ -2084,13 +2094,16 @@ async function loadMidi() {
 // ---------------------------------------------------------------------------
 let _midiMonFp = null;
 function renderMidiMonitor(ring) {
-  const el = $("midiMonitor");
-  if (!el || !Array.isArray(ring)) return;
+  if (!Array.isArray(ring)) return;
   // Change-detect on the newest seq: rebuild only when the ring advanced.
   const fp = ring.length ? String(ring[ring.length - 1].seq) : "empty";
   if (fp === _midiMonFp) return;
   _midiMonFp = fp;
-  el.innerHTML = ring.slice(-30).map(mmRow).join("");
+  const rows = ring.slice(-30).reverse().map(mmRow).join("");
+  const el = $("midiMonitor");
+  if (el) el.innerHTML = rows;
+  const pel = $("performMidiMonitor");
+  if (pel) pel.innerHTML = rows;
 }
 function mmRow(e) {
   const ts = e.ts ? new Date(e.ts * 1000).toLocaleTimeString() : "";
