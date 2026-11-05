@@ -1,5 +1,207 @@
 # Task Handoff Log
 
+## 2026-11-04 — KUKA EKI stale-read zero-curjpos: reject-and-hold with escalation (implement + test + handoff)
+
+### Status
+
+Completed
+
+### Summary
+
+Fixed the EKI stale-read zero-curjpos bug: a zero-filled move `<Res>` (KUKAPY CASE 4 / movej never writes `Res/A1-A6`, only CASE 2 / curjpos does) can be mis-paired as the next tick's `curjpos` response, so the engine reads raw `[0,0,0,0,0,0]` (→ `[0,0,0,0,0,90]` with the J6 offset) even though the robot physically moved. A single mis-paired frame self-heals on the next tick, so the OLD consecutive-zero streak (threshold 3) never fired ("no KukaError").
+
+The fix replaces the consecutive-zero streak with a **reject-and-hold with escalation** detector in `kuka.py`:
+- **Reject** an all-zero raw read when the last physically-plausible reading was non-zero (discriminator: `raw all-zero AND last-good non-zero`). A genuine home pose (last-good itself all-zero, or no baseline yet) is accepted — no false positive at zero.
+- **Hold** the last-measured pose (offset-applied, consistent with the accept path) for the rejected tick. Holding the last-MEASURED pose lags reality (arrival detection delays, never fires early) — the safe direction. Never substitutes the target/ghost.
+- **Escalate** 3 consecutive rejections to `KukaError`, so the engine watchdog's existing `KukaError → recover()` path handles a sustained desync.
+
+Baseline (`_last_good_raw`) is re-established on `recover()` and `set_joint_offsets` so the first read after either is accepted unconditionally. The detector runs pre-offset (raw space) to avoid the `[0,0,0,0,0,90]` offset artifact.
+
+**This session** completed the remaining work: aligned the test file with the new detector semantics and added 6 reject-and-hold behavior tests. The `kuka.py` implementation itself was already committed (in `1929bf0`, bundled with unrelated changes — see Decisions).
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/robot/kuka.py` (committed in **`1929bf0`**, see Decisions for the bundling caveat):
+  - `__init__`: replaced `_zero_streak` / `_zero_streak_threshold` with `_last_good_raw = None`, `_reject_streak = 0`, `_reject_streak_threshold = 3`.
+  - `get_curjpos`: full rewrite — reject-and-hold discriminator, hold last-measured pose (offset-applied), escalate at streak ≥ 3.
+  - `recover()`: re-baselines `_last_good_raw = None; _reject_streak = 0` at the top (removed the two inline `_zero_streak = 0` lines).
+  - `set_joint_offsets`: re-baselines `_last_good_raw = None; _reject_streak = 0` after the offset update.
+- `realtimecontrol/rtr/tests/test_kuka_eki_serialization.py` (committed in **`5e1f5ac`**, this session):
+  - Replaced the stale `_zero_streak` assertions in `test_recover_soft_resync_does_not_quit` and `test_recover_hard_reconnect_when_link_dead` with `_reject_streak` / `_last_good_raw` checks.
+  - Added a dedicated **reject-and-hold** test section: a `ScriptedKukapyRobot` fake (scripted curjpos reads) + `_make_robot_with_reads` helper + 6 behavior tests (`accepts_nonzero_reads`, `rejects_stale_all_zero_and_holds`, `accepts_zero_pose_at_home`, `escalates_to_kuka_error`, `resets_streak_on_accept`, `holds_offset_applied_pose`).
+
+### Documentation
+
+None required — the detector contract is documented inline in the `kuka.py` comments (the `__init__` block, the `get_curjpos` reject-and-hold block, and the `recover()` / `set_joint_offsets` re-baseline comments), and the test section header explains the CASE 4 / zero-`<Res>` root cause.
+
+### Architecture
+
+No architectural impact. Same module, same data flow, same escalation path: the detector raises `KukaError` on a sustained desync, which the engine watchdog (`engine.py` L139–145) already catches to call `robot.recover()`. `engine.py` and `machine.py` are untouched. The new state lives entirely in the `KukaRobot` wrapper (`_last_good_raw`, `_reject_streak`, `_reject_streak_threshold`).
+
+### Validation
+
+- `python tests/test_kuka_eki_serialization.py` (from the `realtimecontrol/rtr` root): **ALL TESTS PASSED** (17/17, incl. the 6 new reject-and-hold tests).
+- `python -m pytest tests/test_kuka_eki_serialization.py -q`: **17 passed**.
+- `python -c "from rtr.robot.kuka import KukaRobot"`: **import OK** (run from `realtimecontrol/rtr`).
+- Behavior verified by the new tests: non-zero read accepted + baselined; all-zero against a non-zero baseline rejected + last-good held (streak 1); a genuine home pose accepted (no false positive); 3 consecutive rejections raise `KukaError`; a plausible read resets the streak + re-baselines; the held pose is offset-applied.
+
+### Decisions and Caveats
+
+- **The `kuka.py` implementation is committed in `1929bf0` ("renderupdates"), which is BUNDLED with unrelated changes** (`perform.html`, `rtr/display/display.py`, `rtr3d.js`, and this handoff file). It was committed before this session's test work. Because it is not a standalone commit, `git revert 1929bf0` would revert the unrelated files too. The targeted revert below reverts **only** the `kuka.py` hunk.
+- **Reject-and-hold, not a longer streak**: a single mis-paired frame is rejected immediately (hold the last-measured pose) instead of waiting for 3 consecutive zeros — that is what makes the zero-curjpos tick safe. Escalation to `KukaError` is still at 3 consecutive rejections, so a sustained desync (not a one-off) triggers `recover()`.
+- **Hold last-measured, never the ghost/target**: substituting the commanded target would mask a real desync and could fire arrival early. Holding the last reading only delays arrival detection (safe direction).
+- **Detector runs pre-offset (raw space)** so the J6 offset artifact (`[0,0,0,0,0,90]`) cannot be mistaken for the stale signature.
+- **Re-baseline on `recover()` + `set_joint_offsets`**: without it, a lingering stale frame right after a buffer clear (or a genuine home pose after an offset hot-reload) could be wrongly rejected against a stale non-zero baseline.
+
+### Revert
+
+The reject-and-hold change spans two commits. To revert **only** the reject-and-hold feature (and nothing else):
+
+```bash
+# Revert the kuka.py reject-and-hold implementation (only the kuka.py hunk of 1929bf0):
+git checkout 1929bf0~1 -- realtimecontrol/rtr/rtr/robot/kuka.py
+
+# Revert the test alignment + behavior tests (only the test file of 5e1f5ac):
+git checkout 5e1f5ac~1 -- realtimecontrol/rtr/tests/test_kuka_eki_serialization.py
+```
+
+After both, `kuka.py` is back to the old `_zero_streak` detector and the test file back to the old assertions; commit the result to finalize. (Do **not** use `git revert 1929bf0` — that reverts the bundled `perform.html` / `display.py` / `rtr3d.js` changes as well.)
+
+**Literal diff** of the `kuka.py` reject-and-hold change (as committed in `1929bf0`):
+
+```diff
+--- a/realtimecontrol/rtr/rtr/robot/kuka.py
++++ b/realtimecontrol/rtr/rtr/robot/kuka.py
+@@ class KukaRobot.__init__
+-        # EKI stale-read detector: the KUKAPY server's CASE 4 (movej) responds
+-        # with Res/A1-A6 = 0.0 (the loop's initialization values), because CASE 4
+-        # never writes Res/A1-A6 — only CASE 2 (curjpos) does. If that zero-filled
+-        # move <Res> lands in _recv_buf and gets misread as the next tick's
+-        # curjpos response, the engine sees [0,0,0,0,0,0] raw (→ [0,0,0,0,0,90]
+-        # with the J6 offset). The robot physically moved, but the readback is
+-        # stale. Track consecutive all-zero raw reads; when the streak reaches the
+-        # threshold, raise KukaError so the engine's watchdog triggers recover().
+-        self._zero_streak = 0
+-        self._zero_streak_threshold = 3
++        # Reject-and-hold stale-read detector (replaces the old consecutive-zero
++        # streak). The KUKAPY server's movej (CASE 4) responds with Res/A1-A6 = 0.0
++        # (the loop's initialization values — CASE 4 never writes Res/A1-A6, only
++        # CASE 2 / curjpos does). If that zero-filled move <Res> is mis-paired as the
++        # next tick's curjpos response, raw reads all-zero even though the robot
++        # physically moved. A single mis-paired frame self-heals on the next tick, so
++        # the OLD consecutive-zero streak (threshold 3) never fired ("no KukaError").
++        # Reject-and-hold acts on ONE bad tick: reject an all-zero read when the last
++        # physically-plausible reading was non-zero, hold the last-good pose, and
++        # escalate consecutive rejections to KukaError so the engine watchdog triggers
++        # recover() on a sustained desync.
++        self._last_good_raw = None
++        self._reject_streak = 0
++        self._reject_streak_threshold = 3
+
+@@ def get_curjpos
+     def get_curjpos(self) -> List[float]:
+         with self._lock:
+             raw = list(self._eki_call("get_curjpos"))
+-        # Stale-read detection: the KUKAPY server's move response (CASE 4) carries
+-        # Res/A1-A6 = 0.0 (initialization values). If that zero-filled <Res> is
+-        # misread as a curjpos response, raw is all zeros. Track consecutive all-zero
+-        # reads; when the streak reaches the threshold, raise KukaError so the
+-        # engine's watchdog triggers recover() (reconnect clears _recv_buf).
++        # Reject-and-hold with escalation.
++        #
++        # all-zero raw is the stale move-<Res> signature. It is only a false reading
++        # when the robot was physically elsewhere: the discriminator is "raw all-zero
++        # AND last-good non-zero". If the robot is genuinely at home (last-good is
++        # itself all-zero, or we have no baseline yet), the all-zero read is real and
++        # is accepted. This avoids the false positive at a legitimate zero pose.
+         all_zero = all(abs(v) < 1e-6 for v in raw)
+-        if all_zero:
+-            self._zero_streak += 1
+-            if self._zero_streak >= self._zero_streak_threshold:
++        last_good_zero = (self._last_good_raw is not None
++                          and all(abs(v) < 1e-6 for v in self._last_good_raw))
++        if all_zero and self._last_good_raw is not None and not last_good_zero:
++            self._reject_streak += 1
++            # Log every rejection loudly — a silent hold would mask a sustained
++            # desync (the whole point is no silent data corruption).
++            print(f"[kuka] REJECTED stale all-zero curjpos read "
++                  f"(reject streak {self._reject_streak}); "
++                  f"holding last-good raw={self._last_good_raw}")
++            if self._reject_streak >= self._reject_streak_threshold:
+                 KukaError = _get_kuka_error()
+                 raise KukaError(
+-                    f"EKI stale read: raw curjpos all-zero for "
+-                    f"{self._zero_streak} consecutive reads (threshold "
+-                    f"{self._zero_streak_threshold}); move <Res> desync suspected"
++                    f"EKI stale read: rejected all-zero curjpos for "
++                    f"{self._reject_streak} consecutive reads (threshold "
++                    f"{self._reject_streak_threshold}); sustained desync, "
++                    f"escalating to recover()"
+                 )
+-        else:
+-            self._zero_streak = 0
++            # Hold the last physically-plausible raw reading, offset-applied (the
++            # accept path below also returns offset-applied, so this stays
++            # consistent). Holding the last-MEASURED pose lags reality while the
++            # robot moves (arrival detection delays, never fires early) — the safe
++            # direction. Never substitute the target/ghost here.
++            return [self._last_good_raw[i] + self._joint_offsets[i]
++                    for i in range(len(self._last_good_raw))]
++        # Accept: physically-plausible reading. Reset the reject streak and
++        # re-baseline the last-good raw (stored pre-offset, so it is independent
++        # of any joint-offset hot-reload).
++        self._reject_streak = 0
++        self._last_good_raw = list(raw)
+         return [raw[i] + self._joint_offsets[i] for i in range(len(raw))]
+
+@@ def recover
+     def recover(self) -> None:
+         """..."""
++        # Re-baseline reject-and-hold so the first read after recovery is accepted
++        # unconditionally (establishes a fresh baseline). Without this, a lingering
++        # stale all-zero frame right after the buffer clear could be rejected, or a
++        # genuine home pose could be wrongly rejected against a stale non-zero
++        # baseline.
++        self._last_good_raw = None
++        self._reject_streak = 0
+         # Case 1: soft resync (the link is alive but mis-paired).
+         if self._robot is not None and self._robot.comm_sock is not None:
+             try:
+                 self._robot._recv_buf = b""  # drop any mis-paired leftover frame
+                 self._robot.ping()           # sets $FLAG[1]; KRL answers, pairing re-syncs
+-                self._zero_streak = 0
+                 print("[kuka] EKI soft-resync OK (link alive, pairing re-synced)")
+                 return
+             except Exception:
+@@ def recover (hard reconnect)
+             self._robot = None
+         try:
+             self.connect()
+-            self._zero_streak = 0
+             print("[kuka] EKI connection recovered")
+             ...
+@@ def set_joint_offsets
+     def set_joint_offsets(self, offsets: List[float]) -> None:
+         """Update the joint home offset (hot-reload from the robot config)."""
+         self._joint_offsets = list(offsets)
++        # Re-baseline reject-and-hold: the offset shifts the virtual space, so the
++        # next physical read re-establishes the last-good baseline. (The raw reading
++        # itself is offset-independent, so this only guards the acceptance edge case.)
++        self._last_good_raw = None
++        self._reject_streak = 0
+```
+
+### Next Task
+
+No immediate next task identified. The reject-and-hold fix, its tests, and this handoff are complete. Optional follow-ups (out of scope): (1) tune `_reject_streak_threshold` (3) against the live robot if the escalation cadence feels too aggressive/lazy; (2) if the `kuka.py` change is ever needed back as a standalone commit, interactive-rebase `1929bf0` to split the `kuka.py` hunk out of the bundled "renderupdates" commit.
+
+### Instructions for the Next Task
+
+- The detector lives in `realtimecontrol/rtr/rtr/robot/kuka.py`: `_last_good_raw` / `_reject_streak` / `_reject_streak_threshold` (`__init__` ~L63–76), the reject-and-hold logic in `get_curjpos` (~L135–175), and the re-baselines in `recover()` (~L208–214) and `set_joint_offsets` (~L241–248).
+- The behavior tests are in `realtimecontrol/rtr/tests/test_kuka_eki_serialization.py` (the `Reject-and-hold stale-read detector` section, near the end, before `test_connect_resets_robot_on_failure`); run with `python tests/test_kuka_eki_serialization.py` from the `realtimecontrol/rtr` root (17 tests).
+- The escalation path is unchanged: `KukaError` → engine watchdog (`engine.py` L139–145) → `robot.recover()`. Do not add a new recovery path.
+- To revert the feature, use the two `git checkout <commit>~1 -- <path>` commands in the Revert section (do not `git revert 1929bf0`).
+
 ## 2026-11-04 — Coordinated-axis 3D viewer: solid-arm tween in `rtr3d.js` (TODO #5)
 
 ### Status
