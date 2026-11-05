@@ -151,7 +151,8 @@
       "bridge": "osc(4, 0.1, 1.2).out()"
     },
     "kb_slow": {
-      "ignore": "osc(4, 0.1, 1.2).out()"
+      "ignore": "osc(5).add(noise(5, 2)).color(0, 0, 3).colorama(0.4).out()\n",
+      "look": "osc(4, 0.1, 1.2).out()"
     }
   }
 }

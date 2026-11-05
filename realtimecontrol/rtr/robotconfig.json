@@ -8,14 +8,40 @@
     90
   ],
   "patch_mode": "video",
+  "soft_limits": [
+    [
+      -185,
+      185
+    ],
+    [
+      -135,
+      35
+    ],
+    [
+      -95,
+      158
+    ],
+    [
+      -180,
+      180
+    ],
+    [
+      -55,
+      100
+    ],
+    [
+      -150,
+      150
+    ]
+  ],
   "red_light": {
     "enabled": true,
-    "x": 0.5,
+    "x": 0.1,
     "y": 0.5,
-    "bar_w": 1,
+    "bar_w": 24,
     "bar_h": 160,
     "radius": 80,
-    "morph": true,
-    "per_beat": 1
+    "per_beat": 1,
+    "morph": true
   }
 }
