@@ -488,14 +488,12 @@ class Brain:
         elif c == Cmd.SET_CADENCE:
             self._handle_set_cadence(p)
         elif c == Cmd.SET_CONTROL_MODE:
-            # Manual and perform modes disable all groups (the operator/performer
-            # drives the robot); clear the active group before the machine freezes
-            # the pose.
-            if p.get("mode") in ("manual", "perform") and self.active_group is not None:
-                self.clear_group()
             # Assertive mode is independent of groups: entering it clears the active
             # group; leaving it clears the assertive navigation state (the machine
-            # drops the per-move speed when it exits assertive mode).
+            # drops the per-move speed when it exits assertive mode). Manual and
+            # perform modes do NOT clear the group: the group stays active (its
+            # brain-driven navigation is gated in perform; in manual the group is
+            # inert but re-engages when the control mode leaves manual).
             if p.get("mode") == "assertive" and self.active_group is not None:
                 self.clear_group()
             if self.machine.control_mode == "assertive" and p.get("mode") != "assertive":

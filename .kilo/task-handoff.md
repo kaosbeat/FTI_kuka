@@ -1,5 +1,46 @@
 # Task Handoff Log
 
+## 2026-11-05 — Fix: entering perform (or manual) control mode cleared the active zone group
+
+### Status
+
+Completed
+
+### Summary
+
+User report: with a group enabled and a zone reached in manual mode, clicking the `perform` control-mode button disabled the group. Root cause: the `SET_CONTROL_MODE` handler in `brain.py` had been extended (during the perform-mode implementation) to call `self.clear_group()` when the new mode was `"manual"` or `"perform"`. That contradicts the locked design decision that `enable_group` works inside perform and groups are not part of the perform freeze — groups should persist across manual/perform switches. The original code only cleared the group when entering `assertive` mode (assertive navigation is independent of groups). Reverted the handler to that original behavior; the assertive logic is unchanged.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/brain/brain.py` (`on_command`, `Cmd.SET_CONTROL_MODE` branch): removed the `if p.get("mode") in ("manual", "perform") and self.active_group is not None: self.clear_group()` block; kept only the assertive-mode group clear. Updated the comment to document that manual/perform do NOT clear the group (group stays active; brain-driven group navigation is gated in perform, inert-but-persisting in manual).
+
+### Documentation
+
+- None required — the code comment at the changed site documents the behavior; the existing perform-mode design notes (AGENTS/plan) already state `enable_group` is kept in perform without forcing auto.
+
+### Architecture
+
+No architectural impact. Behavior now matches the documented design: groups persist through manual/perform; only `assertive` mode clears the active group.
+
+### Validation
+
+- `python -m py_compile rtr/brain/brain.py` → `SYNTAX OK`.
+- `python -m pytest tests/test_state_machine.py -q` → `20 passed, 9 skipped` (perform-mode tests, including `test_control_mode_perform_freeze_on_entry` which asserts `machine.active_group is None` only when it was set by the machine itself, unaffected).
+- No test referenced the removed group-clear-on-manual/perform behavior (grep for `clear_group`/`active_group` in `tests/test_state_machine.py` returned nothing).
+
+### Decisions and Caveats
+
+- Manual mode: the group now persists (pre-existing behavior before the perform work, which this edit restores). Entering manual does not engage group navigation (the brain's group-navigation tick is gated to auto), but the group re-engages when the control mode leaves manual — consistent with prior behavior.
+- Perform mode: the group persists; `enable_group` inside perform is allowed (control mode left as-is, per `_handle_enable_group`). No new caveat.
+
+### Next Task
+
+No immediate next task identified.
+
+### Instructions for the Next Task
+
+Verify in the browser: enable a group (e.g. `circus`), go to a zone in manual mode, click `perform` — the group must stay active (zone-list panel unchanged, `active_group` still set in the snapshot). Then exit perform back to manual/auto and confirm group navigation resumes.
+
 ## 2026-11-05 — Fix: perform-mode snapshot emitted invalid JSON (`Infinity` in `time_to_arrive`)
 
 ### Status
