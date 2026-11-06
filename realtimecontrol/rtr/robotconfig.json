@@ -36,8 +36,8 @@
   ],
   "red_light": {
     "enabled": true,
-    "x": 0.1,
-    "y": 0.5,
+    "x": 0.3,
+    "y": 0,
     "bar_w": 24,
     "bar_h": 160,
     "radius": 80,

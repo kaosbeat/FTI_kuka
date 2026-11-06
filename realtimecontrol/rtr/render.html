@@ -260,12 +260,11 @@ function sizeCamOverlay() {
 
 // ---------------------------------------------------------------------------
 // Red-light overlay (LED-wall dead-pixel mask): a pulsating CRT red light drawn
-// in a WebGL fragment shader. It rests as a thin vertical bar (bar_w x bar_h)
-// and blooms into a circle of `radius` px on every pulse, timed to the MIDI
-// clock. The shape is a rounded-box SDF morphed from bar -> circle by the
-// pulse envelope; scanlines + flicker + a soft glow give the CRT look. The
-// output alpha is the light coverage, so the hydra canvas shows through where
-// there is no light.
+// on a 2D canvas. It rests as a thin vertical bar (bar_w x bar_h) and blooms
+// into a circle of `radius` px on every pulse, timed to the MIDI clock. The
+// shape is a rounded-rect morphed from bar -> circle by the pulse envelope;
+// a radial glow gives the CRT look. The output alpha is the light coverage, so
+// the hydra canvas shows through where there is no light.
 // ---------------------------------------------------------------------------
 function normalizeRedLightClient(data) {
   const d = (data && typeof data === "object") ? data : {};
@@ -299,89 +298,46 @@ async function loadRedLightConfig() {
 function setupRedLight() {
   const c = $("redLight");
   if (!c) return null;
-  const gl = c.getContext("webgl");
-  if (!gl) return null;
-  const vsSrc = "attribute vec2 a_pos; void main(){ gl_Position = vec4(a_pos, 0.0, 1.0); }";
-  const fsSrc = [
-    "precision mediump float;",
-    "uniform vec2 u_res;",
-    "uniform float u_time;",
-    "uniform float u_env;",
-    "uniform float u_morph;",
-    "uniform float u_barW;",
-    "uniform float u_barH;",
-    "uniform float u_radius;",
-    "uniform vec2 u_center;",
-    "float hash(float n){ return fract(sin(n * 12.9898) * 43758.5453123); }",
-    "float sdRoundedBox(vec2 p, vec2 b, float r){",
-    "  vec2 q = abs(p) - b;",
-    "  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;",
-    "}",
-    "void main(){",
-    "  vec2 frag = gl_FragCoord.xy;",
-    "  vec2 p = frag - u_center;",
-    "  float e = u_env * u_morph;",
-    "  float halfW = mix(u_barW * 0.5, u_radius, e);",
-    "  float halfH = mix(u_barH * 0.5, u_radius, e);",
-    "  float cr    = mix(u_barW * 0.5, u_radius, e);",
-    "  float d = sdRoundedBox(p, vec2(halfW, halfH), cr);",
-    "  float glow = 2.5;",
-    "  float cov = 1.0 - smoothstep(-glow, glow + 2.0, d);",
-    "  float core = 1.0 - smoothstep(0.0, max(halfW, 1.0) * 1.2, d);",
-    "  float flicker = 0.90 + 0.10 * hash(floor(u_time * 24.0));",
-    "  float scan = 0.88 + 0.12 * sin(frag.y * 1.7);",
-    "  float bright = (0.30 + 0.70 * u_env) * flicker * scan;",
-    "  float intensity = cov * bright;",
-    "  vec3 red = vec3(1.0, 0.14, 0.09);",
-    "  vec3 hot = vec3(1.0, 0.75, 0.55);",
-    "  vec3 col = mix(red, hot, clamp(core * u_env, 0.0, 1.0)) * intensity;",
-    "  vec2 uv = frag / u_res;",
-    "  float vig = 1.0 - 0.18 * length(uv - 0.5);",
-    "  col *= vig;",
-    "  float alpha = clamp(intensity, 0.0, 1.0);",
-    "  gl_FragColor = vec4(col, alpha);",
-    "}",
-  ].join("\n");
-  function compile(type, src) {
-    const s = gl.createShader(type);
-    gl.shaderSource(s, src);
-    gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-      console.log("red-light shader error:", gl.getShaderLog(s));
-      return null;
-    }
-    return s;
-  }
-  const vs = compile(gl.VERTEX_SHADER, vsSrc);
-  const fs = compile(gl.FRAGMENT_SHADER, fsSrc);
-  if (!vs || !fs) return null;
-  const prog = gl.createProgram();
-  gl.attachShader(prog, vs);
-  gl.attachShader(prog, fs);
-  gl.linkProgram(prog);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-    console.log("red-light link error:", gl.getProgramInfoLog(prog));
-    return null;
-  }
-  gl.useProgram(prog);
-  const buf = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.USAGE_STATIC_DRAW);
-  const loc = gl.getAttribLocation(prog, "a_pos");
-  gl.enableVertexAttribArray(loc);
-  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-  const U = {
-    res: gl.getUniformLocation(prog, "u_res"),
-    time: gl.getUniformLocation(prog, "u_time"),
-    env: gl.getUniformLocation(prog, "u_env"),
-    morph: gl.getUniformLocation(prog, "u_morph"),
-    barW: gl.getUniformLocation(prog, "u_barW"),
-    barH: gl.getUniformLocation(prog, "u_barH"),
-    radius: gl.getUniformLocation(prog, "u_radius"),
-    center: gl.getUniformLocation(prog, "u_center"),
-  };
-  gl.clearColor(0, 0, 0, 0);
-  return { gl, prog, U, canvas: c };
+  const ctx = c.getContext("2d");
+  if (!ctx) return null;
+  return { ctx, canvas: c };
+}
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function roundRectPath(ctx, cx, cy, hw, hh, r) {
+  const x = cx - hw, y = cy - hh, w = hw * 2, h = hh * 2;
+  const rr = Math.min(r, hw, hh);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
+}
+
+function drawRedLight(ctx, w, h, cfg, env) {
+  const cx = cfg.x * w, cy = cfg.y * h;
+  const e = cfg.morph ? env : 0;
+  const halfW = lerp(cfg.bar_w * 0.5, cfg.radius, e);
+  const halfH = lerp(cfg.bar_h * 0.5, cfg.radius, e);
+  const cr = lerp(cfg.bar_w * 0.5, cfg.radius, e);
+  const bright = 0.30 + 0.70 * env;
+  const glowR = Math.max(halfW, halfH) * 2.5;
+  const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, glowR);
+  grad.addColorStop(0, `rgba(255, ${Math.round(40 + 150 * env)}, ${Math.round(25 + 70 * env)}, ${bright})`);
+  grad.addColorStop(0.5, `rgba(255, ${Math.round(40 + 100 * env)}, ${Math.round(25 + 40 * env)}, ${bright * 0.5})`);
+  grad.addColorStop(1, "rgba(255, 34, 25, 0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(cx - glowR, cy - glowR, glowR * 2, glowR * 2);
+  ctx.fillStyle = `rgba(255, ${Math.round(40 + 150 * env)}, ${Math.round(25 + 70 * env)}, ${bright})`;
+  roundRectPath(ctx, cx, cy, halfW, halfH, cr);
+  ctx.fill();
 }
 
 function sizeRedLight() {
@@ -402,22 +358,12 @@ function rlFrame() {
   rlClock.lastT = now;
   const rl = rlGL;
   if (rl) {
-    const c = rl.canvas, gl = rl.gl, U = rl.U;
-    gl.viewport(0, 0, c.width, c.height);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    const c = rl.canvas, ctx = rl.ctx;
+    ctx.clearRect(0, 0, c.width, c.height);
     if (RED_LIGHT.enabled) {
       const phase = (rlClock.beat * RED_LIGHT.per_beat) % 1;
       const env = Math.pow(1 - phase, 3);
-      gl.useProgram(rl.prog);
-      gl.uniform2f(U.res, c.width, c.height);
-      gl.uniform1f(U.time, now / 1000);
-      gl.uniform1f(U.env, env);
-      gl.uniform1f(U.morph, RED_LIGHT.morph ? 1 : 0);
-      gl.uniform1f(U.barW, RED_LIGHT.bar_w);
-      gl.uniform1f(U.barH, RED_LIGHT.bar_h);
-      gl.uniform1f(U.radius, RED_LIGHT.radius);
-      gl.uniform2f(U.center, RED_LIGHT.x * c.width, RED_LIGHT.y * c.height);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      drawRedLight(ctx, c.width, c.height, RED_LIGHT, env);
     }
   }
   requestAnimationFrame(rlFrame);
@@ -567,7 +513,7 @@ async function setupMidi() {
 
 sizeCamOverlay();   // size the camera-overlay canvas to the window before the first frame
 sizeRedLight();     // size the red-light canvas to the window before the first frame
-rlGL = setupRedLight();   // build the red-light WebGL overlay (degrades to no-op when WebGL is unavailable)
+rlGL = setupRedLight();   // build the red-light 2D overlay (degrades to no-op when canvas 2D is unavailable)
 loadRedLightConfig();     // seed the red-light config from the robot config (state frames override)
 rlClock.lastT = performance.now();
 requestAnimationFrame(rlFrame);   // start the red-light pulse loop (free-runs until a perform frame syncs it)

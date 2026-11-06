@@ -404,8 +404,9 @@
   .midiExample .exLbl { color: var(--accent); font-weight: bold; }
   .midiFieldHelp { font-size: 11px; color: var(--dim); margin-top: 2px; }
   /* Live MIDI monitor: the last raw in / commands out. */
-  #midiMonitorSection { grid-column: 2; position: sticky; top: 8px; align-self: start; }
-  #midiAllSection { grid-column: 2; align-self: start; }
+  /* The right column (live monitor + all mapped keys) is one sticky unit so both
+     stay visible while the long left column (zones, etc.) scrolls past. */
+  #midiRightCol { grid-column: 2; position: sticky; top: 8px; align-self: start; display: grid; gap: 16px; }
   #midiAllList .sndRow { flex-wrap: nowrap; }
   #midiMonitor, #performMidiMonitor { background: #0d0f13; border: 1px solid var(--border); border-radius: 6px;
                   padding: 8px 10px; font-size: 12px; line-height: 1.6;
@@ -687,18 +688,20 @@
       <span id="midiStatus" style="font-size:12px;color:var(--dim)"></span>
     </div>
   </div>
-  <section id="midiMonitorSection">
-    <h2>live monitor</h2>
-    <p class="midiHelp">The last raw MIDI traffic: <b>in</b> = messages received on the MIDI port,
-      <b>out</b> = commands the core sent. Newest at the bottom.</p>
-    <div id="midiMonitor"></div>
-  </section>
-  <section id="midiAllSection">
-    <h2>all mapped keys</h2>
-    <p class="midiHelp">Every MIDI key currently mapped, in one list. Edit a value, re-learn it,
-      or remove it. Add new keys in the sections above.</p>
-    <div id="midiAllList"></div>
-  </section>
+  <div id="midiRightCol">
+    <section id="midiMonitorSection">
+      <h2>live monitor</h2>
+      <p class="midiHelp">The last raw MIDI traffic: <b>in</b> = messages received on the MIDI port,
+        <b>out</b> = commands the core sent. Newest at the bottom.</p>
+      <div id="midiMonitor"></div>
+    </section>
+    <section id="midiAllSection">
+      <h2>all mapped keys</h2>
+      <p class="midiHelp">Every MIDI key currently mapped, in one list. Edit a value, re-learn it,
+        or remove it. Add new keys in the sections above.</p>
+      <div id="midiAllList"></div>
+    </section>
+  </div>
 </main>
 
 <main id="brainMain" style="display:none">

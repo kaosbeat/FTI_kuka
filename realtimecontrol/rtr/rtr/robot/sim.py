@@ -22,7 +22,7 @@ derived pose so the display still moves.
 from typing import List
 
 from .base import RobotBase
-from ..state.machine import motion_profile_time
+from .helpers import motion_profile_time
 
 
 class SimRobot(RobotBase):

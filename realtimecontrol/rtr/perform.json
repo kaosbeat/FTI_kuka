@@ -1,8 +1,9 @@
 {
   "default_base_beats": 8,
-  "internal_bpm": 130,
+  "internal_bpm": 45,
   "clock_timeout": 1,
   "velocity_max_deg_s": 30,
+  "acceleration_max_deg_s2": 100,
   "multipliers": [
     0.0625,
     0.125,

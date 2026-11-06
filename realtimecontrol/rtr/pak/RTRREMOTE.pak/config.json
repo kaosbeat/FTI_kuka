@@ -1,5 +1,5 @@
 {
-  "core_host": "192.168.1.185",
+  "core_host": "orangebot",
   "core_port": 8765,
   "http_port": 8766,
   "http_poll": 30,
@@ -22,16 +22,9 @@
   "repo": "/storage/rtr-remote",
   "displaytitle": "kukapp",
   "joy_map": {
-    "15": "up",
-    "16": "down",
-    "17": "left",
-    "18": "right",
-    "29": "enter",
     "305": "enter",
-    "30": "q",
-    "8": "h",
-    "310": "left",
-    "311": "right"
+    "304": "q",
+    "308": "h"
   },
   "theme": {
     "bg": "#000000",

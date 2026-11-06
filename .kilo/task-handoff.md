@@ -1,5 +1,132 @@
 # Task Handoff Log
 
+## 2026-11-06 — Red-light overlay: WebGL → 2D canvas replacement
+
+### Status
+
+Completed
+
+### Summary
+
+Replaced the WebGL fragment-shader red-light overlay in `render.html` with a 2D canvas implementation. The WebGL approach was unverifiable in headless Chrome/SwiftShader (both the real shader and a solid-red control returned black via readPixels/screenshot/drawImage), and the user reported the canvas was empty. The 2D replacement is capturable, produces visible red pixels in headless screenshots, and preserves the same `RED_LIGHT` config, `rlClock` beat tracking, pulse envelope, and MIDI-clock sync.
+
+### Changes Made
+
+- `realtimecontrol/rtr/render.html`: Replaced `setupRedLight()` (WebGL shader compile/link/program setup, ~87 lines) with a 2D `getContext("2d")` returning `{ ctx, canvas }` (4 lines). Added helpers `lerp()`, `roundRectPath()`, `drawRedLight()` (~40 lines). Replaced `rlFrame()` WebGL draw block with `ctx.clearRect` + `drawRedLight()` call. Updated comment block and initialization comment.
+- `realtimecontrol/rtr/tests/js/test_red_light_page.js`: Updated the `ctx2d` DOM stub from a simple no-op Proxy to a recursive callable Proxy (`makeCtxStub`) so `createRadialGradient().addColorStop()` and other 2D context method chains don't throw in the vm sandbox.
+
+### Documentation
+
+None required — the code comments in render.html describe the 2D approach.
+
+### Architecture
+
+No architectural impact. The overlay remains a fixed-position canvas at z-index 4, driven by the same `rlClock` beat clock and `RED_LIGHT` config from state frames. The rendering backend changed from WebGL to Canvas 2D.
+
+### Validation
+
+- `node tests/js/test_red_light_page.js` → ALL_TESTS_PASSED (15 assertions)
+- `node tests/js/test_red_light_tab.js` → ALL_TESTS_PASSED (23 assertions)
+- `python -m pytest tests/test_red_light.py -v` → 11 passed
+- Headless Chrome screenshot of `http://localhost:8766/render.html` → 131,664 red-ish pixels detected; region around expected light center (x=0.1, y=0.5) shows R=169.5 mean.
+
+### Decisions and Caveats
+
+- The original WebGL invisible-canvas root cause remains unknown (headless SwiftShader cannot reliably capture WebGL content). The 2D replacement is the chosen workaround, endorsed by the user ("Maybe a simple CSS dive is easier than a webgl canvas overlay?").
+- The 2D `drawRedLight()` uses a radial gradient for the glow + a filled rounded-rect for the core shape, morphing from bar to circle via the pulse envelope. No scanlines or flicker (those were WebGL-specific shader effects); a simple brightness envelope suffices for the LED-wall dead-pixel mask purpose.
+- The `rlGL` variable name is now a misnomer (it holds a 2D context, not WebGL); left as-is to minimize diff churn. Could be renamed to `rlCtx` in a future cleanup.
+
+### Next Task
+
+Visual verification on the actual LED wall (physical display) to confirm the red light is visible and the pulse timing matches the MIDI clock. The headless screenshot confirms pixels are rendered, but the user's original complaint was on the physical display.
+
+### Instructions for the Next Task
+
+1. Open `http://<core-host>:8766/render.html` on the LED wall's display.
+2. Confirm the red bar is visible at the configured position (x=0.1, y=0.5 → left side, vertical center).
+3. Confirm the pulse blooms on the MIDI clock beat (per_beat=1 → one pulse per beat at 130 BPM).
+4. If invisible, check: (a) is the Hydra base canvas covering it? (z-index 4 should be above Hydra's canvas in `#stage`), (b) is `RED_LIGHT.enabled` true in the state frame?
+5. If the pulse timing is off, verify `perform.beat` is advancing in the state frames (CDP: `JSON.parse` the WS messages).
+
+## 2026-11-05 — TrimUI full keymap captured; config.json joy_map rewritten
+
+### Status
+
+Completed (TrimUI). R36S capture pending.
+
+### Summary
+
+Captured the complete TrimUI controller map via the existing `--joy-diag` probe (PAK bundled interpreter, `/dev/input/event3`). The user pressed all 18 buttons in a fixed order; the output is time-ordered and 1-to-1. Rewrote `pak/RTRREMOTE.pak/config.json` `joy_map` to the clean TrimUI mapping (A/B/X only — the rest of the app is the d-pad ABS + reserved L1/R1 + home). Full hardware table below.
+
+### TrimUI (192.168.1.33, event3) full button → code table
+
+| # | Button | Type | Code | App key | Notes |
+|---|--------|------|------|---------|-------|
+| 1 | A | KEY | 305 | `enter` | BTN_A; launch |
+| 2 | B | KEY | 304 | `q` | BTN_B; quit/back |
+| 3 | X | KEY | 308 | `h` | BTN_X; help |
+| 4 | Y | KEY | 307 | — | BTN_C; not used by app |
+| 5 | L1 | KEY | 310 | page_left | reserved `JOY_L1` (hardcoded, pre-joy_map) |
+| 6 | R1 | KEY | 311 | page_right | reserved `JOY_R1` (hardcoded, pre-joy_map) |
+| 7 | L2 | ABS | 2 (val 255) | — | analog trigger; not used |
+| 8 | R2 | ABS | 5 (val 255) | — | analog trigger; not used |
+| 9 | L3 | KEY | 59 | — | stick click; not used |
+| 10 | R3 | KEY | 60 | — | stick click; not used |
+| 11 | L4 | KEY | 317 | — | stick noise around it (ABS 0/1/3/4) |
+| 12 | R4 | KEY | 318 | — | stick noise around it (ABS 0/1/3/4) |
+| 13 | START | KEY | 315 | — | not used |
+| 14 | SELECT | KEY | 314 | — | not used |
+| 15 | MENU | KEY | 316 | — | not used |
+| 16 | HOME | KEY | 172 | quit | in `quit_codes`; matches prior |
+| 17 | VOL UP | KEY | 115 | — | KEY_VOLUMEUP; not used |
+| 18 | VOL DOWN | KEY | 114 | — | KEY_VOLUMEDOWN; not used |
+
+D-pad is a separate analog axis (not in this capture; already working): axis 17 (up/down), axis 16 (left/right) — in `dpad_map`.
+
+### Config change (app key set = up/down/left/right/enter/q/escape/h)
+
+Only these are consumed by the menu + child apps; the others are documented above but unmapped:
+- `joy_map`: `305`→enter (A), `304`→q (B), `308`→h (X)
+- `dpad_map`: up/down = axis 17, left/right = axis 16 (unchanged)
+- `quit_codes`: `[172]` (home, unchanged)
+- L1/R1 (310/311): reserved for page nav (hardcoded `JOY_L1`/`JOY_R1`, checked before `joy_map`) — no `joy_map` entry needed
+
+Removed the old dead/legacy entries: keyboard codes (15/16/17/18/29/30/8 — local keyboard is pygame `KEY_MAP`, not `joy_map`) and the wrong `310`→left / `311`→right (L1/R1 are reserved page-nav, not d-pad).
+
+### Changes Made
+
+- `realtimecontrol/rtr/pak/RTRREMOTE.pak/config.json`: `joy_map` → `{"305":"enter","304":"q","308":"h"}`.
+
+### Documentation
+
+This entry holds the full TrimUI table. The R36S table goes in a separate entry once captured.
+
+### Architecture
+
+No architectural impact (config data only).
+
+### Validation
+
+- `python3 -c "import json; ..."` → `joy_map: {'305':'enter','304':'q','308':'h'}`, `quit_codes: [172]`, `dpad_map` unchanged, `device: /dev/input/event3` (JSON valid).
+
+### Decisions and Caveats
+
+- The app understands only 8 keys (`APP_KEYS`); the menu uses up/down/enter/q/h/page and the child uses up/down/left/right/enter/q/h. So only A/B/X + d-pad + home + L1/R1 are wired; the other 9 buttons are captured for reference, not mapped.
+- L3/R3 = 59/60 (KEY_F1/F2 range) and L4/R4 = 317/318 (BTN_TR2/SELECT range) — non-standard firmware mapping, but empirically confirmed.
+- Two-device note: this is the TrimUI. The R36S runs a different OS and will have different codes; it needs its own `--joy-diag` capture (separate host) and its own config. Do NOT reuse this `joy_map` for the R36S.
+
+### Next Task
+
+1. Push the config on-device and confirm A launches:
+   `scp -o PreferredAuthentications=password realtimecontrol/rtr/pak/RTRREMOTE.pak/config.json root@192.168.1.33:/mnt/SDCARD/Tools/tg5040/RTRREMOTE.pak/config.json`
+   (or re-run `--ship-code`.) Then in the menu press A → app launches; confirm `MENU: KEY code=305 -> enter` in `$LOGS_PATH/RTRREMOTE.txt`.
+2. Capture the R36S: run the same `--joy-diag` probe on the R36S host (its PAK path/interpreter/IP), press the 18 buttons in the same order, paste back; build the R36S `joy_map` + its own config.
+
+### Instructions for the Next Task
+
+- TrimUI is done; just push + verify A-launch.
+- For the R36S, reuse the exact 18-button press order and the `--joy-diag` command (adjust host + PAK path + interpreter path). Map by press order; the trailing `distinct KEY presses` summary cross-checks.
+
 ## 2026-11-05 — Full TrimUI keymap capture plan (two-device: TrimUI + R36S)
 
 ### Status

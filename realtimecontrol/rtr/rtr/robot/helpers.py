@@ -60,3 +60,22 @@ def comparelist(
 def clamp_pose(pose: Sequence[float], limits: Sequence[Tuple[float, float]]) -> List[float]:
     """Return a copy of ``pose`` with every limited joint clamped to ``limits``."""
     return [fitlimits(i, pose[i], limits) for i in range(len(pose))]
+
+
+def motion_profile_time(distance_deg: float, vmax_deg_s: float, accel_deg_s2: float) -> float:
+    """The rest-to-rest time for one joint axis moving ``distance_deg``.
+
+    A trapezoidal velocity profile when the distance is long enough to reach the
+    max velocity (``distance_deg >= vmax^2 / accel``): ``t = D/vmax + vmax/a``.
+    Triangular otherwise (the axis never reaches vmax): ``t = 2*sqrt(D/a)``.
+    A zero distance takes no time; a non-positive velocity or acceleration means
+    the axis cannot move (infinite time).
+    """
+    if distance_deg <= 0:
+        return 0.0
+    if vmax_deg_s <= 0 or accel_deg_s2 <= 0:
+        return float("inf")
+    threshold = (vmax_deg_s * vmax_deg_s) / accel_deg_s2
+    if distance_deg >= threshold:
+        return distance_deg / vmax_deg_s + vmax_deg_s / accel_deg_s2
+    return 2.0 * (distance_deg / accel_deg_s2) ** 0.5
