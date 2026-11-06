@@ -53,6 +53,18 @@
   .lateBox .val { font-size: 18px; font-weight: bold; margin-top: 2px; }
   .lateBox.late .val { color: var(--late); }
   .hint { color: var(--dim); font-size: 11px; margin-top: 6px; }
+  #beatCounter { display: inline-flex; gap: 4px; align-items: center; }
+  #beatCounter .slot { font-size: 14px; font-weight: bold; color: var(--dim); }
+  #beatCounter .slot.on { color: var(--accent); }
+  #beatCounter.int .slot.on { color: var(--warn); }
+  #clockBadge {
+    font-size: 11px; font-weight: bold; letter-spacing: .08em;
+    padding: 2px 8px; border-radius: 4px; border: 1px solid var(--border);
+    color: var(--dim); opacity: .55; transition: opacity .12s linear;
+  }
+  #clockBadge.int { color: var(--warn); border-color: var(--warn); }
+  #clockBadge.ext { color: var(--accent); border-color: var(--accent); }
+  #clockBadge.pulse { opacity: 1; }
 </style>
 </head>
 <body>
@@ -60,6 +72,8 @@
   <h1>RTR perform</h1>
   <span class="dot" id="dot"></span>
   <span id="status">disconnected</span>
+  <span id="clockBadge">NO CLOCK</span>
+  <span id="beatCounter"><span class="slot">-</span><span class="slot">-</span><span class="slot">-</span><span class="slot">-</span></span>
   <input id="host" placeholder="ws://host:8765" />
   <button id="reconnect">connect</button>
 </header>
@@ -68,6 +82,7 @@
   <section>
     <h2>Beat clock</h2>
     <div class="kv"><span>source</span><span id="clockSource">—</span></div>
+    <div class="hint">auto — external (MIDI 0xF8) drives the counter while present; falls back to the internal BPM after the clock timeout. The header badge + counter color track the source live.</div>
     <div class="kv"><span>BPM</span><span id="bpm">—</span></div>
     <div class="kv"><span>beat</span><span id="beat" class="big">0.00</span></div>
     <div class="kv"><span>bar</span><span id="bar" class="big">1.1</span></div>
@@ -216,6 +231,8 @@ function renderState(m) {
     // No perform state (the clock isn't wired): show the idle state.
     $("clockSource").textContent = "—";
     $("bpm").textContent = "—";
+    $("clockBadge").textContent = "NO CLOCK";
+    $("clockBadge").className = "idle";
     $("lateHint").textContent = "not performing";
     $("lateBox").className = "lateBox ok";
     return;
@@ -224,17 +241,37 @@ function renderState(m) {
   // Beat clock.
   $("clockSource").textContent = p.clock_source || "—";
   $("bpm").textContent = (p.bpm != null) ? p.bpm.toFixed(1) : "—";
+  // Clock source monitor: the header badge (INTERNAL / EXTERNAL) and the
+  // beat-counter color. The core auto-detects the source — external (MIDI 0xF8)
+  // wins while present, otherwise the internal BPM drives the counter. The
+  // badge pulses on the first ~20% of each beat so the clock reads as alive.
+  const src = p.clock_source || "";
+  const isExt = (src === "external" || src === "midi");
+  const isInt = (src === "internal");
+  const srcCls = isExt ? "ext" : (isInt ? "int" : "idle");
+  const phase = (p.beat_phase != null) ? p.beat_phase : 0;
+  $("clockBadge").textContent = isExt ? "EXTERNAL" : (isInt ? "INTERNAL" : "—");
+  $("clockBadge").className = srcCls + (phase < 0.2 ? " pulse" : "");
+  $("beatCounter").className = srcCls;
   $("beat").textContent = (p.beat != null) ? p.beat.toFixed(2) : "—";
   // Bar counter (4/4 time): bar = beat // 4 (1-indexed), beat-in-bar = beat % 4 + 1.
   if (p.beat != null) {
     const bi = Math.floor(p.beat);
     $("bar").textContent = `${Math.floor(bi / 4) + 1}.${(bi % 4) + 1}`;
+    // 4-slot header counter: X - - - → - X - - → - - X - → - - - X
+    const bInBar = bi % 4;
+    const slots = $("beatCounter").children;
+    for (let i = 0; i < 4; i++) {
+      slots[i].textContent = (i === bInBar) ? "X" : "-";
+      slots[i].className = "slot" + (i === bInBar ? " on" : "");
+    }
   } else {
     $("bar").textContent = "—";
+    const slots = $("beatCounter").children;
+    for (let i = 0; i < 4; i++) { slots[i].textContent = "-"; slots[i].className = "slot"; }
   }
   $("beatPhase").textContent = (p.beat_phase != null) ? p.beat_phase.toFixed(3) : "—";
   $("beatDuration").textContent = (p.beat_duration != null) ? p.beat_duration.toFixed(3) + " s" : "—";
-  const phase = (p.beat_phase != null) ? p.beat_phase : 0;
   $("beatFill").style.width = (Math.min(1, Math.max(0, phase)) * 100) + "%";
 
   // Velocity (CC-A).

@@ -14,7 +14,8 @@
     margin: 0; padding: 16px; background: var(--bg); color: var(--text);
     font: 14px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
-  header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;
+           position: sticky; top: 0; z-index: 100; background: var(--bg); padding: 8px 0; }
   h1 { font-size: 18px; margin: 0; }
   .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #e05d5d; }
   .dot.on { background: var(--accent); }

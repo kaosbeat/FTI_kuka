@@ -171,6 +171,9 @@
     },
     "kb_slow": {
       "out_port": null
+    },
+    "kb_medium": {
+      "out_port": null
     }
   },
   "actions": {
@@ -754,7 +757,8 @@
       "ignore": {
         "poses": []
       }
-    }
+    },
+    "kb_medium": {}
   },
   "out_port": 7
 }

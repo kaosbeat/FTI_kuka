@@ -9,7 +9,8 @@
   * { box-sizing: border-box; }
   body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
          font: 14px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-  header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;
+           position: sticky; top: 0; z-index: 100; background: var(--bg); padding: 8px 0; }
   h1 { font-size: 18px; margin: 0; }
   .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #e05d5d; }
   .dot.on { background: var(--accent); }
@@ -676,6 +677,13 @@
         that group's zones (no travel outside). <b>learn</b> = click it, then press a key on your
         MIDI controller — the robot remembers that key for the group.</p>
       <div id="midiGroups"></div>
+    </section>
+    <section>
+      <h2>clock</h2>
+      <p class="midiHelp">The dedicated MIDI-in port for the external clock (0xF8). The device that
+        generates the MIDI clock (a DAW, drum machine, or clock generator) is often on a
+        different port than the default. <b>default</b> = the first available device.</p>
+      <div id="midiClock"></div>
     </section>
     <section>
       <h2>zones (per-zone input)</h2>
@@ -2087,6 +2095,9 @@ async function loadMidi() {
   // Seed the groups section: in_port (null = default port) plus per-group keys.
   if (!data.groups || typeof data.groups !== "object") data.groups = {};
   if (data.groups.in_port === undefined) data.groups.in_port = null;
+  // Seed the clock section: the dedicated MIDI-in port for the external clock (0xF8).
+  if (!data.clock || typeof data.clock !== "object") data.clock = {};
+  if (data.clock.in_port === undefined) data.clock.in_port = null;
   MIDI = data;
   // Seed per-zone entries: ensure each zone has {in_port, command, actions}.
   Object.keys(TABLE.zones || {}).forEach((zn) => {
@@ -2153,6 +2164,7 @@ function buildMidiInForm() {
   buildMidiNav();
   buildMidiCapture();
   buildMidiGroups();
+  buildMidiClock();
   buildMidiAllList();
   const tbl = $("midiZones");
   tbl.innerHTML = "";
@@ -2450,6 +2462,39 @@ function buildMidiGroups() {
     row.appendChild(btn);
     el.appendChild(row);
   });
+}
+
+// The clock section: the dedicated MIDI-in port for the external clock (0xF8).
+// The device that generates the MIDI clock is often on a different port than
+// the default. MIDI.clock = { in_port }.
+function buildMidiClock() {
+  const el = $("midiClock");
+  if (!el) return;
+  el.innerHTML = "";
+  if (!MIDI.clock || typeof MIDI.clock !== "object") MIDI.clock = {};
+  if (MIDI.clock.in_port === undefined) MIDI.clock.in_port = null;
+  // in_port picker
+  const portRow = document.createElement("div");
+  portRow.className = "sndRow";
+  const portLbl = document.createElement("span");
+  portLbl.className = "sndName"; portLbl.textContent = "clock in";
+  portLbl.title = "Which MIDI-in device the external clock (0xF8) is received on. 'default' = the first available device.";
+  portRow.appendChild(portLbl);
+  const portSel = document.createElement("select");
+  portSel.className = "midiKey";
+  const portNone = document.createElement("option");
+  portNone.value = ""; portNone.textContent = "default";
+  portSel.appendChild(portNone);
+  midiPorts.forEach((p) => {
+    const o = document.createElement("option");
+    o.value = String(p.index); o.textContent = `${p.index} — ${p.name}`;
+    portSel.appendChild(o);
+  });
+  const cnp = MIDI.clock.in_port;
+  portSel.value = (cnp === null || cnp === undefined) ? "" : String(cnp);
+  portSel.onchange = () => { MIDI.clock.in_port = portSel.value === "" ? null : parseInt(portSel.value, 10); };
+  portRow.appendChild(portSel);
+  el.appendChild(portRow);
 }
 
 // A flat list of every currently-mapped MIDI-in key (nav, capture, group, zone

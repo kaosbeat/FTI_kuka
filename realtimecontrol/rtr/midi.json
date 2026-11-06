@@ -195,7 +195,16 @@
       "in_port": 0,
       "command": "note:0:61",
       "actions": {
-        "ignore": "note:0:62"
+        "ignore": "note:0:62",
+        "look": "note:0:63",
+        "interested": "note:0:64"
+      }
+    },
+    "kb_medium": {
+      "in_port": 0,
+      "command": "note:0:71",
+      "actions": {
+        "tickle": "note:0:72"
       }
     }
   },
@@ -204,7 +213,7 @@
     "next_zone": null,
     "back": null,
     "retrigger": null,
-    "next_pose": "note:0:63",
+    "next_pose": "note:0:60",
     "in_port": 0
   },
   "capture": {
@@ -219,6 +228,6 @@
     "circus": null
   },
   "clock": {
-    "in_port": null
+    "in_port": 0
   }
 }

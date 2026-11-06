@@ -1,5 +1,101 @@
 # Task Handoff Log
 
+## 2026-11-06 — Perform clock-source monitor: header badge + source-colored beat counter
+
+### Status
+
+Completed
+
+### Summary
+
+Added a visible MIDI-clock source monitor to the perform UI so the operator can tell at a glance whether the beat counter is running on the internal clock or an external MIDI clock. The core auto-detects the source — `BeatClock` (rtr/core/clock.py) starts `"internal"`, flips to `"external"` on every `0xF8` tick, and falls back to `"internal"` after the `clock_timeout` (1 s) of silence; `engine.py` folds `BeatClock.state()["source"]` into the 20 Hz frame as `perform.clock_source`. There is **no core setter** for the source — it is always auto-detected (the only knobs are `midi.clock.in_port`, `perform.internal_bpm`, and `perform.clock_timeout`, all already editable in the editor). The perform page already showed the raw source in the Beat clock section, but the header had no indicator and the 4-slot counter wasn't colored by source. Now: (1) a `#clockBadge` in the header (next to the beat counter) shows **INTERNAL** (amber), **EXTERNAL** (green), or **NO CLOCK** (dim, idle), and pulses on the first ~20% of each beat (from `beat_phase`) so the clock visibly ticks; (2) the 4-slot `#beatCounter` is colored by source — green (`--accent`) for external, amber (`--warn`) for internal; (3) a hint line in the Beat clock section explains the auto-detect/timeout behavior.
+
+### Changes Made
+
+- `realtimecontrol/rtr/perform.html`: (1) header `<span id="clockBadge">NO CLOCK</span>` inserted before `#beatCounter`; (2) CSS: `#clockBadge` base styles (dim, `opacity: .55`, `.12s` opacity transition) with `.int` (amber), `.ext` (green), `.pulse` (`opacity: 1`) modifiers, and `#beatCounter.int .slot.on { color: var(--warn) }` (default `.slot.on` stays green = external); (3) `renderState()`: new clock-source block right after the BPM line — maps `clock_source` (`"external"`/`"midi"` → EXTERNAL, `"internal"` → INTERNAL, else `—`) to the badge text/class, sets `#beatCounter`'s class to `int`/`ext`/`idle`, and adds the `pulse` class while `beat_phase < 0.2`; (4) the idle path (no `perform` field) resets the badge to **NO CLOCK**/`idle`; (5) `const phase` hoisted from the beat-fill line into the source block so the pulse and the fill share it; (6) hint line under the `source` kv row explaining external-wins-while-present + timeout fallback.
+- `realtimecontrol/rtr/tests/js/test_perform_page.js`: (1) added `clockBadge` to the stub `IDS` list; (2) header comment documents the new coverage; (3) assertions — internal frame (beat 12.25, phase 0.25): badge text `INTERNAL`, class `int` (no pulse), counter class `int`; `"midi"` frame (phase 0): badge `EXTERNAL`, class `ext pulse`, counter `ext`; phase 0.5 frame: badge class `ext` (pulse dropped); idle frame: badge `NO CLOCK`/`idle`.
+
+### Documentation
+
+None required — the Beat clock section's new hint text documents the auto-detect behavior for the operator, and the test file's header comment describes the new coverage.
+
+### Architecture
+
+No architectural impact. No core change: the monitor is purely presentational, consuming the already-broadcast `perform.clock_source` / `perform.beat_phase` fields. The clock source remains auto-detected in `BeatClock` (external `0xF8` wins while present, internal fallback after `clock_timeout`). A manual "force internal/external" selector would be a new core feature (a source-mode enum + WS command + engine plumbing) and was intentionally NOT added — see caveats.
+
+### Validation
+
+- `node tests/js/test_perform_page.js` → **ALL_TESTS_PASSED** (39 assertions incl. the new badge/counter-color/pulse/idle cases).
+- `node tests/js/test_perform_tab.js`, `test_flow_tab.js`, `test_groups_tab.js`, `test_poses_tab.js`, `test_red_light_page.js`, `test_roam_badge.js` → **ALL_TESTS_PASSED**.
+- `PYTHONPATH=.../rtr:.../rtr/KukaPy .venv/bin/python -m pytest tests/ -q` → **480 passed, 12 skipped, 1 failed** — the single failure is the pre-existing `tests/test_remote_sdl.py::test_pak_config_is_valid_and_loads` (PAK `joy_map` drift, unrelated, same as the prior baseline).
+
+### Decisions and Caveats
+
+- **No clock-source setter was added.** The core has none: `BeatClock` auto-detects (`"external"` while `0xF8` is present within `clock_timeout`, else `"internal"`). The operator's available "set" knobs are unchanged: `midi.clock.in_port` (which port to listen on, editor MIDI-in tab), `perform.internal_bpm` (the fallback tempo), `perform.clock_timeout` (how long before fallback). If a hard "force internal" (mute the external clock) toggle is wanted, that is a follow-up core feature: a source-mode field on `BeatClock` + a WS command + an editor control.
+- The badge pulse is derived from `beat_phase < 0.2` (≈ first 2–3 of the 20 Hz frames per beat) rather than a JS re-trigger of a CSS animation, so it works in the DOM-stub test and needs no `classList`/reflow tricks.
+- `"midi"` is accepted as an external alias (legacy test value); any unrecognized source renders the badge dim (`idle`) with text `—`.
+- The idle path (no `perform` field) resets only the badge; the beat counter keeps its last slots/class, as before.
+
+### Next Task
+
+Physical/hardware verification: (1) on the live perform page, confirm the header badge reads **NO CLOCK** when no clock is wired, **INTERNAL** (amber badge + amber counter) when running on the internal BPM, and **EXTERNAL** (green badge + green counter) once the external MIDI clock's `0xF8` ticks arrive on `midi.clock.in_port`; (2) confirm the badge pulses on every beat and the counter color flips back to amber within ~1 s after the external clock stops (the `clock_timeout` fallback).
+
+### Instructions for the Next Task
+
+1. The badge/counter read `perform.clock_source` + `perform.beat_phase` from the 20 Hz state frame — no new API. If the badge is stuck on `NO CLOCK`, the `perform` field is absent (clock not wired / not in perform mode); if it shows `INTERNAL` while an external clock is running, check the `0xF8` routing: the clock device must be on `midi.json`'s `clock.in_port` (editor MIDI-in → clock section) and the port must be opened (see `rtr/io/midi.py`).
+2. The `test_perform_page.js` stub's `IDS` list must stay in sync with every id `perform.html` references via `$("...")` — `clockBadge` was added this task.
+3. If a force-internal toggle is requested, the change surface is: `BeatClock` (source-mode state + respect it in `tick`/`clock_tick`), a new WS command handler in the engine's command path, an editor control, and a `perform.html` chip — mirror the `perform_velocity`/`perform_multiplier` command pattern.
+
+## 2026-11-06 — Clock in_port editor UI, 4-slot beat counter, sticky headers
+
+### Status
+
+Completed
+
+### Summary
+
+Exposed the existing `midi.json` `clock.in_port` setting in the editor's MIDI-in tab (new **clock** section with a port picker, seeded and saved via the whole-object `saveMidiAll()` path). Added a 4-slot beat/bar counter to the `perform.html` header (`X - - -` → `- X - -` → `- - X -` → `- - - X`) driven by `perform.beat` from the 20 Hz state frames. Made the header bar sticky in both `client.html` and `editor.html`. Verified that `0xF8` clock ticks are NOT logged in the MIDI monitor (the `0xF8` branch in `midi.py` `_on_message` returns before `_record("in", ...)`). Fixed the `test_perform_page.js` DOM stub, which was missing ids perform.html has always referenced (`pose`, `bar`, `groupSelect`) and now covers the new counter.
+
+### Changes Made
+
+- `realtimecontrol/rtr/editor.html`: (1) new **clock** section in the MIDI-in view (`#midiClock` with help text) between the groups and zones sections; (2) `loadMidi()` seeds `data.clock.in_port` (null = default port) when absent; (3) new `buildMidiClock()` builder — an in_port `<select>` mirroring `buildMidiNav()`/`buildMidiGroups()`'s picker pattern (`default` = first device), wired to `MIDI.clock.in_port`; (4) `buildMidiInForm()` now calls `buildMidiClock()`; (5) `header` CSS: `position: sticky; top: 0; z-index: 100; background: var(--bg); padding: 8px 0;`.
+- `realtimecontrol/rtr/perform.html`: (1) header `<span id="beatCounter">` with 4 `.slot` spans; (2) CSS for `.slot` / `.slot.on`; (3) `renderState()` updates the slots from `perform.beat` (`beat % 4` selects the lit slot; `—`/all-dash when no beat), alongside the existing `#bar` text counter.
+- `realtimecontrol/rtr/client.html`: `header` CSS made sticky (`position: sticky; top: 0; z-index: 100; background: var(--bg); padding: 8px 0;`) — `#statusBar`'s `z-index: 30` stays below it.
+- `realtimecontrol/rtr/tests/js/test_perform_page.js`: fixed the pre-existing broken DOM stub — added the `pose`, `bar`, `beatCounter`, `groupSelect` ids (perform.html has always referenced them; the test crashed on `pose` before my change, verified against HEAD); added 4 slot children to the `beatCounter` stub and `groupSelect.options`; added assertions: slot 0 lit for beat 12.25 (`X---`), slot 3 lit for beat 15.5 (`---X`), and the `slot on`/`slot` classes.
+
+### Documentation
+
+None required — the editor's clock section carries its own `midiHelp` text, and the test file's header comment describes the new coverage.
+
+### Architecture
+
+No architectural impact. `midi.json` already stores `clock.in_port` and `rtr/io/midi.py` already opens/handles the clock port; this task only exposes it in the editor UI (same whole-object save path as every other MIDI section). The perform state frame already carries the folded-in `BeatClock.state()` fields (`beat`, `beat_index`, `beat_phase`, `bpm`, `beat_duration`, `clock_source`) that the counter consumes.
+
+### Validation
+
+- `python -m pytest tests/ -q` (`.venv`, `PYTHONPATH` incl. `KukaPy/`) → **480 passed, 12 skipped, 1 failed**. The single failure is `tests/test_remote_sdl.py::test_pak_config_is_valid_and_loads` — pre-existing/environmental (that test file was already modified before this task and the PAK `joy_map` drift is unrelated to MIDI/clock/headers).
+- `node tests/js/test_perform_page.js` → **ALL_TESTS_PASSED** (was crashing pre-change: `TypeError` on `$("pose")` — reproduced the identical crash on the HEAD `perform.html`, proving the stub gap was pre-existing).
+- `node tests/js/test_perform_tab.js` → **ALL_TESTS_PASSED**.
+- Other JS suites: `test_flow_tab`, `test_groups_tab`, `test_poses_tab`, `test_red_light_page`, `test_red_light_tab`, `test_roam_badge` → ALL_TESTS_PASSED. `test_patches_seed.js` (FAILURES=4) and `test_action_cam.js` (LOAD ERROR) are **pre-existing** — reproduced identical failures by swapping in the HEAD `editor.html`.
+- `0xF8` non-logging verified in code: `rtr/io/midi.py` `_on_message` — the `0xF8` branch calls `self._clock_tick()` and `return`s before `self._record("in", ...)`, so clock ticks never reach the monitor log.
+
+### Decisions and Caveats
+
+- The counter is `beat % 4` (0-based beat-in-bar), matching the existing `#bar` text counter's `(bi % 4) + 1` 1-based display.
+- The idle state (no `perform` field) leaves the counter at its last value — `renderState` returns early before touching the slots, which is fine for a live page.
+- Sticky header `z-index: 100` sits above `#statusBar` (`z-index: 30`); `#midiRightCol`'s earlier sticky right-column (`top: 8px`) is unaffected.
+- The `beatCounter` slots render `X`/`-` (not the em-dash used elsewhere) so the counter reads at a glance; the `on` class colors the active slot with `--accent`.
+
+### Next Task
+
+Physical/hardware verification: (1) open the editor MIDI-in tab and confirm the **clock** section's port picker reads/writes `midi.json`'s `clock.in_port` (select a port, save, reload, confirm persistence); (2) connect the external clock device to that port and confirm `BeatClock` runs; (3) in perform mode, confirm the header counter steps `X - - -` → `- X - -` → `- - X -` → `- - - X` on each beat; (4) scroll both `client.html` and `editor.html` and confirm the header stays pinned at the top.
+
+### Instructions for the Next Task
+
+1. The editor save path is whole-object: `saveMidiAll()` POSTs the entire `MIDI` object to `/api/midi`, so the clock section needs no extra wiring — just verify the picker's `onchange` updates `MIDI.clock.in_port` and that a reload restores it via `loadMidi()`.
+2. The counter's data source is the 20 Hz state frame's `perform` field (folded in by `engine.py` from `BeatClock.state()`); `perform.html` is the reference page. If the counter misbehaves, check `p.beat` in the frame first.
+3. The `test_perform_page.js` stub's `IDS` list must stay in sync with every id `perform.html` references via `$("...")` — that was the root cause of the pre-existing crash.
+
 ## 2026-11-06 — Perform mode: dedicated MIDI clock, arrival-gated triggers, coordinated trapezoidal move
 
 ### Status

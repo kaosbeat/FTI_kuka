@@ -8,6 +8,9 @@
 //   (3) the CC-B multiplier buttons send a perform_multiplier command with the
 //       chosen multiplier.
 //   (4) an absent `perform` field renders the idle state.
+//   (5) the clock-source monitor: the header badge (INTERNAL / EXTERNAL /
+//       NO CLOCK) and the beat-counter color track `perform.clock_source`,
+//       and the badge pulses while beat_phase < 0.2.
 //
 // Run: node tests/js/test_perform_page.js
 "use strict";
@@ -45,8 +48,13 @@ function makeEl(tag, id) { const e = new El(tag); e.attrs.id = id; IDX[id] = e; 
 const IDS = ["dot", "status", "host", "reconnect", "clockSource", "bpm", "beat",
   "beatPhase", "beatFill", "beatDuration", "velocityVal", "velocity", "velocityDeg",
   "multChips", "multVal", "baseBeats", "deadline", "lateBox", "tta", "lateHint",
-  "zone", "action", "moving"];
+  "zone", "action", "moving", "pose", "bar", "beatCounter", "clockBadge", "groupSelect"];
 for (const id of IDS) makeEl("div", id);
+IDX["groupSelect"].options = []; // the active-group <select> (no options in the stub)
+
+// The header beat counter: 4 slots (X - - - → - X - - → - - X - → - - - X).
+const beatCounterEl = IDX["beatCounter"];
+for (let i = 0; i < 4; i++) beatCounterEl.appendChild(new El("span"));
 
 // The multiplier buttons: 9 children of multChips, each with a data-m.
 const multChipsEl = IDX["multChips"];
@@ -104,6 +112,10 @@ assert(IDX["zone"].textContent === "resting", "zone shown: " + IDX["zone"].textC
 assert(IDX["action"].textContent === "breathe", "action shown: " + IDX["action"].textContent);
 assert(IDX["moving"].textContent === "yes", "moving shown: " + IDX["moving"].textContent);
 assert(IDX["clockSource"].textContent === "internal", "clock source: " + IDX["clockSource"].textContent);
+// Clock-source monitor: internal → INTERNAL badge, int class, int counter color.
+assert(IDX["clockBadge"].textContent === "INTERNAL", "badge text (internal): " + IDX["clockBadge"].textContent);
+assert(IDX["clockBadge"].className === "int", "badge class (internal, phase 0.25 no pulse): " + IDX["clockBadge"].className);
+assert(beatCounterEl.className === "int", "beat counter class (internal): " + beatCounterEl.className);
 assert(IDX["bpm"].textContent === "130.0", "bpm: " + IDX["bpm"].textContent);
 assert(IDX["beat"].textContent === "12.25", "beat: " + IDX["beat"].textContent);
 assert(IDX["beatPhase"].textContent === "0.250", "beat phase: " + IDX["beatPhase"].textContent);
@@ -118,6 +130,11 @@ assert(IDX["deadline"].textContent === "2.400 s", "deadline: " + IDX["deadline"]
 assert(IDX["tta"].textContent === "1.200 s", "time-to-arrive: " + IDX["tta"].textContent);
 assert(IDX["lateBox"].className === "lateBox ok", "on-time box class: " + IDX["lateBox"].className);
 assert(IDX["lateHint"].textContent === "on time", "on-time hint: " + IDX["lateHint"].textContent);
+// 4-slot header counter: beat 12.25 → beat-in-bar 12 % 4 = 0 → "X - - -".
+const slotTexts = beatCounterEl.children.map((c) => c.textContent).join("");
+assert(slotTexts === "X---", "beat counter slot 0 lit for beat 12.25: " + slotTexts);
+assert(beatCounterEl.children[0].className === "slot on", "slot 0 class: " + beatCounterEl.children[0].className);
+assert(beatCounterEl.children[1].className === "slot", "slot 1 class: " + beatCounterEl.children[1].className);
 
 // --- Test 2: late state flags the box + hint ----------------------------------
 vm.runInContext(`renderState({
@@ -133,11 +150,34 @@ assert(IDX["lateBox"].className === "lateBox late", "late box class: " + IDX["la
 assert(IDX["lateHint"].textContent.includes("LATE"), "late hint: " + IDX["lateHint"].textContent);
 assert(IDX["tta"].textContent === "2.500 s", "late time-to-arrive: " + IDX["tta"].textContent);
 assert(IDX["clockSource"].textContent === "midi", "midi clock source: " + IDX["clockSource"].textContent);
+// Clock-source monitor: "midi" → EXTERNAL badge (ext class) and the badge pulses
+// while beat_phase < 0.2 (phase 0 here); the counter takes the ext color.
+assert(IDX["clockBadge"].textContent === "EXTERNAL", "badge text (midi): " + IDX["clockBadge"].textContent);
+assert(IDX["clockBadge"].className === "ext pulse", "badge class (midi, phase 0 pulses): " + IDX["clockBadge"].className);
+assert(beatCounterEl.className === "ext", "beat counter class (midi): " + beatCounterEl.className);
+
+// --- Test 2b: beat counter moves to slot 3 for beat 15.5 ----------------------
+vm.runInContext(`renderState({
+  type: "state",
+  zone: "resting", action: "reach", moving: true,
+  perform: {
+    velocity: 0.1, multiplier: 1, base_beats: 4, deadline: 1.0,
+    time_to_arrive: 2.5, late: true, beat: 15.5, beat_index: 15,
+    beat_phase: 0.5, bpm: 130, beat_duration: 0.4615, clock_source: "midi"
+  }
+});`, ctx);
+const slotTexts2 = beatCounterEl.children.map((c) => c.textContent).join("");
+assert(slotTexts2 === "---X", "beat counter slot 3 lit for beat 15.5: " + slotTexts2);
+assert(beatCounterEl.children[3].className === "slot on", "slot 3 class: " + beatCounterEl.children[3].className);
+// Phase 0.5 is past the pulse window: badge keeps the ext class without pulse.
+assert(IDX["clockBadge"].className === "ext", "badge class (phase 0.5, no pulse): " + IDX["clockBadge"].className);
 
 // --- Test 3: an absent perform field renders the idle state -------------------
 vm.runInContext(`renderState({ type: "state", zone: "resting", action: "idle", moving: false });`, ctx);
 assert(IDX["lateHint"].textContent === "not performing", "idle hint: " + IDX["lateHint"].textContent);
 assert(IDX["lateBox"].className === "lateBox ok", "idle box class: " + IDX["lateBox"].className);
+assert(IDX["clockBadge"].textContent === "NO CLOCK", "idle badge text: " + IDX["clockBadge"].textContent);
+assert(IDX["clockBadge"].className === "idle", "idle badge class: " + IDX["clockBadge"].className);
 
 // --- Test 4: velocity slider sends a NORMALIZED perform_velocity --------------
 IDX["velocity"].value = "75";

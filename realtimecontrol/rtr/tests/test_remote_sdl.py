@@ -395,17 +395,18 @@ def test_perform_content_shows_beat_clock_and_midi():
             ]}
     rows = view.build_rows(
         {"zone": "rest"}, {"rest": {"actions": {}}},
-        view.PAGES.index("PERFORM"), 0, {}, live, {}, 80,
-        connected=True, endpoint="ws://x")
+        view.PAGES.index("PERFORM"), 0, {}, {}, {}, 80,
+        connected=True, endpoint="ws://x", live=live)
+    pairs = [dict(r["pairs"]) for r in rows if r.get("pairs")]
     texts = [r.get("text", "") for r in rows]
-    # Beat clock readout.
-    assert any("BPM" in t and "120.0" in t for t in texts)
-    assert any("BEAT" in t and "3" in t for t in texts)
-    assert any("CLOCK" in t and "internal" in t for t in texts)
-    # Current perform values.
-    assert any("VEL" in t and "10.0" in t for t in texts)
-    assert any("MULT" in t and "1" in t for t in texts)
-    # MIDI monitor (last 3 entries).
+    # Beat clock readout (pairs rows).
+    assert any("BPM" in p and "120.0" in str(p.get("BPM", "")) for p in pairs)
+    assert any("BEAT" in p and p.get("BEAT") == "3" for p in pairs)
+    assert any("CLOCK" in p and "internal" in p.get("CLOCK", "") for p in pairs)
+    # Current perform values (pairs rows).
+    assert any("VEL" in p and "10.0" in str(p.get("VEL", "")) for p in pairs)
+    assert any("MULT" in p and p.get("MULT") == "1" for p in pairs)
+    # MIDI monitor (last 3 entries, text rows).
     assert any("MIDI" in t for t in texts)
     assert any("note_on" in t for t in texts)
     assert any("note_off" in t for t in texts)
@@ -415,10 +416,11 @@ def test_perform_content_handles_missing_data():
     rows = view.build_rows(
         {"zone": "rest"}, {"rest": {"actions": {}}},
         view.PAGES.index("PERFORM"), 0, {}, {}, {}, 80,
-        connected=True, endpoint="ws://x")
-    texts = [r.get("text", "") for r in rows]
-    # Missing data shows em-dash placeholders.
-    assert any("BPM" in t and "—" in t for t in texts)
+        connected=True, endpoint="ws://x", live={})
+    pairs = [dict(r["pairs"]) for r in rows if r.get("pairs")]
+    # Missing data shows em-dash placeholders in the pairs rows.
+    assert any("BPM" in p and p.get("BPM") == "—" for p in pairs)
+    assert any("VEL" in p and p.get("VEL") == "—" for p in pairs)
 
 
 def test_perform_activation_sends_command():
@@ -446,11 +448,12 @@ def test_patch_content_shows_resolved_patch():
          "patch": "osc(4, 0.1, 1.2).out()"},
         {"rest": {"actions": {"breathe": {}}}},
         view.PAGES.index("PATCH"), 0, {}, {}, {}, 80,
-        connected=True, endpoint="ws://x")
+        connected=True, endpoint="ws://x", live={})
+    pairs = [dict(r["pairs"]) for r in rows if r.get("pairs")]
     texts = [r.get("text", "") for r in rows]
     assert any("PATCH" in t for t in texts)
-    assert any("ZONE" in t and "rest" in t for t in texts)
-    assert any("ACTION" in t and "breathe" in t for t in texts)
+    assert any("ZONE" in p and p.get("ZONE") == "rest" for p in pairs)
+    assert any("ACTION" in p and p.get("ACTION") == "breathe" for p in pairs)
     assert any("osc(4, 0.1, 1.2).out()" in t for t in texts)
 
 

@@ -2677,7 +2677,7 @@
           ],
           "variable_axes": [],
           "behavior": "calm",
-          "speed": 10,
+          "speed": 15,
           "loop": true,
           "pose_imgs": [
             null,
@@ -2764,7 +2764,7 @@
           ],
           "variable_axes": [],
           "behavior": "calm",
-          "speed": 20,
+          "speed": 40,
           "loop": true,
           "next": [
             {
@@ -2807,6 +2807,22 @@
               35.587,
               87.566,
               20
+            ],
+            [
+              -24.596,
+              7.875,
+              -72.096,
+              39.75,
+              45,
+              0
+            ],
+            [
+              24.852,
+              6.998,
+              -69.108,
+              -50.478,
+              65.436,
+              10
             ]
           ],
           "variable_axes": [],
@@ -2825,9 +2841,13 @@
           ],
           "pose_imgs": [
             null,
+            null,
+            null,
             null
           ],
           "pose_videos": [
+            null,
+            null,
             null,
             null
           ]
@@ -2835,6 +2855,372 @@
       },
       "class": "ignore",
       "pose": "move"
+    },
+    "kb_medium": {
+      "enabled": true,
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -135,
+          35
+        ],
+        [
+          -95,
+          158
+        ],
+        [
+          -180,
+          180
+        ],
+        [
+          -55,
+          100
+        ],
+        [
+          -150,
+          150
+        ]
+      ],
+      "speed": 70,
+      "actions": {
+        "tickle": {
+          "enabled": true,
+          "poses": [
+            [
+              28.055,
+              -76.959,
+              59.22,
+              -48.749,
+              35.125,
+              20
+            ],
+            [
+              28.055,
+              -66.959,
+              59.22,
+              -48.749,
+              35.125,
+              20
+            ],
+            [
+              28.055,
+              -66.959,
+              49.22,
+              -48.749,
+              35.125,
+              20
+            ],
+            [
+              18.055,
+              -66.959,
+              49.22,
+              -48.749,
+              35.125,
+              20
+            ],
+            [
+              18.055,
+              -66.959,
+              49.22,
+              -38.749,
+              35.125,
+              20
+            ],
+            [
+              18.055,
+              -56.959,
+              49.22,
+              -38.749,
+              35.125,
+              20
+            ],
+            [
+              8.055,
+              -56.959,
+              49.22,
+              -38.749,
+              35.125,
+              20
+            ],
+            [
+              8.055,
+              -56.959,
+              59.22,
+              -38.749,
+              35.125,
+              20
+            ],
+            [
+              8.055,
+              -56.959,
+              59.22,
+              -28.749,
+              35.125,
+              20
+            ],
+            [
+              -1.945,
+              -56.959,
+              59.22,
+              -28.749,
+              25.125,
+              30
+            ],
+            [
+              -1.945,
+              -66.959,
+              59.22,
+              -28.749,
+              25.125,
+              30
+            ],
+            [
+              -1.945,
+              -66.959,
+              59.22,
+              -28.749,
+              15.125,
+              30
+            ],
+            [
+              -1.945,
+              -66.959,
+              59.22,
+              -28.749,
+              15.125,
+              20
+            ],
+            [
+              8.055,
+              -66.959,
+              59.22,
+              -28.749,
+              15.125,
+              20
+            ],
+            [
+              8.055,
+              -56.959,
+              59.22,
+              -28.749,
+              15.125,
+              20
+            ],
+            [
+              8.055,
+              -56.959,
+              49.22,
+              -28.749,
+              15.125,
+              20
+            ],
+            [
+              18.055,
+              -56.959,
+              49.22,
+              -28.749,
+              15.125,
+              20
+            ],
+            [
+              18.055,
+              -66.959,
+              49.22,
+              -28.749,
+              15.125,
+              20
+            ],
+            [
+              18.055,
+              -66.959,
+              59.22,
+              -18.749,
+              15.125,
+              20
+            ],
+            [
+              18.055,
+              -76.959,
+              59.22,
+              -18.749,
+              15.125,
+              20
+            ],
+            [
+              18.055,
+              -76.959,
+              59.22,
+              -18.749,
+              15.125,
+              30
+            ],
+            [
+              8.055,
+              -76.959,
+              59.22,
+              -18.749,
+              15.125,
+              30
+            ],
+            [
+              8.055,
+              -76.959,
+              59.22,
+              -18.749,
+              25.125,
+              30
+            ],
+            [
+              8.055,
+              -66.959,
+              59.22,
+              -18.749,
+              25.125,
+              30
+            ],
+            [
+              8.055,
+              -66.959,
+              59.22,
+              -18.749,
+              35.125,
+              30
+            ],
+            [
+              8.055,
+              -66.959,
+              59.22,
+              -28.749,
+              35.125,
+              30
+            ],
+            [
+              18.055,
+              -66.959,
+              59.22,
+              -28.749,
+              35.125,
+              30
+            ],
+            [
+              18.055,
+              -66.959,
+              59.22,
+              -38.749,
+              35.125,
+              30
+            ],
+            [
+              18.055,
+              -66.959,
+              59.22,
+              -38.749,
+              35.125,
+              20
+            ],
+            [
+              18.055,
+              -66.959,
+              59.22,
+              -48.749,
+              35.125,
+              20
+            ],
+            [
+              18.055,
+              -76.959,
+              59.22,
+              -48.749,
+              35.125,
+              20
+            ],
+            [
+              23,
+              -76.959,
+              59.22,
+              -48.749,
+              35.125,
+              20
+            ]
+          ],
+          "variable_axes": [],
+          "behavior": "exhilarated",
+          "speed": 60,
+          "loop": true,
+          "pose_imgs": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ]
+        }
+      },
+      "class": "ignore"
     }
   },
   "layout": {
@@ -2946,6 +3332,6 @@
       "w": 12616.00048828125,
       "h": 3344.000244140625
     },
-    "key": "approach_p,follow_p,inspect,inspect_p,kb_slow,lock,resting,retreat_p,scan,scan_room,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band,tidal,tidal_follow_p_bridge,tidal_inspect_p_bridge"
+    "key": "approach_p,follow_p,inspect,inspect_p,kb_medium,kb_slow,lock,resting,retreat_p,scan,scan_room,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band,tidal,tidal_follow_p_bridge,tidal_inspect_p_bridge"
   }
 }
