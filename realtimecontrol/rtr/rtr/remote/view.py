@@ -50,7 +50,8 @@ SECTION_LABELS = {
     "buttons": "BUTTONS",
 }
 
-PAGES = ("NAV", "CAMERA", "BRAIN", "HUNT", "CADENCE", "TRIGGERS", "ARM", "LED", "SETUP")
+PAGES = ("NAV", "CAMERA", "BRAIN", "HUNT", "CADENCE", "PERFORM", "PATCH",
+         "TRIGGERS", "ARM", "LED", "SETUP")
 
 # Max events kept in the TRIGGERS log (ring buffer).
 EVENT_CAP = 100
@@ -110,6 +111,43 @@ CADENCE_ITEMS = [
      "cmd": {"cmd": "set_cadence", "mode": "fixed", "every": 1.0}},
     {"kind": "engine", "name": "cadence: fixed 2.0 s",
      "cmd": {"cmd": "set_cadence", "mode": "fixed", "every": 2.0}},
+]
+
+# Selectable rows for the PERFORM page. Each sends a command to the core.
+# Velocity presets (deg/s) cover the full range up to the configured max;
+# multiplier presets are the standard power-of-2 steps; reload re-reads the
+# perform config from disk.
+PERFORM_ITEMS = [
+    {"kind": "perform", "name": "vel: 0 (stop)",
+     "cmd": {"cmd": "perform_velocity", "value": 0.0}},
+    {"kind": "perform", "name": "vel: 5",
+     "cmd": {"cmd": "perform_velocity", "value": 5.0}},
+    {"kind": "perform", "name": "vel: 10",
+     "cmd": {"cmd": "perform_velocity", "value": 10.0}},
+    {"kind": "perform", "name": "vel: 20",
+     "cmd": {"cmd": "perform_velocity", "value": 20.0}},
+    {"kind": "perform", "name": "vel: 30 (max)",
+     "cmd": {"cmd": "perform_velocity", "value": 30.0}},
+    {"kind": "perform", "name": "mult: 0.0625",
+     "cmd": {"cmd": "perform_multiplier", "multiplier": 0.0625}},
+    {"kind": "perform", "name": "mult: 0.125",
+     "cmd": {"cmd": "perform_multiplier", "multiplier": 0.125}},
+    {"kind": "perform", "name": "mult: 0.25",
+     "cmd": {"cmd": "perform_multiplier", "multiplier": 0.25}},
+    {"kind": "perform", "name": "mult: 0.5",
+     "cmd": {"cmd": "perform_multiplier", "multiplier": 0.5}},
+    {"kind": "perform", "name": "mult: 1",
+     "cmd": {"cmd": "perform_multiplier", "multiplier": 1}},
+    {"kind": "perform", "name": "mult: 2",
+     "cmd": {"cmd": "perform_multiplier", "multiplier": 2}},
+    {"kind": "perform", "name": "mult: 4",
+     "cmd": {"cmd": "perform_multiplier", "multiplier": 4}},
+    {"kind": "perform", "name": "mult: 8",
+     "cmd": {"cmd": "perform_multiplier", "multiplier": 8}},
+    {"kind": "perform", "name": "mult: 16",
+     "cmd": {"cmd": "perform_multiplier", "multiplier": 16}},
+    {"kind": "perform", "name": "reload perform config",
+     "cmd": {"cmd": "reload_perform"}},
 ]
 
 
@@ -290,6 +328,10 @@ def current_items(page: int, items: List[dict],
         return build_settings_items(settings)
     if name == "CADENCE":
         return CADENCE_ITEMS
+    if name == "PERFORM":
+        return PERFORM_ITEMS
+    if name == "PATCH":
+        return []  # display-only, no selectable items
     if name == "LED":
         return build_led_items(led_colors)
     return items
@@ -321,6 +363,8 @@ def activate_commands(item: dict) -> Tuple[Optional[List[dict]], str]:
     if item.get("kind") == "ui":
         return None, _ui_status(item)
     if item.get("kind") == "engine":
+        return [item["cmd"]], f"→ {item['name']}"
+    if item.get("kind") == "perform":
         return [item["cmd"]], f"→ {item['name']}"
     if item.get("kind") == "led":
         return None, f"LED {item['led'] + 1} → next color"
@@ -568,6 +612,85 @@ def _cadence_content(engine, cursor, current_len, width):
     return rows
 
 
+def _perform_content(perform, live, cursor, current_len, width):
+    """Page 5: perform parameters + beat clock + live MIDI monitor."""
+    rows = []
+    rows.append({"text": "  PERFORM", "style": "label"})
+    rows.append({"style": "divider"})
+    p = perform or {}
+    # Beat clock readout.
+    bpm = p.get("bpm")
+    beat = p.get("beat")
+    beat_phase = p.get("beat_phase")
+    beat_dur = p.get("beat_duration")
+    clock_src = p.get("clock_source") or "—"
+    bpm_s = f"{bpm:.1f}" if bpm is not None else "—"
+    beat_s = str(beat) if beat is not None else "—"
+    phase_s = f"{beat_phase:.2f}" if beat_phase is not None else "—"
+    dur_s = f"{beat_dur:.3f}s" if beat_dur is not None else "—"
+    rows.append({"pairs": [("BPM", bpm_s), ("BEAT", beat_s), ("PHASE", phase_s)],
+                 "style": "state"})
+    rows.append({"pairs": [("BEAT_DUR", dur_s), ("CLOCK", clock_src)],
+                 "style": "state"})
+    # Current perform values.
+    vel = p.get("velocity")
+    mult = p.get("multiplier")
+    base = p.get("base_beats")
+    vel_s = f"{vel:.1f}" if vel is not None else "—"
+    mult_s = str(mult) if mult is not None else "—"
+    base_s = str(base) if base is not None else "—"
+    rows.append({"pairs": [("VEL", vel_s), ("MULT", mult_s), ("BASE", base_s)],
+                 "style": "state"})
+    # Deadline / arrival.
+    deadline = p.get("deadline")
+    tta = p.get("time_to_arrive")
+    late = p.get("late")
+    deadline_s = str(deadline) if deadline is not None else "—"
+    tta_s = f"{tta:.2f}s" if tta is not None else "—"
+    late_s = "yes" if late else "no"
+    rows.append({"pairs": [("DEADLINE", deadline_s), ("TTO", tta_s), ("LATE", late_s)],
+                 "style": "state"})
+    rows.append({"style": "divider"})
+    rows.append({"text": "  SET", "style": "label"})
+    for i, item in enumerate(PERFORM_ITEMS):
+        rows.append(_item_row(i, item, cursor, current_len, width))
+    # Live MIDI monitor (newest last, show the last 3 entries).
+    midi = live.get("midi_monitor")
+    if midi:
+        rows.append({"style": "divider"})
+        rows.append({"text": "  MIDI", "style": "label"})
+        if isinstance(midi, list):
+            for entry in midi[-3:]:
+                d = entry.get("dir", "?")
+                cmd = entry.get("cmd") or "?"
+                msg = entry.get("msg")
+                msg_s = f" {msg}" if msg else ""
+                rows.append({"text": _clip(f"  {d} {cmd}{msg_s}", width),
+                              "style": "text"})
+    return rows
+
+
+def _patch_content(state, width):
+    """Page 6: the currently-running Hydra patch on the screen (display-only)."""
+    rows = []
+    rows.append({"text": "  PATCH", "style": "label"})
+    rows.append({"style": "divider"})
+    zone = state.get("zone", "—")
+    action = state.get("action", "—")
+    rows.append({"pairs": [("ZONE", zone), ("ACTION", action)], "style": "state"})
+    patch = state.get("patch")
+    if patch:
+        # Show the patch code, wrapped to fit the width.
+        code = str(patch)
+        line_w = max(width - 4, 10)
+        for start in range(0, len(code), line_w):
+            rows.append({"text": "  " + code[start:start + line_w],
+                         "style": "text"})
+    else:
+        rows.append({"text": "  (no patch resolved)", "style": "help"})
+    return rows
+
+
 def _settings_content(settings, cursor, current_len, width):
     """Page 5: SETTINGS (THEME/LAYOUT font size + BUTTONS mapper rows)."""
     rows = []
@@ -772,6 +895,11 @@ def build_rows(state, zones, page, cursor, engine, hunt, cam_telem, width,
         rows.extend(_hunt_content(hunt, cam_telem, cursor, current_len, width))
     elif name == "CADENCE":
         rows.extend(_cadence_content(engine, cursor, current_len, width))
+    elif name == "PERFORM":
+        rows.extend(_perform_content(live.get("perform"), live,
+                                     cursor, current_len, width))
+    elif name == "PATCH":
+        rows.extend(_patch_content(state, width))
     elif name == "TRIGGERS":
         rows.extend(_triggers_content(events or [], width))
     elif name == "ARM":
@@ -785,6 +913,8 @@ def build_rows(state, zones, page, cursor, engine, hunt, cam_telem, width,
     rows.append({"text": _clip(status, width), "style": "status"})
     if name == "SETUP":
         help_txt = "←→ font · ↑↓ move · enter select · L1/R1 pages"
+    elif name == "PATCH":
+        help_txt = "←→ pages · home/q quits"
     elif name == "LED":
         help_txt = "←→ pages · ↑↓ move · enter select · q quit"
     else:
@@ -844,7 +974,8 @@ class RemoteState:
                data.get("move_mode"), data.get("cadence"),
                data.get("cadence_every"),
                data.get("behavior"), data.get("behavior_params"),
-               data.get("forced_behavior"), data.get("control_mode"))
+               data.get("forced_behavior"), data.get("control_mode"),
+               data.get("patch"))
         if key != self.state_key:
             self.state = {
                 "zone": data.get("zone"),
@@ -856,6 +987,7 @@ class RemoteState:
                 "behavior_params": data.get("behavior_params"),
                 "forced_behavior": data.get("forced_behavior"),
                 "control_mode": data.get("control_mode"),
+                "patch": data.get("patch"),
             }
             self.state_key = key
             self.rebuild_items()
@@ -871,6 +1003,7 @@ class RemoteState:
             data.get("performance_mode"),
             data.get("autonomy_dwell_remaining"),
             data.get("midi_monitor"),
+            data.get("perform"),
         )
         if live_key != self.live_key:
             self.live = {
@@ -883,6 +1016,7 @@ class RemoteState:
                 "performance_mode": data.get("performance_mode"),
                 "autonomy_dwell_remaining": data.get("autonomy_dwell_remaining"),
                 "midi_monitor": data.get("midi_monitor"),
+                "perform": data.get("perform"),
             }
             self.live_key = live_key
             self.dirty = True

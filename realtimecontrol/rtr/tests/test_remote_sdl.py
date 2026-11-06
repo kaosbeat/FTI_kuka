@@ -174,7 +174,8 @@ def test_settings_content_and_help_text():
     settings = {"font_size": 16, "joy_map": {29: "enter"},
                 "dpad_map": {"up": [17, -1]}}
     rows = view.build_rows(
-        {"zone": "rest"}, {"rest": {"actions": {}}}, 5, 0, {}, {}, {}, 80,
+        {"zone": "rest"}, {"rest": {"actions": {}}},
+        view.PAGES.index("SETUP"), 0, {}, {}, {}, 80,
         connected=True, endpoint="ws://x", settings=settings)
     texts = [r.get("text", "") for r in rows]
     # THEME / BUTTONS section labels + the SETUP page marker.
@@ -190,7 +191,7 @@ def test_settings_content_and_help_text():
 def test_setup_page_activation_returns_none_cmds():
     rs = view.RemoteState()
     rs.settings = {"font_size": 16, "joy_map": {}, "dpad_map": {}}
-    rs.page = 5
+    rs.page = view.PAGES.index("SETUP")
     rs.cursor = 0
     res = rs.activate()
     assert res is not None
@@ -202,7 +203,7 @@ def test_setup_page_activation_returns_none_cmds():
 def test_setup_calibrate_activation_returns_prompt():
     rs = view.RemoteState()
     rs.settings = {"font_size": 16, "joy_map": {}, "dpad_map": {}}
-    rs.page = 5
+    rs.page = view.PAGES.index("SETUP")
     rs.cursor = 1  # the "calibrate controller" row
     res = rs.activate()
     assert res is not None
@@ -214,7 +215,7 @@ def test_setup_calibrate_activation_returns_prompt():
 def test_setup_map_activation_returns_capture_status():
     rs = view.RemoteState()
     rs.settings = {"font_size": 16, "joy_map": {}, "dpad_map": {}}
-    rs.page = 5
+    rs.page = view.PAGES.index("SETUP")
     rs.cursor = 2  # the "map up" row (after font + calibrate)
     res = rs.activate()
     assert res is not None
@@ -316,11 +317,11 @@ def test_setup_page_l1_r1_navigates_not_font():
     # The trap: on SETUP with the cursor on the font row, the shoulders must
     # still navigate away (global page nav), not adjust the font size.
     app = _app_with_settings()
-    app._rs.set_page(5)        # SETUP (last page)
+    app._rs.set_page(view.PAGES.index("SETUP"))  # SETUP (last page)
     app._rs.cursor = 0         # on the font-size row
     fs_before = app._rs.settings["font_size"]
     app._handle_key("page_left")   # L1
-    assert app._rs.page == 4
+    assert app._rs.page == view.PAGES.index("LED")
     assert app._rs.settings["font_size"] == fs_before
     # From an earlier page, R1 (page_right) navigates forward.
     app._rs.set_page(0)
@@ -333,22 +334,152 @@ def test_setup_dpad_left_right_still_font_on_font_row():
     # The d-pad left/right is the LOCAL key: on the font row it adjusts the
     # font size (and stays on the page).
     app = _app_with_settings()
-    app._rs.set_page(5)
+    app._rs.set_page(view.PAGES.index("SETUP"))
     app._rs.cursor = 0         # font row
     fs_before = app._rs.settings["font_size"]
     app._handle_key("right")   # d-pad right
     assert app._rs.settings["font_size"] == fs_before + 2
-    assert app._rs.page == 5   # still on SETUP
+    assert app._rs.page == view.PAGES.index("SETUP")  # still on SETUP
 
 
 def test_setup_dpad_left_right_pages_when_not_on_font_row():
     # Off the font row, the d-pad left/right falls back to page navigation
     # (a second, d-pad-based way out -- the shoulders always work too).
     app = _app_with_settings()
-    app._rs.set_page(5)
+    app._rs.set_page(view.PAGES.index("SETUP"))
     app._rs.cursor = 1         # a map row, not the font row
     app._handle_key("left")    # d-pad left
-    assert app._rs.page == 4
+    assert app._rs.page == view.PAGES.index("LED")
+
+
+# ---------------------------------------------------------------------------
+# PERFORM page (page 5): items, content, activation.
+# ---------------------------------------------------------------------------
+def test_perform_items_send_correct_commands():
+    items = view.PERFORM_ITEMS
+    # Velocity presets.
+    assert items[0]["cmd"] == {"cmd": "perform_velocity", "value": 0.0}
+    assert items[1]["cmd"] == {"cmd": "perform_velocity", "value": 5.0}
+    assert items[2]["cmd"] == {"cmd": "perform_velocity", "value": 10.0}
+    assert items[3]["cmd"] == {"cmd": "perform_velocity", "value": 20.0}
+    assert items[4]["cmd"] == {"cmd": "perform_velocity", "value": 30.0}
+    # Multiplier presets.
+    assert items[5]["cmd"] == {"cmd": "perform_multiplier", "multiplier": 0.0625}
+    assert items[6]["cmd"] == {"cmd": "perform_multiplier", "multiplier": 0.125}
+    assert items[7]["cmd"] == {"cmd": "perform_multiplier", "multiplier": 0.25}
+    assert items[8]["cmd"] == {"cmd": "perform_multiplier", "multiplier": 0.5}
+    assert items[9]["cmd"] == {"cmd": "perform_multiplier", "multiplier": 1}
+    assert items[10]["cmd"] == {"cmd": "perform_multiplier", "multiplier": 2}
+    assert items[11]["cmd"] == {"cmd": "perform_multiplier", "multiplier": 4}
+    assert items[12]["cmd"] == {"cmd": "perform_multiplier", "multiplier": 8}
+    assert items[13]["cmd"] == {"cmd": "perform_multiplier", "multiplier": 16}
+    # Reload.
+    assert items[14]["cmd"] == {"cmd": "reload_perform"}
+
+
+def test_perform_content_shows_beat_clock_and_midi():
+    perform = {
+        "velocity": 10.0, "multiplier": 1, "base_beats": 8,
+        "deadline": 42, "time_to_arrive": 1.5, "late": False,
+        "beat": 3, "beat_index": 7, "beat_phase": 0.25,
+        "bpm": 120.0, "beat_duration": 0.5, "clock_source": "internal",
+    }
+    live = {"perform": perform,
+            "midi_monitor": [
+                {"seq": 1, "dir": "in", "ts": 1.0, "port": "usb",
+                 "msg": [144, 60, 100], "cmd": "note_on", "payload": {}},
+                {"seq": 2, "dir": "in", "ts": 1.5, "port": "usb",
+                 "msg": [144, 62, 100], "cmd": "note_on", "payload": {}},
+                {"seq": 3, "dir": "out", "ts": 2.0, "port": "usb",
+                 "msg": [145, 60, 0], "cmd": "note_off", "payload": {}},
+            ]}
+    rows = view.build_rows(
+        {"zone": "rest"}, {"rest": {"actions": {}}},
+        view.PAGES.index("PERFORM"), 0, {}, live, {}, 80,
+        connected=True, endpoint="ws://x")
+    texts = [r.get("text", "") for r in rows]
+    # Beat clock readout.
+    assert any("BPM" in t and "120.0" in t for t in texts)
+    assert any("BEAT" in t and "3" in t for t in texts)
+    assert any("CLOCK" in t and "internal" in t for t in texts)
+    # Current perform values.
+    assert any("VEL" in t and "10.0" in t for t in texts)
+    assert any("MULT" in t and "1" in t for t in texts)
+    # MIDI monitor (last 3 entries).
+    assert any("MIDI" in t for t in texts)
+    assert any("note_on" in t for t in texts)
+    assert any("note_off" in t for t in texts)
+
+
+def test_perform_content_handles_missing_data():
+    rows = view.build_rows(
+        {"zone": "rest"}, {"rest": {"actions": {}}},
+        view.PAGES.index("PERFORM"), 0, {}, {}, {}, 80,
+        connected=True, endpoint="ws://x")
+    texts = [r.get("text", "") for r in rows]
+    # Missing data shows em-dash placeholders.
+    assert any("BPM" in t and "—" in t for t in texts)
+
+
+def test_perform_activation_sends_command():
+    rs = view.RemoteState()
+    rs.apply_zones(ZONES)
+    rs.page = view.PAGES.index("PERFORM")
+    rs.cursor = 0  # vel: 0 (stop)
+    res = rs.activate()
+    assert res is not None
+    cmds, status = res
+    assert cmds == [{"cmd": "perform_velocity", "value": 0.0}]
+
+
+def test_perform_page_current_items_returns_perform_items():
+    items = view.current_items(view.PAGES.index("PERFORM"), [])
+    assert items is view.PERFORM_ITEMS
+
+
+# ---------------------------------------------------------------------------
+# PATCH page (page 6): display-only content.
+# ---------------------------------------------------------------------------
+def test_patch_content_shows_resolved_patch():
+    rows = view.build_rows(
+        {"zone": "rest", "action": "breathe",
+         "patch": "osc(4, 0.1, 1.2).out()"},
+        {"rest": {"actions": {"breathe": {}}}},
+        view.PAGES.index("PATCH"), 0, {}, {}, {}, 80,
+        connected=True, endpoint="ws://x")
+    texts = [r.get("text", "") for r in rows]
+    assert any("PATCH" in t for t in texts)
+    assert any("ZONE" in t and "rest" in t for t in texts)
+    assert any("ACTION" in t and "breathe" in t for t in texts)
+    assert any("osc(4, 0.1, 1.2).out()" in t for t in texts)
+
+
+def test_patch_content_no_patch_shows_placeholder():
+    rows = view.build_rows(
+        {"zone": "rest", "action": "breathe"},
+        {"rest": {"actions": {"breathe": {}}}},
+        view.PAGES.index("PATCH"), 0, {}, {}, {}, 80,
+        connected=True, endpoint="ws://x")
+    texts = [r.get("text", "") for r in rows]
+    assert any("(no patch resolved)" in t for t in texts)
+
+
+def test_patch_page_has_no_selectable_items():
+    items = view.current_items(view.PAGES.index("PATCH"), [])
+    assert items == []
+
+
+def test_pages_order_contains_perform_and_patch():
+    assert "PERFORM" in view.PAGES
+    assert "PATCH" in view.PAGES
+    # PERFORM comes after CADENCE, PATCH comes after PERFORM.
+    ci = view.PAGES.index("CADENCE")
+    pi = view.PAGES.index("PERFORM")
+    pa = view.PAGES.index("PATCH")
+    assert pi == ci + 1
+    assert pa == pi + 1
+    # SETUP remains last.
+    assert view.PAGES[-1] == "SETUP"
 
 
 # ---------------------------------------------------------------------------
