@@ -1,5 +1,61 @@
 # Task Handoff Log
 
+## 2026-11-06 — Perform-mode MIDI gating, 0-100 velocity scale, Deadline multiplier + MIDI monitor, learnable perform CCs
+
+### Status
+
+Completed
+
+### Summary
+
+Finished the perform-mode MIDI work that had been in flight: (1) **perform-mode MIDI input gating** — while the robot is performing (`control_mode == "perform"`) and moving, the move-triggering MIDI keys (zone/action triggers, nav, legacy) are discarded so a performance is not interrupted by stray keys; the velocity/multiplier CCs, the `0xF8` clock, learn capture, capture, and groups stay ungated; (2) **CC-A velocity reinterpretation to a 0-100 scale** (100 = max deg/s) instead of the old 0-1 normalized value, so the stored velocity is a readable percentage and the deg/s estimate is `(velocity/100) × velocity_max_deg_s`; (3) a **visible MIDI monitor** on `perform.html` mirroring the core's `midi_monitor` ring (raw MIDI in + commands out); (4) a **Deadline multiplier** row on `perform.html` so the operator sees which CC-B multiplier the deadline is computed at; (5) **learnable perform CCs** — the editor's perform tab can now learn CC-A (velocity) and CC-B (multiplier) by capturing a CC on the controller, mirroring the zone/nav/capture/group learn flow. Item 4 of the plan (velocity-aware move-time predictor for `next_pose` timing) was **confirmed already implemented**: the engine already recomputes a velocity-aware time-to-arrive and deadline every tick via `update_perform_time_to_arrive`/`update_perform_deadline`, and those are now velocity-correct after the scale change — no new predictor code was needed.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/io/midi.py`: (1) `__init__` now tracks `self._moving` / `self._control_mode` (seeded `False` / `None`); (2) `on_event` reads `data.moving` + `data.control_mode` from each `SNAPSHOT`; (3) new `_perform_gated()` (True only when `_moving and _control_mode == "perform"`); (4) the `_on_message` dispatch chain gates `_dispatch_zone_key`, `_dispatch_nav`, and the legacy fallback on `not gated`, leaving `_dispatch_capture`, `_dispatch_groups`, `_dispatch_perform`, the `0xF8` clock, and learn capture ungated; (5) `_dispatch_perform` CC-A now submits `value * (100.0 / 127.0)` (0-100 scale) instead of `value / 127.0`; (6) `start_learn` gained `perform` / `perform_port` params — a perform learn arms on `_perform_in_port()` (or an explicit port) and records `"perform"` in the `_learn` context; (7) the learn-capture submit now includes `"perform"` in the `Cmd.MIDI_LEARN` payload.
+- `realtimecontrol/rtr/rtr/io/httpserver.py`: (1) `POST /api/midi/learn` now forwards `group`, `group_port`, `perform`, and `perform_port` to `start_learn` (previously group/group_port were omitted); (2) the route docstring documents the capture/group/perform learn targets.
+- `realtimecontrol/rtr/rtr/state/machine.py`: (1) `set_perform_velocity` clamps to `[0.0, 100.0]` (was `[0.0, 1.0]`); (2) `update_perform_time_to_arrive` computes `v = (velocity / 100.0) * velocity_max_deg_s` (was `velocity * velocity_max_deg_s`); (3) updated docstrings for the 0-100 scale.
+- `realtimecontrol/rtr/perform.html`: (1) new `.midiMon` / `.mmRow` / `.mmTs` / `.mmDir` CSS; (2) a **MIDI monitor** section (`#performMidiMonitor`) + `renderMidiMonitor()` (change-detect on the newest `seq`, rebuilds only when the ring advances), `mmRow()`, and `fmtMidiMsg()` (decodes a raw MIDI message into a short label); (3) `renderState` calls `renderMidiMonitor(m.midi_monitor)` (always, even with no perform state); (4) a **multiplier** row (`#deadlineMult`) in the Deadline section, set from `p.multiplier` (`"Nx"` or `—`); (5) the velocity deg/s display uses `(p.velocity / 100) * PERFORM_CFG.velocity_max_deg_s`; (6) the CC-A slider now sends the integer `0-100` value directly (`parseInt`, no `/100`).
+- `realtimecontrol/rtr/editor.html`: (1) `midiLearn()` gained `perform` / `performPort` params, sets `midiLearnPending.perform`, POSTs `perform` / `perform_port`, and labels the status `perform velocity` / `perform multiplier`; (2) the WS `midi_learn` handler handles `midiLearnPending.perform` — writes the captured CC number (via `_midiCcFromKey`) into `MIDI.perform.cc_a` (velocity) or `cc_b` (multiplier), rejects a non-CC capture with a status message, and rebuilds the perform list; (3) new `_midiCcFromKey()` helper (parses `cc:<n>:<v>` → integer CC, else `null`); (4) `buildPerformMidiList()` now always lists the CC-A / CC-B rows (mapped `cc:<n>` or `unmapped`), each with a `learn` closure, and the row builder appends a **learn** button when `it.learn` is present.
+- `realtimecontrol/rtr/tests/test_midi_in.py`: (1) the four learn-capture tests now expect the new `"perform"` key in the `midi_learn` payload; (2) `test_perform_cc_a_velocity` now expects the 0-100 value (`127 → 100.0`); (3) new `test_perform_learn_captured_on_perform_port`, `test_perform_learn_scoped_to_perform_port`, and `test_perform_learn_not_dispatched`.
+- `realtimecontrol/rtr/tests/test_perform_state.py`: updated to the 0-100 velocity scale — `test_set_perform_velocity` (clamp `[0,100]`), the time-to-arrive tests (`set_perform_velocity(100)` → 30 deg/s, `50` → 15 deg/s), the sanitize test, and the copy test; header docstring updated.
+- `realtimecontrol/rtr/tests/js/test_perform_page.js`: (1) added `deadlineMult` + `performMidiMonitor` to the stub `IDS`; (2) Test 1 velocity moved to the 0-100 scale (`velocity: 50` → `50.00` value, `15.0 °/s`) and a `deadlineMult` assertion (`4x`); (3) Test 4 updated — the slider now sends the integer `75` (0-100 scale) instead of `0.75`; header comment updated.
+
+### Documentation
+
+None required — the editor's perform-tab learn button carries a `title` tooltip, the `perform.html` MIDI-monitor section has its own hint line, and the three test files' header comments describe the new coverage.
+
+### Architecture
+
+Behavioral change to the MIDI input dispatch (gating) and the perform velocity scale; no new core subsystem. The perform-mode gating consumes the already-broadcast `Snapshot.moving` + `Snapshot.control_mode` (read in `midi.on_event`) — no new wiring. The perform velocity is now a 0-100 value end to end (MIDI CC-A → `set_perform_velocity` → `update_perform_time_to_arrive` → snapshot `perform.velocity` → `perform.html` display/slider). The velocity-aware move-time predictor (item 4) was already present in the engine's per-tick path (`engine.py` calls `update_perform_deadline` + `update_perform_time_to_arrive` each tick) and is now velocity-correct via the scale change — no new code.
+
+### Validation
+
+- `node tests/js/test_perform_page.js` → **ALL_TESTS_PASSED** (velocity 0-100 scale, `deadlineMult`, MIDI-monitor stub, multiplier/late/clock/idle cases).
+- `node tests/js/test_perform_tab.js` → **ALL_TESTS_PASSED** (perform-midi list now 7 rows incl. the 2 learnable perform CCs).
+- `node tests/js/test_flow_tab.js`, `test_groups_tab.js`, `test_poses_tab.js`, `test_red_light_page.js`, `test_red_light_tab.js`, `test_roam_badge.js` → **ALL_TESTS_PASSED**.
+- `PYTHONPATH=.../rtr:.../rtr/KukaPy pytest tests/ -q` → **480 passed, 15 skipped, 1 failed** — the single failure is the pre-existing `tests/test_remote_sdl.py::test_pak_config_is_valid_and_loads` (PAK `joy_map` drift, unrelated, same as the prior baseline).
+- `tests/test_midi_in.py`, `tests/test_zone_groups.py`, `tests/test_perform_state.py` → all green (the 0-100 + perform-learn updates).
+- **Pre-existing JS failures (NOT regressions):** `tests/js/test_action_cam.js` (LOAD ERROR) and `tests/js/test_patches_seed.js` (FAILURES=4) fail identically against the original `editor.html` (verified by swapping in the HEAD version) — they are unrelated to this task's changes.
+
+### Decisions and Caveats
+
+- **Gating scope is trigger-only.** While performing + moving, only the move-triggering keys are discarded (zone/action triggers, nav, legacy). The velocity/multiplier CCs, the `0xF8` clock, learn capture, capture, and groups are intentionally ungated so they keep flowing during a performance.
+- **CC-A = "Reinterpret CC-A".** The velocity is stored on a 0-100 scale (100 = max deg/s); the deg/s estimate is `(velocity/100) × velocity_max_deg_s`. This drives the time-to-arrive ESTIMATE only — it does NOT override the per-action `speed` in `zones.json`.
+- **Learned perform CCs are CC numbers only.** `_dispatch_perform` matches on the CC alone (any value), so a learned note is not usable for them; the editor rejects a non-CC capture with a status message.
+- **view.py scale inconsistency (deferred, out of scope):** `rtr/remote/view.py` still sends `perform_velocity` as deg/s (0-30) while the core now interprets it on the 0-100 scale. This remote view path is not touched by this task and is a separate follow-up.
+
+### Next Task
+
+Physical/hardware verification of the perform-mode MIDI behavior: (1) on a live perform, confirm that while the robot is performing + moving, stray zone/nav/legacy MIDI keys are discarded (robot keeps performing) while the CC-A velocity slider, CC-B multiplier buttons, and the `0xF8` clock keep working; (2) confirm the `perform.html` MIDI monitor shows raw MIDI in + commands out, and the Deadline multiplier row tracks the active CC-B multiplier; (3) learn CC-A/CC-B from the editor perform tab on a real controller and confirm the captured CC is stored and dispatched.
+
+### Instructions for the Next Task
+
+1. The perform-mode gating reads `Snapshot.moving` + `Snapshot.control_mode` (tracked in `midi.on_event`); `control_mode == "perform"` is the perform marker and `moving` is the live-move flag. If gating misfires, check both are populated on the `SNAPSHOT` event (`rtr/io/midi.py` `on_event`).
+2. The velocity is 0-100 end to end: `midi.py` `_dispatch_perform` (CC-A → `value * (100/127)`), `machine.py` `set_perform_velocity` (clamp `[0,100]`) + `update_perform_time_to_arrive` (`v = velocity/100 × velocity_max_deg_s`), and `perform.html` (slider sends the integer 0-100; deg/s = `velocity/100 × velocity_max_deg_s`). Keep these in sync if the scale changes.
+3. The `test_perform_page.js` stub's `IDS` list must stay in sync with every id `perform.html` references via `$("...")` — `deadlineMult` and `performMidiMonitor` were added this task.
+4. The learnable perform CCs flow: editor `midiLearn(..., "velocity"/"multiplier", pport)` → `POST /api/midi/learn` (`perform`/`perform_port`) → `midi.start_learn(perform=...)` → capture on the perform `in_port` → `Cmd.MIDI_LEARN` payload with `"perform"` → editor WS handler writes `MIDI.perform.cc_a`/`cc_b`.
+
 ## 2026-11-06 — Perform clock-source monitor: header badge + source-colored beat counter
 
 ### Status

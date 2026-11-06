@@ -114,20 +114,20 @@ CADENCE_ITEMS = [
 ]
 
 # Selectable rows for the PERFORM page. Each sends a command to the core.
-# Velocity presets (deg/s) cover the full range up to the configured max;
-# multiplier presets are the standard power-of-2 steps; reload re-reads the
-# perform config from disk.
+# Velocity presets (0-100) scale the zone/action speed from 1 (min) to the
+# zone/action speed (100 = full); multiplier presets are the standard
+# power-of-2 steps; reload re-reads the perform config from disk.
 PERFORM_ITEMS = [
-    {"kind": "perform", "name": "vel: 0 (stop)",
-     "cmd": {"cmd": "perform_velocity", "value": 0.0}},
-    {"kind": "perform", "name": "vel: 5",
-     "cmd": {"cmd": "perform_velocity", "value": 5.0}},
-    {"kind": "perform", "name": "vel: 10",
-     "cmd": {"cmd": "perform_velocity", "value": 10.0}},
-    {"kind": "perform", "name": "vel: 20",
-     "cmd": {"cmd": "perform_velocity", "value": 20.0}},
-    {"kind": "perform", "name": "vel: 30 (max)",
-     "cmd": {"cmd": "perform_velocity", "value": 30.0}},
+    {"kind": "perform", "name": "vel: 0% (min)",
+     "cmd": {"cmd": "perform_velocity", "value": 0}},
+    {"kind": "perform", "name": "vel: 25%",
+     "cmd": {"cmd": "perform_velocity", "value": 25}},
+    {"kind": "perform", "name": "vel: 50%",
+     "cmd": {"cmd": "perform_velocity", "value": 50}},
+    {"kind": "perform", "name": "vel: 75%",
+     "cmd": {"cmd": "perform_velocity", "value": 75}},
+    {"kind": "perform", "name": "vel: 100% (zone)",
+     "cmd": {"cmd": "perform_velocity", "value": 100}},
     {"kind": "perform", "name": "mult: 0.0625",
      "cmd": {"cmd": "perform_multiplier", "multiplier": 0.0625}},
     {"kind": "perform", "name": "mult: 0.125",

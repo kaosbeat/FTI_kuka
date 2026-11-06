@@ -154,16 +154,17 @@ class StateMachine:
         # action's base_beats × multiplier × (60/BPM). Late when time_to_arrive >
         # deadline (notify-only, no auto-shortening).
         self.perform: dict = {
-            "velocity": 0.0,      # CC-A normalized 0.0-1.0
+            "velocity": 0.0,      # CC-A: 0-100 (scales the per-axis max deg/s)
             "multiplier": 1,      # CC-B: 1, 2, 4, 8, 16
             "base_beats": 0,      # current action's base_beats (from zones)
             "deadline": 0.0,      # seconds (base_beats × multiplier × 60/BPM)
             "time_to_arrive": 0.0,  # seconds (max over joints of the rest-to-rest time)
             "late": False,        # time_to_arrive > deadline
-            # The max velocity (degrees/sec) at CC-A = 127. The CC-A normalized
-            # value is scaled by this to get the actual velocity. Defaults to 1.0
-            # (the raw normalized value is the velocity) until the perform config
-            # supplies a real degrees/sec range.
+            # Per-axis max angular speed (deg/s at zone speed 100). The zone speed
+            # (0-100) is a percentage of these maxes; CC-A (0-100) further scales
+            # the result. Seeded from the robot config's axis_max_deg_s.
+            "axis_max_deg_s": [60.0, 60.0, 60.0, 120.0, 120.0, 180.0],
+            # The perform config's velocity_max_deg_s (kept for config parity).
             "velocity_max_deg_s": 1.0,
             # The axis acceleration limit (degrees/sec^2) for the trapezoidal/
             # triangular rest-to-rest estimate. Seeded from the perform config;
@@ -368,16 +369,33 @@ class StateMachine:
     # Perform mode: live velocity/multiplier + deadline tracking.
     # ------------------------------------------------------------------
     def set_perform_velocity(self, value: float) -> None:
-        """Set the perform velocity (CC-A, normalized 0.0-1.0)."""
-        self.perform["velocity"] = max(0.0, min(1.0, value))
+        """Set the perform velocity (CC-A, a 0-100 scale).
+
+        In perform mode the CC-A velocity scales the per-axis max deg/s:
+        ``axis_max_deg_s[i] × (zone_speed/100) × (cc_a/100)``. The zone speed
+        is a percentage (0-100) of the per-axis maxes; CC-A further scales the
+        result. Clamped to [0, 100].
+        """
+        self.perform["velocity"] = max(0.0, min(100.0, value))
 
     def set_perform_velocity_max_deg_s(self, max_deg_s: float) -> None:
-        """Set the max velocity (degrees/sec) at CC-A = 127.
+        """Set the perform config's ``velocity_max_deg_s`` (kept for config parity).
 
-        The CC-A normalized value (0-1) is scaled by this to get the actual
-        velocity used for the time-to-arrive estimate. Clamped to non-negative.
+        The actual move speed is now the zone/action speed scaled by the CC-A
+        velocity (see :meth:`_current_speed`); this value no longer caps the speed.
+        Clamped to non-negative.
         """
         self.perform["velocity_max_deg_s"] = max(0.0, float(max_deg_s))
+
+    def set_perform_axis_max_deg_s(self, axis_max_deg_s: List[float]) -> None:
+        """Set the per-axis max angular speed (deg/s at zone speed 100).
+
+        The zone speed (0-100) is a percentage of these maxes; CC-A (0-100)
+        further scales the result. Used by :meth:`_current_speed` and
+        :meth:`update_perform_time_to_arrive` in perform mode.
+        """
+        if isinstance(axis_max_deg_s, (list, tuple)) and len(axis_max_deg_s) == 6:
+            self.perform["axis_max_deg_s"] = [max(0.0, float(v)) for v in axis_max_deg_s]
 
     def set_perform_acceleration_max_deg_s2(self, accel_deg_s2: float) -> None:
         """Set the axis acceleration limit (degrees/sec^2) for the motion-profile estimate.
@@ -414,17 +432,35 @@ class StateMachine:
         ``distances`` are the per-axis deltas (degrees) between the current and
         target pose. The move is coordinated (all axes in sync), so the total
         time is the MAX over the per-joint rest-to-rest times — each axis follows
-        a trapezoidal/triangular profile at the CC-A velocity. late =
-        time_to_arrive > deadline (notify-only).
+        a trapezoidal/triangular profile at its own speed. In perform mode the
+        per-axis speed is ``axis_max_deg_s[i] × (base/100) × (cc_a/100)``;
+        outside perform mode a single speed (``self.speed``) is used for all
+        axes. late = time_to_arrive > deadline (notify-only).
         """
-        v = self.perform["velocity"] * self.perform["velocity_max_deg_s"]
         a = self.perform["acceleration_max_deg_s2"]
-        if v <= 0 or a <= 0 or not distances:
+        if a <= 0 or not distances:
             self.perform["time_to_arrive"] = float("inf")
+        elif self.control_mode == "perform":
+            # Per-axis speeds: axis_max_deg_s[i] × (base/100) × (cc_a/100).
+            base = self._base_speed()
+            cc_a = self.perform["velocity"]
+            axis_max = self.perform["axis_max_deg_s"]
+            speeds = [am * (base / 100.0) * (cc_a / 100.0) for am in axis_max]
+            times = []
+            for d, v in zip(distances, speeds):
+                if v <= 0:
+                    times.append(float("inf"))
+                else:
+                    times.append(motion_profile_time(d, v, a))
+            self.perform["time_to_arrive"] = max(times)
         else:
-            self.perform["time_to_arrive"] = max(
-                motion_profile_time(d, v, a) for d in distances
-            )
+            v = self.speed  # the move speed (set in step())
+            if v <= 0:
+                self.perform["time_to_arrive"] = float("inf")
+            else:
+                self.perform["time_to_arrive"] = max(
+                    motion_profile_time(d, v, a) for d in distances
+                )
         self.perform["late"] = (
             self.perform["time_to_arrive"] > self.perform["deadline"]
             if self.perform["deadline"] > 0 else False
@@ -919,23 +955,44 @@ class StateMachine:
         self.action_index = resume
         self._transition = None
 
-    def _current_speed(self) -> float:
-        """The move speed for the current state.
+    def _base_speed(self) -> float:
+        """The base zone/action speed (a percentage, 0-100).
 
-        - assertive mode with a rolled speed -> the assertive per-move speed;
         - transition in progress -> the target zone's speed;
         - action with a declared ``speed`` -> the action's speed;
         - otherwise (no action, or no declared action speed) -> the zone's speed.
         """
-        if self.control_mode == "assertive" and self.assertive_speed is not None:
-            return self.assertive_speed
         if self._transition is not None:
             return self.zones.get(self._transition["zone"]).speed
         if self.current_action:
             s = self.zones.get(self.current_zone).action_speed(self.current_action)
-            if s is not None:
-                return s
+            return s if s is not None else self.zones.get(self.current_zone).speed
         return self.zones.get(self.current_zone).speed
+
+    def _current_speed(self) -> float:
+        """The move speed for the current state.
+
+        - assertive mode with a rolled speed -> the assertive per-move speed;
+        - perform mode -> the max per-axis speed in deg/s (axis_max_deg_s ×
+          zone percentage × CC-A percentage);
+        - otherwise -> the zone/action speed (a percentage, 0-100).
+        """
+        if self.control_mode == "assertive" and self.assertive_speed is not None:
+            return self.assertive_speed
+        base = self._base_speed()
+        if self.control_mode == "perform":
+            # The zone speed (0-100) is a percentage of the per-axis max deg/s;
+            # CC-A (0-100) further scales the result. The effective speed is the
+            # max over axes (the fastest axis determines the move duration).
+            cc_a = self.perform["velocity"]
+            axis_max = self.perform["axis_max_deg_s"]
+            max_speed = 0.0
+            for a in axis_max:
+                s = a * (base / 100.0) * (cc_a / 100.0)
+                if s > max_speed:
+                    max_speed = s
+            return max(1.0, max_speed)
+        return base
 
     @property
     def behavior(self) -> str:

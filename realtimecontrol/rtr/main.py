@@ -28,6 +28,7 @@ from rtr.robot import (
     robot_config_offsets,
     robot_config_patch_mode,
     robot_config_red_light,
+    robot_config_axis_max_deg_s,
 )
 from rtr.camera.geometry import load_camera_geometry
 from rtr.camera.snapshot_grab import SnapshotGrabber
@@ -206,8 +207,9 @@ async def run(cfg: Config) -> None:
     # the reload hook). The sim is never offset.
     robot_cfg = load_robot_config_fallback(cfg.robot_config_path)
     robot = make_robot(cfg.robot_kind, port=cfg.robot_port, tick_hz=cfg.tick_hz,
-                       joint_offsets=robot_config_offsets(robot_cfg))
+                        joint_offsets=robot_config_offsets(robot_cfg))
     machine = StateMachine(zones, tick_hz=cfg.tick_hz)
+    machine.set_perform_axis_max_deg_s(robot_config_axis_max_deg_s(robot_cfg))
     # Safety gate: pre-movement checks (red-link conflict + self-collision).
     # The collision worker is a persistent Node process (collide_worker.js) that
     # loads the KR60 STL world once and answers queries over stdin/stdout.
@@ -267,6 +269,7 @@ async def run(cfg: Config) -> None:
         robot_cfg_holder[0] = new_cfg
         if hasattr(robot, "set_joint_offsets"):
             robot.set_joint_offsets(robot_config_offsets(new_cfg))
+        machine.set_perform_axis_max_deg_s(robot_config_axis_max_deg_s(new_cfg))
     # The snapshot grabber: fetches the RPi's latest camera frame into the local
     # snapshot file (assets/latest.jpg) so the render page can show it. The path is
     # resolved against the rtr root (where assets/ lives). The grab is non-blocking.

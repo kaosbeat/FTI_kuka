@@ -1007,7 +1007,7 @@ let sndPorts = [];  // available MIDI-out ports (GET /api/sound/ports)
 let patchView = false;
 let midiView = false;
 let midiSubView = "out";  // "out" or "in"
-let midiLearnPending = null;  // {zone, action_name} awaiting the next learned message
+let midiLearnPending = null;  // {zone, action_name, nav_name, capture, group, perform} awaiting the next learned message
 let selectedZone = null;
 let selectedAction = null;
 let selectedPatch = null;   // the current patch slot key
@@ -1491,9 +1491,23 @@ function connect() {
       });
     } else if (m.type === "midi_learn") {
       // A learned key was captured; write it into the pending learn slot.
-      // The payload is {key, msg, zone, action} (action is null for a zone command).
+      // The payload is {key, msg, zone, action, nav, capture, group, perform}.
       if (midiLearnPending && MIDI) {
-        if (midiLearnPending.capture) {
+        if (midiLearnPending.perform) {
+          // Perform CCs are controller numbers (the dispatch matches on the CC
+          // alone, any value). Only a CC capture is valid for them.
+          const cc = _midiCcFromKey(m.key);
+          if (!MIDI.perform || typeof MIDI.perform !== "object") MIDI.perform = {};
+          if (cc !== null) {
+            if (midiLearnPending.perform === "velocity") MIDI.perform.cc_a = cc;
+            else MIDI.perform.cc_b = cc;
+          } else {
+            $("midiStatus").textContent = "perform CCs need a CC message — that was a note, try a slider";
+            midiLearnPending = null;
+            buildPerformMidiList();
+            return;
+          }
+        } else if (midiLearnPending.capture) {
           if (!MIDI.capture) MIDI.capture = {};
           MIDI.capture.key = m.key;
         } else if (midiLearnPending.nav_name) {
@@ -1509,8 +1523,10 @@ function connect() {
             else z.command = m.key;
           }
         }
+        const wasPerform = !!midiLearnPending.perform;
         midiLearnPending = null;
         buildMidiInForm();
+        if (wasPerform) buildPerformMidiList();
         $("midiStatus").textContent = `learned ${m.key}`;
       }
     }
@@ -2597,15 +2613,15 @@ function buildMidiAllList() {
   });
 }
 
-function midiLearn(zone, actionName, navName, navPort, capture, capturePort, group, groupPort) {
+function midiLearn(zone, actionName, navName, navPort, capture, capturePort, group, groupPort, perform, performPort) {
   if (midiLearnPending) { $("midiStatus").textContent = "already learning — send a MIDI message first"; return; }
-  midiLearnPending = { zone, action_name: actionName, nav_name: navName || null, capture: capture ? true : null, group: group || null };
+  midiLearnPending = { zone, action_name: actionName, nav_name: navName || null, capture: capture ? true : null, group: group || null, perform: perform || null };
   fetch("/api/midi/learn", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "start", zone, action_name: actionName, nav: navName || null, nav_port: navPort === undefined ? null : navPort, capture: capture ? true : null, capture_port: capturePort === undefined ? null : capturePort, group: group || null, group_port: groupPort === undefined ? null : groupPort }),
+    body: JSON.stringify({ action: "start", zone, action_name: actionName, nav: navName || null, nav_port: navPort === undefined ? null : navPort, capture: capture ? true : null, capture_port: capturePort === undefined ? null : capturePort, group: group || null, group_port: groupPort === undefined ? null : groupPort, perform: perform || null, perform_port: performPort === undefined ? null : performPort }),
   }).then((r) => r.json().then((b) => ({ ok: r.ok, b }))).then(({ ok, b }) => {
-    const label = group ? `group:${group}` : (capture ? "capture" : (navName ? navName : (actionName ? `${zone}/${actionName}` : zone)));
+    const label = perform ? `perform ${perform}` : (group ? `group:${group}` : (capture ? "capture" : (navName ? navName : (actionName ? `${zone}/${actionName}` : zone))));
     if (ok) $("midiStatus").textContent = `learning "${label}" — now press a key on your MIDI controller`;
     else $("midiStatus").textContent = "learn failed: " + (b.error || r.status);
   }).catch((e) => { $("midiStatus").textContent = "learn failed: " + e; });
@@ -3860,7 +3876,7 @@ function saveBrain() {
 // GET /api/robotconfig (falling back to /robotconfig.json, then the built-in
 // all-zero offsets), POST /api/robotconfig to save + hot-reload the running core.
 const ROBOT_JOINTS = ["A1", "A2", "A3", "A4", "A5", "A6"];
-const ROBOT_CONFIG_FALLBACK = { joint_offsets_deg: [0, 0, 0, 0, 0, 0] };
+const ROBOT_CONFIG_FALLBACK = { joint_offsets_deg: [0, 0, 0, 0, 0, 0], axis_max_deg_s: [60, 60, 60, 120, 120, 180] };
 // The LED-wall red-light overlay defaults (mirrors DEFAULT_RED_LIGHT in rtr/robot/config.py).
 const RED_LIGHT_FALLBACK = { enabled: false, x: 0.5, y: 0.5, bar_w: 1, bar_h: 160, radius: 80, morph: true, per_beat: 1 };
 let ROBOT_CONFIG = null;
@@ -3896,7 +3912,12 @@ function normalizeRobotConfig(data) {
     : HW_LIMITS.map((p) => p.slice());
   // The LED-wall red-light overlay (dead-pixel mask); normalized + clamped.
   const redLight = normalizeRedLight(d.red_light);
-  return Object.assign({}, d, { joint_offsets_deg: arr, patch_mode: mode, soft_limits: soft, red_light: redLight });
+  // Per-axis max angular speed (deg/s at zone speed 100). The zone speed (0-100)
+  // is a percentage of these maxes; CC-A (0-100) further scales the result.
+  const axisMax = (Array.isArray(d.axis_max_deg_s) && d.axis_max_deg_s.length === 6)
+    ? d.axis_max_deg_s.map((v) => (typeof v === "number" && isFinite(v) ? Math.max(0, v) : 0))
+    : ROBOT_CONFIG_FALLBACK.axis_max_deg_s.slice();
+  return Object.assign({}, d, { joint_offsets_deg: arr, patch_mode: mode, soft_limits: soft, red_light: redLight, axis_max_deg_s: axisMax });
 }
 
 async function loadRobotConfig() {
@@ -3941,6 +3962,41 @@ function buildRobotConfigForm() {
   $("robotConfigReset").onclick = () => {
     el.querySelectorAll("input[type=number]").forEach((inp) => { inp.value = 0; });
   };
+  // Per-axis max angular speed (deg/s at zone speed 100). The zone speed (0-100)
+  // is a percentage of these maxes; CC-A (0-100) further scales the result.
+  const axisMaxDiv = document.createElement("div");
+  axisMaxDiv.className = "card";
+  const axisMaxTitle = document.createElement("h3");
+  axisMaxTitle.textContent = "axis max deg/s (at zone speed 100)";
+  axisMaxDiv.appendChild(axisMaxTitle);
+  const axisMaxHint = document.createElement("p");
+  axisMaxHint.className = "hint";
+  axisMaxHint.textContent = "The zone speed (0–100) is a percentage of these maxes; CC-A (0–100) further scales the result. Tune to match the real robot's angular speeds.";
+  axisMaxDiv.appendChild(axisMaxHint);
+  ROBOT_CONFIG.axis_max_deg_s.forEach((val, i) => {
+    const joint = ROBOT_JOINTS[i];
+    const row = document.createElement("div");
+    row.className = "row";
+    const label = document.createElement("label");
+    label.textContent = joint + " max (°/s)";
+    label.style.maxWidth = "130px";
+    const input = document.createElement("input");
+    input.type = "number";
+    input.id = "axisMax_" + joint;
+    input.dataset.axisMax = i;
+    input.step = "1";
+    input.min = "0";
+    input.value = val;
+    input.style.maxWidth = "160px";
+    input.onchange = () => {
+      const v = parseFloat(input.value);
+      ROBOT_CONFIG.axis_max_deg_s[i] = isNaN(v) ? 0 : Math.max(0, v);
+    };
+    row.appendChild(label);
+    row.appendChild(input);
+    axisMaxDiv.appendChild(row);
+  });
+  el.appendChild(axisMaxDiv);
   // The red-light overlay card (LED-wall dead-pixel mask).
   buildRedLightForm();
   // The patch mode selector (video = new action-only system, complex = legacy layered system).
@@ -4270,6 +4326,16 @@ function _midiKeyFor(msg) {
   }
   return null;
 }
+// The CC number for a captured key, or null when the key is not a CC message.
+// Perform CCs (velocity / multiplier) are controller numbers matched on the CC
+// alone, so a learned note is not usable for them.
+function _midiCcFromKey(key) {
+  if (typeof key !== "string") return null;
+  const parts = key.split(":");
+  if (parts.length < 3 || parts[0] !== "cc") return null;
+  const n = parseInt(parts[1], 10);
+  return Number.isInteger(n) ? n : null;
+}
 function buildPerformMidiList() {
   const el = $("performMidiList");
   if (!el) return;
@@ -4301,11 +4367,20 @@ function buildPerformMidiList() {
       if (MIDI.groups[g]) items.push({ label: `group / ${g}`, key: MIDI.groups[g], kind: "key" });
     });
   }
-  if (MIDI && MIDI.perform) {
-    if (MIDI.perform.cc_a !== null && MIDI.perform.cc_a !== undefined)
-      items.push({ label: "perform CC-A (velocity)", key: `cc:${MIDI.perform.cc_a}`, kind: "cc" });
-    if (MIDI.perform.cc_b !== null && MIDI.perform.cc_b !== undefined)
-      items.push({ label: "perform CC-B (multiplier)", key: `cc:${MIDI.perform.cc_b}`, kind: "cc" });
+  if (MIDI) {
+    // The perform CCs are always listed (even unmapped) so the operator can
+    // learn them: CC-A (velocity) and CC-B (multiplier) are controller numbers
+    // matched on the CC alone, any value.
+    const perf = MIDI.perform || (MIDI.perform = {});
+    const pport = (perf.in_port !== null && perf.in_port !== undefined) ? perf.in_port : null;
+    items.push({ label: "perform CC-A (velocity)",
+                 key: (perf.cc_a !== null && perf.cc_a !== undefined) ? `cc:${perf.cc_a}` : "unmapped",
+                 kind: "cc",
+                 learn: () => midiLearn(null, null, null, null, null, null, null, null, "velocity", pport) });
+    items.push({ label: "perform CC-B (multiplier)",
+                 key: (perf.cc_b !== null && perf.cc_b !== undefined) ? `cc:${perf.cc_b}` : "unmapped",
+                 kind: "cc",
+                 learn: () => midiLearn(null, null, null, null, null, null, null, null, "multiplier", pport) });
   }
   if (items.length === 0) {
     const empty = document.createElement("div");
@@ -4325,6 +4400,14 @@ function buildPerformMidiList() {
     keyEl.textContent = it.key;
     row.appendChild(lbl);
     row.appendChild(keyEl);
+    if (it.learn) {
+      const btn = document.createElement("button");
+      btn.className = "small";
+      btn.textContent = "learn";
+      btn.title = "Click, then send a CC on your MIDI controller — the robot remembers the CC number.";
+      btn.onclick = it.learn;
+      row.appendChild(btn);
+    }
     el.appendChild(row);
     _performMidiRows.push({ el: row, match: it.key, kind: it.kind });
   });

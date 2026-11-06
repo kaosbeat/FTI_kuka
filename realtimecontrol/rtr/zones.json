@@ -3217,10 +3217,360 @@
             null,
             null,
             null
+          ],
+          "next": {
+            "zone": "kb_medium",
+            "action": "irritated"
+          }
+        },
+        "irritated": {
+          "enabled": true,
+          "poses": [
+            [
+              23,
+              -56.959,
+              59.22,
+              -48.749,
+              35.125,
+              20
+            ],
+            [
+              23,
+              -106.959,
+              59.22,
+              1.251,
+              5.125,
+              20
+            ],
+            [
+              33,
+              -96.959,
+              59.22,
+              31.251,
+              5.125,
+              -10
+            ]
+          ],
+          "variable_axes": [],
+          "behavior": "agitated",
+          "speed": 20,
+          "loop": true,
+          "next": {
+            "zone": "kb_medium",
+            "action": "tickle"
+          },
+          "pose_imgs": [
+            null,
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null,
+            null
           ]
         }
       },
-      "class": "ignore"
+      "class": "ignore",
+      "pose": "move"
+    },
+    "kb_fast": {
+      "enabled": true,
+      "safezone": [
+        [
+          -185,
+          185
+        ],
+        [
+          -135,
+          35
+        ],
+        [
+          -95,
+          158
+        ],
+        [
+          -180,
+          180
+        ],
+        [
+          -55,
+          100
+        ],
+        [
+          -150,
+          150
+        ]
+      ],
+      "speed": 100,
+      "actions": {
+        "powerplay": {
+          "enabled": true,
+          "poses": [
+            [
+              0,
+              8,
+              -9,
+              0,
+              -50,
+              0
+            ],
+            [
+              0,
+              -90,
+              -10,
+              0,
+              90,
+              0
+            ],
+            [
+              90,
+              9,
+              -10,
+              0,
+              80,
+              0
+            ],
+            [
+              90,
+              -135,
+              -49,
+              180,
+              70,
+              0
+            ],
+            [
+              0,
+              -90,
+              -10,
+              0,
+              70,
+              0
+            ],
+            [
+              0,
+              -59.525,
+              49.521,
+              0,
+              -1.233,
+              0
+            ],
+            [
+              0,
+              -135,
+              113.608,
+              0,
+              17.115,
+              0
+            ],
+            [
+              -11.705,
+              -32.811,
+              8.636,
+              -1.704,
+              -9.557,
+              0
+            ],
+            [
+              29.482,
+              -135,
+              117.689,
+              -0.042,
+              31.419,
+              0
+            ],
+            [
+              19.952,
+              -36.216,
+              23.919,
+              -0.691,
+              -6.475,
+              0
+            ],
+            [
+              -40.048,
+              -96.216,
+              23.919,
+              -0.691,
+              -6.475,
+              0
+            ],
+            [
+              -40.048,
+              -16.216,
+              23.919,
+              -0.691,
+              -6.475,
+              0
+            ],
+            [
+              -0.518,
+              -135,
+              117.689,
+              -0.042,
+              31.419,
+              0
+            ],
+            [
+              -7.725,
+              -13.156,
+              10.695,
+              0.053,
+              40.054,
+              0
+            ],
+            [
+              -0.518,
+              -135,
+              117.689,
+              -0.042,
+              31.419,
+              0
+            ],
+            [
+              -7.725,
+              -13.156,
+              10.695,
+              0.053,
+              -39.946,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "behavior": "calm",
+          "speed": 100,
+          "loop": true,
+          "next": {
+            "zone": "kb_fast",
+            "action": "powerclaw"
+          },
+          "pose_imgs": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        "powerclaw": {
+          "enabled": true,
+          "poses": [
+            [
+              6.77,
+              -18.148,
+              19.906,
+              -0.652,
+              -10.03,
+              0
+            ],
+            [
+              -23.251,
+              -116.25,
+              125.434,
+              -78.518,
+              -53.253,
+              0
+            ],
+            [
+              56.77,
+              -18.148,
+              19.906,
+              -90.652,
+              -50.03,
+              0
+            ],
+            [
+              -56.77,
+              -18.148,
+              19.906,
+              -90.652,
+              89.97,
+              0
+            ],
+            [
+              23.3,
+              -116.25,
+              125.434,
+              91.482,
+              -53.253,
+              0
+            ],
+            [
+              -62.21,
+              -0.51,
+              -1.423,
+              66.943,
+              -6.167,
+              0
+            ],
+            [
+              62.21,
+              -0.51,
+              8.577,
+              90.943,
+              63.833,
+              0
+            ]
+          ],
+          "variable_axes": [],
+          "behavior": "calm",
+          "speed": 100,
+          "loop": true,
+          "next": {
+            "zone": "kb_fast",
+            "action": "powerplay"
+          },
+          "pose_imgs": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "pose_videos": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ]
+        }
+      },
+      "class": "ignore",
+      "pose": "move"
     }
   },
   "layout": {
@@ -3332,6 +3682,6 @@
       "w": 12616.00048828125,
       "h": 3344.000244140625
     },
-    "key": "approach_p,follow_p,inspect,inspect_p,kb_medium,kb_slow,lock,resting,retreat_p,scan,scan_room,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band,tidal,tidal_follow_p_bridge,tidal_inspect_p_bridge"
+    "key": "approach_p,follow_p,inspect,inspect_p,kb_fast,kb_medium,kb_slow,lock,resting,retreat_p,scan,scan_room,scanning,scanning_task1_bridge,sleeping,sleeping_resting_bridge,sleeping_scanning_bridge,sleeping_testing_bridge,task1_task2_bridge,task2_task3_bridge,task3_task1_bridge,task3_task2_bridge,testing,testing_locked_band,tidal,tidal_follow_p_bridge,tidal_inspect_p_bridge"
   }
 }

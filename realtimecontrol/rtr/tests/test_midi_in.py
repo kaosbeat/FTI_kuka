@@ -370,8 +370,8 @@ def test_noteoff_learn_captures_key():
     assert len(cmds) == 1
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1] == {"key": "noteoff:0:60", "msg": [0x80, 60, 0],
-                           "zone": "wander", "action": "look", "nav": None,
-                           "capture": None, "group": None}
+                            "zone": "wander", "action": "look", "nav": None,
+                            "capture": None, "group": None, "perform": None}
     assert m.is_learning is False
 
 
@@ -424,7 +424,7 @@ def test_learn_arms_and_captures_on_zone_port():
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1] == {"key": "cc:5:10", "msg": [0xB0, 5, 10],
                             "zone": "wander", "action": "look", "nav": None,
-                            "capture": None, "group": None}
+                            "capture": None, "group": None, "perform": None}
     # Learn is single-shot: disarmed after capture.
     assert m.is_learning is False
 
@@ -559,7 +559,7 @@ def test_nav_learn_captured_on_nav_port():
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1] == {"key": "cc:11:0", "msg": [0xB0, 11, 0],
                             "zone": None, "action": None, "nav": "next_action",
-                            "capture": None, "group": None}
+                            "capture": None, "group": None, "perform": None}
     # Learn is single-shot: disarmed after capture.
     assert m.is_learning is False
 
@@ -632,7 +632,7 @@ def test_capture_learn_captured_on_capture_port():
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1] == {"key": "cc:15:0", "msg": [0xB0, 15, 0],
                             "zone": None, "action": None, "nav": None,
-                            "capture": True, "group": None}
+                            "capture": True, "group": None, "perform": None}
     # Learn is single-shot: disarmed after capture.
     assert m.is_learning is False
 
@@ -649,6 +649,50 @@ def test_capture_learn_scoped_to_capture_port():
     cmds = _cmds(bus)
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1]["capture"] is True
+
+
+# ---------------------------------------------------------------------------
+# Perform CC learn (velocity / multiplier), scoped to the perform's in_port.
+# ---------------------------------------------------------------------------
+def test_perform_learn_captured_on_perform_port():
+    # Perform learn captures on the perform's in_port (the default port when null)
+    # and submits MIDI_LEARN with the perform context (the editor writes cc_a/cc_b).
+    m, bus = _midi({"perform": {"in_port": None, "cc_a": None, "cc_b": None}})
+    m.start_learn(perform="velocity")
+    assert m.is_learning is True
+    _feed(m, [0xB0, 70, 127])  # the default port
+    cmds = _cmds(bus)
+    assert len(cmds) == 1
+    assert cmds[0][0] == "midi_learn"
+    assert cmds[0][1] == {"key": "cc:70:127", "msg": [0xB0, 70, 127],
+                            "zone": None, "action": None, "nav": None,
+                            "capture": None, "group": None, "perform": "velocity"}
+    # Learn is single-shot: disarmed after capture.
+    assert m.is_learning is False
+
+
+def test_perform_learn_scoped_to_perform_port():
+    # When the perform in_port is set, the learn capture is scoped to that port.
+    m, bus = _midi({"perform": {"in_port": 2, "cc_a": None, "cc_b": None}})
+    m.start_learn(perform="multiplier")
+    assert m.is_learning is True
+    _feed(m, [0xB0, 71, 0], port=0)  # the default port: not captured
+    assert _cmds(bus) == []
+    assert m.is_learning is True  # still armed
+    _feed(m, [0xB0, 71, 0], port=2)  # the perform port: captured
+    cmds = _cmds(bus)
+    assert cmds[0][0] == "midi_learn"
+    assert cmds[0][1]["perform"] == "multiplier"
+
+
+def test_perform_learn_not_dispatched():
+    # While a perform learn is armed, the captured CC is not dispatched.
+    m, bus = _midi({"perform": {"in_port": None, "cc_a": 70, "cc_b": 71}})
+    m.start_learn(perform="velocity")
+    _feed(m, [0xB0, 70, 127])
+    cmds = _cmds(bus)
+    assert cmds[0][0] == "midi_learn"
+    assert "perform_velocity" not in [c[0] for c in cmds]
 
 
 # ---------------------------------------------------------------------------
@@ -770,17 +814,60 @@ def test_clock_tick_no_callback():
     midi._on_message(0, ([0xF8], 0.0))  # Should not raise.
 
 
+def test_open_in_enables_clock_reception():
+    """_open_in disables RtMidi's default timing filter so 0xF8 reaches the callback.
+
+    RtMidi filters system-realtime messages (the 0xF8 clock) by default; without
+    ``ignore_types(timing=False)`` the clock never reaches ``_on_message``.
+    """
+    fake = types.ModuleType("rtmidi")
+    calls = []
+
+    class _MidiIn:
+        def get_ports(self):
+            return ["In A"]
+
+        def open_port(self, idx):
+            pass
+
+        def set_callback(self, cb):
+            pass
+
+        def ignore_types(self, sysex=True, timing=True, active_sense=True):
+            calls.append({"sysex": sysex, "timing": timing, "active_sense": active_sense})
+
+        def close_port(self):
+            pass
+
+    fake.MidiIn = _MidiIn
+    saved = sys.modules.get("rtmidi")
+    sys.modules["rtmidi"] = fake
+    try:
+        bus = StateBus()
+        m = MidiInput(bus, in_port=0, enabled=False)
+        m._open_in(0)
+        assert calls, "expected ignore_types to be called on the opened MidiIn"
+        # Only the timing (0xF8 clock) filter is disabled; sysex + active sense stay filtered.
+        assert all(c["timing"] is False for c in calls)
+        assert all(c["sysex"] is True and c["active_sense"] is True for c in calls)
+    finally:
+        if saved is not None:
+            sys.modules["rtmidi"] = saved
+        else:
+            del sys.modules["rtmidi"]
+
+
 def test_perform_cc_a_velocity():
-    """CC-A (velocity): the CC value is normalized to 0.0-1.0."""
+    """CC-A (velocity): the CC value (0-127) is re-expressed on the 0-100 scale (100 = max deg/s)."""
     bus = StateBus()
     midi = MidiInput(bus, in_port=0, enabled=False)
     midi._data["perform"] = {"in_port": None, "cc_a": 70, "cc_b": 71}
-    # Send CC70 value 127.
+    # Send CC70 value 127 → velocity 100.
     midi._on_message(0, ([0xB0, 70, 127], 0.0))
     cmds = bus.drain_commands()
     assert len(cmds) == 1
     assert cmds[0].cmd == Cmd.PERFORM_VELOCITY
-    assert abs(cmds[0].payload["value"] - 1.0) < 0.001
+    assert abs(cmds[0].payload["value"] - 100.0) < 0.001
 
 
 def test_perform_cc_a_zero():

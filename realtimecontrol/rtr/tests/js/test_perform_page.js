@@ -4,7 +4,8 @@
 // then verifies:
 //   (1) renderState maps the `perform` snapshot fields to the DOM (beat clock,
 //       velocity, multiplier, deadline/time-to-arrive, late flag, live move).
-//   (2) the CC-A velocity slider sends a NORMALIZED perform_velocity command (0-1).
+//   (2) the CC-A velocity slider sends a perform_velocity command on the 0-100
+//       scale (100 = max deg/s).
 //   (3) the CC-B multiplier buttons send a perform_multiplier command with the
 //       chosen multiplier.
 //   (4) an absent `perform` field renders the idle state.
@@ -47,8 +48,9 @@ function makeEl(tag, id) { const e = new El(tag); e.attrs.id = id; IDX[id] = e; 
 // Every id perform.html references via $("...").
 const IDS = ["dot", "status", "host", "reconnect", "clockSource", "bpm", "beat",
   "beatPhase", "beatFill", "beatDuration", "velocityVal", "velocity", "velocityDeg",
-  "multChips", "multVal", "baseBeats", "deadline", "lateBox", "tta", "lateHint",
-  "zone", "action", "moving", "pose", "bar", "beatCounter", "clockBadge", "groupSelect"];
+  "multChips", "multVal", "baseBeats", "deadlineMult", "deadline", "lateBox", "tta",
+  "lateHint", "zone", "action", "moving", "pose", "bar", "beatCounter", "clockBadge",
+  "groupSelect", "performMidiMonitor"];
 for (const id of IDS) makeEl("div", id);
 IDX["groupSelect"].options = []; // the active-group <select> (no options in the stub)
 
@@ -103,7 +105,7 @@ vm.runInContext(`renderState({
   type: "state",
   zone: "resting", action: "breathe", moving: true,
   perform: {
-    velocity: 0.5, multiplier: 4, base_beats: 4, deadline: 2.4,
+    velocity: 50, multiplier: 4, base_beats: 4, deadline: 2.4,
     time_to_arrive: 1.2, late: false, beat: 12.25, beat_index: 12,
     beat_phase: 0.25, bpm: 130, beat_duration: 0.4615, clock_source: "internal"
   }
@@ -120,12 +122,13 @@ assert(IDX["bpm"].textContent === "130.0", "bpm: " + IDX["bpm"].textContent);
 assert(IDX["beat"].textContent === "12.25", "beat: " + IDX["beat"].textContent);
 assert(IDX["beatPhase"].textContent === "0.250", "beat phase: " + IDX["beatPhase"].textContent);
 assert(IDX["beatFill"].style.width === "25%", "beat fill width: " + IDX["beatFill"].style.width);
-assert(IDX["velocityVal"].textContent === "0.50", "velocity value: " + IDX["velocityVal"].textContent);
-assert(IDX["velocityDeg"].textContent.startsWith("15.0"), "velocity deg/s (0.5 x 30): " + IDX["velocityDeg"].textContent);
+assert(IDX["velocityVal"].textContent === "50.00", "velocity value (0-100 scale): " + IDX["velocityVal"].textContent);
+assert(IDX["velocityDeg"].textContent.startsWith("15.0"), "velocity deg/s (50/100 x 30): " + IDX["velocityDeg"].textContent);
 assert(IDX["multVal"].textContent === "4x", "multiplier value: " + IDX["multVal"].textContent);
 assert(multChipsEl.children[6].className === "active", "4x chip highlighted active");
 assert(multChipsEl.children[4].className === "", "1x chip not active");
 assert(IDX["baseBeats"].textContent === "4", "base beats: " + IDX["baseBeats"].textContent);
+assert(IDX["deadlineMult"].textContent === "4x", "deadline multiplier: " + IDX["deadlineMult"].textContent);
 assert(IDX["deadline"].textContent === "2.400 s", "deadline: " + IDX["deadline"].textContent);
 assert(IDX["tta"].textContent === "1.200 s", "time-to-arrive: " + IDX["tta"].textContent);
 assert(IDX["lateBox"].className === "lateBox ok", "on-time box class: " + IDX["lateBox"].className);
@@ -179,12 +182,12 @@ assert(IDX["lateBox"].className === "lateBox ok", "idle box class: " + IDX["late
 assert(IDX["clockBadge"].textContent === "NO CLOCK", "idle badge text: " + IDX["clockBadge"].textContent);
 assert(IDX["clockBadge"].className === "idle", "idle badge class: " + IDX["clockBadge"].className);
 
-// --- Test 4: velocity slider sends a NORMALIZED perform_velocity --------------
+// --- Test 4: velocity slider sends a perform_velocity on the 0-100 scale -----
 IDX["velocity"].value = "75";
 IDX["velocity"].listeners["input"][0]();
 const velCmd = sentCmds[sentCmds.length - 1];
 assert(velCmd.cmd === "perform_velocity", "velocity cmd name: " + velCmd.cmd);
-assert(velCmd.value === 0.75, "velocity normalized to 0-1: " + velCmd.value);
+assert(velCmd.value === 75, "velocity on the 0-100 scale: " + velCmd.value);
 
 // --- Test 5: multiplier button sends perform_multiplier -----------------------
 multChipsEl.children[7].listeners["click"][0](); // the 8x button

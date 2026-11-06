@@ -65,6 +65,12 @@
   #clockBadge.int { color: var(--warn); border-color: var(--warn); }
   #clockBadge.ext { color: var(--accent); border-color: var(--accent); }
   #clockBadge.pulse { opacity: 1; }
+  .midiMon { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; }
+  .mmRow { display: flex; gap: 8px; font-size: 11px; padding: 2px 0; border-bottom: 1px solid #20242d; }
+  .mmTs { color: var(--dim); }
+  .mmDir { color: var(--dim); width: 24px; }
+  .mmDir.in { color: var(--accent); }
+  .mmDir.out { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -95,8 +101,8 @@
     <h2>Velocity (CC-A)</h2>
     <div class="kv"><span>value</span><span id="velocityVal">0.00</span></div>
     <input type="range" id="velocity" class="slider" min="0" max="100" value="0" />
-    <div class="kv"><span>degrees/sec</span><span id="velocityDeg">—</span></div>
-    <div class="hint">CC-A sets the physical velocity directly.</div>
+    <div class="kv"><span>speed (°/s)</span><span id="velocityDeg">—</span></div>
+    <div class="hint">CC-A scales the zone/action speed from 1 (min) to the zone/action speed (100%); it can only slow the move down.</div>
   </section>
 
   <section>
@@ -118,6 +124,7 @@
   <section>
     <h2>Deadline</h2>
     <div class="kv"><span>base beats</span><span id="baseBeats">—</span></div>
+    <div class="kv"><span>multiplier</span><span id="deadlineMult">—</span></div>
     <div class="kv"><span>deadline</span><span id="deadline">—</span></div>
     <div class="lateBox ok" id="lateBox">
       <div class="lbl">time to arrive</div>
@@ -140,6 +147,12 @@
     <select id="groupSelect" class="groupSel"><option value="">—</option></select>
     <div class="hint">display only — the active group is set by the core (brain zone_groups).</div>
   </section>
+
+  <section>
+    <h2>MIDI monitor</h2>
+    <div class="midiMon" id="performMidiMonitor"></div>
+    <div class="hint">raw MIDI in + commands out (the core's live monitor ring).</div>
+  </section>
 </main>
 
 <script>
@@ -152,7 +165,6 @@
 // commands to the core via the WebSocket.
 // ------------------------------------------------------------------
 let ws = null;
-let PERFORM_CFG = { velocity_max_deg_s: 30.0 };
 
 function $(id) { return document.getElementById(id); }
 
@@ -213,6 +225,40 @@ function send(cmd) {
   ws.send(JSON.stringify(cmd));
 }
 
+let _midiMonFp = null;
+function renderMidiMonitor(ring) {
+  if (!Array.isArray(ring)) return;
+  // Change-detect on the newest seq: rebuild only when the ring advanced.
+  const fp = ring.length ? String(ring[ring.length - 1].seq) : "empty";
+  if (fp === _midiMonFp) return;
+  _midiMonFp = fp;
+  const rows = ring.slice(-30).reverse().map(mmRow).join("");
+  $("performMidiMonitor").innerHTML = rows;
+}
+function mmRow(e) {
+  const ts = e.ts ? new Date(e.ts * 1000).toLocaleTimeString() : "";
+  const body = e.dir === "in"
+    ? fmtMidiMsg(e.msg)
+    : (e.cmd ? e.cmd + (e.payload ? " " + JSON.stringify(e.payload) : "") : "—");
+  return `<div class="mmRow"><span class="mmTs">${ts}</span>` +
+         `<span class="mmDir ${e.dir}">${e.dir}</span><span>${body}</span></div>`;
+}
+// Decode a raw MIDI message into a short human label.
+function fmtMidiMsg(msg) {
+  if (!Array.isArray(msg) || msg.length < 2) return "—";
+  const st = msg[0], ch = st & 0x0F, d = msg[1], v = msg[2];
+  const names = { 0x80: "note off", 0x90: "note on", 0xA0: "poly", 0xB0: "cc",
+                 0xC0: "program", 0xD0: "nrp", 0xE0: "aftertouch" };
+  const base = names[st & 0xF0];
+  if (base) {
+    if (base === "cc") return `cc ${d}=${v}`;
+    if (base === "program") return `program ${d}`;
+    if (base === "nrp") return `nrp ${d}=${v}`;
+    return `${base} ch${ch} ${d}` + (v !== undefined ? ` v${v}` : "");
+  }
+  return msg.map((b) => b.toString(16).padStart(2, "0")).join(" ");
+}
+
 function renderState(m) {
   const p = m.perform;
   // Live move state (always present in the state frame).
@@ -220,6 +266,8 @@ function renderState(m) {
   $("action").textContent = m.action || "—";
   $("pose").textContent = (m.action_index != null) ? (m.action_index + 1) : "—";
   $("moving").textContent = m.moving ? "yes" : "no";
+  // MIDI monitor (always rendered, even when there is no perform state).
+  renderMidiMonitor(m.midi_monitor);
 
   // Performance group (display-only): highlight the active group from the frame.
   const grp = m.active_group || "";
@@ -274,10 +322,11 @@ function renderState(m) {
   $("beatDuration").textContent = (p.beat_duration != null) ? p.beat_duration.toFixed(3) + " s" : "—";
   $("beatFill").style.width = (Math.min(1, Math.max(0, phase)) * 100) + "%";
 
-  // Velocity (CC-A).
+  // Velocity (CC-A). The displayed speed is the actual velocity-overridden move
+  // speed (m.speed, the zone/action speed scaled by the CC-A velocity, set in
+  // the core's step()).
   $("velocityVal").textContent = (p.velocity != null) ? p.velocity.toFixed(2) : "—";
-  const deg = (p.velocity != null) ? p.velocity * PERFORM_CFG.velocity_max_deg_s : null;
-  $("velocityDeg").textContent = (deg != null) ? deg.toFixed(1) + " °/s" : "—";
+  $("velocityDeg").textContent = (m.speed != null) ? m.speed.toFixed(1) + " °/s" : "—";
 
   // Multiplier (CC-B).
   const mult = p.multiplier || 1;
@@ -288,6 +337,7 @@ function renderState(m) {
 
   // Deadline + time-to-arrive + late.
   $("baseBeats").textContent = (p.base_beats != null) ? p.base_beats : "—";
+  $("deadlineMult").textContent = (p.multiplier != null) ? p.multiplier + "x" : "—";
   $("deadline").textContent = (p.deadline != null) ? p.deadline.toFixed(3) + " s" : "—";
   const tta = p.time_to_arrive;
   $("tta").textContent = (tta != null && isFinite(tta)) ? tta.toFixed(3) + " s" : "∞";
@@ -302,7 +352,7 @@ function renderState(m) {
 
 // Controls: CC-A velocity slider + CC-B multiplier buttons.
 $("velocity").addEventListener("input", () => {
-  const v = parseInt($("velocity").value, 10) / 100.0;
+  const v = parseInt($("velocity").value, 10);
   send({ cmd: "perform_velocity", value: v });
 });
 for (const b of $("multChips").children) {

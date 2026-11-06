@@ -357,6 +357,10 @@ class MidiInput:
         self._learn = None
         self._current_zone = "init"
         self._current_action = None
+        # The current robot moving flag + control mode (tracked from snapshots) so
+        # the perform-mode gating can discard move-triggering MIDI while performing.
+        self._moving = False
+        self._control_mode = None
         # The nav cursor: the zone the rows were built for + the rows + the index.
         self._nav_zone = None
         self._nav_items: list = []
@@ -373,10 +377,16 @@ class MidiInput:
         bus.subscribe(self.on_event)
 
     def on_event(self, event: Event, data) -> None:
-        """Track the current zone/action from each snapshot (CC3 + the nav cursor)."""
+        """Track the current zone/action + moving/control-mode from each snapshot.
+
+        CC3 + the nav cursor resolve off the zone/action; the perform-mode MIDI
+        gating (``_perform_gated``) resolves off the moving flag + control mode.
+        """
         if event == Event.SNAPSHOT:
             self._current_zone = data.zone
             self._current_action = data.action
+            self._moving = bool(getattr(data, "moving", False))
+            self._control_mode = getattr(data, "control_mode", None)
 
     # ------------------------------------------------------------------
     # Table access + reload.
@@ -530,6 +540,9 @@ class MidiInput:
             midi.open_port(idx)
             cb = self._make_callback(idx)
             midi.set_callback(cb)
+            # RtMidi filters system-realtime messages (incl. the 0xF8 clock) by
+            # default; disable that filter so the clock ticks reach _on_message.
+            midi.ignore_types(timing=False)
             self._midi_ins[idx] = (midi, cb)
         except Exception as exc:  # noqa: BLE001 - MIDI must not kill the core
             print(f"[midi] could not open MIDI in port {port}: {exc}")
@@ -558,9 +571,10 @@ class MidiInput:
     # Learn capture (armed per-zone).
     # ------------------------------------------------------------------
     def start_learn(self, zone=None, action=None, nav=None, nav_port=None,
-                    capture=None, capture_port=None, group=None, group_port=None) -> None:
+                    capture=None, capture_port=None, group=None, group_port=None,
+                    perform=None, perform_port=None) -> None:
         """Arm the learn capture for a zone key, a global nav key, the capture key,
-        or a group-enable key.
+        a group-enable key, or a perform CC (velocity / multiplier).
 
         A zone learn (``zone``/``action``) captures the next mappable message on the
         zone's ``in_port``; a nav learn (``nav``) captures on the nav's ``in_port``
@@ -569,12 +583,21 @@ class MidiInput:
         captures on the capture's ``in_port`` (the default port when it is null), or
         on ``capture_port`` when given; a group learn (``group``) captures on the
         groups' ``in_port`` (the default port when it is null), or on ``group_port``
-        when given. The key is submitted as ``Cmd.MIDI_LEARN`` with the matching
-        context (the editor writes it into the zone's ``command``/``actions``, into
-        ``nav[nav]``, into ``capture.key``, or into ``groups[group]``). The captured
+        when given; a perform learn (``perform`` = "velocity" / "multiplier")
+        captures on the perform's ``in_port`` (the default port when it is null), or
+        on ``perform_port`` when given. The key is submitted as ``Cmd.MIDI_LEARN``
+        with the matching context (the editor writes it into the zone's
+        ``command``/``actions``, into ``nav[nav]``, into ``capture.key``, into
+        ``groups[group]``, or into ``perform.cc_a`` / ``perform.cc_b``). The captured
         message is **not** dispatched, so arming learn never moves the robot.
         """
-        if capture is not None:
+        if perform is not None:
+            port = self._perform_in_port()
+            if isinstance(perform_port, int) and not isinstance(perform_port, bool) and perform_port >= 0:
+                port = perform_port
+            self._learn = {"port": port, "zone": None, "action": None, "nav": None,
+                            "capture": None, "group": None, "perform": perform}
+        elif capture is not None:
             port = self._capture_in_port()
             if isinstance(capture_port, int) and not isinstance(capture_port, bool) and capture_port >= 0:
                 port = capture_port
@@ -804,14 +827,20 @@ class MidiInput:
                                    "action": self._learn["action"],
                                    "nav": self._learn["nav"],
                                    "capture": self._learn["capture"],
-                                   "group": self._learn.get("group")})
+                                   "group": self._learn.get("group"),
+                                   "perform": self._learn.get("perform")})
                     self._learn = None
             return
+        # Perform-mode gating: while performing + moving, discard the move-triggering
+        # keys (zone/action triggers, nav, legacy) so the performance is not
+        # interrupted. The velocity/multiplier CCs, clock, learn, capture, and groups
+        # below are NOT gated and continue to flow.
+        gated = self._perform_gated()
         # Per-zone dispatch: a matching command or actions key → TRIGGER_ACTION.
-        if self._dispatch_zone_key(port, message):
+        if not gated and self._dispatch_zone_key(port, message):
             return
         # Nav dispatch: the global navigation keys (on the nav's in_port).
-        if self._dispatch_nav(port, message):
+        if not gated and self._dispatch_nav(port, message):
             return
         # Capture dispatch: the global snapshot-grab key (on the capture's in_port).
         if self._dispatch_capture(port, message):
@@ -823,7 +852,7 @@ class MidiInput:
         if self._dispatch_perform(port, message):
             return
         # Legacy fallback: only on the default port.
-        if port == self.in_port:
+        if not gated and port == self.in_port:
             self._legacy_dispatch(message)
 
     def _dispatch_nav(self, port, message) -> bool:
@@ -921,11 +950,21 @@ class MidiInput:
                 return m
         return STANDARD_MULTIPLIERS
 
+    def _perform_gated(self) -> bool:
+        """True while performing (control_mode == "perform") and the robot is moving.
+
+        The perform-mode MIDI gating: while the robot is mid-performance and moving,
+        the move-triggering keys (zone/action triggers, nav, legacy) are discarded so
+        the performance is not interrupted by stray keys. The velocity/multiplier CCs,
+        the 0xF8 clock, learn capture, capture, and groups are NOT gated (they flow).
+        """
+        return self._moving and self._control_mode == "perform"
+
     def _dispatch_perform(self, port, message) -> bool:
         """Match the perform CCs on the perform in_port; submit PERFORM_* commands.
 
-        CC-A (velocity): the raw CC value (0-127) is normalized to 0.0-1.0 and
-        submitted as ``Cmd.PERFORM_VELOCITY``.
+        CC-A (velocity): the raw CC value (0-127) is re-expressed on the 0-100 scale
+        (100 = max deg/s) and submitted as ``Cmd.PERFORM_VELOCITY``.
         CC-B (multiplier): the CC value (0-127) bands across the perform multiplier
         steps (1/16 … 16, divide and multiply) and is submitted as
         ``Cmd.PERFORM_MULTIPLIER``.
@@ -944,7 +983,7 @@ class MidiInput:
         cc_a = perf.get("cc_a")
         cc_b = perf.get("cc_b")
         if cc_a is not None and cc == cc_a:
-            self._submit(Cmd.PERFORM_VELOCITY, {"value": value / 127.0})
+            self._submit(Cmd.PERFORM_VELOCITY, {"value": value * (100.0 / 127.0)})
             return True
         if cc_b is not None and cc == cc_b:
             multipliers = self._perform_multipliers()

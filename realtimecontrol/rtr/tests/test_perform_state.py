@@ -1,7 +1,7 @@
 """Test: Machine perform state (rtr/state/machine.py perform dict).
 
 Covers:
-- set_perform_velocity (clamping to 0.0-1.0).
+- set_perform_velocity (clamping to 0.0-100.0, where 100 = max deg/s).
 - set_perform_multiplier (only accepts 1/2/4/8/16).
 - update_perform_deadline (base_beats × multiplier × 60/BPM).
 - update_perform_time_to_arrive (max over per-joint motion-profile times, late flag).
@@ -62,15 +62,15 @@ def test_perform_initial_state():
 
 
 def test_set_perform_velocity():
-    """set_perform_velocity clamps to [0.0, 1.0]."""
+    """set_perform_velocity clamps to [0.0, 100.0] (100 = max deg/s)."""
     m = _make_machine()
-    m.set_perform_velocity(0.5)
-    assert m.perform["velocity"] == 0.5
+    m.set_perform_velocity(50)
+    assert m.perform["velocity"] == 50.0
 
-    m.set_perform_velocity(2.0)
-    assert m.perform["velocity"] == 1.0
+    m.set_perform_velocity(150.0)
+    assert m.perform["velocity"] == 100.0
 
-    m.set_perform_velocity(-0.5)
+    m.set_perform_velocity(-50)
     assert m.perform["velocity"] == 0.0
 
 
@@ -147,7 +147,7 @@ def test_update_perform_time_to_arrive_max_over_joints():
     m = _make_machine()
     m.set_perform_velocity_max_deg_s(30.0)
     m.set_perform_acceleration_max_deg_s2(100.0)
-    m.set_perform_velocity(1.0)  # v = 1.0 × 30.0 = 30.0 deg/s
+    m.set_perform_velocity(100)  # v = 100/100 × 30.0 = 30.0 deg/s
     # joint 0: D=30.0 → trapezoidal 1.3 s; joint 1: D=4.0 → triangular 0.4 s.
     # max(1.3, 0.4, 0, 0, 0, 0) = 1.3 s
     m.update_perform_time_to_arrive([30.0, 4.0, 0.0, 0.0, 0.0, 0.0])
@@ -159,7 +159,7 @@ def test_update_perform_time_to_arrive_late():
     m = _make_machine()
     m.set_perform_velocity_max_deg_s(30.0)
     m.set_perform_acceleration_max_deg_s2(100.0)
-    m.set_perform_velocity(0.5)  # v = 0.5 × 30.0 = 15.0 deg/s
+    m.set_perform_velocity(50)  # v = 50/100 × 30.0 = 15.0 deg/s
     m.set_perform_multiplier(1)
     m.update_perform_deadline(base_beats=4, bpm=120.0)
     # deadline = 4 × 1 × (60/120) = 2.0 s
@@ -174,7 +174,7 @@ def test_update_perform_time_to_arrive_not_late():
     m = _make_machine()
     m.set_perform_velocity_max_deg_s(30.0)
     m.set_perform_acceleration_max_deg_s2(100.0)
-    m.set_perform_velocity(1.0)  # v = 30.0 deg/s
+    m.set_perform_velocity(100)  # v = 100/100 × 30.0 = 30.0 deg/s
     m.set_perform_multiplier(16)
     m.update_perform_deadline(base_beats=4, bpm=120.0)
     # deadline = 4 × 16 × 0.5 = 32.0 s
@@ -216,7 +216,7 @@ def test_perform_state_sanitizes_infinite_time_to_arrive():
     assert s["time_to_arrive"] is None
 
     # Finite values pass through untouched.
-    m.set_perform_velocity(1.0)  # v = 30.0 deg/s
+    m.set_perform_velocity(100)  # v = 100/100 × 30.0 = 30.0 deg/s
     m.update_perform_time_to_arrive([30.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     s2 = m.perform_state()
     assert abs(s2["time_to_arrive"] - 1.3) < 1e-9
@@ -225,10 +225,10 @@ def test_perform_state_sanitizes_infinite_time_to_arrive():
 def test_perform_state_returns_copy():
     """perform_state() returns a copy (mutations don't affect the machine)."""
     m = _make_machine()
-    m.set_perform_velocity(0.5)
+    m.set_perform_velocity(50)
     s = m.perform_state()
-    s["velocity"] = 0.99
-    assert m.perform["velocity"] == 0.5
+    s["velocity"] = 99
+    assert m.perform["velocity"] == 50.0
 
 
 def main():

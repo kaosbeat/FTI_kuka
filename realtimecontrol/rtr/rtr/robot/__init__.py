@@ -8,6 +8,7 @@ from .config import (
     robot_config_offsets,
     robot_config_patch_mode,
     robot_config_red_light,
+    robot_config_axis_max_deg_s,
     validate_robot_config,
 )
 from .helpers import (
@@ -34,6 +35,7 @@ __all__ = [
     "robot_config_offsets",
     "robot_config_patch_mode",
     "robot_config_red_light",
+    "robot_config_axis_max_deg_s",
     "validate_robot_config",
     "fitlimits",
     "checklimits",

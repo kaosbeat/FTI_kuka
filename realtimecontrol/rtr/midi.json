@@ -204,7 +204,16 @@
       "in_port": 0,
       "command": "note:0:71",
       "actions": {
-        "tickle": "note:0:72"
+        "tickle": "note:0:72",
+        "irritated": "note:0:73"
+      }
+    },
+    "kb_fast": {
+      "in_port": null,
+      "command": "note:0:81",
+      "actions": {
+        "powerplay": "note:0:82",
+        "powerclaw": "note:0:83"
       }
     }
   },
@@ -229,5 +238,6 @@
   },
   "clock": {
     "in_port": 0
-  }
+  },
+  "perform": {}
 }

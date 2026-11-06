@@ -8,7 +8,8 @@ and hot-reloaded via the ``RELOAD_ROBOT_CONFIG`` command.
 
 Shape::
 
-    { "joint_offsets_deg": [0, 0, 0, 0, 0, 0] }
+    { "joint_offsets_deg": [0, 0, 0, 0, 0, 0],
+      "axis_max_deg_s": [60, 60, 60, 120, 120, 180] }
 
 - ``joint_offsets_deg`` — the physical robot's A1..A6 home, shifted by these
   degrees relative to the core's virtual joint space. On the way out the offset is
@@ -17,6 +18,10 @@ Shape::
   (comparelist) keeps firing. Index 5 (A6) is the calibration the user tunes; the
   others default to 0 (no change) and are left in so more axes can be calibrated
   later.
+- ``axis_max_deg_s`` — the max angular speed (deg/s) of each axis A1..A6 at zone
+  speed 100. The zone speed (0-100) is a percentage of these maxes; CC-A (0-100)
+  further scales the result. Best-guess defaults for a KUKA robot in a performance
+  context; the user tunes them in the robotconfig tab to match the real robot.
 
 Unknown top-level keys are preserved (not clobbered) so the config can grow new
 calibration parameters without losing hand-edited data.
@@ -29,6 +34,12 @@ JOINT_COUNT = 6
 JOINT_OFFSETS_KEY = "joint_offsets_deg"
 PATCH_MODE_KEY = "patch_mode"
 RED_LIGHT_KEY = "red_light"
+# Per-axis max angular speed (deg/s) at zone speed 100. The zone speed (0-100)
+# is a percentage of these maxes; CC-A (0-100) further scales the result.
+# Best-guess defaults for a KUKA robot in a performance context; the user
+# tunes them in the robotconfig tab to match the real robot's angular speeds.
+AXIS_MAX_DEG_S_KEY = "axis_max_deg_s"
+DEFAULT_AXIS_MAX_DEG_S: List[float] = [60.0, 60.0, 60.0, 120.0, 120.0, 180.0]
 # The LED-wall calibration overlay: a pulsating red light drawn on the render
 # page (a 1px-wide vertical bar that blooms into a circle on the MIDI clock),
 # positioned by a normalized (x, y) offset. The core only normalizes it — it is
@@ -55,6 +66,7 @@ VALID_PATCH_MODES = ("video", "complex")
 DEFAULT_ROBOT_CONFIG: Dict[str, Any] = {
     JOINT_OFFSETS_KEY: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
     PATCH_MODE_KEY: DEFAULT_PATCH_MODE,
+    AXIS_MAX_DEG_S_KEY: list(DEFAULT_AXIS_MAX_DEG_S),
 }
 
 
@@ -63,6 +75,7 @@ def builtin_robot_config() -> Dict[str, Any]:
     return {
         JOINT_OFFSETS_KEY: list(DEFAULT_ROBOT_CONFIG[JOINT_OFFSETS_KEY]),
         PATCH_MODE_KEY: DEFAULT_PATCH_MODE,
+        AXIS_MAX_DEG_S_KEY: list(DEFAULT_AXIS_MAX_DEG_S),
     }
 
 
@@ -93,8 +106,10 @@ def validate_robot_config(data: Any) -> Dict[str, Any]:
     """Validate and normalise a robot config. Returns the filled config or raises :class:`ValueError`.
 
     ``joint_offsets_deg`` is type-checked and filled from the defaults; ``patch_mode``
-    is validated against :data:`VALID_PATCH_MODES` and filled from the default; any
-    other top-level keys are preserved verbatim so the config can grow new parameters.
+    is validated against :data:`VALID_PATCH_MODES` and filled from the default;
+    ``axis_max_deg_s`` is type-checked as a list of 6 numbers (filled from the
+    defaults); any other top-level keys are preserved verbatim so the config can
+    grow new parameters.
     """
     if not isinstance(data, dict):
         raise ValueError("data must be an object")
@@ -103,6 +118,9 @@ def validate_robot_config(data: Any) -> Dict[str, Any]:
         data.get(JOINT_OFFSETS_KEY), JOINT_OFFSETS_KEY, JOINT_COUNT,
         DEFAULT_ROBOT_CONFIG[JOINT_OFFSETS_KEY])
     out[PATCH_MODE_KEY] = _patch_mode(data.get(PATCH_MODE_KEY), PATCH_MODE_KEY)
+    out[AXIS_MAX_DEG_S_KEY] = _num_list(
+        data.get(AXIS_MAX_DEG_S_KEY), AXIS_MAX_DEG_S_KEY, JOINT_COUNT,
+        DEFAULT_AXIS_MAX_DEG_S)
     return out
 
 
@@ -115,6 +133,20 @@ def load_robot_config(path: str) -> Dict[str, Any]:
 def robot_config_offsets(config: Dict[str, Any]) -> List[float]:
     """The 6-element joint offset list from a robot config (defaults if absent)."""
     return list(config.get(JOINT_OFFSETS_KEY, DEFAULT_ROBOT_CONFIG[JOINT_OFFSETS_KEY]))
+
+
+def robot_config_axis_max_deg_s(config: Dict[str, Any]) -> List[float]:
+    """The 6-element per-axis max angular speed list (deg/s at zone speed 100).
+
+    Returns the defaults when the field is absent or malformed.
+    """
+    vals = config.get(AXIS_MAX_DEG_S_KEY)
+    if isinstance(vals, (list, tuple)) and len(vals) == JOINT_COUNT:
+        try:
+            return [float(v) for v in vals]
+        except (TypeError, ValueError):
+            pass
+    return list(DEFAULT_AXIS_MAX_DEG_S)
 
 
 def robot_config_patch_mode(config: Dict[str, Any]) -> str:

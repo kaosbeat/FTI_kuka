@@ -49,10 +49,12 @@ It serves two kinds of requests:
     ``midi.json`` and submit a ``RELOAD_MIDI`` command so the running core hot-reloads.
     On validation failure the file is untouched and a 400 is returned.
   - ``GET /api/midi/ports`` → the available MIDI in ports (for the input-device picker).
-   - ``POST /api/midi/learn`` → arm (``{"action": "start"}``) or disarm
-     (``{"action": "stop"}``) the learn capture on the running :class:`MidiInput`.
-     A start may target a zone command (``zone``), a zone action (``zone`` +
-     ``action_name``), or a global navigation command (``nav``).
+    - ``POST /api/midi/learn`` → arm (``{"action": "start"}``) or disarm
+      (``{"action": "stop"}``) the learn capture on the running :class:`MidiInput`.
+      A start may target a zone command (``zone``), a zone action (``zone`` +
+      ``action_name``), a global navigation command (``nav``), the capture key
+      (``capture``), a group key (``group``), or a perform CC (``perform`` =
+      ``velocity`` / ``multiplier``).
 - **The pose-images API** (per-pose reference images, cropped + resized to a
   768×768 square, stored under ``assets/imgs/``):
    - ``POST /api/imgs`` → process an uploaded image (JSON: base64 ``image`` + a
@@ -710,7 +712,9 @@ def _make_handler(server: HttpServer):
             else:
                 server.midi.start_learn(
                     req.get("zone"), req.get("action_name"), req.get("nav"),
-                    req.get("nav_port"), req.get("capture"), req.get("capture_port"))
+                    req.get("nav_port"), req.get("capture"), req.get("capture_port"),
+                    req.get("group"), req.get("group_port"),
+                    req.get("perform"), req.get("perform_port"))
             self._send_json(200, {"ok": True, "learning": server.midi.is_learning})
 
         # ------------------------------------------------------------------
