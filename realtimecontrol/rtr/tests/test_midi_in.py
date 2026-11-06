@@ -245,9 +245,10 @@ def test_builtin_midi_data_is_empty_zones():
                                       "nav": {"in_port": None, "next_action": None,
                                                "next_zone": None, "back": None,
                                                "retrigger": None, "next_pose": None},
-                                      "capture": {"in_port": None, "key": None},
-                                      "groups": {"in_port": None},
-                                      "perform": {"in_port": None, "cc_a": None, "cc_b": None}}
+                                       "capture": {"in_port": None, "key": None},
+                                       "groups": {"in_port": None},
+                                       "perform": {"in_port": None, "cc_a": None, "cc_b": None},
+                                       "clock": {"in_port": None}}
 
 
 def test_load_midi_data_reads_and_validates():

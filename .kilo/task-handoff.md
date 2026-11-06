@@ -1,5 +1,60 @@
 # Task Handoff Log
 
+## 2026-11-06 — Perform mode: dedicated MIDI clock, arrival-gated triggers, coordinated trapezoidal move
+
+### Status
+
+Completed
+
+### Summary
+
+Completed the RTR `perform` mode repairs: (1) the MIDI clock is received on a dedicated clock input port; (2) incoming MIDI triggers are held until the robot arrives at the current pose before advancing; (3) the coordinated move paces every moving axis so they all arrive on the same tick; and (4) the circular import that blocked `machine.py` startup is resolved by relocating `motion_profile_time` to the shared `rtr/robot/helpers.py`. The three state/zone/midi tests that still encoded the old behavior were updated to match the committed behavior.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/robot/helpers.py`: Added `motion_profile_time(distance_deg, vmax_deg_s, accel_deg_s2)` (pure function, alongside `comparelist`/`clamp_pose`). This is the trapezoidal/triangular rest-to-rest time for one joint axis. Now the single shared home for the function.
+- `realtimecontrol/rtr/rtr/state/machine.py`: Removed the local `motion_profile_time` definition (was lines 33-49); line 28 now imports it from `..robot.helpers`. `_cadence_due()` perform branch now gates the `_midi_pulse` on arrival: it requires `self.target is not None and comparelist(curjpos, self.target, margin=0.1, count=5)` before consuming the pulse; if not arrived it returns `False` and keeps the pulse armed so it fires on the arrival tick.
+- `realtimecontrol/rtr/rtr/robot/sim.py`: `get_curjpos()` now computes `T = max(motion_profile_time(|diff_i|, speed, accel))` each tick (streaming re-time) and paces each axis at `|diff|/T` deg/s so all moving axes arrive simultaneously. Added `accel_deg_s2: float = 100.0` param (matches `DEFAULT_PERFORM_CONFIG["acceleration_max_deg_s2"]`); stored as `self._accel`. Import changed from `..state.machine` to `.helpers` (same package, no cycle).
+- `realtimecontrol/rtr/rtr/io/midi.py`: Added the `clock` section handling — `builtin_midi_data()` returns `"clock": {"in_port": None}`; `validate_midi_data()` validates it (non-negative int or null, unknown fields rejected); added `_clock_in_port()` helper; `_in_ports()` now adds the clock port so the `0xF8` ticks reach the `BeatClock` even when no other section shares that port.
+- `realtimecontrol/rtr/midi.json`: Added the top-level `clock` section with `in_port` (null = default port).
+- `realtimecontrol/rtr/editor.html`: Wrapped `#midiMonitorSection` + `#midiAllSection` in a `#midiRightCol` column with sticky CSS (`grid-column: 2; position: sticky; top: 8px; align-self: start; display: grid; gap: 16px;`). `#midiMonitor`/`#midiAllList` IDs preserved; HTML verified well-formed.
+- `realtimecontrol/rtr/tests/test_midi_in.py`: `test_builtin_midi_data_is_empty_zones` — added `"clock": {"in_port": None}` to the expected dict.
+- `realtimecontrol/rtr/tests/test_state_machine.py`: `test_perform_midi_pulse_advances_anchor` — added arrival simulation: the pulse is held before arrival (robot at `[0]`, target `[1]`) and fires on the arrival tick (`step([1]*6)`), so the pose is never jumped before the robot reaches the current pose.
+- `realtimecontrol/rtr/tests/test_zone_groups.py`: Renamed `test_manual_mode_clears_active_group` → `test_manual_mode_preserves_active_group`; manual mode no longer clears the active group (only `assertive` does), so the test now asserts the group persists.
+
+### Documentation
+
+None required — the in-code docstrings in `machine.py` (`_cadence_due`, `midi_pulse`), `midi.py` (`builtin_midi_data`, `_clock_in_port`), and `sim.py` describe the new behavior.
+
+### Architecture
+
+No new architectural impact beyond the perform-mode design already in place. The only structural change is that `motion_profile_time` now lives in `rtr/robot/helpers.py` (a shared, cycle-free home) instead of `rtr/state/machine.py`; both `machine.py` and `sim.py` import it from there.
+
+### Validation
+
+- `py_compile` on `machine.py`, `sim.py`, `helpers.py`, `midi.py` → ALL COMPILE OK.
+- Import check: `from rtr.state.machine import motion_profile_time; from rtr.robot import SimRobot; from rtr.io.midi import builtin_midi_data` → imports OK, no circular import; `builtin_midi_data()["clock"]` == `{"in_port": None}`.
+- `python -m pytest tests/ -q` → **457 passed, 12 skipped, 6 failed**.
+- The 6 failures are all in `tests/test_remote_sdl.py` and are **pre-existing / environmental**, unrelated to this work: `test_settings_content_and_help_text`, `test_setup_page_activation_returns_none_cmds`, `test_setup_calibrate_activation_returns_prompt`, `test_setup_map_activation_returns_capture_status`, `test_setup_dpad_left_right_still_font_on_font_row` (TUI rendering/font), and `test_pak_config_is_valid_and_loads` (PAK `joy_map` no longer contains `310`/`311` after the `826211c redlight` commit rewrote it). None of these tests reference the changed areas (`motion_profile_time`, perform mode, clock, midi, `active_group`, `set_control_mode`).
+
+### Decisions and Caveats
+
+- The streaming coordinated arrival (all moving axes at tick 89 for the 90° axes) is longer than the initial `T` estimate (66 ticks = 3.3 s @ 20 Hz) because profile time is nonlinear in distance; it is consistent with the engine's streaming `time_to_arrive`. The 10° axis snaps at tick 86 due to the 0.05 snap epsilon.
+- `perform.json` has `velocity_max_deg_s: 30` but is missing `acceleration_max_deg_s2`; the code default in `perform.py` is `100.0`.
+- The invalid-JSON broadcast fix (sanitizing infinite `time_to_arrive` → `None` in `perform_state()`) and the active-group persistence (only `assertive` clears `active_group`) were already in place from the prior session and are unchanged here.
+
+### Next Task
+
+Physical/hardware verification on the LED wall and real MIDI devices: confirm the dedicated clock port drives the `BeatClock`, that MIDI triggers advance only on arrival, and that the coordinated move makes all axes arrive together.
+
+### Instructions for the Next Task
+
+1. Open the editor and confirm the `#midiRightCol` (monitor + all-midi list) is sticky in the right column.
+2. Connect the external clock device to the `clock.in_port` in `midi.json`; confirm `BeatClock` receives `0xF8` ticks.
+3. In perform mode, fire a MIDI trigger mid-move and confirm the advance is deferred to the arrival tick (no pose jump).
+4. Run a multi-axis perform move and confirm all axes arrive on the same tick (watch `perform.time_to_arrive` in the state frames).
+5. The 6 `test_remote_sdl.py` failures are pre-existing/environmental and can be left for a separate TUI/PAK-config task.
+
 ## 2026-11-06 — Red-light overlay: WebGL → 2D canvas replacement
 
 ### Status

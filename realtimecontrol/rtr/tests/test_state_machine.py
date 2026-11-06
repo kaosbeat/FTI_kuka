@@ -406,7 +406,9 @@ def test_perform_mode_blocks_auto_advance():
 def test_perform_midi_pulse_advances_anchor():
     """In perform mode the midi pulse arms and advances the current action's
     anchor (manual advance on top of the arrival auto-advance), regardless of
-    the base cadence (forced to arrival on entry)."""
+    the base cadence (forced to arrival on entry). A trigger that lands before
+    arrival is held (the pulse stays armed) and fires on the arrival tick, so the
+    pose is never jumped before the robot reaches the current pose."""
     data = validate_state_data({"zones": {
         "a": {"safezone": [[0, 10]] * 6, "speed": 1,
               "actions": {"spin": {"poses": [[1] * 6, [2] * 6, [3] * 6]}}}}})
@@ -420,6 +422,9 @@ def test_perform_midi_pulse_advances_anchor():
     m.midi_pulse()
     assert m._midi_pulse is True  # armed despite the arrival cadence
     m.step([0] * 6)
+    assert m.action_index == 0  # trigger landed before arrival -> held
+    assert m._midi_pulse is True  # still armed
+    m.step([1] * 6)  # robot reaches the target; the held pulse fires here
     assert m.action_index == 1  # pulse consumed, advanced once
     assert m._midi_pulse is False
     m.step([0] * 6)

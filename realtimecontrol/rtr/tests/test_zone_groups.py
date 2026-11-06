@@ -243,14 +243,16 @@ def test_clear_group_resets_state():
 # Manual-mode interlock.
 # ---------------------------------------------------------------------------
 
-def test_manual_mode_clears_active_group():
-    """Setting control mode to manual while a group is active clears the group."""
+def test_manual_mode_preserves_active_group():
+    """Setting control mode to manual while a group is active keeps the group
+    (only assertive mode clears it; manual leaves it inert but re-engaging when
+    the control mode leaves manual)."""
     brain, machine = _make_brain()
     _setup_brain_at(brain, machine, "a", "a1")
     brain.on_command(Command(cmd=Cmd.ENABLE_GROUP, payload={"group": "g2"}), [0.0] * 6)
     assert brain.active_group == "g2"
     brain.on_command(Command(cmd=Cmd.SET_CONTROL_MODE, payload={"mode": "manual"}), [0.0] * 6)
-    assert brain.active_group is None
+    assert brain.active_group == "g2"
 
 
 def test_auto_mode_preserves_active_group():
