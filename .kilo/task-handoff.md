@@ -1,5 +1,198 @@
 # Task Handoff Log
 
+## 2026-11-07 — Standalone KUKA speed-measurement tool: measure per-axis top speed / accel / braking, output robotconfig drop-in
+
+### Status
+
+Completed
+
+### Summary
+
+Built `realtimecontrol/rtr/measure_speed.py`, a standalone terminal tool (no web UI, not part of `main.py`) that measures the real KUKA's angular speed profile so the operator can drop a measured profile into `robotconfig.json` (`axis_max_deg_s`) and the perform-mode speed model. It borrows only the EKI connection (the vendored `kukapy.robot.Robot`), commands a PTP move at a given velocity % + acceleration % (default 100/100 = as fast as possible), and samples `get_curjpos()` as fast as the single-flight EKI link allows, recording `(t, pose)`. From the position-vs-time trace it recovers, per axis: top speed (deg/s), acceleration (deg/s²), braking (deg/s²), and the profile shape (trapezoidal = reached the true max; triangular = top speed is a lower bound). It tests each axis individually (one axis moves by a configurable `--amplitude`, clamped to the KR60 hardware joint limits) and, with `--combined`, all six axes at once. It parks the robot at a safe speed between tests and on Ctrl-C. A `SimDriver` runs the identical pipeline headlessly for validation.
+
+### Changes Made
+
+- `realtimecontrol/rtr/measure_speed.py` (new, standalone):
+  - `analyze_run(samples, axis)` — pure analysis: interval-difference velocity (smoothed with a 5-sample moving average), `top_speed` = velocity peak, `accel` = `top_speed / ramp_time` (time from the first sample until the velocity first reaches 95% of the peak), `brake` = `top_speed / (stop - end_of_plateau)` (from the END of the plateau until the velocity last drops below 5%), and the profile label. Trapezoidal vs triangular is decided analytically: trapezoidal when the move duration exceeds the pure-triangular minimum (`2 * top_speed / accel`) by >10% (a real plateau); otherwise triangular (top speed is a lower bound).
+  - `RealDriver` — the physical KUKA via the vendored `kukapy.robot.Robot` (raw client, exposes `velocity` + `acceleration` %, `get_curjpos()` in degrees).
+  - `SimDriver` — the headless `SimRobot` (treats `velocity` as deg/s; its constant-velocity pacing validates the pipeline with no hardware).
+  - `sample_run()` — commands a stream move (`cnt_val > 0`) and samples until arrival/timeout, with a stale all-zero read guard.
+  - `park()` — moves to a pose at a safe speed (20%) and polls until arrival.
+  - `run_all()` — individual-axis tests (one axis +amplitude, clamped to `HARDWARE_LIMITS`) + optional combined test (all six +amplitude); parks between tests.
+  - CLI: `--ip --port --sim --amplitude --axes --combined --velocity --acceleration --timeout --out --dry-run`.
+  - SIGINT handler stops the robot (blocking move holding the current pose at 1% speed).
+  - `print_report()` + `write_profile()` — a terminal table and a JSON file with the `axis_max_deg_s` drop-in (+ the max accel for `acceleration_max_deg_s2`).
+  - Incomplete-drop-in guard: axes that were not measured (skipped for lack of room, or an error) are collected into `missing_axes`; the report prints a loud `!! INCOMPLETE` warning and the JSON `drop_in` now carries `complete` + `missing_axes` so a `0.0` placeholder can't be silently copied into `robotconfig.json` (a `0.0` would disable that axis in perform mode).
+
+### Documentation
+
+None required — the module docstring documents the tool's purpose, how it works, the safety model, and the CLI usage.
+
+### Architecture
+
+No core change. This is a standalone diagnostic that borrows the EKI connection (`kukapy.robot.Robot`) and the hardware limits (`rtr/state/zones.py::HARDWARE_LIMITS`) but is not wired into `main.py`, `machine.py`, or any web page. Its output is a drop-in for `robotconfig.json`'s `axis_max_deg_s` (the field the perform-mode speed model reads) and a suggested `acceleration_max_deg_s2`.
+
+### Validation
+
+- `python3 measure_speed.py --sim --combined` → runs end-to-end: connects, reads home `[0,-90,90,0,90,0]`, runs all six individual tests + the combined test, parks, and prints a report. `top_speed` is recovered correctly (A1/A2/A3/A4/A6 = 33.4 deg/s for a 45-deg move; A5 = 15.7 because it clamps to a 10-deg range). `accel`/`brake` are `-` because the sim produces a constant-velocity profile (no ramp) — expected.
+- `python3 measure_speed.py --sim --combined --out /tmp/kilo/speed_sim.json` → writes the JSON; `drop_in.axis_max_deg_s = [33.4, 33.4, 33.4, 33.4, 15.7, 33.4]`.
+- Pure-analysis test on synthetic traces: a real trapezoidal profile (a=100, vmax=100) recovers `top_speed=100, accel=105, brake=105, profile=trapezoidal`; a triangular profile (a=100, D=50) recovers `top_speed=70.1, accel=105, brake=106, profile=triangular`. Both correct.
+- `python3 measure_speed.py --dry-run` → prints the plan (home pose, per-axis clamp ranges) without moving the robot.
+- `RealDriver` import + `parse_axes('1-4')` → `[0,1,2,3]`, `parse_axes('2,5')` → `[1,4]` → OK.
+
+### Decisions and Caveats
+
+- **`--sim` is a pipeline smoke-test, not a real measurement.** The sim paces each axis at a constant `|diff|/t_total` deg/s (the average speed), so it produces a flat velocity profile: `top_speed` comes out as the average (a sensible positive number) but `accel`/`brake` are `None`. The real trapezoidal/triangular analysis is validated separately on synthetic traces.
+- **trapezoidal vs triangular is an analytic check, not a curve-shape check.** Comparing the measured duration to the pure-triangular minimum (`2 * top_speed / accel`) is robust to the moving-average smoothing that broadens a triangular peak (a curve-shape check on the smoothed velocity mislabels a broad triangular peak as trapezoidal).
+- **The accel/brake estimates assume a clean trapezoid.** For a real trapezoidal move, `accel ≈ brake ≈ the controller's real max accel` (recovered within ~5%). For a triangular move, `accel` still recovers the controller's real max accel (the axis ramps at max accel to its sub-max peak).
+- **Incomplete drop-in is now flagged, not silent.** Running from a pose near a hardware limit skips that axis (no room), which previously produced an unflagged `0.0` in the drop-in. Now such axes land in `missing_axes` and the report/JSON warn loudly. A `0.0` must never be copied into `robotconfig.json`. Re-validated: a full `--sim --combined` run still yields `complete: true, missing_axes: []` and the same `[33.4, 33.4, 33.4, 33.4, 15.7, 33.4]` drop-in.
+- **Safety:** each test starts from the current pose and moves only `--amplitude` degrees (clamped to `HARDWARE_LIMITS`), then returns to the start pose. Ctrl-C stops the robot. The real-robot run has NOT been exercised here (no hardware in this environment) — only the `--sim`, `--dry-run`, and pure-analysis paths were validated.
+
+### Next Task
+
+Physical/hardware verification: on the real KUKA, run `python measure_speed.py` (and `--combined`) to capture the true per-axis top speeds and the controller's real max accel, then drop the measured `axis_max_deg_s` (and `acceleration_max_deg_s2`) into `robotconfig.json`.
+
+### Instructions for the Next Task
+
+1. Confirm the plan before any movement: `python measure_speed.py --dry-run` (shows the home pose and per-axis clamp ranges).
+2. Run `python measure_speed.py --combined --out speed.json` at the robot. Raise `--amplitude` until the report shows `profile=trapezoidal` for every axis (a triangular row means the move was too short to reach that axis's true max — its `top_speed` is a lower bound).
+3. Copy the printed `axis_max_deg_s` into `robotconfig.json` (and the max accel into `acceleration_max_deg_s2`). The perform-mode speed model (`machine._current_speed`) already reads `axis_max_deg_s`.
+4. If a reading looks wrong (e.g. an axis reports a far-lower top speed than expected), re-run that axis alone with `--axes <n>` and a larger `--amplitude`.
+
+## 2026-11-07 — MIDI `commands` section: `random_wrist` + `adjust_limit` learnable in editor; legacy hardcoded protocol removed
+
+### Status
+
+Completed
+
+### Summary
+
+Removed all hardcoded MIDI mappings from the `MidiInput` adapter and made every mapped MIDI function — including the two previously-hardcoded global commands `random_wrist` and `adjust_limit` — listed and learnable in `editor.html`'s MIDI-in tab. A new top-level `commands` section in `midi.json` now carries: an optional `in_port` (MIDI-in device index the command keys are learned and dispatched on; null = default port), a `random_wrist` key (a full MIDI message key, e.g. `"100:0"`), and an `adjust_limit` map with three CC slots (`cc_0`/`cc_1`/`cc_2`, each an int 0-127 or null). A message on the commands port whose key matches `random_wrist` dispatches `Cmd.RANDOM_WRIST`; a CC message on the commands port whose CC number matches one of the `adjust_limit` slots dispatches `Cmd.ADJUST_LIMIT` with the slot index (0/1/2) as the axis. Learn capture is armed per-command: `start_learn(command="random_wrist")` or `start_learn(command="adjust_limit", command_cc="cc_1")` captures the next mappable message on the commands port and submits it to the editor (which writes the key/CC into the right slot). The captured message is never dispatched. The legacy hardcoded protocol (CC-1 zone map, program-change action index, note-on play) is fully removed — unmapped messages are now simply ignored.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/io/midi.py`:
+  - Added `commands` to `builtin_midi_data()` (default `{"in_port": None, "random_wrist": None, "adjust_limit": {"cc_0": None, "cc_1": None, "cc_2": None}}`).
+  - Added `commands` validation in `validate_midi_data()` (in_port: non-negative int or null; random_wrist: valid MIDI key string or null; adjust_limit: object with exactly cc_0/cc_1/cc_2, each int 0-127 or null).
+  - Added `_commands_in_port()` accessor (returns the commands port or None).
+  - Updated `_in_ports()` to include the commands port.
+  - Added `_dispatch_commands(port, message)` — routes a message on the commands port: key match on `random_wrist` → `Cmd.RANDOM_WRIST`; CC match on an `adjust_limit` slot → `Cmd.ADJUST_LIMIT(axis=slot_index, value=message_value)`.
+  - Wired `_dispatch_commands()` into `_on_message()` after zone dispatch (only when not gated/learn-armed).
+  - Extended `start_learn()` to accept `command` (`"random_wrist"` or `"adjust_limit"`) and `command_cc` (`"cc_0"`/`"cc_1"`/`"cc_2"`) params; when arming a command learn, captures on the commands port and includes `command`/`command_cc` in the learn payload.
+  - Added `command`/`command_cc` fields to the learn payload emitted on capture (both None when not arming a command learn).
+  - **Removed** the legacy protocol: `ZONE_BY_CC1`, `_legacy_dispatch`, `_handle_cc`, `_play_action_by_index`, `_handle_note`.
+  - Updated module docstring to remove legacy fallback language and document the `commands` section.
+- `realtimecontrol/rtr/editor.html`:
+  - Added `#midiCommands` HTML section (after groups, before clock) with help text.
+  - Added `buildMidiCommands()` — builds the commands UI: in_port picker, random_wrist key editor + learn button, three adjust_limit CC rows (each with CC number input + learn button). Called from `buildMidiInForm()` between `buildMidiGroups()` and `buildMidiClock()`.
+  - Extended `midiLearn()` signature with `command`, `commandCc`, `commandPort` params.
+  - Extended WS `midi_learn` handler: `command` branch (first, before `perform`) — for `random_wrist` stores the captured key into `MIDI.commands.random_wrist`; for `adjust_limit` extracts the CC number via `_midiCcFromKey()` and writes it into `MIDI.commands.adjust_limit[command_cc]`, rejecting non-CC captures.
+  - Added command rows to `buildMidiAllList()` (the "all mappings" flat list view).
+  - Added `commands` validation to `validateMidi()` (in_port, random_wrist, adjust_limit.cc_0/cc_1/cc_2).
+  - Added `commands` seeding to `loadMidi()` (seeds `data.commands` before `MIDI = data`).
+- `realtimecontrol/rtr/rtr/io/httpserver.py`: `_post_midi_learn()` now forwards `command`, `command_cc`, `command_port` to `server.midi.start_learn()`.
+- `realtimecontrol/rtr/tests/test_midi_in.py`:
+  - Removed legacy tests: `test_unmapped_falls_back_to_legacy_on_default_port`, `test_legacy_mode_on_default_port`, `test_legacy_only_on_default_port`.
+  - Added `test_unmapped_cc_dispatches_nothing` (replaces the legacy fallback test — unmapped CC now does nothing).
+  - Updated `test_unmapped_note_off_dispatches_nothing` and `test_unmapped_program_dispatches_nothing` comments.
+  - Updated `test_builtin_midi_data_is_empty_zones` to include the `commands` section.
+  - Added validation tests: `test_validate_midi_data_accepts_commands`, `test_validate_midi_data_accepts_null_commands`, `test_validate_midi_data_rejects_bad_commands_in_port`, `test_validate_midi_data_rejects_bad_random_wrist_key`, `test_validate_midi_data_rejects_bad_adjust_limit_cc`, `test_validate_midi_data_rejects_unknown_commands_field`, `test_validate_midi_data_rejects_unknown_adjust_limit_field`.
+  - Added dispatch tests: `test_commands_random_wrist_dispatch`, `test_commands_random_wrist_cc_key`, `test_commands_adjust_limit_dispatch`, `test_commands_scoped_to_port`, `test_commands_unmapped_key_dispatches_nothing`, `test_commands_adjust_limit_not_channel_0`.
+  - Added learn tests: `test_commands_learn_random_wrist_captured_on_commands_port`, `test_commands_learn_adjust_limit_captured_on_commands_port`, `test_commands_learn_scoped_to_commands_port`, `test_commands_learn_not_dispatched`.
+  - Updated existing learn-payload assertions to include `"command": None, "command_cc": None`.
+- `realtimecontrol/rtr/tests/js/test_flow_tab.js`, `tests/js/test_groups_tab.js`, `tests/js/test_action_cam.js`, `tests/js/test_patches_seed.js`, `tests/js/test_roam_badge.js`: added `midiCommands` to `STATIC_IDS` (codebase convention: keep STATIC_IDS complete when the editor gains new element ids).
+
+### Documentation
+
+None required — the `commands` section is documented in `midi.py`'s module docstring (the "Global commands" section describes `in_port`, `random_wrist`, `adjust_limit` slots, dispatch rules, and learn capture). The editor's `#midiCommands` help text explains the UI to the operator.
+
+### Architecture
+
+The MIDI-in adapter previously had two dispatch paths: (1) the per-zone model (zones in `midi.json` → zone actions) and (2) a hardcoded legacy protocol (CC-1 → zone map, program change → action index, note-on → play). This task removes the legacy path and replaces it with a data-driven `commands` section that follows the same pattern as zones/nav/clock: optional `in_port` for port scoping, learnable keys, and dispatch on match. The `commands` port is independent of zone ports — a single MIDI-in device can serve zones, nav, clock, and commands simultaneously (each section's `in_port` selects which device it listens on). The two global commands (`random_wrist`, `adjust_limit`) are now first-class learnable mappings, consistent with the "everything is learned, nothing is hardcoded" design principle.
+
+### Validation
+
+- `pytest tests/test_midi_in.py -q` → **91 passed** (was 78 before; 13 legacy/old tests replaced by 23 new commands tests).
+- `pytest tests/test_midi_in.py tests/test_midi_brain_trigger.py tests/test_clock.py tests/test_perform_http.py tests/test_videos_http.py -q` → **118 passed**.
+- `pytest tests/ --ignore=tests/test_kuka_eki_recv.py --ignore=tests/test_kuka_eki_serialization.py -q` → **470 passed, 14 skipped, 2 failed**. The 2 failures (`test_remote_sdl.py::test_perform_items_send_correct_commands`, `test_remote_sdl.py::test_pak_config_is_valid_and_loads`) are **pre-existing** — verified by reverting my `midi.py` + `httpserver.py` to the parent commit and re-running: both still fail identically without my changes.
+- `node tests/js/test_flow_tab.js` → PASS; `node tests/js/test_groups_tab.js` → PASS; `node tests/js/test_roam_badge.js` → PASS.
+- `node tests/js/test_action_cam.js` (LOAD ERROR) and `node tests/js/test_patches_seed.js` (FAILURES=4) → **pre-existing failures**, verified identical on the parent commit (they fail on the `resting_testing_bridge` zone data assertions, unrelated to MIDI).
+- Collection errors in `tests/test_kuka_eki_recv.py`, `tests/test_kuka_eki_serialization.py` (ModuleNotFoundError: No module named 'kukapy') and `KukaPy/kuka_example/fkik/fk_ik_test.py` (sys.exit at module scope) → **pre-existing**, unrelated.
+
+### Decisions and Caveats
+
+- **`adjust_limit` uses CC number, not full key.** Unlike `random_wrist` (which captures the full message key like `"100:0"`), `adjust_limit` stores only the CC number (0-127). This is because the three slots are meant to map three physical CC sliders to three axis limits; the CC number is the stable identifier, and the value (velocity of the CC message) is used as the limit value. The editor's learn handler extracts the CC via `_midiCcFromKey()` and rejects non-CC captures (e.g. if the operator hits a note instead of a CC).
+- **Commands port is optional.** `commands.in_port` can be null (default port) or omitted entirely (the whole `commands` section can be absent from `midi.json`); in that case no command dispatch occurs. This keeps backward compatibility with existing `midi.json` files that lack the section.
+- **No live ALSA/MIDI hardware in this environment.** End-to-end controller learn and real `0xF8` delivery cannot be empirically verified here; the unit tests use the rtmidi mock pattern established in prior tasks.
+
+### Next Task
+
+Physical/hardware verification: on a live MIDI controller, learn the `random_wrist` key and the three `adjust_limit` CC slots via the editor's MIDI-in tab, then confirm the robot responds (random wrist re-randomization, limit adjustment) when the physical buttons/sliders are hit.
+
+### Instructions for the Next Task
+
+1. The `commands` section in `midi.json` is `{"in_port": int|null, "random_wrist": "key"|null, "adjust_limit": {"cc_0": int|null, "cc_1": int|null, "cc_2": int|null}}`. The editor's MIDI-in tab → "Commands" section provides the learn buttons.
+2. To learn `random_wrist`: click its learn button, hit the desired key on the controller; the key is captured and stored. To learn an `adjust_limit` slot: click that slot's learn button, move the desired CC slider; the CC number is captured and stored.
+3. The commands port (`in_port`) is the MIDI-in device index. If it's null, commands use the default port (same as zones/nav/clock when they're null).
+4. The `test_midi_in.py` suite (91 tests) covers validation, dispatch, port scoping, and learn capture for the commands section. Run it before any further MIDI changes.
+
+## 2026-11-07 — Perform-mode speed = real KUKA per-axis deg/s (zone/action speed as % of per-axis max; CC-A scales the result)
+
+### Status
+
+Completed
+
+### Summary
+
+Rebuilt the perform-mode speed model so CC-A velocity, the time-to-arrive (TTA), and the sim move speed all reflect the real KUKA's angular speed in deg/s, instead of the old flat `velocity_max_deg_s` (30.0) estimate. New model: each axis has a max angular speed `axis_max_deg_s[A1..A6]` (deg/s at zone speed 100), stored in the robot config (best-guess defaults `[60, 60, 60, 120, 120, 180]`, editable in the robotconfig tab). The zone/action speed (0-100) is a **percentage** of those per-axis maxes, and CC-A (0-100) further scales the result: `per-axis speed = axis_max_deg_s[i] × (zone_speed/100) × (cc_a/100)`. The effective move speed is the **max over axes** (the fastest axis sets the move duration), floored at 1.0 deg/s. This now drives the *actual* move speed (`machine.speed` each tick) and the TTA, not just the TTA estimate as in the prior task. Outside perform mode `_current_speed()` still returns the zone/action speed percentage.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/robot/config.py`: new `AXIS_MAX_DEG_S_KEY` + `DEFAULT_AXIS_MAX_DEG_S = [60.0, 60.0, 60.0, 120.0, 120.0, 180.0]`; added to `DEFAULT_ROBOT_CONFIG`, `builtin_robot_config()`, and `validate_robot_config()` (via the existing `_num_list` helper, 6 numbers); new accessor `robot_config_axis_max_deg_s()` (defaults when absent/malformed).
+- `realtimecontrol/rtr/rtr/state/machine.py`: (1) `perform` dict gained `axis_max_deg_s` (seeded `[60,60,60,120,120,180]`); (2) new `set_perform_axis_max_deg_s()`; (3) new `_base_speed()` helper (transition → target zone speed; action with declared speed → action speed; else zone speed); (4) reworked `_current_speed()` — perform mode returns `max(1.0, max(axis_max[i] × base/100 × cc_a/100))`, otherwise returns `base` (the zone/action speed percentage); (5) reworked `update_perform_time_to_arrive()` — perform mode times each axis at its own per-axis speed (max over joints), outside perform mode uses the single `self.speed`.
+- `realtimecontrol/rtr/main.py`: imported `robot_config_axis_max_deg_s`; seeded `machine.set_perform_axis_max_deg_s(robot_config_axis_max_deg_s(robot_cfg))` right after the machine is created, and `_reload_robot_config()` now updates it on hot-reload.
+- `realtimecontrol/rtr/rtr/robot/__init__.py`: exported `robot_config_axis_max_deg_s`.
+- `realtimecontrol/rtr/editor.html`: robotconfig tab — `axis_max_deg_s` added to `ROBOT_CONFIG_FALLBACK`, `normalizeRobotConfig`, and the form (6 per-axis inputs A1-A6).
+- `realtimecontrol/rtr/perform.html`: removed `fetchPerformConfig()` and its call in `connect()` (the perform-config fetch is dead once the speed model moved to the robot config); `velocityDeg` now reads the top-level `m.speed` (the effective deg/s) instead of `p.velocity/100 × velocity_max_deg_s`; updated the velocity hint line.
+- `realtimecontrol/rtr/rtr/remote/view.py`: `PERFORM_ITEMS` velocity presets changed to `0 / 25 / 50 / 75 / 100` (percentage labels, matching the 0-100 scale).
+- `realtimecontrol/rtr/tests/test_perform_state.py`: rewrote the TTA tests with a `_setup_perform_tta()` helper (enter perform mode + seed the per-axis deg/s model); added `test_set_perform_axis_max_deg_s`, `test_current_speed_perform_mode`, `test_current_speed_perform_mode_zero_velocity_floors`, `test_current_speed_non_perform_returns_zone_percentage`.
+- `realtimecontrol/rtr/tests/js/test_perform_page.js`: Test 1 state object now carries a top-level `speed: 180.0`; the `velocityDeg` assertion was updated to `"180.0 °/s"` (it previously expected `"15.0"` from the old `cc_a/100 × velocity_max_deg_s` model — the new display reads `m.speed`); the sandbox `fetch` stub's return changed from `{ velocity_max_deg_s: 30.0 }` to `{ zone_groups: {} }` (the stub now backs the still-present `fetchBrainGroups()` brain fetch, not the removed perform-config fetch).
+
+### Documentation
+
+None required — the `axis_max_deg_s` field's meaning is documented in `rtr/robot/config.py`'s module docstring and the `robot_config_axis_max_deg_s` accessor; the `machine.py` docstrings (`_base_speed`, `_current_speed`, `set_perform_axis_max_deg_s`, `update_perform_time_to_arrive`) describe the per-axis formula; the `perform.html` velocity hint line and the JS test header comment describe the new `m.speed` display.
+
+### Architecture
+
+Behavioral change to the perform-mode speed source; no new core subsystem. The per-axis deg/s table lives in the robot config (physical-robot-only, like `joint_offsets_deg`) and is seeded onto the machine at startup + on robot-config hot-reload via `main.py`. The snapshot's top-level `speed` field (already `machine.speed` = `_current_speed()` each tick) is now the effective deg/s in perform mode, so `perform.html`'s `velocityDeg` readout and the sim's move pacing both reflect the real per-axis model with no new wiring. `perform.json`'s `velocity_max_deg_s` / `acceleration_max_deg_s2` are kept for config parity but no longer cap the speed.
+
+### Validation
+
+- `PYTHONPATH=/tmp/kilo python tests/test_perform_state.py` → **ALL TESTS PASSED** (per-axis TTA + `_current_speed` model; `/tmp/kilo/pytest.py` is a minimal `skip` stub since pytest is not installed).
+- `PYTHONPATH=/tmp/kilo python tests/test_state_machine.py` → **ALL TESTS PASSED** (perform-mode advance/wiggle/midi-cadence still green after the `_current_speed` rework).
+- `node tests/js/test_perform_page.js` → **ALL_TESTS_PASSED** (after the `speed`/`velocityDeg` assertion update).
+- `node tests/js/test_perform_tab.js` → **ALL_TESTS_PASSED** (the perform-**config** tab still edits `velocity_max_deg_s` for parity; unchanged).
+- Other JS suites (`test_flow_tab`, `test_groups_tab`, `test_poses_tab`, `test_red_light_page`, `test_red_light_tab`, `test_roam_badge`) → **ALL_TESTS_PASSED**.
+- **Pre-existing JS failures (NOT regressions):** `tests/js/test_action_cam.js` (LOAD ERROR) and `tests/js/test_patches_seed.js` (FAILURES=4) fail identically at the pre-work baseline commit `2b5b3d3 save zones` (verified by `git stash` + `git checkout 2b5b3d3`) — unrelated to this task.
+
+### Decisions and Caveats
+
+- **Best-guess defaults; user tunes them.** `axis_max_deg_s = [60, 60, 60, 120, 120, 180]` are placeholders for a KUKA in a performance context; the operator sets the real per-axis maxes in the robotconfig tab so the deg/s readout and TTA match the physical robot.
+- **The speed model now drives the ACTUAL move speed** (`machine.speed`), unlike the prior task where CC-A only drove the TTA estimate. So the sim and the deg/s readout change together.
+- **`velocity_max_deg_s` / `acceleration_max_deg_s2` are vestigial.** They remain in `perform.json` (loaded, sent to the machine) for config parity, but `set_perform_velocity_max_deg_s` no longer caps the speed. A follow-up could drop them from the perform config entirely.
+- **`_current_speed()` floors at 1.0 deg/s in perform mode** so a 0 CC-A / 0 zone speed never produces a zero/infinite move (TTA already treats v ≤ 0 as infinite).
+
+### Next Task
+
+Physical/hardware verification: tune `axis_max_deg_s` in the robotconfig tab to the real KUKA's per-axis angular speeds, then on a live perform confirm the `perform.html` speed (°/s) readout, the TTA, and the sim pacing all reflect the real deg/s at the chosen zone/action speed × CC-A.
+
+### Instructions for the Next Task
+
+1. The model is `per-axis speed = axis_max_deg_s[i] × (zone_speed/100) × (cc_a/100)`; the effective speed is `max(1.0, max over axes)`. It lives in `machine.py` `_current_speed()` + `update_perform_time_to_arrive()`, seeded from the robot config via `main.py` (`set_perform_axis_max_deg_s`).
+2. The `perform.html` `velocityDeg` readout shows the top-level `m.speed` (= `machine.speed` = `_current_speed()` each tick); the CC-A slider still sends the 0-100 `perform_velocity` command.
+3. The robotconfig tab edits `axis_max_deg_s` (6 inputs A1-A6) and saves via the whole-object robot-config path; a reload re-seeds the machine via `_reload_robot_config()`.
+4. The `test_perform_page.js` DOM stub must keep a top-level `speed` field on its state object for the `velocityDeg` assertion (it does not run the Python speed model — it only verifies the `m.speed` → `velocityDeg` mapping).
+
 ## 2026-11-06 — MIDI clock (0xF8) reception fix: disable RtMidi's default timing filter
 
 ### Status
