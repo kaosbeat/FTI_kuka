@@ -1,10 +1,14 @@
 """Test: Machine perform state (rtr/state/machine.py perform dict).
 
 Covers:
-- set_perform_velocity (clamping to 0.0-100.0, where 100 = max deg/s).
-- set_perform_multiplier (only accepts 1/2/4/8/16).
+- set_perform_velocity (clamping to 0.0-100.0, the CC-A percentage).
+- set_perform_axis_max_deg_s (per-axis max angular speed, deg/s at zone speed 100).
+- set_perform_multiplier (any positive number).
 - update_perform_deadline (base_beats × multiplier × 60/BPM).
 - update_perform_time_to_arrive (max over per-joint motion-profile times, late flag).
+  In perform mode the per-axis speed is axis_max_deg_s[i] × (zone_speed/100) ×
+  (cc_a/100); each axis follows its own trapezoidal/triangular profile.
+- _current_speed (perform mode -> max per-axis deg/s; otherwise the zone %).
 - perform_state() returns a JSON-safe copy (infinite time_to_arrive -> None).
 
 All tests are headless: no robot, no hardware.
@@ -28,18 +32,24 @@ from rtr.state.machine import StateMachine, motion_profile_time
 from rtr.state.zones import Zones
 
 
-def _make_machine() -> StateMachine:
-    """A minimal machine with a single test zone."""
+def _make_machine(speed: float = 10.0) -> StateMachine:
+    """A minimal machine with a single test zone.
+
+    ``speed`` is the zone/action speed (a percentage, 0-100) — the ``base`` in the
+    perform-mode deg/s model. Defaults to 10.0 (a low speed) so non-perform tests
+    that read ``m.speed`` keep a stable value; the TTA tests pass 100.0 so the
+    per-axis deg/s math comes out clean.
+    """
     zones_data = {
         "test": {
             "enabled": True,
-            "speed": 10.0,
+            "speed": speed,
             "actions": {
                 "act1": {
                     "enabled": True,
                     "poses": [[0, 0, 0, 0, 0, 0]],
                     "behavior": "idle",
-                    "speed": 10.0,
+                    "speed": speed,
                     "base_beats": 4,
                 }
             },
@@ -62,7 +72,7 @@ def test_perform_initial_state():
 
 
 def test_set_perform_velocity():
-    """set_perform_velocity clamps to [0.0, 100.0] (100 = max deg/s)."""
+    """set_perform_velocity (CC-A) clamps to [0.0, 100.0] (a percentage)."""
     m = _make_machine()
     m.set_perform_velocity(50)
     assert m.perform["velocity"] == 50.0
@@ -72,6 +82,54 @@ def test_set_perform_velocity():
 
     m.set_perform_velocity(-50)
     assert m.perform["velocity"] == 0.0
+
+
+def test_set_perform_axis_max_deg_s():
+    """set_perform_axis_max_deg_s stores 6 non-negative values; bad input is ignored."""
+    m = _make_machine()
+    m.set_perform_axis_max_deg_s([30.0, 40.0, 50.0, 60.0, 70.0, 80.0])
+    assert m.perform["axis_max_deg_s"] == [30.0, 40.0, 50.0, 60.0, 70.0, 80.0]
+
+    # Negative values are clamped to 0.
+    m.set_perform_axis_max_deg_s([-5.0, 12.0, 60.0, 120.0, 120.0, 180.0])
+    assert m.perform["axis_max_deg_s"][0] == 0.0
+
+    # A malformed list (wrong length) is ignored — the previous value is kept.
+    before = list(m.perform["axis_max_deg_s"])
+    m.set_perform_axis_max_deg_s([1.0, 2.0, 3.0])
+    assert m.perform["axis_max_deg_s"] == before
+
+
+def test_current_speed_perform_mode():
+    """_current_speed (perform mode) = max over per-axis deg/s, floored at 1.0.
+
+    per-axis speed = axis_max[i] × (zone_speed/100) × (cc_a/100).
+    """
+    m = _make_machine(speed=100.0)
+    m.set_control_mode("perform")
+    m.set_perform_axis_max_deg_s([60.0, 60.0, 60.0, 120.0, 120.0, 180.0])
+    m.set_perform_velocity(100)  # cc_a = 1.0
+    # per-axis speeds = [60,60,60,120,120,180] × 1.0 × 1.0 → max = 180.0 deg/s
+    assert abs(m._current_speed() - 180.0) < 1e-9
+
+    m.set_perform_velocity(50)  # cc_a = 0.5 → max = 90.0 deg/s
+    assert abs(m._current_speed() - 90.0) < 1e-9
+
+
+def test_current_speed_perform_mode_zero_velocity_floors():
+    """At cc_a = 0 the per-axis speed is 0; _current_speed floors at 1.0 deg/s."""
+    m = _make_machine(speed=100.0)
+    m.set_control_mode("perform")
+    m.set_perform_axis_max_deg_s([60.0, 60.0, 60.0, 120.0, 120.0, 180.0])
+    m.set_perform_velocity(0.0)
+    assert m._current_speed() == 1.0
+
+
+def test_current_speed_non_perform_returns_zone_percentage():
+    """Outside perform mode _current_speed returns the zone/action speed (%) as-is."""
+    m = _make_machine(speed=42.0)
+    assert m.control_mode == "auto"
+    assert m._current_speed() == 42.0
 
 
 def test_set_perform_multiplier():
@@ -142,12 +200,27 @@ def test_motion_profile_time_zero_velocity():
     assert motion_profile_time(10.0, 30.0, 0.0) == float("inf")
 
 
+def _setup_perform_tta(m, axis_max=(30.0, 30.0, 30.0, 30.0, 30.0, 30.0),
+                       cc_a=100.0, accel=100.0):
+    """Enter perform mode and seed the per-axis deg/s model for a TTA test.
+
+    Zone speed is 100 (from _make_machine), so the per-axis speed is
+    ``axis_max[i] × (100/100) × (cc_a/100) = axis_max[i] × cc_a/100``.
+    """
+    m.set_control_mode("perform")
+    m.set_perform_axis_max_deg_s(list(axis_max))
+    m.set_perform_acceleration_max_deg_s2(accel)
+    m.set_perform_velocity(cc_a)
+    return m
+
+
 def test_update_perform_time_to_arrive_max_over_joints():
-    """time_to_arrive = MAX over the per-joint rest-to-rest times (coordinated move)."""
-    m = _make_machine()
-    m.set_perform_velocity_max_deg_s(30.0)
-    m.set_perform_acceleration_max_deg_s2(100.0)
-    m.set_perform_velocity(100)  # v = 100/100 × 30.0 = 30.0 deg/s
+    """time_to_arrive = MAX over the per-joint rest-to-rest times (coordinated move).
+
+    cc_a=100, zone speed=100, axis_max=30 → per-axis speed = 30.0 deg/s.
+    """
+    m = _make_machine(speed=100.0)
+    _setup_perform_tta(m, cc_a=100.0)  # per-axis speed = 30 × 1.0 × 1.0 = 30.0 deg/s
     # joint 0: D=30.0 → trapezoidal 1.3 s; joint 1: D=4.0 → triangular 0.4 s.
     # max(1.3, 0.4, 0, 0, 0, 0) = 1.3 s
     m.update_perform_time_to_arrive([30.0, 4.0, 0.0, 0.0, 0.0, 0.0])
@@ -155,11 +228,12 @@ def test_update_perform_time_to_arrive_max_over_joints():
 
 
 def test_update_perform_time_to_arrive_late():
-    """late = True when the max-over-joints time exceeds the deadline."""
-    m = _make_machine()
-    m.set_perform_velocity_max_deg_s(30.0)
-    m.set_perform_acceleration_max_deg_s2(100.0)
-    m.set_perform_velocity(50)  # v = 50/100 × 30.0 = 15.0 deg/s
+    """late = True when the max-over-joints time exceeds the deadline.
+
+    cc_a=50, zone speed=100, axis_max=30 → per-axis speed = 15.0 deg/s.
+    """
+    m = _make_machine(speed=100.0)
+    _setup_perform_tta(m, cc_a=50.0)  # per-axis speed = 30 × 1.0 × 0.5 = 15.0 deg/s
     m.set_perform_multiplier(1)
     m.update_perform_deadline(base_beats=4, bpm=120.0)
     # deadline = 4 × 1 × (60/120) = 2.0 s
@@ -171,10 +245,8 @@ def test_update_perform_time_to_arrive_late():
 
 def test_update_perform_time_to_arrive_not_late():
     """When the max-over-joints time is under the deadline, late is False."""
-    m = _make_machine()
-    m.set_perform_velocity_max_deg_s(30.0)
-    m.set_perform_acceleration_max_deg_s2(100.0)
-    m.set_perform_velocity(100)  # v = 100/100 × 30.0 = 30.0 deg/s
+    m = _make_machine(speed=100.0)
+    _setup_perform_tta(m, cc_a=100.0)  # per-axis speed = 30.0 deg/s
     m.set_perform_multiplier(16)
     m.update_perform_deadline(base_beats=4, bpm=120.0)
     # deadline = 4 × 16 × 0.5 = 32.0 s
@@ -185,11 +257,9 @@ def test_update_perform_time_to_arrive_not_late():
 
 
 def test_update_perform_zero_velocity():
-    """When velocity is 0, time_to_arrive is infinity (late)."""
-    m = _make_machine()
-    m.set_perform_velocity_max_deg_s(30.0)
-    m.set_perform_acceleration_max_deg_s2(100.0)
-    m.set_perform_velocity(0.0)
+    """When CC-A velocity is 0, the per-axis speed is 0 → time_to_arrive is infinity (late)."""
+    m = _make_machine(speed=100.0)
+    _setup_perform_tta(m, cc_a=0.0)  # per-axis speed = 30 × 1.0 × 0 = 0 deg/s
     m.set_perform_multiplier(2)
     m.update_perform_deadline(base_beats=4, bpm=120.0)
 
@@ -201,22 +271,20 @@ def test_update_perform_zero_velocity():
 def test_perform_state_sanitizes_infinite_time_to_arrive():
     """perform_state() maps an infinite time_to_arrive to None (JSON-safe).
 
-    The internal state keeps float("inf") (velocity 0 -> cannot arrive), but the
+    The internal state keeps float("inf") (cc_a 0 -> cannot arrive), but the
     broadcast copy must be JSON-serializable: JSON has no Infinity, and
     json.dumps would emit the non-JSON token ``Infinity`` that the client's
     JSON.parse rejects ("Unexpected token 'I'").
     """
-    m = _make_machine()
-    m.set_perform_velocity_max_deg_s(30.0)
-    m.set_perform_acceleration_max_deg_s2(100.0)
-    m.set_perform_velocity(0.0)
+    m = _make_machine(speed=100.0)
+    _setup_perform_tta(m, cc_a=0.0)  # per-axis speed = 0 deg/s
     m.update_perform_time_to_arrive([10.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     assert m.perform["time_to_arrive"] == float("inf")  # internal state unchanged
     s = m.perform_state()
     assert s["time_to_arrive"] is None
 
     # Finite values pass through untouched.
-    m.set_perform_velocity(100)  # v = 100/100 × 30.0 = 30.0 deg/s
+    m.set_perform_velocity(100)  # per-axis speed = 30 × 1.0 × 1.0 = 30.0 deg/s
     m.update_perform_time_to_arrive([30.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     s2 = m.perform_state()
     assert abs(s2["time_to_arrive"] - 1.3) < 1e-9

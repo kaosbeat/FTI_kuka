@@ -679,6 +679,14 @@
       <div id="midiGroups"></div>
     </section>
     <section>
+      <h2>commands</h2>
+      <p class="midiHelp">Global commands that work from any zone. <b>random_wrist</b> randomizes the
+        wrist target (A4/A5); <b>adjust_limit</b> has one CC per limit (0/1/2) that nudges a
+        hardware limit. <b>learn</b> = click it, then press a key (or move a slider for a limit CC)
+        on your MIDI controller — the robot remembers it.</p>
+      <div id="midiCommands"></div>
+    </section>
+    <section>
       <h2>clock</h2>
       <p class="midiHelp">The dedicated MIDI-in port for the external clock (0xF8). The device that
         generates the MIDI clock (a DAW, drum machine, or clock generator) is often on a
@@ -1491,9 +1499,27 @@ function connect() {
       });
     } else if (m.type === "midi_learn") {
       // A learned key was captured; write it into the pending learn slot.
-      // The payload is {key, msg, zone, action, nav, capture, group, perform}.
+      // The payload is {key, msg, zone, action, nav, capture, group, perform, command, command_cc}.
       if (midiLearnPending && MIDI) {
-        if (midiLearnPending.perform) {
+        if (midiLearnPending.command) {
+          if (!MIDI.commands || typeof MIDI.commands !== "object") MIDI.commands = {};
+          if (!MIDI.commands.adjust_limit || typeof MIDI.commands.adjust_limit !== "object") MIDI.commands.adjust_limit = {};
+          if (midiLearnPending.command === "random_wrist") {
+            MIDI.commands.random_wrist = m.key;
+          } else if (midiLearnPending.command === "adjust_limit") {
+            // adjust_limit CCs are controller numbers (the dispatch matches on the
+            // CC alone, any value). Only a CC capture is valid for them.
+            const cc = _midiCcFromKey(m.key);
+            if (cc !== null && midiLearnPending.command_cc) {
+              MIDI.commands.adjust_limit[midiLearnPending.command_cc] = cc;
+            } else {
+              $("midiStatus").textContent = "limit CCs need a CC message — that was a note, try a slider";
+              midiLearnPending = null;
+              buildMidiInForm();
+              return;
+            }
+          }
+        } else if (midiLearnPending.perform) {
           // Perform CCs are controller numbers (the dispatch matches on the CC
           // alone, any value). Only a CC capture is valid for them.
           const cc = _midiCcFromKey(m.key);
@@ -2067,6 +2093,24 @@ function validateMidi() {
       }
     }
   }
+  // global commands: in_port (null = default), random_wrist (a key), adjust_limit (3 CCs)
+  if (MIDI.commands) {
+    if (MIDI.commands.in_port !== null && MIDI.commands.in_port !== undefined) {
+      if (!Number.isInteger(MIDI.commands.in_port) || MIDI.commands.in_port < 0) errs.push("commands.in_port: must be a non-negative int or null");
+    }
+    if (MIDI.commands.random_wrist !== null && MIDI.commands.random_wrist !== undefined && !midiKeyValid(MIDI.commands.random_wrist)) {
+      errs.push("commands.random_wrist: must be a valid key");
+    }
+    if (MIDI.commands.adjust_limit && typeof MIDI.commands.adjust_limit === "object") {
+      for (let i = 0; i < 3; i++) {
+        const k = "cc_" + i;
+        const ccv = MIDI.commands.adjust_limit[k];
+        if (ccv !== null && ccv !== undefined && (!Number.isInteger(ccv) || ccv < 0 || ccv > 127)) {
+          errs.push(`commands.adjust_limit.${k}: must be an int in [0, 127] or null`);
+        }
+      }
+    }
+  }
   for (const [zone, zd] of Object.entries(MIDI.zones || {})) {
     if (zd.in_port !== null && zd.in_port !== undefined) {
       if (!Number.isInteger(zd.in_port) || zd.in_port < 0) errs.push(`zones[${zone}].in_port: must be a non-negative int or null`);
@@ -2114,6 +2158,16 @@ async function loadMidi() {
   // Seed the clock section: the dedicated MIDI-in port for the external clock (0xF8).
   if (!data.clock || typeof data.clock !== "object") data.clock = {};
   if (data.clock.in_port === undefined) data.clock.in_port = null;
+  // Seed the global commands section: in_port (null = default), random_wrist (a key),
+  // and adjust_limit (one CC per limit index, cc_0/cc_1/cc_2).
+  if (!data.commands || typeof data.commands !== "object") data.commands = {};
+  if (data.commands.in_port === undefined) data.commands.in_port = null;
+  if (data.commands.random_wrist === undefined) data.commands.random_wrist = null;
+  if (!data.commands.adjust_limit || typeof data.commands.adjust_limit !== "object") data.commands.adjust_limit = {};
+  for (let i = 0; i < 3; i++) {
+    const k = "cc_" + i;
+    if (data.commands.adjust_limit[k] === undefined) data.commands.adjust_limit[k] = null;
+  }
   MIDI = data;
   // Seed per-zone entries: ensure each zone has {in_port, command, actions}.
   Object.keys(TABLE.zones || {}).forEach((zn) => {
@@ -2180,6 +2234,7 @@ function buildMidiInForm() {
   buildMidiNav();
   buildMidiCapture();
   buildMidiGroups();
+  buildMidiCommands();
   buildMidiClock();
   buildMidiAllList();
   const tbl = $("midiZones");
@@ -2480,6 +2535,96 @@ function buildMidiGroups() {
   });
 }
 
+// The global commands section: random_wrist (a key) and adjust_limit (one CC per
+// limit index). MIDI.commands = { in_port, random_wrist, adjust_limit: {cc_0, cc_1, cc_2} }.
+const COMMANDS_HELP = {
+  random_wrist: "Randomize the wrist target (A4/A5) and hold it.",
+  cc_0: "Nudge limit 0 (from the hardware limits form).",
+  cc_1: "Nudge limit 1 (from the hardware limits form).",
+  cc_2: "Nudge limit 2 (from the hardware limits form).",
+};
+
+function buildMidiCommands() {
+  const el = $("midiCommands");
+  if (!el) return;
+  el.innerHTML = "";
+  if (!MIDI.commands || typeof MIDI.commands !== "object") MIDI.commands = {};
+  if (MIDI.commands.in_port === undefined) MIDI.commands.in_port = null;
+  if (MIDI.commands.random_wrist === undefined) MIDI.commands.random_wrist = null;
+  if (!MIDI.commands.adjust_limit || typeof MIDI.commands.adjust_limit !== "object") MIDI.commands.adjust_limit = {};
+  for (let i = 0; i < 3; i++) {
+    const k = "cc_" + i;
+    if (MIDI.commands.adjust_limit[k] === undefined) MIDI.commands.adjust_limit[k] = null;
+  }
+  const cport = MIDI.commands.in_port;
+  // in_port picker: which MIDI-in device the command keys are learned on
+  // (null = the default port, the first available device).
+  const portRow = document.createElement("div");
+  portRow.className = "sndRow";
+  const portLbl = document.createElement("span");
+  portLbl.className = "sndName"; portLbl.textContent = "listen on";
+  portLbl.title = "Which MIDI controller the command keys are learned on. 'default' = the first available device.";
+  portRow.appendChild(portLbl);
+  const portSel = document.createElement("select");
+  portSel.className = "midiKey";
+  const portNone = document.createElement("option");
+  portNone.value = ""; portNone.textContent = "default";
+  portSel.appendChild(portNone);
+  midiPorts.forEach((p) => {
+    const o = document.createElement("option");
+    o.value = String(p.index); o.textContent = `${p.index} — ${p.name}`;
+    portSel.appendChild(o);
+  });
+  portSel.value = (cport === null || cport === undefined) ? "" : String(cport);
+  portSel.onchange = () => { MIDI.commands.in_port = portSel.value === "" ? null : parseInt(portSel.value, 10); };
+  portRow.appendChild(portSel);
+  el.appendChild(portRow);
+  // random_wrist key editor + learn button
+  const rwRow = document.createElement("div");
+  rwRow.className = "sndRow";
+  const rwLbl = document.createElement("span");
+  rwLbl.className = "sndName"; rwLbl.textContent = "random wrist";
+  rwLbl.title = COMMANDS_HELP.random_wrist;
+  rwRow.appendChild(rwLbl);
+  const rwInp = document.createElement("input");
+  rwInp.type = "text"; rwInp.className = "midiName";
+  rwInp.value = MIDI.commands.random_wrist || "";
+  rwInp.onchange = () => { MIDI.commands.random_wrist = rwInp.value.trim() || null; };
+  rwRow.appendChild(rwInp);
+  const rwBtn = document.createElement("button");
+  rwBtn.className = "small"; rwBtn.textContent = "learn";
+  rwBtn.title = "Click, then press the key on your MIDI controller — the robot remembers it.";
+  rwBtn.onclick = () => midiLearn(null, null, null, null, null, null, null, null, null, null, null, "random_wrist", null, MIDI.commands.in_port);
+  rwRow.appendChild(rwBtn);
+  el.appendChild(rwRow);
+  // adjust_limit: one CC row per limit index
+  for (let i = 0; i < 3; i++) {
+    const k = "cc_" + i;
+    const row = document.createElement("div");
+    row.className = "sndRow";
+    const lbl = document.createElement("span");
+    lbl.className = "sndName"; lbl.textContent = `adjust limit ${i}`;
+    lbl.title = COMMANDS_HELP[k];
+    row.appendChild(lbl);
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.className = "midiName";
+    const ccv = MIDI.commands.adjust_limit[k];
+    inp.value = (ccv === null || ccv === undefined) ? "" : String(ccv);
+    inp.onchange = () => {
+      const v = inp.value.trim();
+      const n = parseInt(v, 10);
+      MIDI.commands.adjust_limit[k] = (v === "" || !Number.isInteger(n) || n < 0 || n > 127) ? null : n;
+    };
+    row.appendChild(inp);
+    const btn = document.createElement("button");
+    btn.className = "small"; btn.textContent = "learn";
+    btn.title = "Click, then move the slider for this limit on your MIDI controller — the robot remembers the CC number.";
+    btn.onclick = () => midiLearn(null, null, null, null, null, null, null, null, null, null, null, "adjust_limit", k, MIDI.commands.in_port);
+    row.appendChild(btn);
+    el.appendChild(row);
+  }
+}
+
 // The clock section: the dedicated MIDI-in port for the external clock (0xF8).
 // The device that generates the MIDI clock is often on a different port than
 // the default. MIDI.clock = { in_port }.
@@ -2544,19 +2689,46 @@ function buildMidiAllList() {
       remove: () => { MIDI.capture.key = null; },
     });
   }
-  const groups = (BRAIN && BRAIN.zone_groups) ? BRAIN.zone_groups : {};
-  Object.keys(groups).filter((n) => n !== "hunt" && n !== "facefocus").forEach((name) => {
-    if (MIDI.groups && MIDI.groups[name]) {
-      entries.push({
-        label: `group · ${name}`,
-        key: MIDI.groups[name],
-        set: (k) => { MIDI.groups[name] = k; },
-        learn: () => midiLearn(null, null, null, null, null, null, name, MIDI.groups.in_port),
-        remove: () => { MIDI.groups[name] = null; },
-      });
-    }
-  });
-  Object.keys(TABLE.zones || {}).forEach((zone) => {
+   const groups = (BRAIN && BRAIN.zone_groups) ? BRAIN.zone_groups : {};
+   Object.keys(groups).filter((n) => n !== "hunt" && n !== "facefocus").forEach((name) => {
+     if (MIDI.groups && MIDI.groups[name]) {
+       entries.push({
+         label: `group · ${name}`,
+         key: MIDI.groups[name],
+         set: (k) => { MIDI.groups[name] = k; },
+         learn: () => midiLearn(null, null, null, null, null, null, name, MIDI.groups.in_port),
+         remove: () => { MIDI.groups[name] = null; },
+       });
+     }
+   });
+   if (MIDI.commands) {
+     if (MIDI.commands.random_wrist) {
+       entries.push({
+         label: "command · random wrist",
+         key: MIDI.commands.random_wrist,
+         set: (k) => { MIDI.commands.random_wrist = k; },
+         learn: () => midiLearn(null, null, null, null, null, null, null, null, null, null, null, "random_wrist", null, MIDI.commands.in_port),
+         remove: () => { MIDI.commands.random_wrist = null; },
+       });
+     }
+     for (let i = 0; i < 3; i++) {
+       const k = "cc_" + i;
+       const ccv = MIDI.commands.adjust_limit ? MIDI.commands.adjust_limit[k] : null;
+       if (ccv !== null && ccv !== undefined) {
+         entries.push({
+           label: `command · adjust limit ${i}`,
+           key: String(ccv),
+           set: (v) => {
+             const n = parseInt(v, 10);
+             MIDI.commands.adjust_limit[k] = (v === "" || !Number.isInteger(n) || n < 0 || n > 127) ? null : n;
+           },
+           learn: () => midiLearn(null, null, null, null, null, null, null, null, null, null, null, "adjust_limit", k, MIDI.commands.in_port),
+           remove: () => { MIDI.commands.adjust_limit[k] = null; },
+         });
+       }
+     }
+   }
+   Object.keys(TABLE.zones || {}).forEach((zone) => {
     const z = MIDI.zones[zone];
     if (!z) return;
     if (z.command) {
@@ -2613,15 +2785,15 @@ function buildMidiAllList() {
   });
 }
 
-function midiLearn(zone, actionName, navName, navPort, capture, capturePort, group, groupPort, perform, performPort) {
+function midiLearn(zone, actionName, navName, navPort, capture, capturePort, group, groupPort, perform, performPort, command, commandCc, commandPort) {
   if (midiLearnPending) { $("midiStatus").textContent = "already learning — send a MIDI message first"; return; }
-  midiLearnPending = { zone, action_name: actionName, nav_name: navName || null, capture: capture ? true : null, group: group || null, perform: perform || null };
+  midiLearnPending = { zone, action_name: actionName, nav_name: navName || null, capture: capture ? true : null, group: group || null, perform: perform || null, command: command || null, command_cc: commandCc || null };
   fetch("/api/midi/learn", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "start", zone, action_name: actionName, nav: navName || null, nav_port: navPort === undefined ? null : navPort, capture: capture ? true : null, capture_port: capturePort === undefined ? null : capturePort, group: group || null, group_port: groupPort === undefined ? null : groupPort, perform: perform || null, perform_port: performPort === undefined ? null : performPort }),
+    body: JSON.stringify({ action: "start", zone, action_name: actionName, nav: navName || null, nav_port: navPort === undefined ? null : navPort, capture: capture ? true : null, capture_port: capturePort === undefined ? null : capturePort, group: group || null, group_port: groupPort === undefined ? null : groupPort, perform: perform || null, perform_port: performPort === undefined ? null : performPort, command: command || null, command_cc: commandCc || null, command_port: commandPort === undefined ? null : commandPort }),
   }).then((r) => r.json().then((b) => ({ ok: r.ok, b }))).then(({ ok, b }) => {
-    const label = perform ? `perform ${perform}` : (group ? `group:${group}` : (capture ? "capture" : (navName ? navName : (actionName ? `${zone}/${actionName}` : zone))));
+    const label = command ? `command ${command}${commandCc ? " " + commandCc : ""}` : (perform ? `perform ${perform}` : (group ? `group:${group}` : (capture ? "capture" : (navName ? navName : (actionName ? `${zone}/${actionName}` : zone)))));
     if (ok) $("midiStatus").textContent = `learning "${label}" — now press a key on your MIDI controller`;
     else $("midiStatus").textContent = "learn failed: " + (b.error || r.status);
   }).catch((e) => { $("midiStatus").textContent = "learn failed: " + e; });

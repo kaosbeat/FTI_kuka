@@ -180,7 +180,6 @@ function connect() {
   ws.onopen = () => {
     setConn(true);
     ws.send(JSON.stringify({ cmd: "hello", client: "perform" }));
-    fetchPerformConfig();
     fetchBrainGroups();
   };
   ws.onclose = () => {
@@ -192,14 +191,6 @@ function connect() {
     try { m = JSON.parse(e.data); } catch (err) { return; }
     if (m.type === "state") renderState(m);
   };
-}
-
-function fetchPerformConfig() {
-  // The perform config (velocity range) comes from the HTTP server (/api/perform).
-  // A relative fetch works when the page is served by the same host.
-  fetch("/api/perform").then(r => r.json()).then(cfg => {
-    PERFORM_CFG = cfg;
-  }).catch(() => {});
 }
 
 function fetchBrainGroups() {
@@ -322,9 +313,8 @@ function renderState(m) {
   $("beatDuration").textContent = (p.beat_duration != null) ? p.beat_duration.toFixed(3) + " s" : "—";
   $("beatFill").style.width = (Math.min(1, Math.max(0, phase)) * 100) + "%";
 
-  // Velocity (CC-A). The displayed speed is the actual velocity-overridden move
-  // speed (m.speed, the zone/action speed scaled by the CC-A velocity, set in
-  // the core's step()).
+  // Velocity (CC-A). The displayed speed is the effective deg/s (m.speed):
+  // the max per-axis speed = axis_max_deg_s[i] × (zone_speed/100) × (cc_a/100).
   $("velocityVal").textContent = (p.velocity != null) ? p.velocity.toFixed(2) : "—";
   $("velocityDeg").textContent = (m.speed != null) ? m.speed.toFixed(1) + " °/s" : "—";
 

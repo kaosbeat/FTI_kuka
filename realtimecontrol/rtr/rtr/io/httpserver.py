@@ -714,7 +714,8 @@ def _make_handler(server: HttpServer):
                     req.get("zone"), req.get("action_name"), req.get("nav"),
                     req.get("nav_port"), req.get("capture"), req.get("capture_port"),
                     req.get("group"), req.get("group_port"),
-                    req.get("perform"), req.get("perform_port"))
+                    req.get("perform"), req.get("perform_port"),
+                    req.get("command"), req.get("command_cc"), req.get("command_port"))
             self._send_json(200, {"ok": True, "learning": server.midi.is_learning})
 
         # ------------------------------------------------------------------

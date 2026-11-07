@@ -1,5 +1,49 @@
 # Task Handoff Log
 
+## 2026-11-06 — MIDI clock (0xF8) reception fix: disable RtMidi's default timing filter
+
+### Status
+
+Completed
+
+### Summary
+
+Fixed the MIDI clock (0xF8) not reaching the core. The root cause was that RtMidi (via `python-rtmidi`) filters system-realtime messages — including the 0xF8 MIDI clock — from the input **by default**, so the registered `set_callback` never received the clock ticks even though `_on_message` already handled them correctly. No `set_notification` API exists (checked both `python-rtmidi` 1.5.8 and PyPI `rtmidi` 2.5.0); the documented mechanism is `MidiIn.ignore_types(timing=False)`. The fix is a single line in `_open_in` (the single place that opens receiving `MidiIn` handles — every receiving port, including the dedicated clock port, opens through it via `_reconnect`): after `set_callback`, call `midi.ignore_types(timing=False)` to disable only the timing filter. The `0xF8` handler in `_on_message` and the `clock_tick` wiring in `main.py` were already correct and now actually receive the ticks.
+
+### Changes Made
+
+- `realtimecontrol/rtr/rtr/io/midi.py`: `_open_in` now calls `midi.ignore_types(timing=False)` after `midi.set_callback(cb)`, so the 0xF8 clock (filtered by RtMidi by default) reaches `_on_message`. Applies to every receiving port (zone/nav/capture/groups/perform/clock in_ports all open through `_open_in`).
+- `realtimecontrol/rtr/tests/test_midi_in.py`: new `test_open_in_enables_clock_reception` — a fake `rtmidi.MidiIn` records the `ignore_types` call; the test asserts `_open_in` disables only the timing filter (`timing=False`) while leaving sysex and active-sense filtered.
+
+### Documentation
+
+None required — the new test's docstring documents the RtMidi timing-filter behavior and why `ignore_types(timing=False)` is needed.
+
+### Architecture
+
+No architectural change. The clock path was already correct end to end (`_on_message` 0xF8 handler → `clock_tick` → `BeatClock`); the fix only un-blocks delivery at the RtMidi layer. The 0xF8 ticks now reach `BeatClock.clock_tick` on the configured clock `in_port` (or the default port), flipping the source to `"external"` as documented in `rtr/core/clock.py`.
+
+### Validation
+
+- `pytest tests/test_midi_in.py -q` → **75 passed, 1 skipped** (was 74 passed, 1 skipped before the new test).
+- `python -c "import ast; ast.parse(open('rtr/io/midi.py').read())"` → syntax OK on the edited `midi.py`.
+
+### Decisions and Caveats
+
+- **Only the timing filter is disabled.** `ignore_types(timing=False)` leaves `sysex=True` and `active_sense=True` (the defaults), so sysex and active-sense messages are still filtered — only the 0xF8 clock is un-filtered. This avoids the buffer flooding the filter exists to prevent.
+- **The existing clock test bypasses real rtmidi.** `test_clock_tick_forwards_0xf8` calls `_on_message` directly and does not exercise the RtMidi delivery path; the new `test_open_in_enables_clock_reception` covers the actual `ignore_types` call. Live hardware verification (a real controller sending 0xF8) is the final confirmation that the clock now flips the BeatClock to `"external"`.
+
+### Next Task
+
+Continue the broader MIDI-mapping refactor: remove the remaining hardcoded legacy protocol from `rtr/io/midi.py` (the default-port fallback in `_on_message`) and make the remaining legacy functions (`random_wrist`, `adjust_limit`) learnable global commands listed in the editor's MIDI-in tab, mirroring the existing nav/capture/groups learn flow.
+
+### Instructions for the Next Task
+
+1. The legacy hardcoded protocol is the fallback in `midi.py` `_on_message` that runs when a message on the default port does not match a learned mapping: CC1 (zone trigger), CC3 (per-zone action), CC20/21/22 (`adjust_limit`), and note-on on 0-based channel 2 / 1-based ch3 (`random_wrist`).
+2. The zone `command` and per-zone `actions` mappings are already data-driven in `midi.json` (learnable via the editor). The remaining hardcoded functions to convert are `random_wrist` (note ch3) and `adjust_limit` (CC20/21/22).
+3. Model the new learnable global commands on the existing `nav` / `capture` / `groups` sections: each has an `in_port` + a learned `key`, a `_dispatch_*` method, a `start_learn` param, an editor learn button, and a JS handler that writes the captured key into `midi.json`.
+4. The `0xF8` clock now arrives (this task); when the legacy note-ch3 `random_wrist` is removed, confirm nothing else depended on the note-on path.
+
 ## 2026-11-06 — Perform-mode MIDI gating, 0-100 velocity scale, Deadline multiplier + MIDI monitor, learnable perform CCs
 
 ### Status

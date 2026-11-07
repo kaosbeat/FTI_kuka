@@ -82,7 +82,7 @@ const sandbox = {
   console,
   document,
   WebSocket: FakeWS,
-  fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({ velocity_max_deg_s: 30.0 }) }),
+  fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({ zone_groups: {} }) }),
   location: { hostname: "localhost" },
   setTimeout, clearTimeout,
 };
@@ -103,7 +103,7 @@ function assert(cond, msg) { if (!cond) { failures++; console.log("FAIL:", msg);
 // --- Test 1: renderState maps the perform snapshot to the DOM ----------------
 vm.runInContext(`renderState({
   type: "state",
-  zone: "resting", action: "breathe", moving: true,
+  zone: "resting", action: "breathe", moving: true, speed: 180.0,
   perform: {
     velocity: 50, multiplier: 4, base_beats: 4, deadline: 2.4,
     time_to_arrive: 1.2, late: false, beat: 12.25, beat_index: 12,
@@ -123,7 +123,7 @@ assert(IDX["beat"].textContent === "12.25", "beat: " + IDX["beat"].textContent);
 assert(IDX["beatPhase"].textContent === "0.250", "beat phase: " + IDX["beatPhase"].textContent);
 assert(IDX["beatFill"].style.width === "25%", "beat fill width: " + IDX["beatFill"].style.width);
 assert(IDX["velocityVal"].textContent === "50.00", "velocity value (0-100 scale): " + IDX["velocityVal"].textContent);
-assert(IDX["velocityDeg"].textContent.startsWith("15.0"), "velocity deg/s (50/100 x 30): " + IDX["velocityDeg"].textContent);
+assert(IDX["velocityDeg"].textContent === "180.0 °/s", "velocity deg/s (effective m.speed): " + IDX["velocityDeg"].textContent);
 assert(IDX["multVal"].textContent === "4x", "multiplier value: " + IDX["multVal"].textContent);
 assert(multChipsEl.children[6].className === "active", "4x chip highlighted active");
 assert(multChipsEl.children[4].className === "", "1x chip not active");

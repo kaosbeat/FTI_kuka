@@ -242,13 +242,81 @@ def test_validate_midi_data_rejects_unknown_capture_field():
 
 def test_builtin_midi_data_is_empty_zones():
     assert builtin_midi_data() == {"enabled": True, "zones": {},
-                                      "nav": {"in_port": None, "next_action": None,
-                                               "next_zone": None, "back": None,
-                                               "retrigger": None, "next_pose": None},
-                                       "capture": {"in_port": None, "key": None},
-                                       "groups": {"in_port": None},
-                                       "perform": {"in_port": None, "cc_a": None, "cc_b": None},
-                                       "clock": {"in_port": None}}
+                                       "nav": {"in_port": None, "next_action": None,
+                                                "next_zone": None, "back": None,
+                                                "retrigger": None, "next_pose": None},
+                                        "capture": {"in_port": None, "key": None},
+                                        "groups": {"in_port": None},
+                                        "commands": {"in_port": None, "random_wrist": None,
+                                                     "adjust_limit": {"cc_0": None, "cc_1": None, "cc_2": None}},
+                                        "perform": {"in_port": None, "cc_a": None, "cc_b": None},
+                                        "clock": {"in_port": None}}
+
+
+def test_validate_midi_data_accepts_commands():
+    # A commands object with a valid random_wrist key and adjust_limit CCs is accepted.
+    data = {"enabled": True, "zones": {},
+            "commands": {"in_port": 2, "random_wrist": "note:0:60",
+                           "adjust_limit": {"cc_0": 20, "cc_1": 21, "cc_2": 22}}}
+    assert validate_midi_data(data)["commands"]["adjust_limit"]["cc_0"] == 20
+
+
+def test_validate_midi_data_accepts_null_commands():
+    # A commands object with all-null fields is accepted.
+    data = {"enabled": True, "zones": {},
+            "commands": {"in_port": None, "random_wrist": None,
+                           "adjust_limit": {"cc_0": None, "cc_1": None, "cc_2": None}}}
+    assert validate_midi_data(data) is data
+
+
+def test_validate_midi_data_rejects_bad_commands_in_port():
+    for bad in (-1, "0", True):
+        try:
+            validate_midi_data({"enabled": True, "zones": {},
+                                  "commands": {"in_port": bad}})
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for commands.in_port {bad!r}")
+
+
+def test_validate_midi_data_rejects_bad_random_wrist_key():
+    for bad in ("cc:7", "xyz:1:5", 5):
+        try:
+            validate_midi_data({"enabled": True, "zones": {},
+                                  "commands": {"random_wrist": bad}})
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for random_wrist key {bad!r}")
+
+
+def test_validate_midi_data_rejects_bad_adjust_limit_cc():
+    for bad in (-1, 128, "20", True):
+        try:
+            validate_midi_data({"enabled": True, "zones": {},
+                                  "commands": {"adjust_limit": {"cc_0": bad}}})
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for adjust_limit cc {bad!r}")
+
+
+def test_validate_midi_data_rejects_unknown_commands_field():
+    try:
+        validate_midi_data({"enabled": True, "zones": {},
+                              "commands": {"in_port": None, "random_wrist": None,
+                                             "adjust_limit": {"cc_0": None, "cc_1": None, "cc_2": None},
+                                             "foo": "bar"}})
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError for an unknown commands field")
+
+
+def test_validate_midi_data_rejects_unknown_adjust_limit_field():
+    try:
+        validate_midi_data({"enabled": True, "zones": {},
+                              "commands": {"adjust_limit": {"cc_3": 22}}})
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError for an unknown adjust_limit field")
 
 
 def test_load_midi_data_reads_and_validates():
@@ -371,29 +439,20 @@ def test_noteoff_learn_captures_key():
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1] == {"key": "noteoff:0:60", "msg": [0x80, 60, 0],
                             "zone": "wander", "action": "look", "nav": None,
-                            "capture": None, "group": None, "perform": None}
+                            "capture": None, "group": None, "perform": None,
+                            "command": None, "command_cc": None}
     assert m.is_learning is False
 
 
 # ---------------------------------------------------------------------------
-# Legacy hardcoded protocol: fallback on the default port only.
+# No legacy fallback: an unmapped message dispatches nothing (the hardcoded
+# channel-0 protocol was retired; every mapped function is now learned).
 # ---------------------------------------------------------------------------
-def test_unmapped_falls_back_to_legacy_on_default_port():
-    # CC1 value 2 -> "rest" (the legacy hardcoded protocol, default port).
-    zones = {"rest": {"actions": {"rest": {}}}}
-    m, bus = _midi({"zones": {}}, zones=zones)
+def test_unmapped_cc_dispatches_nothing():
+    # CC1 value 2 was the legacy "rest" trigger; with the legacy protocol retired,
+    # an unmapped CC on the default port dispatches nothing.
+    m, bus = _midi({"zones": {}})
     _feed(m, [0xB0, 1, 2])
-    assert _cmds(bus) == [("trigger_action", {"zone": "rest", "action": "rest"})]
-
-
-def test_legacy_mode_on_default_port():
-    pytest.skip("CC2/set_mode is no longer part of the legacy MIDI protocol")
-
-
-def test_legacy_only_on_default_port():
-    # The legacy protocol does not fire on a non-default port.
-    m, bus = _midi({"zones": {"wander": {"in_port": 1}}})
-    _feed(m, [0xB0, 1, 2], port=1)  # CC1 value 2 = "rest", but on port 1 (not default)
     assert _cmds(bus) == []
 
 
@@ -404,7 +463,7 @@ def test_unmapped_note_off_dispatches_nothing():
 
 
 def test_unmapped_program_dispatches_nothing():
-    # The legacy protocol has no program-change handling.
+    # An unmapped program change dispatches nothing.
     m, bus = _midi({"zones": {}})
     _feed(m, [0xC0, 5])
     assert _cmds(bus) == []
@@ -424,7 +483,8 @@ def test_learn_arms_and_captures_on_zone_port():
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1] == {"key": "cc:5:10", "msg": [0xB0, 5, 10],
                             "zone": "wander", "action": "look", "nav": None,
-                            "capture": None, "group": None, "perform": None}
+                            "capture": None, "group": None, "perform": None,
+                            "command": None, "command_cc": None}
     # Learn is single-shot: disarmed after capture.
     assert m.is_learning is False
 
@@ -559,7 +619,8 @@ def test_nav_learn_captured_on_nav_port():
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1] == {"key": "cc:11:0", "msg": [0xB0, 11, 0],
                             "zone": None, "action": None, "nav": "next_action",
-                            "capture": None, "group": None, "perform": None}
+                            "capture": None, "group": None, "perform": None,
+                            "command": None, "command_cc": None}
     # Learn is single-shot: disarmed after capture.
     assert m.is_learning is False
 
@@ -632,7 +693,8 @@ def test_capture_learn_captured_on_capture_port():
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1] == {"key": "cc:15:0", "msg": [0xB0, 15, 0],
                             "zone": None, "action": None, "nav": None,
-                            "capture": True, "group": None, "perform": None}
+                            "capture": True, "group": None, "perform": None,
+                            "command": None, "command_cc": None}
     # Learn is single-shot: disarmed after capture.
     assert m.is_learning is False
 
@@ -666,7 +728,8 @@ def test_perform_learn_captured_on_perform_port():
     assert cmds[0][0] == "midi_learn"
     assert cmds[0][1] == {"key": "cc:70:127", "msg": [0xB0, 70, 127],
                             "zone": None, "action": None, "nav": None,
-                            "capture": None, "group": None, "perform": "velocity"}
+                            "capture": None, "group": None, "perform": "velocity",
+                            "command": None, "command_cc": None}
     # Learn is single-shot: disarmed after capture.
     assert m.is_learning is False
 
@@ -693,6 +756,130 @@ def test_perform_learn_not_dispatched():
     cmds = _cmds(bus)
     assert cmds[0][0] == "midi_learn"
     assert "perform_velocity" not in [c[0] for c in cmds]
+
+
+# ---------------------------------------------------------------------------
+# Global commands (random_wrist key + adjust_limit CCs), scoped to the commands' in_port.
+# ---------------------------------------------------------------------------
+def test_commands_random_wrist_dispatch():
+    # The learned random_wrist key submits Cmd.RANDOM_WRIST (an empty payload).
+    m, bus = _midi({"commands": {"in_port": None, "random_wrist": "note:0:60",
+                                   "adjust_limit": {"cc_0": None, "cc_1": None, "cc_2": None}}})
+    _feed(m, [0x90, 60, 90])  # the random_wrist key on the default port
+    assert _cmds(bus) == [("random_wrist", {})]
+
+
+def test_commands_random_wrist_cc_key():
+    # A CC key also dispatches random_wrist (the key is the full cc:<cc>:<value>).
+    m, bus = _midi({"commands": {"in_port": None, "random_wrist": "cc:18:0",
+                                   "adjust_limit": {"cc_0": None, "cc_1": None, "cc_2": None}}})
+    _feed(m, [0xB0, 18, 0])
+    assert _cmds(bus) == [("random_wrist", {})]
+
+
+def test_commands_adjust_limit_dispatch():
+    # A matching channel-0 CC submits Cmd.ADJUST_LIMIT (index i, value = value/4).
+    m, bus = _midi({"commands": {"in_port": None, "random_wrist": None,
+                                   "adjust_limit": {"cc_0": 20, "cc_1": 21, "cc_2": 22}}})
+    _feed(m, [0xB0, 20, 100])  # cc_0 = 20, value 100 -> 25.0
+    assert _cmds(bus) == [("adjust_limit", {"index": 0, "value": 25.0})]
+    bus.drain_commands()
+    _feed(m, [0xB0, 21, 8])  # cc_1 = 21, value 8 -> 2.0
+    assert _cmds(bus) == [("adjust_limit", {"index": 1, "value": 2.0})]
+    bus.drain_commands()
+    _feed(m, [0xB0, 22, 4])  # cc_2 = 22, value 4 -> 1.0
+    assert _cmds(bus) == [("adjust_limit", {"index": 2, "value": 1.0})]
+
+
+def test_commands_scoped_to_port():
+    # The command keys are global (any zone) but scoped to the commands' in_port
+    # (the default port when null): the same key on another port is a no-op.
+    m, bus = _midi({"commands": {"in_port": 2, "random_wrist": "note:0:60",
+                                   "adjust_limit": {"cc_0": 20, "cc_1": None, "cc_2": None}}})
+    _feed(m, [0x90, 60, 90], port=0)  # not the commands port
+    assert _cmds(bus) == []
+    _feed(m, [0x90, 60, 90], port=2)  # the commands port
+    assert _cmds(bus) == [("random_wrist", {})]
+
+
+def test_commands_unmapped_key_dispatches_nothing():
+    # A CC that is not the random_wrist key and not an adjust_limit CC dispatches nothing.
+    m, bus = _midi({"commands": {"in_port": None, "random_wrist": "note:0:60",
+                                   "adjust_limit": {"cc_0": 20, "cc_1": None, "cc_2": None}}})
+    _feed(m, [0xB0, 5, 10])  # an unmapped CC
+    assert _cmds(bus) == []
+
+
+def test_commands_adjust_limit_not_channel_0():
+    # adjust_limit CCs only match channel-0 CCs (0xB0); a channel-1 CC is a no-op.
+    m, bus = _midi({"commands": {"in_port": None, "random_wrist": None,
+                                   "adjust_limit": {"cc_0": 20, "cc_1": None, "cc_2": None}}})
+    _feed(m, [0xB1, 20, 100])  # channel 1 (0xB1), not channel 0
+    assert _cmds(bus) == []
+
+
+def test_commands_learn_random_wrist_captured_on_commands_port():
+    # Command learn (random_wrist) captures on the commands' in_port (default when null)
+    # and submits MIDI_LEARN with the command context (the editor writes random_wrist).
+    m, bus = _midi({"commands": {"in_port": None, "random_wrist": None,
+                                   "adjust_limit": {"cc_0": None, "cc_1": None, "cc_2": None}}})
+    m.start_learn(command="random_wrist")
+    assert m.is_learning is True
+    _feed(m, [0x90, 60, 90])  # the default port
+    cmds = _cmds(bus)
+    assert len(cmds) == 1
+    assert cmds[0][0] == "midi_learn"
+    assert cmds[0][1] == {"key": "note:0:60", "msg": [0x90, 60, 90],
+                            "zone": None, "action": None, "nav": None,
+                            "capture": None, "group": None, "perform": None,
+                            "command": "random_wrist", "command_cc": None}
+    # Learn is single-shot: disarmed after capture.
+    assert m.is_learning is False
+
+
+def test_commands_learn_adjust_limit_captured_on_commands_port():
+    # Command learn (adjust_limit, cc_0) captures the CC message on the commands' in_port
+    # and submits MIDI_LEARN with command + command_cc context (the editor writes the CC).
+    m, bus = _midi({"commands": {"in_port": None, "random_wrist": None,
+                                   "adjust_limit": {"cc_0": None, "cc_1": None, "cc_2": None}}})
+    m.start_learn(command="adjust_limit", command_cc="cc_0")
+    assert m.is_learning is True
+    _feed(m, [0xB0, 20, 100])  # a CC message on the default port
+    cmds = _cmds(bus)
+    assert len(cmds) == 1
+    assert cmds[0][0] == "midi_learn"
+    assert cmds[0][1] == {"key": "cc:20:100", "msg": [0xB0, 20, 100],
+                            "zone": None, "action": None, "nav": None,
+                            "capture": None, "group": None, "perform": None,
+                            "command": "adjust_limit", "command_cc": "cc_0"}
+    assert m.is_learning is False
+
+
+def test_commands_learn_scoped_to_commands_port():
+    # When the commands in_port is set, the learn capture is scoped to that port.
+    m, bus = _midi({"commands": {"in_port": 2, "random_wrist": None,
+                                   "adjust_limit": {"cc_0": None, "cc_1": None, "cc_2": None}}})
+    m.start_learn(command="random_wrist")
+    assert m.is_learning is True
+    _feed(m, [0x90, 60, 90], port=0)  # the default port: not captured
+    assert _cmds(bus) == []
+    assert m.is_learning is True  # still armed
+    _feed(m, [0x90, 60, 90], port=2)  # the commands port: captured
+    cmds = _cmds(bus)
+    assert cmds[0][0] == "midi_learn"
+    assert cmds[0][1]["command"] == "random_wrist"
+
+
+def test_commands_learn_not_dispatched():
+    # While a command learn is armed, the captured message is not dispatched.
+    m, bus = _midi({"commands": {"in_port": None, "random_wrist": "note:0:60",
+                                   "adjust_limit": {"cc_0": 20, "cc_1": None, "cc_2": None}}})
+    m.start_learn(command="random_wrist")
+    _feed(m, [0x90, 60, 90])
+    cmds = _cmds(bus)
+    assert cmds[0][0] == "midi_learn"
+    assert "random_wrist" not in [c[0] for c in cmds]
+    assert "adjust_limit" not in [c[0] for c in cmds]
 
 
 # ---------------------------------------------------------------------------

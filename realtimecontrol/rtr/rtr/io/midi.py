@@ -14,9 +14,7 @@ an ``actions`` map that sends a learned key to a zone action. One ``MidiIn`` is
 opened per distinct ``in_port`` (rtmidi's callback does not report the source
 port, so multiple ports need separate handles). A message on port P is routed
 to the zones with ``in_port == P``: a matching ``command`` → TRIGGER_ACTION,
-a matching ``actions`` key → TRIGGER_ACTION (zone + action). Unmapped messages
-on the **default** port fall back to the legacy hardcoded protocol below, so
-existing controllers keep working.
+a matching ``actions`` key → TRIGGER_ACTION (zone + action).
 
 Learn capture is armed per-zone: ``start_learn(zone, action)`` captures the next
 mappable message on the zone's ``in_port`` and submits ``MIDI_LEARN {key, msg,
@@ -40,18 +38,21 @@ A nav key is learned with ``start_learn(nav=<command>)`` (captured on the nav's
 
 The legacy top-level ``in_port`` and ``mapping`` fields of ``midi.json`` are
 **deprecated**: the validator still accepts and preserves them so old files load,
-but dispatch no longer uses them (the hardcoded protocol is the fallback on the
-default port).
+but dispatch no longer uses them.
 
-Legacy hardcoded protocol (default port only)
----------------------------------------------
-- CC1 (value 1-6)      → trigger_action (zone + first enabled action)
-- CC3 (value i)        → play the i-th action (1-based) in the current zone; 0 clears
-- CC20 / 21 / 22       → adjust_limit (index 0/1/2)
-- Note ch3             → random_wrist
-
-The per-trigger random walks on ch4/ch5 and the ch7 "step" trigger are subsumed by the
-brain's continuous tick in the new architecture, so they are intentionally not mapped.
+Global commands (from ``midi.json`` ``commands``)
+-------------------------------------------------
+The optional top-level ``commands`` object maps the global command keys (that
+work in any zone, scoped to the section's ``in_port`` — null = the default
+port): ``random_wrist`` (a MIDI key → ``Cmd.RANDOM_WRIST``) and ``adjust_limit``
+(a ``{cc_0, cc_1, cc_2}`` map — three CC numbers, one per limit index →
+``Cmd.ADJUST_LIMIT`` with ``value = cc_value / 4``, mirroring the retired
+legacy CC20/21/22 scaling). A command key is learned with
+``start_learn(command="random_wrist")`` (captured on the commands' ``in_port``);
+an ``adjust_limit`` CC is learned with ``start_learn(command="adjust_limit",
+command_cc="cc_0")`` (the editor writes the captured CC number into the slot).
+These replace the retired hardcoded channel-0 fallback, so every mapped MIDI
+function is now learned and listed in the editor.
 """
 
 import json
@@ -61,9 +62,6 @@ from typing import Any, Optional
 from ..core.bus import StateBus
 from ..core.commands import Cmd, Command, Event
 from ..flow import activation_commands, build_items
-
-# Legacy hardcoded protocol tables (channel-0 fallback, default port only).
-ZONE_BY_CC1 = {1: "init", 2: "rest", 3: "wakeup", 4: "stretch", 5: "wander", 6: "wildwander"}
 
 # How many recent MIDI events the live monitor ring holds (newest last).
 MONITOR_MAX = 50
@@ -117,6 +115,8 @@ def builtin_midi_data() -> dict:
                     "back": None, "retrigger": None, "next_pose": None},
             "capture": {"in_port": None, "key": None},
             "groups": {"in_port": None},
+            "commands": {"in_port": None, "random_wrist": None,
+                         "adjust_limit": {"cc_0": None, "cc_1": None, "cc_2": None}},
             "perform": {"in_port": None, "cc_a": None, "cc_b": None},
             "clock": {"in_port": None}}
 
@@ -263,6 +263,36 @@ def validate_midi_data(data: Any) -> dict:
                 raise ValueError("groups.in_port must be a non-negative int or null")
         elif val is not None:
             validate_midi_key(val)
+    # The global commands section (optional): the port the global command keys are
+    # dispatched on (null = the default port), the ``random_wrist`` key (a MIDI key
+    # → Cmd.RANDOM_WRIST), and the ``adjust_limit`` sub-section (three CC numbers,
+    # one per limit index → Cmd.ADJUST_LIMIT, mirroring the legacy CC20/21/22).
+    commands = data.get("commands", {})
+    if not isinstance(commands, dict):
+        raise ValueError("'commands' must be an object")
+    for name, val in commands.items():
+        if name == "in_port":
+            if val is not None and not (isinstance(val, int) and not isinstance(val, bool)
+                                         and val >= 0):
+                raise ValueError("commands.in_port must be a non-negative int or null")
+        elif name == "random_wrist":
+            if val is not None:
+                validate_midi_key(val)
+        elif name == "adjust_limit":
+            if not isinstance(val, dict):
+                raise ValueError("commands.adjust_limit must be an object")
+            for cc_name, cc_val in val.items():
+                if cc_name not in ("cc_0", "cc_1", "cc_2"):
+                    raise ValueError(f"commands.adjust_limit[{cc_name!r}] is not a known "
+                                      f"field (expected cc_0/cc_1/cc_2)")
+                if cc_val is not None and not (isinstance(cc_val, int)
+                                               and not isinstance(cc_val, bool)
+                                               and 0 <= cc_val <= 127):
+                    raise ValueError(f"commands.adjust_limit.{cc_name} "
+                                      f"must be an int in [0, 127] or null")
+        else:
+            raise ValueError(f"commands[{name!r}] is not a known field "
+                              f"(expected in_port/random_wrist/adjust_limit)")
     # The perform section (optional): the two CC numbers for the live perform
     # controllers (CC-A = velocity, CC-B = multiplier) plus the ``in_port`` they
     # are dispatched on (null = the default port).
@@ -353,7 +383,8 @@ class MidiInput:
         self._multipliers_provider = multipliers_provider
         # Open MidiIn handles, keyed by port index (one per distinct in_port).
         self._midi_ins: dict = {}
-        # The armed learn capture: {"port", "zone", "action", "nav"} or None.
+        # The armed learn capture: {"port", "zone", "action", "nav", "capture",
+        # "group", "perform", "command", "command_cc"} or None.
         self._learn = None
         self._current_zone = "init"
         self._current_action = None
@@ -484,6 +515,14 @@ class MidiInput:
         cap = self._data.get("capture")
         return cap.get("key") if isinstance(cap, dict) else None
 
+    def _commands_in_port(self) -> Optional[int]:
+        """The ``in_port`` for the global commands section (else the default port)."""
+        cmd = self._data.get("commands")
+        ip = cmd.get("in_port") if isinstance(cmd, dict) else None
+        if isinstance(ip, int) and not isinstance(ip, bool) and ip >= 0:
+            return ip
+        return self.in_port
+
     def _zones_by_port(self, port) -> list:
         """The zones whose effective ``in_port`` is ``port``."""
         return [z for z in self._data.get("zones", {})
@@ -491,14 +530,15 @@ class MidiInput:
 
     def _in_ports(self) -> set:
         """The distinct ports to open: every zone's in_port, the nav in_port, the
-        capture in_port, the groups in_port, the perform in_port, the clock in_port,
-        plus the default port."""
+        capture in_port, the groups in_port, the commands in_port, the perform
+        in_port, the clock in_port, plus the default port."""
         ports = {self.in_port}
         for z in self._data.get("zones", {}):
             ports.add(self._zone_in_port(z))
         ports.add(self._nav_in_port())
         ports.add(self._capture_in_port())
         ports.add(self._groups_in_port())
+        ports.add(self._commands_in_port())
         ports.add(self._perform_in_port())
         ports.add(self._clock_in_port())
         return ports
@@ -572,9 +612,11 @@ class MidiInput:
     # ------------------------------------------------------------------
     def start_learn(self, zone=None, action=None, nav=None, nav_port=None,
                     capture=None, capture_port=None, group=None, group_port=None,
-                    perform=None, perform_port=None) -> None:
+                    perform=None, perform_port=None,
+                    command=None, command_cc=None, command_port=None) -> None:
         """Arm the learn capture for a zone key, a global nav key, the capture key,
-        a group-enable key, or a perform CC (velocity / multiplier).
+        a group-enable key, a perform CC (velocity / multiplier), or a global command
+        (``random_wrist`` / ``adjust_limit``).
 
         A zone learn (``zone``/``action``) captures the next mappable message on the
         zone's ``in_port``; a nav learn (``nav``) captures on the nav's ``in_port``
@@ -585,11 +627,16 @@ class MidiInput:
         groups' ``in_port`` (the default port when it is null), or on ``group_port``
         when given; a perform learn (``perform`` = "velocity" / "multiplier")
         captures on the perform's ``in_port`` (the default port when it is null), or
-        on ``perform_port`` when given. The key is submitted as ``Cmd.MIDI_LEARN``
-        with the matching context (the editor writes it into the zone's
-        ``command``/``actions``, into ``nav[nav]``, into ``capture.key``, into
-        ``groups[group]``, or into ``perform.cc_a`` / ``perform.cc_b``). The captured
-        message is **not** dispatched, so arming learn never moves the robot.
+        on ``perform_port`` when given; a command learn (``command`` =
+        "random_wrist" / "adjust_limit") captures on the commands' ``in_port`` (the
+        default port when it is null), or on ``command_port`` when given, with
+        ``command_cc`` (``cc_0``/``cc_1``/``cc_2``) selecting which ``adjust_limit``
+        slot to write. The key is submitted as ``Cmd.MIDI_LEARN`` with the matching
+        context (the editor writes it into the zone's ``command``/``actions``, into
+        ``nav[nav]``, into ``capture.key``, into ``groups[group]``, into
+        ``perform.cc_a`` / ``perform.cc_b``, or into ``commands.random_wrist`` /
+        ``commands.adjust_limit[command_cc]``). The captured message is **not**
+        dispatched, so arming learn never moves the robot.
         """
         if perform is not None:
             port = self._perform_in_port()
@@ -615,6 +662,13 @@ class MidiInput:
                 port = group_port
             self._learn = {"port": port, "zone": None, "action": None, "nav": None,
                             "capture": None, "group": group}
+        elif command is not None:
+            port = self._commands_in_port()
+            if isinstance(command_port, int) and not isinstance(command_port, bool) and command_port >= 0:
+                port = command_port
+            self._learn = {"port": port, "zone": None, "action": None, "nav": None,
+                            "capture": None, "group": None, "command": command,
+                            "command_cc": command_cc}
         else:
             self._learn = {"port": self._zone_in_port(zone), "zone": zone,
                             "action": action, "nav": None, "capture": None, "group": None}
@@ -828,7 +882,9 @@ class MidiInput:
                                    "nav": self._learn["nav"],
                                    "capture": self._learn["capture"],
                                    "group": self._learn.get("group"),
-                                   "perform": self._learn.get("perform")})
+                                   "perform": self._learn.get("perform"),
+                                   "command": self._learn.get("command"),
+                                   "command_cc": self._learn.get("command_cc")})
                     self._learn = None
             return
         # Perform-mode gating: while performing + moving, discard the move-triggering
@@ -848,12 +904,13 @@ class MidiInput:
         # Groups dispatch: a group-enable key (on the groups' in_port).
         if self._dispatch_groups(port, message):
             return
+        # Commands dispatch: the global command keys (random_wrist, adjust_limit)
+        # on the commands' in_port.
+        if not gated and self._dispatch_commands(port, message):
+            return
         # Perform dispatch: the two live perform CCs (velocity + multiplier).
         if self._dispatch_perform(port, message):
             return
-        # Legacy fallback: only on the default port.
-        if not gated and port == self.in_port:
-            self._legacy_dispatch(message)
 
     def _dispatch_nav(self, port, message) -> bool:
         """Match the global nav keys on the nav's in_port; True if a nav command was dispatched.
@@ -915,6 +972,39 @@ class MidiInput:
             if gkey == key:
                 self._submit(Cmd.ENABLE_GROUP, {"group": name})
                 return True
+        return False
+
+    def _dispatch_commands(self, port, message) -> bool:
+        """Match the global command keys on the commands' in_port.
+
+        ``random_wrist`` (a learned key) submits ``Cmd.RANDOM_WRIST``. ``adjust_limit``
+        holds three learned CC numbers (one per limit index): a matching channel-0 CC
+        submits ``Cmd.ADJUST_LIMIT`` (index i, value = value/4, mirroring the legacy
+        CC20/21/22 scaling). Both are scoped to the commands' ``in_port`` (the default
+        port when it is null), like the other port-scoped dispatches.
+        """
+        if port != self._commands_in_port():
+            return False
+        cmd = self._data.get("commands")
+        if not isinstance(cmd, dict):
+            return False
+        key = self._key_for(message)
+        if key is None:
+            return False
+        rw = cmd.get("random_wrist")
+        if rw is not None and rw == key:
+            self._submit(Cmd.RANDOM_WRIST, {})
+            return True
+        al = cmd.get("adjust_limit")
+        if isinstance(al, dict):
+            if message[0] == 0xB0 and len(message) >= 3:
+                cc = message[1]
+                for i in range(3):
+                    cci = al.get(f"cc_{i}")
+                    if cci is not None and cc == cci:
+                        self._submit(Cmd.ADJUST_LIMIT,
+                                      {"index": i, "value": message[2] / 4})
+                        return True
         return False
 
     def _perform_in_port(self) -> Optional[int]:
@@ -1011,57 +1101,6 @@ class MidiInput:
                     self._submit(Cmd.TRIGGER_ACTION, {"zone": zone, "action": action})
                     return True
         return False
-
-    def _legacy_dispatch(self, message) -> None:
-        """The hardcoded channel-0 protocol (default port only)."""
-        status = message[0]
-        if status == 0xB0:
-            if len(message) < 3:
-                return
-            self._handle_cc(message[1], message[2])
-        elif 0x90 <= status <= 0x9F:
-            if len(message) < 3:
-                return
-            self._handle_note(status - 0x90, message[1], message[2])
-
-    def _handle_cc(self, cc: int, value: int) -> None:
-        """Legacy CC protocol (channel 0)."""
-        if cc == 1 and value in ZONE_BY_CC1:
-            zone = ZONE_BY_CC1[value]
-            action = self._first_enabled_action(zone)
-            if action:
-                self._submit(Cmd.TRIGGER_ACTION, {"zone": zone, "action": action})
-        elif cc == 3:
-            self._play_action_by_index(value)
-        elif cc in (20, 21, 22):
-            self._submit(Cmd.ADJUST_LIMIT, {"index": cc - 20, "value": value / 4})
-
-    def _play_action_by_index(self, index: int) -> None:
-        """CC3: play the ``index``-th action (1-based) in the current zone.
-
-        ``0`` clears the active action. The index is resolved against the current
-        zone's action table (in order), so it tracks hot-reloaded zone data.
-        """
-        if index == 0:
-            self._submit(Cmd.CLEAR_ACTION, {})
-            return
-        zones = self.zones_provider() if self.zones_provider is not None else None
-        if zones is None or not zones.has(self._current_zone):
-            print(f"[midi] CC3: unknown current zone {self._current_zone!r}")
-            return
-        actions = list(zones.get(self._current_zone).actions())
-        if index <= 0 or index > len(actions):
-            print(f"[midi] CC3 index {index} out of range for zone "
-                  f"{self._current_zone!r} ({len(actions)} action(s))")
-            return
-        self._submit(Cmd.PLAY_ACTION, {"action": actions[index - 1]})
-
-    def _handle_note(self, channel: int, note: int, velocity: int) -> None:
-        """Legacy note protocol (channel 2)."""
-        if velocity == 0:  # note off
-            return
-        if channel == 2:
-            self._submit(Cmd.RANDOM_WRIST, {})
 
     def _submit(self, cmd: Cmd, payload: dict) -> None:
         self._record("out", cmd=cmd.value, payload=payload)
