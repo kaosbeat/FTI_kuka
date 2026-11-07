@@ -52,6 +52,7 @@ class Cmd(str, Enum):
     CAM_TEST_STOP = "cam_test_stop"
     PERFORM_VELOCITY = "perform_velocity"
     PERFORM_MULTIPLIER = "perform_multiplier"
+    PERFORM_BASE_BEATS = "perform_base_beats"
 
 
 class Event(str, Enum):

@@ -25,9 +25,28 @@ It borrows the EKI connection (the vendored ``kukapy.Robot``) but is NOT part of
 
 Usage
 -----
+    python measure_speed.py --readme               # full in-program guide
+    python measure_speed.py --dry-run              # print the plan (no movement)
     python measure_speed.py --sim                  # validate the pipeline (no robot)
     python measure_speed.py                        # real robot, default port
     python measure_speed.py --amplitude 60 --out speed.json
+
+Starting pose & confirmation
+-----------------------------
+The robot must start from a known pose. Set ``START_POSE`` in the CONFIG
+section below, then run the tool: it reads the robot's LIVE pose, prints it
+(raw + app/virtual), and asks you to CONFIRM the robot is there before any
+movement. The per-axis targets are printed too, so you know exactly where the
+robot will go.
+
+A6 +90 offset
+--------------
+The app (``rtr.robot.kuka.KukaRobot``) works in a *virtual* joint space = raw
+EKI pose + ``joint_offsets_deg`` (A6 carries a +90 calibration, see
+``robotconfig.json``). This tool works in **RAW** EKI space: it reads/writes the
+physical axis angles and clamps to the physical hardware limits. A constant
+offset cancels in the velocity difference, so the measured speeds are identical
+in either space. The tool prints a note explaining what is and is not offset.
 
 Safety
 ------
@@ -64,6 +83,25 @@ ARRIVAL_EPS = 0.5  # degrees
 # The safe speed (%) used to park the robot between tests.
 PARK_VEL = 20
 PARK_ACC = 20
+
+
+# ---------------------------------------------------------------------------
+# CONFIG (edit these for your robot)
+# ---------------------------------------------------------------------------
+# The starting pose (RAW EKI joint angles, degrees) the robot must be at before
+# the tests run. The tool reads the robot's LIVE pose, prints it (raw + app),
+# and asks you to CONFIRM the robot is here before any movement. Set this to the
+# pose you want to measure from.
+START_POSE = [0.0, -135.0, 45.0, 0.0, 30.0, 0.0]
+# Tolerance (degrees) for the "is the robot at the starting pose" self-check.
+# If any axis is further than this from START_POSE, the tool warns loudly.
+START_EPS = 1.0
+# The app's joint_offsets_deg (from robotconfig.json): the app's *virtual* joint
+# space = raw EKI pose + this offset. A6 carries a +90 calibration. This tool
+# works in RAW space (see the module docstring); this is printed so you can map
+# between the app's display and what this tool reads/sends. Keep in sync with
+# robotconfig.json's "joint_offsets_deg".
+JOINT_OFFSETS_DEG = [0.0, 0.0, 0.0, 0.0, 0.0, 90.0]
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +322,63 @@ def _clamp_target(home, axes, amplitude):
     return target
 
 
+def print_offset_note():
+    """Explain what the A6 +90 offset does and does not affect in this tool."""
+    if all(abs(x) < 1e-9 for x in JOINT_OFFSETS_DEG):
+        print("\n=== joint offset ===")
+        print("No joint offsets configured (all zero) — raw space == app space.")
+        return
+    off = ", ".join(f"{AXIS_NAMES[i]}={JOINT_OFFSETS_DEG[i]:+.0f}"
+                    for i in range(6) if JOINT_OFFSETS_DEG[i])
+    print("\n=== joint offset (A6 +90 calibration) ===")
+    print(f"Configured offsets: {off}  (app virtual = raw + offset)")
+    print("This tool works in RAW EKI joint space (what get_curjpos() returns and")
+    print("what it sends to the controller). The app's joint_offsets_deg are NOT")
+    print("applied to the poses it reads, sends, or clamps to. Concretely:")
+    print("  - the poses printed here are the PHYSICAL axis angles (raw);")
+    print("  - the app's display = raw + offset (e.g. app A6 = raw A6 + 90);")
+    print("  - HARDWARE_LIMITS are the physical (raw) joint limits, so the safety")
+    print("    clamp is correct in raw space;")
+    print("  - the measured speeds are IDENTICAL in either space: a constant offset")
+    print("    cancels in the velocity difference, so top_speed / accel / brake are")
+    print("    the same whether you read raw or app (virtual) space.")
+
+
+def confirm_start(driver, args):
+    """Self-check + operator confirmation that the robot is at START_POSE.
+
+    Reads the robot's live RAW pose, compares it to the configured START_POSE,
+    prints both (raw + app/virtual equivalents) and the per-axis delta, and asks
+    the operator to confirm before any movement. Returns True to proceed, False
+    to abort. (Skipped in --sim mode by the caller: the sim has no physical
+    robot to verify.)
+    """
+    print("\n=== starting-pose check (before any movement) ===")
+    print_offset_note()
+    exp = [float(x) for x in START_POSE]
+    cur = [float(x) for x in driver.get_curjpos()]
+    exp_v = [exp[i] + JOINT_OFFSETS_DEG[i] for i in range(6)]
+    cur_v = [cur[i] + JOINT_OFFSETS_DEG[i] for i in range(6)]
+    print(f"expected start (RAW):        {[round(x, 1) for x in exp]}")
+    print(f"expected start (app/virt):   {[round(x, 1) for x in exp_v]}   (raw + offset)")
+    print(f"current pose   (RAW):        {[round(x, 1) for x in cur]}")
+    print(f"current pose   (app/virt):   {[round(x, 1) for x in cur_v]}   (raw + offset)")
+    delta = [abs(cur[i] - exp[i]) for i in range(6)]
+    maxd = max(delta)
+    print("per-axis |current - expected| (raw): "
+          + "  ".join(f"{AXIS_NAMES[i]}={delta[i]:.1f}" for i in range(6)))
+    if maxd > START_EPS:
+        print(f"  !! WARNING: the robot is {maxd:.1f} deg away from the expected start "
+              f"(tolerance {START_EPS} deg). Verify before continuing.")
+    else:
+        print(f"  OK: the robot is within {START_EPS} deg of the expected start pose.")
+    if args.yes:
+        print("  (--yes: skipping interactive confirmation)")
+        return True
+    ans = input("  Is the robot at the starting pose? (y/N): ").strip().lower()
+    return ans in ("y", "yes")
+
+
 def run_all(driver, args, axes):
     """Run the individual-axis and (optionally) combined tests; return the metrics."""
     home = driver.get_curjpos()
@@ -410,18 +505,89 @@ def write_profile(results, args):
 
 
 def print_plan(args, axes):
-    home = "(current pose — read at run time)"
+    """Print the plan (no robot movement). Uses START_POSE as the assumed home, so
+    you can see exactly where the robot will go before running for real."""
+    home = [float(x) for x in START_POSE]
     print("dry run — no robot movement")
     print(f"device={'sim' if args.sim else 'kuka'}  ip={args.ip}  port={args.port}")
     print(f"velocity={args.velocity}%  acceleration={args.acceleration}%  "
           f"amplitude={args.amplitude} deg")
-    print(f"home = {home}")
+    print_offset_note()
+    print(f"\nstarting pose (RAW, from CONFIG): {[round(x, 1) for x in home]}")
+    print(f"  (app/virtual = raw + offset: "
+          f"{[round(home[i] + JOINT_OFFSETS_DEG[i], 1) for i in range(6)]})")
+    print("\nplanned individual tests (one axis moves +amplitude at a time, "
+          "then returns):")
     for axis in axes:
+        t = _clamp_target(home, [axis], args.amplitude)
         lo, hi = HARDWARE_LIMITS[axis]
-        print(f"  {AXIS_NAMES[axis]}: move +{args.amplitude} deg, clamped to "
-              f"[{lo}, {hi}]")
+        print(f"  {AXIS_NAMES[axis]}: -> {[round(x, 1) for x in t]}  "
+              f"(clamped to [{lo}, {hi}])")
     if args.combined:
-        print("  combined: all six axes move +amplitude at once")
+        t = _clamp_target(home, list(range(6)), args.amplitude)
+        print(f"\nplanned combined test (all six axes at once): -> "
+              f"{[round(x, 1) for x in t]}")
+    print(f"\nfinal: park back at the starting pose "
+          f"{[round(x, 1) for x in home]}")
+
+
+def print_readme():
+    """The full in-program usage guide (--readme)."""
+    print("""
+MEASURE_SPEED — KUKA per-axis speed measurement (standalone terminal tool)
+==========================================================================
+
+WHAT IT DOES
+  Commands the KUKA to move each axis — and all axes combined — as fast as
+  possible, samples the joint positions, and recovers the real angular speed
+  profile: top speed (deg/s), acceleration (deg/s^2), braking (deg/s^2), and the
+  profile shape (trapezoidal vs triangular). The result is a drop-in for
+  robotconfig.json's axis_max_deg_s (the field the perform-mode speed model reads).
+
+HOW IT WORKS
+  - Borrows the EKI connection (vendored kukapy) but is NOT part of main.py and
+    has no web UI — it is a plain terminal program.
+  - Reads/writes RAW EKI joint angles (A1..A6, degrees). The app's A6 +90 offset
+    (joint_offsets_deg) is NOT applied — the tool prints a note explaining what is
+    and is not offset. Measured speeds are identical in raw or app space.
+  - Each test starts from the current pose and moves only --amplitude degrees on
+    the axis under test (clamped to the KR60 hardware joint limits), then returns.
+
+USAGE
+  python measure_speed.py --readme               # this guide
+  python measure_speed.py --dry-run              # print the plan, no movement
+  python measure_speed.py --sim                  # pipeline test (no hardware)
+  python measure_speed.py                        # real robot, default port
+  python measure_speed.py --combined --out speed.json
+
+BEFORE RUNNING (real robot)
+  1. Set START_POSE in the CONFIG section to the pose the robot is in.
+  2. The tool reads the live pose, prints it (raw + app), and asks you to confirm
+     the robot is there before any movement. The planned targets are printed too.
+  3. Raise --amplitude until the report shows profile=trapezoidal for every axis.
+     A triangular row means the move was too short to reach that axis's true max
+     (its top_speed is a lower bound).
+
+FLAGS
+  --ip, --port         EKI connection (default 192.168.10.201:18735)
+  --sim                run against the headless SimRobot (no hardware)
+  --amplitude N        degrees each axis moves (default 45)
+  --axes SPEC          axes to test individually (default all, e.g. '1,3' or '1-6')
+  --combined           also run the all-axes-at-once test
+  --velocity N         velocity % (default 100 = as fast as possible)
+  --acceleration N     acceleration % (default 100)
+  --timeout N          per-move timeout in seconds (default 20)
+  --out FILE           write the measured profile to this JSON file
+  --dry-run            print the plan without moving the robot
+  --yes                skip the interactive starting-pose confirmation
+  --readme             print this guide
+
+SAFETY
+  - Ctrl-C at any time stops and parks the robot.
+  - The tool parks the robot at a safe speed between tests.
+  - A 0.0 in the drop-in means that axis was NOT measured — NEVER copy a 0.0 into
+    robotconfig.json (it would disable that axis in perform mode).
+""")
 
 
 # ---------------------------------------------------------------------------
@@ -484,11 +650,18 @@ def parse_args(argv):
                    help="write the measured profile to this JSON file")
     p.add_argument("--dry-run", action="store_true",
                    help="print the plan without moving the robot")
+    p.add_argument("--yes", action="store_true",
+                   help="skip the interactive starting-pose confirmation")
+    p.add_argument("--readme", action="store_true",
+                   help="print the full in-program usage guide")
     return p.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
+    if args.readme:
+        print_readme()
+        return 0
     axes = parse_axes(args.axes)
     if args.dry_run:
         print_plan(args, axes)
@@ -500,6 +673,11 @@ def main(argv=None):
     print(f"connecting ({'sim' if args.sim else args.ip}:{args.port})...")
     driver.connect()
     try:
+        # The starting-pose self-check + operator confirmation (real robot only;
+        # the sim has no physical robot to verify, so it is skipped there).
+        if not args.sim and not confirm_start(driver, args):
+            print("aborted — the robot was not confirmed at the starting pose.")
+            return 1
         results = run_all(driver, args, axes)
     finally:
         driver.disconnect()

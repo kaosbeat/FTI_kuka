@@ -157,8 +157,9 @@ class StateMachine:
             "velocity": 0.0,      # CC-A: 0-100 (scales the per-axis max deg/s)
             "multiplier": 1,      # CC-B: 1, 2, 4, 8, 16
             "base_beats": 0,      # current action's base_beats (from zones)
+            "base_beats_override": 0,  # live override (the base-beats buttons); 0 = use action/config
             "deadline": 0.0,      # seconds (base_beats × multiplier × 60/BPM)
-            "time_to_arrive": 0.0,  # seconds (max over joints of the rest-to-rest time)
+            "time_to_arrive": 0.0,  # seconds (stopwatch: total − elapsed, 1 s/s)
             "late": False,        # time_to_arrive > deadline
             # Per-axis max angular speed (deg/s at zone speed 100). The zone speed
             # (0-100) is a percentage of these maxes; CC-A (0-100) further scales
@@ -171,6 +172,17 @@ class StateMachine:
             # the placeholder keeps the estimate defined before the seed.
             "acceleration_max_deg_s2": 1.0,
         }
+
+        # Stopwatch TTA state (perform mode): the total move duration (rest-to-rest
+        # to the target at the current speed), anchored at _tta_start (monotonic
+        # seconds). TTA = total − (now − _tta_start), so the countdown ticks at
+        # exactly 1 s/s (wall-clock). Re-anchored on a speed change or a new move
+        # (anchor advance / transition); the per-tick wiggle does NOT re-anchor
+        # (the move identity is stable). _tta_total is None until the first anchor.
+        self._tta_total: Optional[float] = None
+        self._tta_start: float = 0.0
+        self._tta_speed_key: Optional[tuple] = None
+        self._tta_move_id: Optional[tuple] = None
 
     # ------------------------------------------------------------------
     # Requested changes (called by the brain when a command arrives).
@@ -414,6 +426,19 @@ class StateMachine:
         if isinstance(multiplier, (int, float)) and not isinstance(multiplier, bool) and multiplier > 0:
             self.perform["multiplier"] = multiplier
 
+    def set_perform_base_beats(self, value: int) -> None:
+        """Set the live base-beats override (the base-beats buttons: 1/2/4/8/16).
+
+        A positive integer sets the override (the deadline recalculates on the next
+        tick: the engine reads this override before the action's base_beats). 0 (or a
+        non-positive / non-numeric value) clears it — the action's base_beats / config
+        default apply again.
+        """
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            self.perform["base_beats_override"] = int(value)
+        else:
+            self.perform["base_beats_override"] = 0
+
     def update_perform_deadline(self, base_beats: int, bpm: float) -> None:
         """Recompute the perform deadline from the action's base_beats and BPM.
 
@@ -461,6 +486,90 @@ class StateMachine:
                 self.perform["time_to_arrive"] = max(
                     motion_profile_time(d, v, a) for d in distances
                 )
+        self.perform["late"] = (
+            self.perform["time_to_arrive"] > self.perform["deadline"]
+            if self.perform["deadline"] > 0 else False
+        )
+
+    def _perform_speed_key(self) -> tuple:
+        """The perform speed signature (the TTA re-anchors when it changes).
+
+        Captures every input to the per-axis move speed: the base zone/action
+        speed, the CC-A velocity, the per-axis max deg/s, and the acceleration.
+        """
+        base = self._base_speed()
+        cc_a = self.perform["velocity"]
+        axis_max = self.perform["axis_max_deg_s"]
+        accel = self.perform["acceleration_max_deg_s2"]
+        return (round(base, 3), round(cc_a, 3), tuple(axis_max), round(accel, 3))
+
+    def _perform_move_id(self) -> tuple:
+        """The perform move identity (the TTA re-anchors when it changes).
+
+        The per-tick wiggle (target oscillation) does NOT change this — the anchor
+        index and transition are stable across the wiggle — so the stopwatch is not
+        reset every tick. A new move (anchor advance / transition change / action
+        change) changes it and re-anchors the stopwatch.
+        """
+        trans = self._transition.get("action") if self._transition is not None else None
+        return (self.current_zone, self.current_action, self.action_index, trans)
+
+    def update_perform_tta(self, curjpos, target, now: float) -> None:
+        """Stopwatch time-to-arrive: TTA = total − elapsed (true 1 s/s).
+
+        The total is the rest-to-rest time to the target at the current speed,
+        computed at the last anchor. The countdown ticks at exactly 1 s/s
+        (wall-clock), so moving the velocity slider does not change the tick rate —
+        only the TTA *value* is recomputed (re-anchored) on a speed change or a new
+        move (anchor advance / transition). The per-tick wiggle does NOT re-anchor
+        (the move identity is stable), so the countdown is a real stopwatch.
+
+        ``now`` is a monotonic clock (``time.monotonic``), consistent with the beat
+        clock. Outside perform mode (or with no target) the TTA is 0 and the late
+        flag is cleared.
+        """
+        if self.control_mode != "perform" or target is None or not curjpos:
+            self.perform["time_to_arrive"] = 0.0
+            self.perform["late"] = False
+            self._tta_total = None
+            self._tta_speed_key = None
+            self._tta_move_id = None
+            return
+
+        speed_key = self._perform_speed_key()
+        move_id = self._perform_move_id()
+
+        if (self._tta_total is None
+                or speed_key != self._tta_speed_key
+                or move_id != self._tta_move_id):
+            # Re-anchor: the rest-to-rest time to the target at the current speed,
+            # and reset the stopwatch to now (the countdown continues at 1 s/s).
+            a = self.perform["acceleration_max_deg_s2"]
+            if a <= 0:
+                self._tta_total = float("inf")
+            else:
+                base = self._base_speed()
+                cc_a = self.perform["velocity"]
+                axis_max = self.perform["axis_max_deg_s"]
+                speeds = [am * (base / 100.0) * (cc_a / 100.0) for am in axis_max]
+                times = []
+                for c, t, v in zip(curjpos, target, speeds):
+                    d = abs(c - t)
+                    if v <= 0:
+                        times.append(float("inf"))
+                    else:
+                        times.append(motion_profile_time(d, v, a))
+                self._tta_total = max(times)
+            self._tta_start = now
+            self._tta_speed_key = speed_key
+            self._tta_move_id = move_id
+
+        elapsed = now - self._tta_start
+        tta = self._tta_total - elapsed
+        if math.isinf(tta):
+            self.perform["time_to_arrive"] = float("inf")
+        else:
+            self.perform["time_to_arrive"] = max(0.0, tta)
         self.perform["late"] = (
             self.perform["time_to_arrive"] > self.perform["deadline"]
             if self.perform["deadline"] > 0 else False

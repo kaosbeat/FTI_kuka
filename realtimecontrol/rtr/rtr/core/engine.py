@@ -17,6 +17,7 @@ state machine advances one step per tick.
 """
 
 import asyncio
+import time
 import traceback
 from typing import Callable, Optional
 
@@ -214,6 +215,8 @@ class Engine:
                 self.machine.set_perform_velocity(cmd.payload.get("value", 0.0))
             elif cmd.cmd == Cmd.PERFORM_MULTIPLIER:
                 self.machine.set_perform_multiplier(cmd.payload.get("multiplier", 1))
+            elif cmd.cmd == Cmd.PERFORM_BASE_BEATS:
+                self.machine.set_perform_base_beats(cmd.payload.get("value", 0))
             else:
                 if cmd.cmd == Cmd.SET_JOINT_POSE and self.machine.current_action is not None:
                     # A raw joint pose is about to clear the active action (the
@@ -241,11 +244,11 @@ class Engine:
             bpm = clock_state["bpm"]
             base_beats = self._current_base_beats()
             self.machine.update_perform_deadline(base_beats, bpm)
-            # Per-axis deltas (degrees): the move is coordinated, so the time is the
-            # max over the per-joint rest-to-rest times (see motion_profile_time).
-            tgt = target if target is not None else curjpos
-            distances = [abs(a - b) for a, b in zip(curjpos, tgt)]
-            self.machine.update_perform_time_to_arrive(distances)
+            # Stopwatch TTA: TTA = total − elapsed (true 1 s/s). The total is the
+            # rest-to-rest time to the target at the current speed, anchored on a
+            # speed change or a new move (anchor advance / transition); the per-tick
+            # wiggle does NOT re-anchor (the move identity is stable).
+            self.machine.update_perform_tta(curjpos, target, time.monotonic())
 
         if target is not None:
             if self.machine.target_kind == "linear":
@@ -289,13 +292,18 @@ class Engine:
         return self.machine.control_mode == "perform"
 
     def _current_base_beats(self) -> int:
-        """The current action's base_beats, falling back to the global default.
+        """The current base_beats: the live override (buttons) first, then the
+        action's base_beats, then the global default.
 
-        The action's own ``base_beats`` (from zones) wins; when absent (0) the
-        perform config's ``default_base_beats`` is used. Returns 0 when neither
-        is available (no timing constraint).
+        The live override (the base-beats buttons, PERFORM_BASE_BEATS) wins when
+        positive; otherwise the action's own ``base_beats`` (from zones) wins; when
+        absent (0) the perform config's ``default_base_beats`` is used. Returns 0
+        when neither is available (no timing constraint).
         """
         m = self.machine
+        # Live override (the base-beats buttons): a positive value wins.
+        if m.perform["base_beats_override"] > 0:
+            return int(m.perform["base_beats_override"])
         if m.current_action is not None and m.current_zone is not None:
             try:
                 z = m.zones.get(m.current_zone)
